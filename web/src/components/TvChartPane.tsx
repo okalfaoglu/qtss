@@ -80,13 +80,21 @@ function zigzagLineOptions(
   chartTheme: Theme,
   layerIndex: number,
   lineColorOverride?: string,
+  lineStyleOverride?: "solid" | "dotted" | "dashed",
+  lineWidthOverride?: number,
 ): { color: string; lineWidth: number; lineStyle: LineStyle } {
   const zzPal = chartTheme === "dark" ? ZZ_PALETTE_DARK : ZZ_PALETTE_LIGHT;
+  const mapLineStyle = (s?: "solid" | "dotted" | "dashed"): LineStyle | undefined =>
+    s === "solid" ? LineStyle.Solid : s === "dotted" ? LineStyle.Dotted : s === "dashed" ? LineStyle.Dashed : undefined;
   const applyOverride = (base: { color: string; lineWidth: number; lineStyle: LineStyle }) => {
     const o = lineColorOverride?.trim();
-    if (o && /^#[0-9A-Fa-f]{3}$/.test(o)) return { ...base, color: o };
-    if (o && /^#[0-9A-Fa-f]{6}$/.test(o)) return { ...base, color: o };
-    return base;
+    const lw = typeof lineWidthOverride === "number" && Number.isFinite(lineWidthOverride)
+      ? Math.min(6, Math.max(1, Math.round(lineWidthOverride)))
+      : base.lineWidth;
+    const ls = mapLineStyle(lineStyleOverride) ?? base.lineStyle;
+    if (o && /^#[0-9A-Fa-f]{3}$/.test(o)) return { ...base, color: o, lineWidth: lw, lineStyle: ls };
+    if (o && /^#[0-9A-Fa-f]{6}$/.test(o)) return { ...base, color: o, lineWidth: lw, lineStyle: ls };
+    return { ...base, lineWidth: lw, lineStyle: ls };
   };
   switch (kind) {
     case "elliott_abc":
@@ -252,7 +260,7 @@ export function TvChartPane({
         const kind =
           layer?.zigzag && layer.zigzag.length > 0 ? layer.zigzagKind ?? "default" : "default";
         zigLine.applyOptions({
-          ...zigzagLineOptions(kind, chartTheme, i),
+          ...zigzagLineOptions(kind, chartTheme, i, layer?.zigzagLineColor, layer?.zigzagLineStyle, layer?.zigzagLineWidth),
           priceLineVisible: false,
           lastValueVisible: false,
         });

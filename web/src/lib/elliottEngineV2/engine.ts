@@ -37,7 +37,7 @@ function microImpulseTooCompressed(imp: ImpulseCountV2): boolean {
 
 function runForTf(tf: Timeframe, rows: OhlcV2[], input: ElliottEngineInputV2): TimeframeStateV2 {
   const pivots = buildZigzagPivotsV2(rows, input.zigzag);
-  const menu = mergePatternToggles(input.patternToggles);
+  const menu = mergePatternToggles(input.patternTogglesByTf?.[tf] ?? input.patternToggles);
   let impulse = detectBestImpulseV2(pivots, input.maxWindows ?? 80, {
     allowStandard: menu.motive_impulse,
     allowDiagonal: menu.motive_diagonal,
@@ -53,7 +53,7 @@ function runForTf(tf: Timeframe, rows: OhlcV2[], input: ElliottEngineInputV2): T
     historicalImpulses = historicalImpulses.filter((x) => !microImpulseTooCompressed(x));
   }
   const corr = impulse
-    ? detectImpulseCorrectionsV2(pivots, impulse, input.patternToggles)
+    ? detectImpulseCorrectionsV2(pivots, impulse, menu)
     : { wave2: null, wave4: null, postImpulseAbc: null };
   const core = {
     timeframe: tf,

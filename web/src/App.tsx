@@ -28,16 +28,22 @@ import { ChartToolbar, type ChartTool } from "./components/ChartToolbar";
 import { ProfitCalculator } from "./components/ProfitCalculator";
 import { MultiTimeframeLiveStrip } from "./components/MultiTimeframeLiveStrip";
 import { ElliottWaveLegend } from "./components/ElliottWaveLegend";
-import { ElliottPatternMenuPanel } from "./components/ElliottPatternMenuPanel";
 import { ElliottWaveCard } from "./components/ElliottWaveCard";
 import { TvChartPane } from "./components/TvChartPane";
 import {
   DEFAULT_ELLIOTT_WAVE_CONFIG,
   ELLIOTT_WAVE_CONFIG_KEY,
+  mergePatternMenuOrTf,
   mtfWaveColorsFromConfig,
+  mtfZigzagColorsFromConfig,
   normalizeElliottWaveConfig,
+  patternMenuForTf,
   type ElliottWaveConfig,
 } from "./lib/elliottWaveAppConfig";
+import {
+  ELLIOTT_PATTERN_MENU_GROUPS,
+  type ElliottPatternMenuToggles,
+} from "./lib/elliottPatternMenuCatalog";
 import { buildElliottLegendRows } from "./lib/elliottWaveLegend";
 import {
   buildElliottProjectionOverlayV2,
@@ -65,20 +71,16 @@ import { CHART_INTERVALS } from "./lib/chartIntervals";
 type Theme = "dark" | "light";
 type SettingsTab = "general" | "elliott" | "elliott_impulse" | "elliott_corrective" | "acp" | "setting";
 
+type ElliottLineStyle = "solid" | "dotted" | "dashed";
+
 /** V2 ham ZigZag overlay katmanları — adapter’daki `zigzagKind` ile eşleşir. */
-type ElliottZigzagTfKey = "4h" | "1h" | "15m";
-type ElliottZigzagTfVisibility = Record<ElliottZigzagTfKey, boolean>;
-
-const DEFAULT_ELLIOTT_ZIGZAG_TF: ElliottZigzagTfVisibility = {
-  "4h": true,
-  "1h": true,
-  "15m": true,
-};
-
-function keepElliottZigzagLayer(kind: PatternLayerOverlay["zigzagKind"], vis: ElliottZigzagTfVisibility): boolean {
-  if (kind === "elliott_v2_zigzag_macro") return vis["4h"];
-  if (kind === "elliott_v2_zigzag_intermediate") return vis["1h"];
-  if (kind === "elliott_v2_zigzag_micro") return vis["15m"];
+function keepElliottZigzagLayer(
+  kind: PatternLayerOverlay["zigzagKind"],
+  c: Pick<ElliottWaveConfig, "show_zigzag_pivot_4h" | "show_zigzag_pivot_1h" | "show_zigzag_pivot_15m">,
+): boolean {
+  if (kind === "elliott_v2_zigzag_macro") return c.show_zigzag_pivot_4h;
+  if (kind === "elliott_v2_zigzag_intermediate") return c.show_zigzag_pivot_1h;
+  if (kind === "elliott_v2_zigzag_micro") return c.show_zigzag_pivot_15m;
   return true;
 }
 
@@ -89,6 +91,25 @@ function isV2RawZigzagKind(kind: PatternLayerOverlay["zigzagKind"] | undefined):
     kind === "elliott_v2_zigzag_intermediate" ||
     kind === "elliott_v2_zigzag_micro"
   );
+}
+
+function patchPatternMenuTf(
+  c: ElliottWaveConfig,
+  tf: "4h" | "1h" | "15m",
+  key: keyof ElliottPatternMenuToggles,
+  checked: boolean,
+): ElliottWaveConfig {
+  const pattern_menu_by_tf = {
+    ...c.pattern_menu_by_tf,
+    [tf]: { ...c.pattern_menu_by_tf[tf], [key]: checked },
+  };
+  const pattern_menu = mergePatternMenuOrTf(pattern_menu_by_tf);
+  return {
+    ...c,
+    pattern_menu_by_tf,
+    pattern_menu,
+    formations: { ...c.formations, impulse: pattern_menu.motive_impulse },
+  };
 }
 
 /** `<input type="color" />` için #RGB → #RRGGBB */
@@ -183,10 +204,6 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<SettingsTab>("general");
   const [drawerSearch, setDrawerSearch] = useState("");
-  const [elliottZigzagByTf, setElliottZigzagByTf] = useState<ElliottZigzagTfVisibility>(() => ({
-    ...DEFAULT_ELLIOTT_ZIGZAG_TF,
-  }));
-
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("qtss-theme", theme);
@@ -237,6 +254,11 @@ export default function App() {
     ...DEFAULT_ELLIOTT_WAVE_CONFIG,
     formations: { ...DEFAULT_ELLIOTT_WAVE_CONFIG.formations },
     pattern_menu: { ...DEFAULT_ELLIOTT_WAVE_CONFIG.pattern_menu },
+    pattern_menu_by_tf: {
+      "4h": { ...DEFAULT_ELLIOTT_WAVE_CONFIG.pattern_menu_by_tf["4h"] },
+      "1h": { ...DEFAULT_ELLIOTT_WAVE_CONFIG.pattern_menu_by_tf["1h"] },
+      "15m": { ...DEFAULT_ELLIOTT_WAVE_CONFIG.pattern_menu_by_tf["15m"] },
+    },
   }));
   const [elliottLoadErr, setElliottLoadErr] = useState("");
   const [elliottSaveErr, setElliottSaveErr] = useState("");
@@ -376,13 +398,13 @@ export default function App() {
       byTimeframe,
       zigzag: { depth: elliottZigzagDepth, deviationPct: 0.35, backstep: 3 },
       maxWindows: elliottConfig.max_pivot_windows,
-      patternToggles: elliottConfig.pattern_menu,
+      patternTogglesByTf: elliottConfig.pattern_menu_by_tf,
     });
   }, [
     barInterval,
     bars,
     elliottConfig.max_pivot_windows,
-    elliottConfig.pattern_menu,
+    elliottConfig.pattern_menu_by_tf,
     elliottV2Frames,
     elliottZigzagDepth,
     toOhlcV2,
@@ -390,11 +412,63 @@ export default function App() {
 
   const elliottChartBundle = useMemo(() => {
     if (!elliottV2Output) return null;
+    const lineVisibility = {
+      "4h": elliottConfig.show_line_4h,
+      "1h": elliottConfig.show_line_1h,
+      "15m": elliottConfig.show_line_15m,
+    } as const;
+    const labelVisibility = {
+      "4h": elliottConfig.show_label_4h,
+      "1h": elliottConfig.show_label_1h,
+      "15m": elliottConfig.show_label_15m,
+    } as const;
+    const labelColors = {
+      "4h": elliottConfig.mtf_label_color_4h,
+      "1h": elliottConfig.mtf_label_color_1h,
+      "15m": elliottConfig.mtf_label_color_15m,
+    } as const;
+    const lineStyles = {
+      "4h": elliottConfig.mtf_line_style_4h,
+      "1h": elliottConfig.mtf_line_style_1h,
+      "15m": elliottConfig.mtf_line_style_15m,
+    } as const;
+    const lineWidths = {
+      "4h": elliottConfig.mtf_line_width_4h,
+      "1h": elliottConfig.mtf_line_width_1h,
+      "15m": elliottConfig.mtf_line_width_15m,
+    } as const;
+    const zigzagVisibility = {
+      "4h": elliottConfig.show_zigzag_pivot_4h,
+      "1h": elliottConfig.show_zigzag_pivot_1h,
+      "15m": elliottConfig.show_zigzag_pivot_15m,
+    } as const;
+    const zzColors = mtfZigzagColorsFromConfig(elliottConfig);
+    const zigzagLineStyles = {
+      "4h": elliottConfig.mtf_zigzag_line_style_4h,
+      "1h": elliottConfig.mtf_zigzag_line_style_1h,
+      "15m": elliottConfig.mtf_zigzag_line_style_15m,
+    } as const;
+    const zigzagLineWidths = {
+      "4h": elliottConfig.mtf_zigzag_line_width_4h,
+      "1h": elliottConfig.mtf_zigzag_line_width_1h,
+      "15m": elliottConfig.mtf_zigzag_line_width_15m,
+    } as const;
     const full = v2ToChartOverlays(
       elliottV2Output,
-      elliottConfig.pattern_menu,
-      undefined,
+      elliottConfig.pattern_menu_by_tf,
+      mtfWaveColorsFromConfig(elliottConfig),
       elliottConfig.show_historical_waves,
+      {
+        showLines: lineVisibility,
+        showLabels: labelVisibility,
+        labelColors,
+        lineStyles,
+        lineWidths,
+        showZigzagPivots: zigzagVisibility,
+        zigzagColors: zzColors,
+        zigzagLineStyles,
+        zigzagLineWidths,
+      },
     );
     if (!elliottConfig.enabled) {
       return {
@@ -408,13 +482,40 @@ export default function App() {
     elliottConfig.mtf_wave_color_15m,
     elliottConfig.mtf_wave_color_1h,
     elliottConfig.mtf_wave_color_4h,
-    elliottConfig.pattern_menu,
+    elliottConfig.mtf_label_color_15m,
+    elliottConfig.mtf_label_color_1h,
+    elliottConfig.mtf_label_color_4h,
+    elliottConfig.mtf_line_style_15m,
+    elliottConfig.mtf_line_style_1h,
+    elliottConfig.mtf_line_style_4h,
+    elliottConfig.mtf_line_width_15m,
+    elliottConfig.mtf_line_width_1h,
+    elliottConfig.mtf_line_width_4h,
+    elliottConfig.pattern_menu_by_tf,
+    elliottConfig.mtf_zigzag_color_15m,
+    elliottConfig.mtf_zigzag_color_1h,
+    elliottConfig.mtf_zigzag_color_4h,
+    elliottConfig.mtf_zigzag_line_style_15m,
+    elliottConfig.mtf_zigzag_line_style_1h,
+    elliottConfig.mtf_zigzag_line_style_4h,
+    elliottConfig.mtf_zigzag_line_width_15m,
+    elliottConfig.mtf_zigzag_line_width_1h,
+    elliottConfig.mtf_zigzag_line_width_4h,
+    elliottConfig.show_zigzag_pivot_15m,
+    elliottConfig.show_zigzag_pivot_1h,
+    elliottConfig.show_zigzag_pivot_4h,
     elliottConfig.show_historical_waves,
+    elliottConfig.show_line_15m,
+    elliottConfig.show_line_1h,
+    elliottConfig.show_line_4h,
+    elliottConfig.show_label_15m,
+    elliottConfig.show_label_1h,
+    elliottConfig.show_label_4h,
     elliottV2Output,
   ]);
 
   const elliottProjectionLayers = useMemo((): PatternLayerOverlay[] => {
-    if (!elliottConfig.enabled || !elliottConfig.pattern_menu.motive_impulse || !bars?.length || !elliottV2Output) {
+    if (!elliottConfig.enabled || !bars?.length || !elliottV2Output) {
       return [];
     }
     const rows = toOhlcV2(bars);
@@ -426,9 +527,27 @@ export default function App() {
     };
     const out: PatternLayerOverlay[] = [];
     const specs: Array<{ tf: "4h" | "1h" | "15m"; on: boolean }> = [
-      { tf: "4h", on: elliottConfig.show_projection_4h },
-      { tf: "1h", on: elliottConfig.show_projection_1h },
-      { tf: "15m", on: elliottConfig.show_projection_15m },
+      {
+        tf: "4h",
+        on:
+          elliottConfig.show_projection_4h &&
+          elliottConfig.show_line_4h &&
+          patternMenuForTf(elliottConfig, "4h").motive_impulse,
+      },
+      {
+        tf: "1h",
+        on:
+          elliottConfig.show_projection_1h &&
+          elliottConfig.show_line_1h &&
+          patternMenuForTf(elliottConfig, "1h").motive_impulse,
+      },
+      {
+        tf: "15m",
+        on:
+          elliottConfig.show_projection_15m &&
+          elliottConfig.show_line_15m &&
+          patternMenuForTf(elliottConfig, "15m").motive_impulse,
+      },
     ];
     for (const { tf, on } of specs) {
       if (!on) continue;
@@ -436,11 +555,29 @@ export default function App() {
         elliottV2Output,
         rows,
         opt,
-        elliottConfig.pattern_menu,
+        patternMenuForTf(elliottConfig, tf),
         wc[tf],
         tf,
       );
-      if (built?.layers?.length) out.push(...built.layers);
+      if (built?.layers?.length) {
+        out.push(
+          ...built.layers.map((layer) => ({
+            ...layer,
+            zigzagLineStyle:
+              tf === "4h"
+                ? elliottConfig.mtf_line_style_4h
+                : tf === "1h"
+                  ? elliottConfig.mtf_line_style_1h
+                  : elliottConfig.mtf_line_style_15m,
+            zigzagLineWidth:
+              tf === "4h"
+                ? elliottConfig.mtf_line_width_4h
+                : tf === "1h"
+                  ? elliottConfig.mtf_line_width_1h
+                  : elliottConfig.mtf_line_width_15m,
+          })),
+        );
+      }
     }
     return out;
   }, [
@@ -449,13 +586,21 @@ export default function App() {
     elliottConfig.mtf_wave_color_15m,
     elliottConfig.mtf_wave_color_1h,
     elliottConfig.mtf_wave_color_4h,
-    elliottConfig.pattern_menu.motive_impulse,
-    elliottConfig.pattern_menu,
+    elliottConfig.pattern_menu_by_tf,
     elliottConfig.projection_bar_hop,
     elliottConfig.projection_steps,
     elliottConfig.show_projection_15m,
     elliottConfig.show_projection_1h,
     elliottConfig.show_projection_4h,
+    elliottConfig.show_line_15m,
+    elliottConfig.show_line_1h,
+    elliottConfig.show_line_4h,
+    elliottConfig.mtf_line_style_15m,
+    elliottConfig.mtf_line_style_1h,
+    elliottConfig.mtf_line_style_4h,
+    elliottConfig.mtf_line_width_15m,
+    elliottConfig.mtf_line_width_1h,
+    elliottConfig.mtf_line_width_4h,
     elliottV2Output,
     toOhlcV2,
   ]);
@@ -503,13 +648,20 @@ export default function App() {
     const acp = multiOverlay?.layers ?? [];
     const cap = 32;
     const elayersRaw: PatternLayerOverlay[] = elliottChartBundle?.layers ?? [];
-    const elayers = elayersRaw.filter((l) => keepElliottZigzagLayer(l.zigzagKind, elliottZigzagByTf));
+    const elayers = elayersRaw.filter((l) => keepElliottZigzagLayer(l.zigzagKind, elliottConfig));
     const proj = elliottProjectionLayers;
     const eAll = proj.length ? [...elayers, ...proj] : [...elayers];
     if (!eAll.length) return acp.slice(0, cap);
     const room = Math.max(0, cap - eAll.length);
     return [...acp.slice(0, room), ...eAll].slice(0, cap);
-  }, [elliottChartBundle?.layers, elliottProjectionLayers, multiOverlay?.layers, elliottZigzagByTf]);
+  }, [
+    elliottChartBundle?.layers,
+    elliottProjectionLayers,
+    multiOverlay?.layers,
+    elliottConfig.show_zigzag_pivot_4h,
+    elliottConfig.show_zigzag_pivot_1h,
+    elliottConfig.show_zigzag_pivot_15m,
+  ]);
 
   const mergedPivotLabelMarkers = useMemo(() => {
     const a = multiOverlay?.pivotLabels ?? [];
@@ -1132,47 +1284,9 @@ export default function App() {
                           Etkin: <span className="mono">{elliottZigzagDepth}</span>
                         </p>
                       </div>
-                      <div className="tv-settings__zigzag-tf">
-                        <label className="tv-settings__check">
-                          <input
-                            type="checkbox"
-                            checked={elliottZigzagByTf["4h"]}
-                            onChange={(e) =>
-                              setElliottZigzagByTf((v: ElliottZigzagTfVisibility) => ({
-                                ...v,
-                                "4h": e.target.checked,
-                              }))
-                            }
-                          />
-                          4h (makro)
-                        </label>
-                        <label className="tv-settings__check">
-                          <input
-                            type="checkbox"
-                            checked={elliottZigzagByTf["1h"]}
-                            onChange={(e) =>
-                              setElliottZigzagByTf((v: ElliottZigzagTfVisibility) => ({
-                                ...v,
-                                "1h": e.target.checked,
-                              }))
-                            }
-                          />
-                          1h (ara)
-                        </label>
-                        <label className="tv-settings__check">
-                          <input
-                            type="checkbox"
-                            checked={elliottZigzagByTf["15m"]}
-                            onChange={(e) =>
-                              setElliottZigzagByTf((v: ElliottZigzagTfVisibility) => ({
-                                ...v,
-                                "15m": e.target.checked,
-                              }))
-                            }
-                          />
-                          15m (mikro)
-                        </label>
-                      </div>
+                      <p className="muted" style={{ margin: "0.45rem 0 0", fontSize: "0.78rem" }}>
+                        TF bazlı ZigZag/renk/etiket/çizgi tipi/kalınlık ayarları aşağıdaki tabloda.
+                      </p>
                     </div>
                   ) : null}
                   {matchesSetting(
@@ -1195,76 +1309,253 @@ export default function App() {
                     <div className="card">
                       <p className="tv-drawer__section-head">Elliott dalga türleri</p>
                       <p className="muted" style={{ margin: "0 0 0.5rem", fontSize: "0.82rem" }}>
-                        İşaretli türler grafikte ve motorda kullanılır; kapatılanlar çizilmez / aranmaz.
+                        Dalga türleri ve görünüm — TF başına. Motor ve çizim aynı anahtarları kullanır; ayarlar{" "}
+                        <code className="mono">app_config.elliott_wave</code> ile veritabanına kaydedilir.
                       </p>
-                      <ElliottPatternMenuPanel value={elliottConfig} onChange={setElliottConfig} />
                       <div
                         style={{
                           marginTop: "0.65rem",
                           paddingTop: "0.5rem",
                           borderTop: "1px solid var(--tv-border, rgba(255,255,255,0.08))",
                           display: "grid",
-                          gridTemplateColumns: "repeat(3, 1fr)",
                           gap: "0.5rem",
                         }}
                       >
-                        <label className="muted" style={{ fontSize: "0.72rem", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                          <span>4h · makro çizgi</span>
-                          <input
-                            type="color"
-                            aria-label="4h Elliott rengi"
-                            value={elliottColorInputValue(elliottConfig.mtf_wave_color_4h)}
-                            onChange={(e) =>
-                              setElliottConfig((c) => ({ ...c, mtf_wave_color_4h: e.target.value }))
-                            }
-                            style={{
-                              width: "100%",
-                              height: "2rem",
-                              padding: 0,
-                              border: "none",
-                              cursor: "pointer",
-                              background: "transparent",
-                            }}
-                          />
-                        </label>
-                        <label className="muted" style={{ fontSize: "0.72rem", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                          <span>1h · ara çizgi</span>
-                          <input
-                            type="color"
-                            aria-label="1h Elliott rengi"
-                            value={elliottColorInputValue(elliottConfig.mtf_wave_color_1h)}
-                            onChange={(e) =>
-                              setElliottConfig((c) => ({ ...c, mtf_wave_color_1h: e.target.value }))
-                            }
-                            style={{
-                              width: "100%",
-                              height: "2rem",
-                              padding: 0,
-                              border: "none",
-                              cursor: "pointer",
-                              background: "transparent",
-                            }}
-                          />
-                        </label>
-                        <label className="muted" style={{ fontSize: "0.72rem", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                          <span>15m · mikro çizgi</span>
-                          <input
-                            type="color"
-                            aria-label="15m Elliott rengi"
-                            value={elliottColorInputValue(elliottConfig.mtf_wave_color_15m)}
-                            onChange={(e) =>
-                              setElliottConfig((c) => ({ ...c, mtf_wave_color_15m: e.target.value }))
-                            }
-                            style={{
-                              width: "100%",
-                              height: "2rem",
-                              padding: 0,
-                              border: "none",
-                              cursor: "pointer",
-                              background: "transparent",
-                            }}
-                          />
-                        </label>
+                        <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }}>
+                          Sol sütun: dalga / katman türü; üstte timeframe: 4H / 1H / 15M. «ZigZag (pivot)» ham pivot
+                          hattıdır; «Dalga çizgisi» itki ve düzeltme segmentleri için geçerlidir.
+                        </p>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
+                          <thead>
+                            <tr>
+                              <th style={{ textAlign: "left", padding: "0.25rem 0.2rem" }}>Ayar</th>
+                              <th style={{ textAlign: "center", padding: "0.25rem 0.2rem" }}>4H</th>
+                              <th style={{ textAlign: "center", padding: "0.25rem 0.2rem" }}>1H</th>
+                              <th style={{ textAlign: "center", padding: "0.25rem 0.2rem" }}>15M</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {ELLIOTT_PATTERN_MENU_GROUPS.flatMap((g) => g.items).map((item) => (
+                              <tr key={item.id}>
+                                <td style={{ padding: "0.2rem" }}>
+                                  <span style={{ fontWeight: 600 }}>{item.titleTr}</span>
+                                  {item.structure ? (
+                                    <span className="mono muted" style={{ fontSize: "0.68rem", marginLeft: "0.25rem" }}>
+                                      {item.structure}
+                                    </span>
+                                  ) : null}
+                                </td>
+                                <td style={{ textAlign: "center" }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={elliottConfig.pattern_menu_by_tf["4h"][item.id]}
+                                    onChange={(e) =>
+                                      setElliottConfig((c) => patchPatternMenuTf(c, "4h", item.id, e.target.checked))
+                                    }
+                                  />
+                                </td>
+                                <td style={{ textAlign: "center" }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={elliottConfig.pattern_menu_by_tf["1h"][item.id]}
+                                    onChange={(e) =>
+                                      setElliottConfig((c) => patchPatternMenuTf(c, "1h", item.id, e.target.checked))
+                                    }
+                                  />
+                                </td>
+                                <td style={{ textAlign: "center" }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={elliottConfig.pattern_menu_by_tf["15m"][item.id]}
+                                    onChange={(e) =>
+                                      setElliottConfig((c) => patchPatternMenuTf(c, "15m", item.id, e.target.checked))
+                                    }
+                                  />
+                                </td>
+                              </tr>
+                            ))}
+                            <tr>
+                              <td style={{ padding: "0.2rem" }}>ZigZag (pivot)</td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={elliottConfig.show_zigzag_pivot_4h}
+                                  onChange={(e) => setElliottConfig((c) => ({ ...c, show_zigzag_pivot_4h: e.target.checked }))}
+                                />
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={elliottConfig.show_zigzag_pivot_1h}
+                                  onChange={(e) => setElliottConfig((c) => ({ ...c, show_zigzag_pivot_1h: e.target.checked }))}
+                                />
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={elliottConfig.show_zigzag_pivot_15m}
+                                  onChange={(e) => setElliottConfig((c) => ({ ...c, show_zigzag_pivot_15m: e.target.checked }))}
+                                />
+                              </td>
+                            </tr>
+                            <tr>
+                              <td style={{ padding: "0.2rem" }}>ZigZag renk</td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="color"
+                                  value={elliottColorInputValue(elliottConfig.mtf_zigzag_color_4h)}
+                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_zigzag_color_4h: e.target.value }))}
+                                />
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="color"
+                                  value={elliottColorInputValue(elliottConfig.mtf_zigzag_color_1h)}
+                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_zigzag_color_1h: e.target.value }))}
+                                />
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="color"
+                                  value={elliottColorInputValue(elliottConfig.mtf_zigzag_color_15m)}
+                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_zigzag_color_15m: e.target.value }))}
+                                />
+                              </td>
+                            </tr>
+                            <tr>
+                              <td style={{ padding: "0.2rem" }}>ZigZag cizgi tipi</td>
+                              <td style={{ textAlign: "center" }}>
+                                <select
+                                  value={elliottConfig.mtf_zigzag_line_style_4h}
+                                  onChange={(e) =>
+                                    setElliottConfig((c) => ({
+                                      ...c,
+                                      mtf_zigzag_line_style_4h: e.target.value as ElliottLineStyle,
+                                    }))
+                                  }
+                                >
+                                  <option value="solid">Duz</option>
+                                  <option value="dotted">Nokta</option>
+                                  <option value="dashed">Kesik</option>
+                                </select>
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <select
+                                  value={elliottConfig.mtf_zigzag_line_style_1h}
+                                  onChange={(e) =>
+                                    setElliottConfig((c) => ({
+                                      ...c,
+                                      mtf_zigzag_line_style_1h: e.target.value as ElliottLineStyle,
+                                    }))
+                                  }
+                                >
+                                  <option value="solid">Duz</option>
+                                  <option value="dotted">Nokta</option>
+                                  <option value="dashed">Kesik</option>
+                                </select>
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <select
+                                  value={elliottConfig.mtf_zigzag_line_style_15m}
+                                  onChange={(e) =>
+                                    setElliottConfig((c) => ({
+                                      ...c,
+                                      mtf_zigzag_line_style_15m: e.target.value as ElliottLineStyle,
+                                    }))
+                                  }
+                                >
+                                  <option value="solid">Duz</option>
+                                  <option value="dotted">Nokta</option>
+                                  <option value="dashed">Kesik</option>
+                                </select>
+                              </td>
+                            </tr>
+                            <tr>
+                              <td style={{ padding: "0.2rem" }}>ZigZag kalinligi</td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={6}
+                                  value={elliottConfig.mtf_zigzag_line_width_4h}
+                                  onChange={(e) =>
+                                    setElliottConfig((c) => ({
+                                      ...c,
+                                      mtf_zigzag_line_width_4h: Math.min(6, Math.max(1, parseInt(e.target.value, 10) || 1)),
+                                    }))
+                                  }
+                                  style={{ width: "3.3rem" }}
+                                />
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={6}
+                                  value={elliottConfig.mtf_zigzag_line_width_1h}
+                                  onChange={(e) =>
+                                    setElliottConfig((c) => ({
+                                      ...c,
+                                      mtf_zigzag_line_width_1h: Math.min(6, Math.max(1, parseInt(e.target.value, 10) || 1)),
+                                    }))
+                                  }
+                                  style={{ width: "3.3rem" }}
+                                />
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={6}
+                                  value={elliottConfig.mtf_zigzag_line_width_15m}
+                                  onChange={(e) =>
+                                    setElliottConfig((c) => ({
+                                      ...c,
+                                      mtf_zigzag_line_width_15m: Math.min(6, Math.max(1, parseInt(e.target.value, 10) || 1)),
+                                    }))
+                                  }
+                                  style={{ width: "3.3rem" }}
+                                />
+                              </td>
+                            </tr>
+                            <tr>
+                              <td style={{ padding: "0.2rem" }}>Dalga cizgisi</td>
+                              <td style={{ textAlign: "center" }}><input type="checkbox" checked={elliottConfig.show_line_4h} onChange={(e) => setElliottConfig((c) => ({ ...c, show_line_4h: e.target.checked }))} /></td>
+                              <td style={{ textAlign: "center" }}><input type="checkbox" checked={elliottConfig.show_line_1h} onChange={(e) => setElliottConfig((c) => ({ ...c, show_line_1h: e.target.checked }))} /></td>
+                              <td style={{ textAlign: "center" }}><input type="checkbox" checked={elliottConfig.show_line_15m} onChange={(e) => setElliottConfig((c) => ({ ...c, show_line_15m: e.target.checked }))} /></td>
+                            </tr>
+                            <tr>
+                              <td style={{ padding: "0.2rem" }}>Etiket</td>
+                              <td style={{ textAlign: "center" }}><input type="checkbox" checked={elliottConfig.show_label_4h} onChange={(e) => setElliottConfig((c) => ({ ...c, show_label_4h: e.target.checked }))} /></td>
+                              <td style={{ textAlign: "center" }}><input type="checkbox" checked={elliottConfig.show_label_1h} onChange={(e) => setElliottConfig((c) => ({ ...c, show_label_1h: e.target.checked }))} /></td>
+                              <td style={{ textAlign: "center" }}><input type="checkbox" checked={elliottConfig.show_label_15m} onChange={(e) => setElliottConfig((c) => ({ ...c, show_label_15m: e.target.checked }))} /></td>
+                            </tr>
+                            <tr>
+                              <td style={{ padding: "0.2rem" }}>Cizgi renk</td>
+                              <td style={{ textAlign: "center" }}><input type="color" value={elliottColorInputValue(elliottConfig.mtf_wave_color_4h)} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_wave_color_4h: e.target.value }))} /></td>
+                              <td style={{ textAlign: "center" }}><input type="color" value={elliottColorInputValue(elliottConfig.mtf_wave_color_1h)} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_wave_color_1h: e.target.value }))} /></td>
+                              <td style={{ textAlign: "center" }}><input type="color" value={elliottColorInputValue(elliottConfig.mtf_wave_color_15m)} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_wave_color_15m: e.target.value }))} /></td>
+                            </tr>
+                            <tr>
+                              <td style={{ padding: "0.2rem" }}>Etiket renk</td>
+                              <td style={{ textAlign: "center" }}><input type="color" value={elliottColorInputValue(elliottConfig.mtf_label_color_4h)} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_label_color_4h: e.target.value }))} /></td>
+                              <td style={{ textAlign: "center" }}><input type="color" value={elliottColorInputValue(elliottConfig.mtf_label_color_1h)} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_label_color_1h: e.target.value }))} /></td>
+                              <td style={{ textAlign: "center" }}><input type="color" value={elliottColorInputValue(elliottConfig.mtf_label_color_15m)} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_label_color_15m: e.target.value }))} /></td>
+                            </tr>
+                            <tr>
+                              <td style={{ padding: "0.2rem" }}>Cizgi tipi</td>
+                              <td style={{ textAlign: "center" }}><select value={elliottConfig.mtf_line_style_4h} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_line_style_4h: e.target.value as ElliottLineStyle }))}><option value="solid">Duz</option><option value="dotted">Nokta</option><option value="dashed">Kesik</option></select></td>
+                              <td style={{ textAlign: "center" }}><select value={elliottConfig.mtf_line_style_1h} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_line_style_1h: e.target.value as ElliottLineStyle }))}><option value="solid">Duz</option><option value="dotted">Nokta</option><option value="dashed">Kesik</option></select></td>
+                              <td style={{ textAlign: "center" }}><select value={elliottConfig.mtf_line_style_15m} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_line_style_15m: e.target.value as ElliottLineStyle }))}><option value="solid">Duz</option><option value="dotted">Nokta</option><option value="dashed">Kesik</option></select></td>
+                            </tr>
+                            <tr>
+                              <td style={{ padding: "0.2rem" }}>Cizgi kalinligi</td>
+                              <td style={{ textAlign: "center" }}><input type="number" min={1} max={6} value={elliottConfig.mtf_line_width_4h} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_line_width_4h: Math.min(6, Math.max(1, parseInt(e.target.value, 10) || 1)) }))} style={{ width: "3.3rem" }} /></td>
+                              <td style={{ textAlign: "center" }}><input type="number" min={1} max={6} value={elliottConfig.mtf_line_width_1h} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_line_width_1h: Math.min(6, Math.max(1, parseInt(e.target.value, 10) || 1)) }))} style={{ width: "3.3rem" }} /></td>
+                              <td style={{ textAlign: "center" }}><input type="number" min={1} max={6} value={elliottConfig.mtf_line_width_15m} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_line_width_15m: Math.min(6, Math.max(1, parseInt(e.target.value, 10) || 1)) }))} style={{ width: "3.3rem" }} /></td>
+                            </tr>
+                          </tbody>
+                        </table>
                       </div>
                     </div>
                   ) : null}

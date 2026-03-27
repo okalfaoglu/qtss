@@ -2,9 +2,48 @@
  * `app_config` anahtarı `elliott_wave` — web panel + GET `/analysis/elliott-wave-config`.
  */
 
-import { DEFAULT_ELLIOTT_PATTERN_MENU, type ElliottPatternMenuToggles } from "./elliottPatternMenuCatalog";
+import {
+  DEFAULT_ELLIOTT_PATTERN_MENU,
+  type ElliottPatternMenuToggles,
+} from "./elliottPatternMenuCatalog";
 
 export type { ElliottPatternMenuToggles };
+
+/** Dalga türü anahtarları — her TF için ayrı açılıp kapatılır (motor + çizim). */
+export type ElliottPatternMenuByTf = {
+  "4h": ElliottPatternMenuToggles;
+  "1h": ElliottPatternMenuToggles;
+  "15m": ElliottPatternMenuToggles;
+};
+
+export function defaultPatternMenuByTf(base?: ElliottPatternMenuToggles): ElliottPatternMenuByTf {
+  const m = { ...DEFAULT_ELLIOTT_PATTERN_MENU, ...base };
+  return { "4h": { ...m }, "1h": { ...m }, "15m": { ...m } };
+}
+
+/** Geriye dönük: tek `pattern_menu` alanını «herhangi bir TF açık mı?» olarak birleştirir. */
+export function mergePatternMenuOrTf(m: ElliottPatternMenuByTf): ElliottPatternMenuToggles {
+  return {
+    motive_impulse:
+      m["4h"].motive_impulse || m["1h"].motive_impulse || m["15m"].motive_impulse,
+    motive_diagonal:
+      m["4h"].motive_diagonal || m["1h"].motive_diagonal || m["15m"].motive_diagonal,
+    corrective_zigzag:
+      m["4h"].corrective_zigzag || m["1h"].corrective_zigzag || m["15m"].corrective_zigzag,
+    corrective_flat:
+      m["4h"].corrective_flat || m["1h"].corrective_flat || m["15m"].corrective_flat,
+    corrective_triangle:
+      m["4h"].corrective_triangle || m["1h"].corrective_triangle || m["15m"].corrective_triangle,
+    corrective_complex_wxy:
+      m["4h"].corrective_complex_wxy ||
+      m["1h"].corrective_complex_wxy ||
+      m["15m"].corrective_complex_wxy,
+  };
+}
+
+export function patternMenuForTf(c: ElliottWaveConfig, tf: keyof ElliottPatternMenuByTf): ElliottPatternMenuToggles {
+  return { ...DEFAULT_ELLIOTT_PATTERN_MENU, ...c.pattern_menu_by_tf[tf] };
+}
 
 export const ELLIOTT_WAVE_CONFIG_KEY = "elliott_wave";
 
@@ -72,12 +111,49 @@ export type ElliottWaveConfig = {
   strict_wave4_overlap: boolean;
   /**
    * Menüdeki dalga türleri — düzeltme motoru hangi kalıpları deneyeceğini filtreler (varsayılan hepsi açık).
+   * @deprecated Yeni kayıtlar `pattern_menu_by_tf` kullanır; normalize sırasında OR ile doldurulur.
    */
   pattern_menu: ElliottPatternMenuToggles;
+  /** Dalga türleri — TF başına (motor + hangi çizimlerin üretileceği). */
+  pattern_menu_by_tf: ElliottPatternMenuByTf;
   /** MTF ZigZag + dalga çizgileri rengi (hex). */
   mtf_wave_color_4h: string;
   mtf_wave_color_1h: string;
   mtf_wave_color_15m: string;
+  /** MTF etiket rengi (hex). */
+  mtf_label_color_4h: string;
+  mtf_label_color_1h: string;
+  mtf_label_color_15m: string;
+  /** MTF çizgi görünürlüğü. */
+  show_line_4h: boolean;
+  show_line_1h: boolean;
+  show_line_15m: boolean;
+  /** MTF etiket görünürlüğü. */
+  show_label_4h: boolean;
+  show_label_1h: boolean;
+  show_label_15m: boolean;
+  /** MTF çizgi tipi. */
+  mtf_line_style_4h: "solid" | "dotted" | "dashed";
+  mtf_line_style_1h: "solid" | "dotted" | "dashed";
+  mtf_line_style_15m: "solid" | "dotted" | "dashed";
+  /** MTF çizgi kalınlığı. */
+  mtf_line_width_4h: number;
+  mtf_line_width_1h: number;
+  mtf_line_width_15m: number;
+  /** Ham ZigZag pivot çizgisi — TF başına görünürlük (DB). */
+  show_zigzag_pivot_4h: boolean;
+  show_zigzag_pivot_1h: boolean;
+  show_zigzag_pivot_15m: boolean;
+  /** Ham ZigZag çizgi rengi (dalga çizgilerinden bağımsız). */
+  mtf_zigzag_color_4h: string;
+  mtf_zigzag_color_1h: string;
+  mtf_zigzag_color_15m: string;
+  mtf_zigzag_line_style_4h: "solid" | "dotted" | "dashed";
+  mtf_zigzag_line_style_1h: "solid" | "dotted" | "dashed";
+  mtf_zigzag_line_style_15m: "solid" | "dotted" | "dashed";
+  mtf_zigzag_line_width_4h: number;
+  mtf_zigzag_line_width_1h: number;
+  mtf_zigzag_line_width_15m: number;
 };
 
 export function mtfWaveColorsFromConfig(
@@ -87,6 +163,19 @@ export function mtfWaveColorsFromConfig(
     "4h": sanitizeElliottHexColor(c.mtf_wave_color_4h, DEFAULT_ELLIOTT_MTF_WAVE_COLORS["4h"]),
     "1h": sanitizeElliottHexColor(c.mtf_wave_color_1h, DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1h"]),
     "15m": sanitizeElliottHexColor(c.mtf_wave_color_15m, DEFAULT_ELLIOTT_MTF_WAVE_COLORS["15m"]),
+  };
+}
+
+export function mtfZigzagColorsFromConfig(
+  c: Pick<
+    ElliottWaveConfig,
+    "mtf_zigzag_color_4h" | "mtf_zigzag_color_1h" | "mtf_zigzag_color_15m"
+  >,
+): ElliottMtfWaveColors {
+  return {
+    "4h": sanitizeElliottHexColor(c.mtf_zigzag_color_4h, DEFAULT_ELLIOTT_MTF_WAVE_COLORS["4h"]),
+    "1h": sanitizeElliottHexColor(c.mtf_zigzag_color_1h, DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1h"]),
+    "15m": sanitizeElliottHexColor(c.mtf_zigzag_color_15m, DEFAULT_ELLIOTT_MTF_WAVE_COLORS["15m"]),
   };
 }
 
@@ -109,9 +198,37 @@ export const DEFAULT_ELLIOTT_WAVE_CONFIG: ElliottWaveConfig = {
   max_pivot_windows: 120,
   strict_wave4_overlap: false,
   pattern_menu: { ...DEFAULT_ELLIOTT_PATTERN_MENU },
+  pattern_menu_by_tf: defaultPatternMenuByTf(),
   mtf_wave_color_4h: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["4h"],
   mtf_wave_color_1h: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1h"],
   mtf_wave_color_15m: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["15m"],
+  mtf_label_color_4h: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["4h"],
+  mtf_label_color_1h: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1h"],
+  mtf_label_color_15m: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["15m"],
+  show_line_4h: true,
+  show_line_1h: true,
+  show_line_15m: true,
+  show_label_4h: true,
+  show_label_1h: true,
+  show_label_15m: true,
+  mtf_line_style_4h: "solid",
+  mtf_line_style_1h: "dashed",
+  mtf_line_style_15m: "dotted",
+  mtf_line_width_4h: 4,
+  mtf_line_width_1h: 3,
+  mtf_line_width_15m: 2,
+  show_zigzag_pivot_4h: true,
+  show_zigzag_pivot_1h: true,
+  show_zigzag_pivot_15m: true,
+  mtf_zigzag_color_4h: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["4h"],
+  mtf_zigzag_color_1h: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1h"],
+  mtf_zigzag_color_15m: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["15m"],
+  mtf_zigzag_line_style_4h: "dotted",
+  mtf_zigzag_line_style_1h: "dotted",
+  mtf_zigzag_line_style_15m: "dotted",
+  mtf_zigzag_line_width_4h: 2,
+  mtf_zigzag_line_width_1h: 2,
+  mtf_zigzag_line_width_15m: 2,
 };
 
 function isRecord(x: unknown): x is Record<string, unknown> {
@@ -123,6 +240,7 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
     ...DEFAULT_ELLIOTT_WAVE_CONFIG,
     formations: { ...DEFAULT_ELLIOTT_WAVE_CONFIG.formations },
     pattern_menu: { ...DEFAULT_ELLIOTT_PATTERN_MENU },
+    pattern_menu_by_tf: defaultPatternMenuByTf(),
   };
   if (!isRecord(raw)) return base;
 
@@ -201,12 +319,74 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
       corrective_complex_wxy: b("corrective_complex_wxy"),
     };
   }
-  // UI sadeleştirme: ayrı "formations.impulse" checkbox'ı kaldırıldı; menüdeki motive_impulse tek kaynak.
+
+  let pattern_menu_by_tf = defaultPatternMenuByTf(pattern_menu);
+  const pmTfRaw = raw.pattern_menu_by_tf;
+  if (isRecord(pmTfRaw)) {
+    const tfPatch = (tf: keyof ElliottPatternMenuByTf) => {
+      const o = pmTfRaw[tf];
+      if (!isRecord(o)) return pattern_menu_by_tf[tf];
+      const z = (k: keyof ElliottPatternMenuToggles) =>
+        typeof o[k] === "boolean" ? o[k] : pattern_menu_by_tf[tf][k];
+      return {
+        motive_impulse: z("motive_impulse"),
+        motive_diagonal: z("motive_diagonal"),
+        corrective_zigzag: z("corrective_zigzag"),
+        corrective_flat: z("corrective_flat"),
+        corrective_triangle: z("corrective_triangle"),
+        corrective_complex_wxy: z("corrective_complex_wxy"),
+      };
+    };
+    pattern_menu_by_tf = {
+      "4h": tfPatch("4h"),
+      "1h": tfPatch("1h"),
+      "15m": tfPatch("15m"),
+    };
+  }
+
+  pattern_menu = mergePatternMenuOrTf(pattern_menu_by_tf);
+  // UI: ayrı "formations.impulse" — herhangi bir TF'de itki açıksa true.
   formations.impulse = pattern_menu.motive_impulse;
 
   const mtf_wave_color_4h = sanitizeElliottHexColor(raw.mtf_wave_color_4h, base.mtf_wave_color_4h);
   const mtf_wave_color_1h = sanitizeElliottHexColor(raw.mtf_wave_color_1h, base.mtf_wave_color_1h);
   const mtf_wave_color_15m = sanitizeElliottHexColor(raw.mtf_wave_color_15m, base.mtf_wave_color_15m);
+  const mtf_label_color_4h = sanitizeElliottHexColor(raw.mtf_label_color_4h, base.mtf_label_color_4h);
+  const mtf_label_color_1h = sanitizeElliottHexColor(raw.mtf_label_color_1h, base.mtf_label_color_1h);
+  const mtf_label_color_15m = sanitizeElliottHexColor(raw.mtf_label_color_15m, base.mtf_label_color_15m);
+  const show_line_4h = typeof raw.show_line_4h === "boolean" ? raw.show_line_4h : base.show_line_4h;
+  const show_line_1h = typeof raw.show_line_1h === "boolean" ? raw.show_line_1h : base.show_line_1h;
+  const show_line_15m = typeof raw.show_line_15m === "boolean" ? raw.show_line_15m : base.show_line_15m;
+  const show_label_4h = typeof raw.show_label_4h === "boolean" ? raw.show_label_4h : base.show_label_4h;
+  const show_label_1h = typeof raw.show_label_1h === "boolean" ? raw.show_label_1h : base.show_label_1h;
+  const show_label_15m = typeof raw.show_label_15m === "boolean" ? raw.show_label_15m : base.show_label_15m;
+  const lineStyle = (v: unknown, d: "solid" | "dotted" | "dashed") =>
+    v === "solid" || v === "dotted" || v === "dashed" ? v : d;
+  const lineWidth = (v: unknown, d: number) =>
+    typeof v === "number" && Number.isFinite(v) ? Math.min(6, Math.max(1, Math.round(v))) : d;
+  const mtf_line_style_4h = lineStyle(raw.mtf_line_style_4h, base.mtf_line_style_4h);
+  const mtf_line_style_1h = lineStyle(raw.mtf_line_style_1h, base.mtf_line_style_1h);
+  const mtf_line_style_15m = lineStyle(raw.mtf_line_style_15m, base.mtf_line_style_15m);
+  const mtf_line_width_4h = lineWidth(raw.mtf_line_width_4h, base.mtf_line_width_4h);
+  const mtf_line_width_1h = lineWidth(raw.mtf_line_width_1h, base.mtf_line_width_1h);
+  const mtf_line_width_15m = lineWidth(raw.mtf_line_width_15m, base.mtf_line_width_15m);
+
+  const show_zigzag_pivot_4h =
+    typeof raw.show_zigzag_pivot_4h === "boolean" ? raw.show_zigzag_pivot_4h : base.show_zigzag_pivot_4h;
+  const show_zigzag_pivot_1h =
+    typeof raw.show_zigzag_pivot_1h === "boolean" ? raw.show_zigzag_pivot_1h : base.show_zigzag_pivot_1h;
+  const show_zigzag_pivot_15m =
+    typeof raw.show_zigzag_pivot_15m === "boolean" ? raw.show_zigzag_pivot_15m : base.show_zigzag_pivot_15m;
+
+  const mtf_zigzag_color_4h = sanitizeElliottHexColor(raw.mtf_zigzag_color_4h, base.mtf_zigzag_color_4h);
+  const mtf_zigzag_color_1h = sanitizeElliottHexColor(raw.mtf_zigzag_color_1h, base.mtf_zigzag_color_1h);
+  const mtf_zigzag_color_15m = sanitizeElliottHexColor(raw.mtf_zigzag_color_15m, base.mtf_zigzag_color_15m);
+  const mtf_zigzag_line_style_4h = lineStyle(raw.mtf_zigzag_line_style_4h, base.mtf_zigzag_line_style_4h);
+  const mtf_zigzag_line_style_1h = lineStyle(raw.mtf_zigzag_line_style_1h, base.mtf_zigzag_line_style_1h);
+  const mtf_zigzag_line_style_15m = lineStyle(raw.mtf_zigzag_line_style_15m, base.mtf_zigzag_line_style_15m);
+  const mtf_zigzag_line_width_4h = lineWidth(raw.mtf_zigzag_line_width_4h, base.mtf_zigzag_line_width_4h);
+  const mtf_zigzag_line_width_1h = lineWidth(raw.mtf_zigzag_line_width_1h, base.mtf_zigzag_line_width_1h);
+  const mtf_zigzag_line_width_15m = lineWidth(raw.mtf_zigzag_line_width_15m, base.mtf_zigzag_line_width_15m);
 
   return {
     version: 1,
@@ -225,8 +405,36 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
     max_pivot_windows,
     strict_wave4_overlap,
     pattern_menu,
+    pattern_menu_by_tf,
     mtf_wave_color_4h,
     mtf_wave_color_1h,
     mtf_wave_color_15m,
+    mtf_label_color_4h,
+    mtf_label_color_1h,
+    mtf_label_color_15m,
+    show_line_4h,
+    show_line_1h,
+    show_line_15m,
+    show_label_4h,
+    show_label_1h,
+    show_label_15m,
+    mtf_line_style_4h,
+    mtf_line_style_1h,
+    mtf_line_style_15m,
+    mtf_line_width_4h,
+    mtf_line_width_1h,
+    mtf_line_width_15m,
+    show_zigzag_pivot_4h,
+    show_zigzag_pivot_1h,
+    show_zigzag_pivot_15m,
+    mtf_zigzag_color_4h,
+    mtf_zigzag_color_1h,
+    mtf_zigzag_color_15m,
+    mtf_zigzag_line_style_4h,
+    mtf_zigzag_line_style_1h,
+    mtf_zigzag_line_style_15m,
+    mtf_zigzag_line_width_4h,
+    mtf_zigzag_line_width_1h,
+    mtf_zigzag_line_width_15m,
   };
 }

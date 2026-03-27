@@ -113,8 +113,6 @@ export function ElliottWaveCard({
   const splitMenuLayout = layout === "impulse" || layout === "corrective";
   const showImpulseUi = layout === "full" || layout === "impulse";
   const showCorrectiveUi = layout === "full" || layout === "corrective";
-  const impulseEnabled = value.pattern_menu.motive_impulse;
-
   const pivotCount = useMemo(() => {
     if (!value.enabled || !bars?.length) return 0;
     return buildSwingPivots(chartOhlcRowsSortedChrono(bars), effectiveSwingDepth).length;
@@ -265,7 +263,7 @@ export function ElliottWaveCard({
               <input
                 type="checkbox"
                 checked={value.show_projection_4h}
-                disabled={!value.enabled || !impulseEnabled}
+                disabled={!value.enabled || !value.pattern_menu_by_tf["4h"].motive_impulse}
                 onChange={(e) => onChange({ ...value, show_projection_4h: e.target.checked })}
               />
               <span>İleri Fib projeksiyon — 4h (makro itkiden; şema, tahmin değildir)</span>
@@ -274,7 +272,7 @@ export function ElliottWaveCard({
               <input
                 type="checkbox"
                 checked={value.show_projection_1h}
-                disabled={!value.enabled || !impulseEnabled}
+                disabled={!value.enabled || !value.pattern_menu_by_tf["1h"].motive_impulse}
                 onChange={(e) => onChange({ ...value, show_projection_1h: e.target.checked })}
               />
               <span>İleri Fib projeksiyon — 1h (ara itkiden)</span>
@@ -283,7 +281,7 @@ export function ElliottWaveCard({
               <input
                 type="checkbox"
                 checked={value.show_projection_15m}
-                disabled={!value.enabled || !impulseEnabled}
+                disabled={!value.enabled || !value.pattern_menu_by_tf["15m"].motive_impulse}
                 onChange={(e) => onChange({ ...value, show_projection_15m: e.target.checked })}
               />
               <span>İleri Fib projeksiyon — 15m (mikro itkiden)</span>

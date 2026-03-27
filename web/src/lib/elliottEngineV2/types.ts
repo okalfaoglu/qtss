@@ -75,6 +75,8 @@ export type ElliottEngineInputV2 = {
   maxWindows?: number;
   /** Düzeltme dalgası kalıplarını filtreler; yoksa hepsi açık kabul edilir. */
   patternToggles?: ElliottPatternMenuToggles;
+  /** TF başına dalga türleri; varsa `patternToggles` yerine kullanılır. */
+  patternTogglesByTf?: Partial<Record<Timeframe, ElliottPatternMenuToggles>>;
 };
 
 export type ElliottEngineOutputV2 = {

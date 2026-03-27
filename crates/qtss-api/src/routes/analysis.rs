@@ -80,9 +80,70 @@ fn default_elliott_wave_json() -> serde_json::Value {
         "projection_steps": 12,
         "use_acp_zigzag_swing": false,
         "acp_zigzag_row_index": 0,
+        "pattern_menu": {
+            "motive_impulse": true,
+            "motive_diagonal": true,
+            "corrective_zigzag": true,
+            "corrective_flat": true,
+            "corrective_triangle": true,
+            "corrective_complex_wxy": true
+        },
+        "pattern_menu_by_tf": {
+            "4h": {
+                "motive_impulse": true,
+                "motive_diagonal": true,
+                "corrective_zigzag": true,
+                "corrective_flat": true,
+                "corrective_triangle": true,
+                "corrective_complex_wxy": true
+            },
+            "1h": {
+                "motive_impulse": true,
+                "motive_diagonal": true,
+                "corrective_zigzag": true,
+                "corrective_flat": true,
+                "corrective_triangle": true,
+                "corrective_complex_wxy": true
+            },
+            "15m": {
+                "motive_impulse": true,
+                "motive_diagonal": true,
+                "corrective_zigzag": true,
+                "corrective_flat": true,
+                "corrective_triangle": true,
+                "corrective_complex_wxy": true
+            }
+        },
         "mtf_wave_color_4h": "#e53935",
         "mtf_wave_color_1h": "#43a047",
-        "mtf_wave_color_15m": "#fb8c00"
+        "mtf_wave_color_15m": "#fb8c00",
+        "mtf_label_color_4h": "#e53935",
+        "mtf_label_color_1h": "#43a047",
+        "mtf_label_color_15m": "#fb8c00",
+        "show_line_4h": true,
+        "show_line_1h": true,
+        "show_line_15m": true,
+        "show_label_4h": true,
+        "show_label_1h": true,
+        "show_label_15m": true,
+        "mtf_line_style_4h": "solid",
+        "mtf_line_style_1h": "dashed",
+        "mtf_line_style_15m": "dotted",
+        "mtf_line_width_4h": 4,
+        "mtf_line_width_1h": 3,
+        "mtf_line_width_15m": 2,
+        "show_zigzag_pivot_4h": true,
+        "show_zigzag_pivot_1h": true,
+        "show_zigzag_pivot_15m": true,
+        "mtf_zigzag_color_4h": "#e53935",
+        "mtf_zigzag_color_1h": "#43a047",
+        "mtf_zigzag_color_15m": "#fb8c00",
+        "mtf_zigzag_line_style_4h": "dotted",
+        "mtf_zigzag_line_style_1h": "dotted",
+        "mtf_zigzag_line_style_15m": "dotted",
+        "mtf_zigzag_line_width_4h": 2,
+        "mtf_zigzag_line_width_1h": 2,
+        "mtf_zigzag_line_width_15m": 2
     })
 }
 
