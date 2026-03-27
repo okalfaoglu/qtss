@@ -9,16 +9,48 @@ use qtss_binance::{
     connect_url, parse_closed_kline_json, public_spot_kline_url, public_usdm_kline_url,
 };
 use qtss_common::{init_logging, load_dotenv};
-use qtss_storage::{create_pool, run_migrations, upsert_market_bar, MarketBarUpsert};
+use qtss_storage::{
+    create_pool, run_migrations, upsert_market_bar, MarketBarUpsert, PnlRollupRepository,
+};
 use rust_decimal::Decimal;
 use sqlx::PgPool;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tracing::{info, warn};
 
+async fn pnl_rollup_loop(pool: PgPool) {
+    let pnl = PnlRollupRepository::new(pool);
+    loop {
+        match pnl.rebuild_live_rollups_from_exchange_orders().await {
+            Ok(s) => info!(
+                scanned = s.orders_scanned,
+                fills = s.orders_with_fills,
+                rows = s.rollup_rows_written,
+                "pnl_rollups yenilendi"
+            ),
+            Err(e) => warn!(%e, "pnl_rollups rebuild"),
+        }
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     load_dotenv();
     init_logging("info,qtss_worker=debug");
+
+    let pool_opt: Option<PgPool> = match std::env::var("DATABASE_URL") {
+        Ok(db_url) if !db_url.trim().is_empty() => {
+            let pool = create_pool(&db_url, 3).await?;
+            run_migrations(&pool).await?;
+            let pnl_pool = pool.clone();
+            tokio::spawn(pnl_rollup_loop(pnl_pool));
+            Some(pool)
+        }
+        _ => {
+            warn!("DATABASE_URL yok — pnl_rollups / market_bars DB yazımı kapalı");
+            None
+        }
+    };
 
     if let Ok(sym) = std::env::var("QTSS_KLINE_SYMBOL") {
         let sym = sym.trim().to_string();
@@ -29,13 +61,11 @@ async fn main() -> anyhow::Result<()> {
                 std::env::var("QTSS_KLINE_SEGMENT").unwrap_or_else(|_| "spot".into());
             info!(%sym, %interval, %segment, "kline WebSocket görevi başlatılıyor");
 
-            match std::env::var("DATABASE_URL") {
-                Ok(db_url) if !db_url.trim().is_empty() => {
-                    let pool = create_pool(&db_url, 3).await?;
-                    run_migrations(&pool).await?;
-                    tokio::spawn(kline_ws_loop(sym, interval, segment, Some(pool)));
+            match pool_opt.as_ref() {
+                Some(pool) => {
+                    tokio::spawn(kline_ws_loop(sym, interval, segment, Some(pool.clone())));
                 }
-                _ => {
+                None => {
                     warn!("DATABASE_URL yok — kline yalnızca log (market_bars yazılmaz)");
                     tokio::spawn(kline_ws_loop(sym, interval, segment, None));
                 }

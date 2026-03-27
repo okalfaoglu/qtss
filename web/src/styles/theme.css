@@ -884,6 +884,16 @@ button.theme-toggle:hover {
   gap: 0.35rem;
 }
 
+.tv-settings__subtabs {
+  margin-top: 0.35rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.tv-settings__subtabs .tv-settings__tab {
+  font-size: 0.72rem;
+  padding: 0.32rem 0.35rem;
+}
+
 .tv-settings__tab {
   border: 1px solid var(--border);
   background: transparent;

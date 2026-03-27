@@ -20,7 +20,7 @@
 
 ## Denetim
 
-- **`audit_log`**: `/api/v1/*` üzerindeki mutasyonlar yalnızca **`QTSS_AUDIT_HTTP=1`** iken kaydedilir. Saklama süresi ve PII politikası operasyonel karar.
+- **`audit_log`**: `/api/v1/*` üzerindeki mutasyonlar yalnızca **`QTSS_AUDIT_HTTP=1`** iken kaydedilir; değişken tanımsız veya `1` dışındaysa denetim kapalıdır. Saklama süresi ve PII politikası operasyonel karar.
 - İleride: imzalı denetim zinciri, ayrı immutability (WORM) storage.
 
 ## Tenancy

@@ -104,6 +104,9 @@ function appendSegmentToLastBar(out: ZigzagPivot[], rows: OhlcV2[]): void {
  * Grafik tarafı: motor pivotları aynı kalır. Çizgi, son onaylı pivottan sonra kalan bölgede
  * ham fraktallar + aynı sapma birleştirmesiyle devam eder — tek parça “global min/max” çizgisi
  * aradaki tepkiyi atlayıp mumların içinden kesmez.
+ *
+ * Son muma fitil uzatması (`appendSegmentToLastBar`) yalnızca bu kuyruk gerçekten onaylı ucu
+ * oynattıysa uygulanır; ara bölgede hiç ham aday yoksa düz çizgi çizilmez.
  */
 export function extendZigzagPivotsForChartLine(
   rows: OhlcV2[],
@@ -123,9 +126,17 @@ export function extendZigzagPivotsForChartLine(
   const tail: ZigzagPivot[] = [{ ...last }];
   mergeDeviationChain(tail, rawAfter, dev);
 
+  const finTail = tail[tail.length - 1]!;
+  /** Ham fraktal + sapma kuyruğu onaylı ucu gerçekten oynatmadıysa son muma düz segment ekleme (yanıltıcı düz çizgi). */
+  const hadFractalBackedExtension =
+    tail.length > 1 ||
+    finTail.index !== last.index ||
+    finTail.price !== last.price ||
+    finTail.kind !== last.kind;
+
   const merged = [...pivots.slice(0, -1), ...tail];
   const fin = merged[merged.length - 1];
-  if (fin.index < n - 1) {
+  if (hadFractalBackedExtension && fin.index < n - 1) {
     appendSegmentToLastBar(merged, rows);
   }
 

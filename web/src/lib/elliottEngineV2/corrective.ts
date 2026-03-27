@@ -9,6 +9,94 @@ function mergePatternToggles(t?: ElliottPatternMenuToggles): ElliottPatternMenuT
 const EPS = 1e-10;
 type CorrectiveContext = "wave2" | "wave4" | "post";
 
+/** §2.5.4.3 tri_r2 — A–C ve B–D çizgilerinde linear fiyat (index = zaman). */
+function linearPriceAtIndex(t: number, t1: number, p1: number, t2: number, p2: number): number {
+  if (Math.abs(t2 - t1) < EPS) return p1;
+  return p1 + ((p2 - p1) * (t - t1)) / (t2 - t1);
+}
+
+/** İki doğrunun (index, fiyat) kesişim x’i; paralel → null */
+function lineLineIntersectIndexX(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  x3: number,
+  y3: number,
+  x4: number,
+  y4: number,
+): number | null {
+  const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+  if (Math.abs(denom) < 1e-12) return null;
+  const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+  return x1 + t * (x2 - x1);
+}
+
+/**
+ * §2.5.4.3 — 6 pivot: A–C ve B–D uçları; tüm tepe/dipler iki çizgi arasında mı?
+ */
+function triangleTriR2ChannelOk(pts: ZigzagPivot[]): boolean {
+  if (pts.length < 6) return false;
+  const p = pts;
+  for (let i = 0; i < 6; i++) {
+    const t = p[i].index;
+    const vAC = linearPriceAtIndex(t, p[1].index, p[1].price, p[3].index, p[3].price);
+    const vBD = linearPriceAtIndex(t, p[2].index, p[2].price, p[4].index, p[4].price);
+    const lo = Math.min(vAC, vBD);
+    const hi = Math.max(vAC, vBD);
+    if (p[i].price < lo - 1e-7 || p[i].price > hi + 1e-7) return false;
+  }
+  return true;
+}
+
+/** tri_r3 — üst/alt bant kesişimi E bitişinden sonra (gelecekteki apex). */
+function triangleTriR3ApexAfterE(pts: ZigzagPivot[]): boolean {
+  if (pts.length < 6) return false;
+  const p = pts;
+  const ix = lineLineIntersectIndexX(
+    p[1].index,
+    p[1].price,
+    p[3].index,
+    p[3].price,
+    p[2].index,
+    p[2].price,
+    p[4].index,
+    p[4].price,
+  );
+  if (ix === null) return false;
+  return ix + EPS >= p[5].index;
+}
+
+/** tri_r4 — çizgiler paralel değil (eğim farkı). */
+function triangleTriR4NotParallel(pts: ZigzagPivot[]): boolean {
+  if (pts.length < 6) return false;
+  const p = pts;
+  const dx1 = p[3].index - p[1].index;
+  const dy1 = p[3].price - p[1].price;
+  const dx2 = p[4].index - p[2].index;
+  const dy2 = p[4].price - p[2].price;
+  if (Math.abs(dx1) < EPS || Math.abs(dx2) < EPS) return false;
+  const s1 = dy1 / dx1;
+  const s2 = dy2 / dx2;
+  return Math.abs(s1 - s2) > 1e-9;
+}
+
+/** tri_r7 — genişleyen üçgende en kısa dalga A veya B (ilk iki bacak). */
+function triangleTriR7ExpandingShortestAb(pts: ZigzagPivot[]): boolean {
+  if (pts.length < 6) return false;
+  const p = pts;
+  const L = [
+    Math.abs(p[1].price - p[0].price),
+    Math.abs(p[2].price - p[1].price),
+    Math.abs(p[3].price - p[2].price),
+    Math.abs(p[4].price - p[3].price),
+    Math.abs(p[5].price - p[4].price),
+  ];
+  const minL = Math.min(...L);
+  const idx = L.indexOf(minL);
+  return idx === 0 || idx === 1;
+}
+
 /** Yassı: B, A’nın büyük bölümünü geri alır; değilse zigzag adayı (§2.5.4.1 / 2.5.4.2). */
 function classifyFlatVsZigzag(retrB: number): "flat" | "zigzag" {
   return retrB >= 0.9 ? "flat" : "zigzag";
@@ -54,7 +142,8 @@ function collectAbcCorrectiveDown(
       const lenA = start.price - a.price;
       if (lenA <= EPS) continue;
       const retrB = (b.price - a.price) / lenA;
-      const lenC = a.price - end.price;
+      /** C bacağı B→C (a→end değil); `cVsA` ve tez `zz_r1` ile uyumlu */
+      const lenC = b.price - end.price;
       const cVsA = lenA > EPS ? lenC / lenA : 0;
       if (retrB < 0.12 || retrB > 2.85) continue;
 
@@ -148,7 +237,7 @@ function findCorrectiveBetween(
     if (t.corrective_complex_wxy) {
       const wxyxz = findWxyxzBetween(start, end, inner, "down", context);
       if (wxyxz) return wxyxz;
-      const comb = findCombinationBetween(start, end, inner, "down");
+      const comb = findCombinationBetween(start, end, inner, "down", context);
       if (comb) return comb;
     }
     return null;
@@ -163,7 +252,7 @@ function findCorrectiveBetween(
   if (t.corrective_complex_wxy) {
     const wxyxz = findWxyxzBetween(start, end, inner, "up", context);
     if (wxyxz) return wxyxz;
-    return findCombinationBetween(start, end, inner, "up");
+    return findCombinationBetween(start, end, inner, "up", context);
   }
   return null;
 }
@@ -174,30 +263,32 @@ function findTriangleBetween(
   inner: ZigzagPivot[],
   context: CorrectiveContext,
 ): CorrectiveCountV2 | null {
-  // Triangle in Elliott context is typically wave 4 or B-like region.
-  if (context !== "wave4" && context !== "post") return null;
-  if (inner.length < 3) return null;
-  const seq = [start, ...inner, end];
-  const last = seq.slice(-5);
-  if (last.length < 5) return null;
+  /** §2.5.4.3: 4. dalga yaygın; 2/B/post bağlamında da aranır (2 nadir). */
+  if (context !== "wave2" && context !== "wave4" && context !== "post") return null;
+  if (inner.length < 4) return null;
 
-  const alternating = last.every((p, i) => (i === 0 ? true : p.kind !== last[i - 1].kind));
+  const seq = [start, ...inner, end];
+  /** 5 dalga a–e → 6 uç pivot (3-3-3-3-3 alt yapı zigzag’ta doğrulanmaz). */
+  if (seq.length < 6) return null;
+  const pts = seq.slice(-6);
+  if (pts.length < 6) return null;
+
+  const alternating = pts.every((p, i) => (i === 0 ? true : p.kind !== pts[i - 1].kind));
   if (!alternating) return null;
 
-  const highs = last.filter((p) => p.kind === "high");
-  const lows = last.filter((p) => p.kind === "low");
+  const highs = pts.filter((p) => p.kind === "high");
+  const lows = pts.filter((p) => p.kind === "low");
   if (highs.length < 2 || lows.length < 2) return null;
 
-  const span1 = Math.abs(last[1].price - last[0].price);
-  const span2 = Math.abs(last[2].price - last[1].price);
-  const span3 = Math.abs(last[3].price - last[2].price);
-  const span4 = Math.abs(last[4].price - last[3].price);
-  const width = Math.max(span1, span2, span3, span4);
+  const span1 = Math.abs(pts[1].price - pts[0].price);
+  const span2 = Math.abs(pts[2].price - pts[1].price);
+  const span3 = Math.abs(pts[3].price - pts[2].price);
+  const span4 = Math.abs(pts[4].price - pts[3].price);
+  const span5 = Math.abs(pts[5].price - pts[4].price);
+  const width = Math.max(span1, span2, span3, span4, span5);
   if (!Number.isFinite(width) || width <= EPS) return null;
   const tightening = span4 <= span1 * 0.85 || span4 <= span2 * 0.85;
 
-  // Geometric channel constraint (contracting wedge):
-  // high-line should slope down or stay flat; low-line should slope up or stay flat.
   const hSlope = highs[highs.length - 1].price - highs[0].price;
   const lSlope = lows[lows.length - 1].price - lows[0].price;
   const converging = hSlope <= EPS && lSlope >= -EPS;
@@ -205,12 +296,32 @@ function findTriangleBetween(
   const envelope0 = Math.abs(highs[0].price - lows[0].price);
   const envelopeN = Math.abs(highs[highs.length - 1].price - lows[lows.length - 1].price);
   const envelopeContract = envelopeN <= envelope0 * 0.9;
+  const envelopeExpand = envelopeN >= envelope0 * 1.05;
 
-  const legA = Math.abs(last[1].price - last[0].price);
-  const legB = Math.abs(last[2].price - last[1].price);
+  const legA = Math.abs(pts[1].price - pts[0].price);
+  const legB = Math.abs(pts[2].price - pts[1].price);
   const bVsA = legA > EPS ? legB / legA : 0;
-  /** §2.5.4.3 tri_r5 — B, A’nın %38.2–%161.8 aralığında */
   const triR5 = bVsA >= 0.382 && bVsA <= 1.618;
+
+  const triR2 = triangleTriR2ChannelOk(pts);
+  const triR3 = triangleTriR3ApexAfterE(pts);
+  const triR4 = triangleTriR4NotParallel(pts);
+  const triR7Exp = triangleTriR7ExpandingShortestAb(pts);
+
+  const kindContract = converging && envelopeContract;
+  const kindExpand = envelopeExpand && !envelopeContract && triR7Exp;
+
+  const triR2e = (() => {
+    const t = pts[5].index;
+    const vAC = linearPriceAtIndex(t, pts[1].index, pts[1].price, pts[3].index, pts[3].price);
+    const vBD = linearPriceAtIndex(t, pts[2].index, pts[2].price, pts[4].index, pts[4].price);
+    const lo = Math.min(vAC, vBD);
+    const hi = Math.max(vAC, vBD);
+    const range = hi - lo;
+    if (range <= EPS) return true;
+    const d = Math.min(Math.abs(pts[5].price - lo), Math.abs(pts[5].price - hi));
+    return d / range <= 0.15 + 1e-9;
+  })();
 
   const checks: ElliottRuleCheckV2[] = [
     { id: "triangle_alt", passed: alternating },
@@ -221,41 +332,116 @@ function findTriangleBetween(
     },
     { id: "triangle_converging", passed: converging, detail: `hSlope=${hSlope.toFixed(3)} lSlope=${lSlope.toFixed(3)}` },
     { id: "triangle_envelope_contract", passed: envelopeContract, detail: `${envelopeN.toFixed(3)}<=${(envelope0 * 0.9).toFixed(3)}` },
+    { id: "triangle_expanding", passed: envelopeExpand, detail: `zarf↑ ${envelopeN.toFixed(3)}≥${(envelope0 * 1.05).toFixed(3)}` },
     { id: "tri_r5", passed: triR5, detail: `B/A=${bVsA.toFixed(3)} ∈ [0.382,1.618]` },
-    { id: "triangle_context_wave4_or_b", passed: true, detail: context },
+    { id: "tri_r2_channel", passed: triR2, detail: "A–C / B–D şeridi" },
+    { id: "tri_r2_e_deviation_15", passed: triR2e, detail: "E bant sapması ≤%15" },
+    { id: "tri_r3_apex_after_e", passed: triR3, detail: "kesişim E sonrası" },
+    { id: "tri_r4_not_parallel", passed: triR4, detail: "AC ∦ BD" },
+    { id: "tri_r7_expanding_shortest_ab", passed: !envelopeExpand || triR7Exp, detail: envelopeExpand ? "genişleyen: en kısa A veya B" : "daralan: tri_r7 uygulanmaz" },
+    {
+      id: "tri_r1_substructure_note",
+      passed: true,
+      detail: "§2.5.4.3 3-3-3-3-3 alt dalga sayımı zigzag pivotlarında yok",
+    },
+    {
+      id: "triangle_context_wave2_wave4_post",
+      passed: true,
+      detail: context,
+    },
   ];
   const score = checks.filter((x) => x.passed).length + 0.2;
-  if (!converging || !envelopeContract) return null;
-  return {
-    pivots: [start, last[1], last[2], end],
-    path: last,
-    labels: ["a", "b", "c", "d", "e"],
-    pattern: "triangle",
-    checks,
-    score,
-  };
+
+  if (!triR2 || !triR3 || !triR4 || !triR5) return null;
+  if (kindContract) {
+    return {
+      pivots: [pts[0], pts[1], pts[2], pts[5]],
+      path: pts,
+      labels: ["a", "b", "c", "d", "e"],
+      pattern: "triangle",
+      checks,
+      score,
+    };
+  }
+  if (kindExpand && triR7Exp) {
+    return {
+      pivots: [pts[0], pts[1], pts[2], pts[5]],
+      path: pts,
+      labels: ["a", "b", "c", "d", "e"],
+      pattern: "triangle",
+      checks,
+      score,
+    };
+  }
+  return null;
 }
 
+/**
+ * §2.5.4.4 W–X–Y: yapısal teyit (comb_r1–comb_r4). Y tarafında en az iki ek salınım
+ * (iç pivot ≥ 5 → toplam ≥ 7 uç) ki son parça “üçgen benzeri” karmaşıklık filtrelenebilsin.
+ */
 function findCombinationBetween(
   start: ZigzagPivot,
   end: ZigzagPivot,
   inner: ZigzagPivot[],
   direction: "down" | "up",
+  context: CorrectiveContext,
 ): CorrectiveCountV2 | null {
-  if (inner.length < 4) return null;
+  if (inner.length < 5) return null;
   const seq = [start, ...inner, end];
   const alternating = seq.every((p, i) => (i === 0 ? true : p.kind !== seq[i - 1].kind));
   if (!alternating) return null;
   const first = seq[0].price;
-  const last = seq[seq.length - 1].price;
-  const progressed = direction === "down" ? last < first - EPS : last > first + EPS;
+  const lastP = seq[seq.length - 1].price;
+  const progressed = direction === "down" ? lastP < first - EPS : lastP > first + EPS;
   if (!progressed) return null;
+
+  const legW = Math.abs(seq[1].price - seq[0].price);
+  const legX = Math.abs(seq[2].price - seq[1].price);
+  const ySegs: number[] = [];
+  for (let i = 3; i < seq.length; i++) {
+    ySegs.push(Math.abs(seq[i].price - seq[i - 1].price));
+  }
+  const pathY = ySegs.reduce((a, b) => a + b, 0);
+  const maxYLeg = ySegs.length ? Math.max(...ySegs) : 0;
+
+  const xVsW = legW > EPS ? legX / legW : 0;
+  /** comb_r1 — üç parça ölçülebilir; X/W makul bant (yapısal bütünlük, §2.5.4.4) */
+  const combR1 =
+    legW > EPS && legX > EPS && maxYLeg > EPS && xVsW >= 0.12 && xVsW <= 1.05;
+  /** comb_r2 — X, W’yi pratikte domine etmez (çoğunlukla zigzag bağlantısı) */
+  const combR2 = legX <= legW * 0.95 + EPS;
+  /** comb_r3 — Y bölümü (yol toplamı) cüce değil; son parça sık üçgen benzeri */
+  const combR3 = pathY >= legX * 0.35 - EPS;
+  /** comb_r4 — almaşıklık/kontrast: W ile Y tarafının güçlü bacakları farklı karakter */
+  const maxWY = Math.max(legW, maxYLeg);
+  const contrast = maxWY > EPS ? Math.abs(legW - maxYLeg) / maxWY : 0;
+  const combR4 = contrast >= 0.12 - EPS;
+
+  if (!combR1 || !combR2 || !combR3 || !combR4) return null;
 
   const checks: ElliottRuleCheckV2[] = [
     { id: "comb_alt", passed: alternating },
     { id: "comb_progress", passed: progressed },
+    { id: "comb_r1", passed: combR1, detail: `X/W=${xVsW.toFixed(3)}` },
+    { id: "comb_r2", passed: combR2, detail: `X≤0.95·W` },
+    { id: "comb_r3", passed: combR3, detail: `pathY/X=${legX > EPS ? (pathY / legX).toFixed(3) : "—"}` },
+    { id: "comb_r4", passed: combR4, detail: `kontrast(W,maxY)=${contrast.toFixed(3)}` },
+    {
+      id: "comb_r5",
+      passed: true,
+      detail: "W≈Y / Z uzatma: wxyxz_* (W–X–Y–X–Z motoru)",
+    },
+    {
+      id: "comb_r6",
+      passed: true,
+      detail: `bağlam=${context}; WXYXZ post-B: wxyxz_post_b_context`,
+    },
   ];
-  const score = checks.filter((x) => x.passed).length + 0.05;
+  const combConfirmed = true;
+  checks.push({ id: "comb_confirmed", passed: combConfirmed, detail: "W–X–Y teyit" });
+  const score = checks.filter((x) => x.passed).length * 0.1 + 0.28;
+
   return {
     pivots: [start, seq[1], seq[2], end],
     path: seq,

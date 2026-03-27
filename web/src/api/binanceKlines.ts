@@ -189,7 +189,7 @@ async function fetchBinanceKlinesRecentTotal(params: {
 
 /**
  * Binance klines → grafik satırı.
- * - Varsayılan: tarayıcı → Vite `__binance` veya `VITE_BINANCE_API_BASE` (OAuth gerekmez).
+ * - Varsayılan: tarayıcı → Vite `/__binance` (proxy hedefi `.env` → `VITE_BINANCE_PROXY_TARGET`) veya doğrudan `VITE_BINANCE_API_BASE` (CORS; OAuth gerekmez).
  * - `VITE_BINANCE_KLINES_VIA_API=1` ve `accessToken` doluysa: `GET /api/v1/market/binance/klines`.
  *
  * `startTimeMs` + `endTimeMs`: aynı takvim penceresi — limit aşılsa bile sayfalanır (MTF hizası için).

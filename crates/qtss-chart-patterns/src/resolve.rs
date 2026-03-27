@@ -26,7 +26,12 @@ pub fn resolve_pattern_type_id(
     }
     let bd = bar_diff as f64;
 
-    let upper_angle = if t1p1 > t2p1 {
+    // Pine: `if (t1p1 > t2p1) … else …`. `==` için `else` dalı `den = t2p1 - min(t1p1,t1p2)` üretip
+    // (t1p2≥t1p1 iken) sık sık 0’a düşer ve tüm `resolve` 0 olur. Eşit sol uç fiyatında üst/alt açıları
+    // anlamlı tutmak için sınır `>=` ile ilk dala alınır (Trendoscope kaynak `>` ise bu tek farklılık).
+    let t1_left_higher_or_equal = t1p1 >= t2p1;
+
+    let upper_angle = if t1_left_higher_or_equal {
         let den = t1p1 - t2p1.min(t2p2);
         if den.abs() < 1e-15 {
             return 0;
@@ -40,7 +45,7 @@ pub fn resolve_pattern_type_id(
         (t2p2 - t1p1.min(t1p2)) / den
     };
 
-    let lower_angle = if t1p1 > t2p1 {
+    let lower_angle = if t1_left_higher_or_equal {
         let den = t2p1 - t1p1.max(t1p2);
         if den.abs() < 1e-15 {
             return 0;
@@ -153,5 +158,13 @@ mod tests {
         // t1 üstte başlayıp altta bitmez — Pine invalid
         let id = resolve_pattern_type_id(100.0, 90.0, 95.0, 105.0, 10, 0.2);
         assert_eq!(id, 0);
+    }
+
+    #[test]
+    fn equal_left_anchor_uses_first_branch_slopes_not_zero_den_else() {
+        // t1p1 == t2p1: eski `>` ile else dalında upper den = t2p1 - min(t1p1,t1p2) çoğu zaman 0 → tüm id 0.
+        // t2p2 < t1p1 iken ilk dal anlamlı payda üretir; id 0 olmamalı (geçerli işaret ile).
+        let id = resolve_pattern_type_id(100.0, 110.0, 100.0, 95.0, 10, 0.2);
+        assert!(id > 0, "expected non-zero pattern id for equal left anchors, got {id}");
     }
 }

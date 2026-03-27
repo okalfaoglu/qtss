@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::symbol::InstrumentId;
 
+/// Taşınabilir emir yönü — JSON/API ve backtest (`qtss-backtest`) bu tipi kullanır (`buy` / `sell`).
+///
+/// Binance REST `side` (`BUY` / `SELL`) için tek dönüşüm: `qtss_binance::types::OrderSide::from`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderSide {

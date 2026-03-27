@@ -196,29 +196,16 @@ impl ZigzagLite {
             return;
         }
 
-        let p_dir = Self::last_trend_dir(self.pivots[0].dir);
+        let p_dir_before = Self::last_trend_dir(self.pivots[0].dir);
         let last_ix = self.pivots[0].point.index;
         let distance = new_bar - last_ix;
         let overflow = distance >= self.length as i64;
 
-        let force_double = if self.pivots.len() > 1 {
-            let ll = &self.pivots[1];
-            if p_dir == 1 && p_low_bar == 0 {
-                p_low < ll.point.price
-            } else if p_dir == -1 && p_high_bar == 0 {
-                p_high > ll.point.price
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
         let mut replaced = false;
         // 1) Aynı yönde uç güncelle — Pine: `shift` + `Pivot.new` + `addnewpivot` (yerinde atama değil).
-        if (p_dir == 1 && p_high_bar == 0) || (p_dir == -1 && p_low_bar == 0) {
+        if (p_dir_before == 1 && p_high_bar == 0) || (p_dir_before == -1 && p_low_bar == 0) {
             let lp = self.pivots[0].clone();
-            let value = if p_dir == 1 { p_high } else { p_low };
+            let value = if p_dir_before == 1 { p_high } else { p_low };
             let remove_old = value * f64::from(lp.dir) >= lp.point.price * f64::from(lp.dir);
             if remove_old {
                 self.flags.update_last_pivot = true;
@@ -236,6 +223,22 @@ impl ZigzagLite {
                 replaced = true;
             }
         }
+
+        // `forceDouble` ve trend yönü (2)–(3) için: (1) uç pivotu değiştiyse eski `pivots[0]` üzerinden
+        // hesaplanan kuvvetli çift / bant koşulu yanlış kalır — güncel liste + `last_trend_dir` kullan.
+        let p_dir = Self::last_trend_dir(self.pivots[0].dir);
+        let force_double = if self.pivots.len() > 1 {
+            let ll = &self.pivots[1];
+            if p_dir == 1 && p_low_bar == 0 {
+                p_low < ll.point.price
+            } else if p_dir == -1 && p_high_bar == 0 {
+                p_high > ll.point.price
+            } else {
+                false
+            }
+        } else {
+            false
+        };
 
         // 2) Karşı pivot (Pine: `not newPivot || forceDouble`; burada adım başında newPivot temiz).
         let allow_opp = !self.flags.new_pivot || force_double;

@@ -19,6 +19,7 @@ function mergePatternToggles(t?: ElliottPatternMenuToggles): ElliottPatternMenuT
 /** 15m mikro itkide dalga 1–5 arası en az bu kadar mum aralığı; aksi halde etiketler üst üste biner. */
 const MIN_15M_IMPULSE_P1_P5_BAR_SPAN = 12;
 
+/** Boğa: `w3_not_below_w1_end` — ayı: `w3_not_above_w1_end`. Her itkıda yalnızca biri üretilir; ikisi de set’te olduğu için `decideTimeframeState` hangi yönde fail olursa `invalid` üretir. */
 const HARD_IMPULSE_CHECK_IDS = new Set([
   "structure",
   "w2_not_beyond_w1_start",
@@ -26,6 +27,9 @@ const HARD_IMPULSE_CHECK_IDS = new Set([
   "w3_not_shortest_135",
   "w3_not_below_w1_end",
   "w3_not_above_w1_end",
+  "w5_not_longest_135",
+  "ed_r4_w3_area_gt_w2",
+  "ld_r3_w5_ge_138_w4",
 ]);
 
 function hasPassedCheck(c: CorrectiveCountV2, id: string): boolean {
@@ -40,11 +44,19 @@ function correctiveIsConfirmed(c: CorrectiveCountV2): boolean {
     return hasPassedCheck(c, "abc_order") && hasPassedCheck(c, "flat_r4") && hasPassedCheck(c, "flat_g7");
   }
   if (c.pattern === "triangle") {
-    return hasPassedCheck(c, "tri_r5") && hasPassedCheck(c, "triangle_converging") && hasPassedCheck(c, "triangle_envelope_contract");
+    const triCore =
+      hasPassedCheck(c, "tri_r5") &&
+      hasPassedCheck(c, "tri_r2_channel") &&
+      hasPassedCheck(c, "tri_r3_apex_after_e") &&
+      hasPassedCheck(c, "tri_r4_not_parallel");
+    const contract =
+      hasPassedCheck(c, "triangle_converging") && hasPassedCheck(c, "triangle_envelope_contract");
+    const expand =
+      hasPassedCheck(c, "triangle_expanding") && hasPassedCheck(c, "tri_r7_expanding_shortest_ab");
+    return triCore && (contract || expand);
   }
   if (c.pattern === "combination") {
-    // W-X-Y-X-Z motoru teyit üretiyorsa confirmed; diğer kombinasyonlar candidate kalır.
-    return hasPassedCheck(c, "wxyxz_confirmed");
+    return hasPassedCheck(c, "comb_confirmed") || hasPassedCheck(c, "wxyxz_confirmed");
   }
   return false;
 }
@@ -59,9 +71,10 @@ export function decideTimeframeState(state: Omit<TimeframeStateV2, "decision">):
   if (hardFails) return "invalid";
   if (standardW4Fail) return "invalid";
 
+  /** Dalga 2 ve 4 ikisi de üretildiyse tez beklentisi: her düzeltme kurallara uyar; tek yönlü onay yeterli değil. */
   const internals = [state.wave2, state.wave4].filter((x): x is CorrectiveCountV2 => !!x);
   if (!internals.length) return "candidate";
-  return internals.some(correctiveIsConfirmed) ? "confirmed" : "candidate";
+  return internals.every(correctiveIsConfirmed) ? "confirmed" : "candidate";
 }
 
 function microImpulseTooCompressed(imp: ImpulseCountV2): boolean {

@@ -15,7 +15,7 @@ use axum::Router;
 
 pub use catalog_sync::catalog_sync_router;
 pub use config_admin::config_router;
-pub use dashboard::dashboard_router;
+pub use dashboard::{dashboard_admin_router, dashboard_router};
 pub use health::health_router;
 
 use crate::audit_http::audit_http_middleware;
@@ -36,6 +36,10 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(
             dashboard_router()
                 .layer(from_fn(require_dashboard_roles)),
+        )
+        .merge(
+            dashboard_admin_router()
+                .layer(from_fn(require_admin)),
         )
         .merge(
             catalog_sync_router()

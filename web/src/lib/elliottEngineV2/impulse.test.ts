@@ -61,13 +61,14 @@ describe("detectBestImpulseV2 hard rule matrix", () => {
   });
 
   it("rejects overlap for standard but allows it for diagonal", () => {
+    // Diyagonal §2.5.3.4: ed_r4, w5_not_longest, ld_r3 (|5|≥1.38|4|) ile uyumlu fiyatlar
     const pivots: ZigzagPivot[] = [
       p(0, 100, "low"),
       p(1, 120, "high"),
       p(2, 108, "low"),
       p(3, 140, "high"),
-      p(4, 116, "low"), // overlap: P4 <= P1
-      p(5, 152, "high"),
+      p(4, 117, "low"), // |4|=23 → |5|≥~31.74; |5|=32, w5 en uzun değil (|3|=32)
+      p(5, 149, "high"),
     ];
     const standard = detectBestImpulseV2(pivots, 1, { allowStandard: true, allowDiagonal: false });
     expect(standard).toBeNull();
@@ -130,14 +131,14 @@ describe("detectBestImpulseV2 hard rule matrix", () => {
   });
 
   it("rejects bearish standard on w4–w1 overlap but allows bearish diagonal", () => {
-    // P4=185 > P1=180 → standart `w4_no_overlap_w1` fail; ayı doğrulandı (overlap: false)
+    // P4=185 > P1=180 → standart fail; diyagonal: ld_r3 / ed_r4 / w5_not_longest ile uyumlu (P5=165)
     const pivots: ZigzagPivot[] = [
       p(0, 200, "high"),
       p(1, 180, "low"),
       p(2, 192, "high"),
       p(3, 172, "low"),
       p(4, 185, "high"),
-      p(5, 160, "low"),
+      p(5, 165, "low"),
     ];
     expect(detectBestImpulseV2(pivots, 1, { allowStandard: true, allowDiagonal: false })).toBeNull();
 

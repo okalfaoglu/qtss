@@ -63,6 +63,9 @@ pub fn get_ratio_diff(p1: (i64, f64), p2: (i64, f64), p3: (i64, f64)) -> Option<
 
 /// Pine `wr.Line.inspect(...)` — tek trend doğrusu için skor ve geçerlilik.
 /// Dönüş: `(ok, score)` — `ok == valid && score/total < score_ratio_max` (Pine: `errorThresold/100`, varsayılan 0.2).
+///
+/// `bars` anahtarları Pine’daki gibi ardışık varsayılmaz: `[starting_bar, ending_bar]` içinde yalnızca haritada
+/// bulunan indeksler değerlendirilir (seyrek takvim / atlanan bar_index).
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn trend_line_inspect(
@@ -81,12 +84,7 @@ pub fn trend_line_inspect(
     let mut score = 0.0_f64;
     let mut total = 0.0_f64;
     let mut loop_valid = true;
-    let mut b = starting_bar;
-    while b <= ending_bar {
-        let Some(ohlc) = bars.get(&b) else {
-            loop_valid = false;
-            break;
-        };
+    for (&b, ohlc) in bars.range(starting_bar..=ending_bar) {
         total += 1.0;
         let Some(line_price) = line_price_at_bar_index(p1.0, p1.1, p2.0, p2.1, b) else {
             loop_valid = false;
@@ -105,7 +103,6 @@ pub fn trend_line_inspect(
             loop_valid = false;
             break;
         }
-        b += 1;
     }
     let ok = loop_valid && total > 0.0 && score / total < score_ratio_max;
     (ok, score)
@@ -206,6 +203,18 @@ mod tests {
         // `otherBar` döngüdeki bir indeksle çakışmamalı: Pine’da o mumda çizgi band dışındaysa valid kırılır.
         let mut m = BTreeMap::new();
         for i in 0..5 {
+            let (k, v) = bar(i, 85.0, 90.0, 80.0, 85.0);
+            m.insert(k, v);
+        }
+        let (ok, sc) = trend_line_inspect((0, 100.0), (4, 100.0), 1, 4, 0, 1.0, &m, 0.2);
+        assert!(ok);
+        assert_eq!(sc, 0.0);
+    }
+
+    #[test]
+    fn trend_line_inspect_sparse_bar_index_skips_gaps() {
+        let mut m = BTreeMap::new();
+        for i in [1_i64, 4] {
             let (k, v) = bar(i, 85.0, 90.0, 80.0, 85.0);
             m.insert(k, v);
         }

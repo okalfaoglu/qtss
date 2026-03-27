@@ -13,10 +13,13 @@
 
 mod find;
 mod ohlc;
+mod pattern_catalog;
 mod resolve;
 mod scan;
 mod theme;
 mod zigzag;
+
+pub use pattern_catalog::{pattern_name_by_id, PatternId};
 
 pub use find::{
     analyze_channel_six_from_bars, channel_six_drawing_hints, last_six_pivots_chrono,
@@ -66,25 +69,13 @@ pub fn line_price_at_bar_index(
     Some(p1_price + (bar - p1_bar) as f64 * step)
 }
 
-/// `basechartpatterns.getPatternNameById` ile **kimlik eşlemesi**.
+/// `basechartpatterns.getPatternNameById` ile **kimlik eşlemesi** ([`pattern_name_by_id`] ile aynı tablo).
 #[must_use]
 pub fn pattern_name_by_acp_id(id: u8) -> Option<&'static str> {
-    Some(match id {
-        1 => "Ascending Channel",
-        2 => "Descending Channel",
-        3 => "Ranging Channel",
-        4 => "Rising Wedge (Expanding)",
-        5 => "Falling Wedge (Expanding)",
-        6 => "Diverging Triangle",
-        7 => "Ascending Triangle (Expanding)",
-        8 => "Descending Triangle (Expanding)",
-        9 => "Rising Wedge (Contracting)",
-        10 => "Falling Wedge (Contracting)",
-        11 => "Converging Triangle",
-        12 => "Descending Triangle (Contracting)",
-        13 => "Ascending Triangle (Contracting)",
-        _ => return None,
-    })
+    if !(1..=13).contains(&id) {
+        return None;
+    }
+    Some(pattern_name_by_id(id as i32))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

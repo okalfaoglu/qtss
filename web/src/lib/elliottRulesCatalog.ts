@@ -82,10 +82,11 @@ export const ELLIOTT_IMPULSE_RULES = [
 /**
  * `elliottEngineV2` ile örtüşme derecesi (panel etiketi).
  * - `full`: zigzag pivot itkisinde ilgili kontrol geçerli sayılır.
- * - `partial`: bir alt kümesi motorda; metindeki diğer cümleler henüz yok / bağlam bağımlı (ör. diyagonal).
+ * - `partial`: bir alt kümesi motorda; metindeki diğer cümleler henüz yok / bağlam bağımlı.
+ * - `standard_only`: yalnızca standart itkıda motor kontrolü; diyagonalda ilgili kural kasıtlı olarak devre dışı (ör. `w4_no_overlap_w1` → her zaman geçer).
  * - `none`: yalnızca kaynak metin; otomatik skorda doğrudan yok.
  */
-export type ElliottImpulseRuleEngineScope = "full" | "partial" | "none";
+export type ElliottImpulseRuleEngineScope = "full" | "partial" | "standard_only" | "none";
 
 export const ELLIOTT_IMPULSE_RULE_ENGINE_SCOPE: Record<
   (typeof ELLIOTT_IMPULSE_RULES)[number]["id"],
@@ -95,13 +96,14 @@ export const ELLIOTT_IMPULSE_RULE_ENGINE_SCOPE: Record<
   tez_hard_wave2_wave4_length: "partial",
   tez_hard_wave3_shortest: "full",
   tez_hard_wave3_vs_wave1_end: "full",
-  /** Standart itkide w4–w1 bindirme yok; diyagonal modda kasıtlı istisna. */
-  tez_hard_wave4_wave1_area: "partial",
+  /** Standart itkide w4–w1 alanı motorlu; diyagonalda kontrol uygulanmaz (passed: true). */
+  tez_hard_wave4_wave1_area: "standard_only",
 };
 
 export function elliottImpulseRuleScopeLabelTr(scope: ElliottImpulseRuleEngineScope): string {
   if (scope === "full") return "Motor · tam";
   if (scope === "partial") return "Motor · kısmi";
+  if (scope === "standard_only") return "Motor · yalnız standart itkı";
   return "Yalnız metin";
 }
 

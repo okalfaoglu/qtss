@@ -6,7 +6,7 @@ use qtss_binance::{
 };
 use qtss_common::{log_business, Loggable, QtssLogLevel};
 use qtss_domain::exchange::{ExchangeId, MarketSegment};
-use qtss_domain::orders::{OrderIntent, OrderSide, OrderType, TimeInForce};
+use qtss_domain::orders::{OrderIntent, OrderType, TimeInForce};
 use rust_decimal::Decimal;
 use serde_json::Value;
 use tracing::instrument;
@@ -66,13 +66,6 @@ impl BinanceLiveGateway {
         d.normalize().to_string()
     }
 
-    fn map_side(s: OrderSide) -> BSide {
-        match s {
-            OrderSide::Buy => BSide::Buy,
-            OrderSide::Sell => BSide::Sell,
-        }
-    }
-
     fn map_tif(t: TimeInForce) -> Result<BTif, ExecutionError> {
         match t {
             TimeInForce::Gtc => Ok(BTif::Gtc),
@@ -90,7 +83,7 @@ impl BinanceLiveGateway {
         symbol: &str,
         cid: &str,
     ) -> Result<Value, ExecutionError> {
-        let side = Self::map_side(intent.side);
+        let side: BSide = intent.side.into();
         let qty = Self::dec_str(intent.quantity);
         match &intent.order_type {
             OrderType::Market => self
@@ -146,7 +139,7 @@ impl BinanceLiveGateway {
         symbol: &str,
         cid: &str,
     ) -> Result<Value, ExecutionError> {
-        let side = Self::map_side(intent.side);
+        let side: BSide = intent.side.into();
         let qty = Self::dec_str(intent.quantity);
 
         match &intent.order_type {

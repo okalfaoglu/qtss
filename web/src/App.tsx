@@ -204,6 +204,8 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<SettingsTab>("general");
   const [drawerSearch, setDrawerSearch] = useState("");
+  const isElliottDrawerGroup =
+    drawerTab === "elliott" || drawerTab === "elliott_impulse" || drawerTab === "elliott_corrective";
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("qtss-theme", theme);
@@ -386,7 +388,9 @@ export default function App() {
   ]);
 
   const elliottV2Output = useMemo(() => {
-    /* Motor çıktısı ZigZag çizgileri için de kullanılır; `enabled` kapalı olsa da üretilir. */
+    /* Motor çıktısı ZigZag çizgileri için de kullanılır; `enabled` kapalı olsa da üretilir.
+     * Kaynak: tam `bars` (açık mum dahil). ACP `repaint=false` penceresi yalnızca `acpOhlcWindowForScan` ile;
+     * Elliott kasıtlı olarak etkilenmez. */
     if (!bars?.length) return null;
     const anchorRows = toOhlcV2(bars);
     if (!anchorRows.length) return null;
@@ -820,10 +824,20 @@ export default function App() {
     setChannelScanJson("");
     setChannelScanLoading(true);
     try {
-      const chrono = chartOhlcRowsSortedChrono(bars);
-      const cap = Math.min(acpConfig.calculated_bars, chrono.length);
-      const capped = chrono.slice(-cap);
-      const payload = chartOhlcRowsToScanBars(capped);
+      const scanWindow = acpOhlcWindowForScan(bars, acpConfig.calculated_bars, acpConfig.scanning.repaint);
+      if (!scanWindow.length) {
+        setChannelScanError(
+          acpConfig.scanning.repaint
+            ? "ACP taraması için yeterli mum yok."
+            : "ACP taraması (repaint kapalı): en az iki kapanmış mum gerekir.",
+        );
+        setLastChannelScan(null);
+        setChannelScanJson("");
+        setChannelScanSummary("");
+        setChannelScanHoverTitle("");
+        return;
+      }
+      const payload = chartOhlcRowsToScanBars(scanWindow);
       const base = acpConfigToChannelSixOptions(acpConfig, theme);
       const res = await scanChannelSix(token, { bars: payload, ...(base as Record<string, unknown>) });
       setLastChannelScan(res);
@@ -1181,8 +1195,8 @@ export default function App() {
                 <button
                   type="button"
                   role="tab"
-                  aria-selected={drawerTab === "elliott"}
-                  className={`tv-settings__tab ${drawerTab === "elliott" ? "is-active" : ""}`}
+                  aria-selected={isElliottDrawerGroup}
+                  className={`tv-settings__tab ${isElliottDrawerGroup ? "is-active" : ""}`}
                   onClick={() => setDrawerTab("elliott")}
                 >
                   Elliott
@@ -1206,6 +1220,41 @@ export default function App() {
                   Setting
                 </button>
               </div>
+              {isElliottDrawerGroup ? (
+                <div
+                  className="tv-settings__tabs tv-settings__subtabs"
+                  role="tablist"
+                  aria-label="Elliott alt sekmeleri"
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={drawerTab === "elliott"}
+                    className={`tv-settings__tab ${drawerTab === "elliott" ? "is-active" : ""}`}
+                    onClick={() => setDrawerTab("elliott")}
+                  >
+                    Özet
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={drawerTab === "elliott_impulse"}
+                    className={`tv-settings__tab ${drawerTab === "elliott_impulse" ? "is-active" : ""}`}
+                    onClick={() => setDrawerTab("elliott_impulse")}
+                  >
+                    İtki (1–5)
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={drawerTab === "elliott_corrective"}
+                    className={`tv-settings__tab ${drawerTab === "elliott_corrective" ? "is-active" : ""}`}
+                    onClick={() => setDrawerTab("elliott_corrective")}
+                  >
+                    Düzeltme (2/4)
+                  </button>
+                </div>
+              ) : null}
 
               {drawerTab === "general" ? (
                 <>

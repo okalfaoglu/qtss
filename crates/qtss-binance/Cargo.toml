@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+qtss-domain.workspace = true
 qtss-storage.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -50,8 +50,9 @@ export function buildTez254AbcChecks(
       detail: `B/A=${retrB.toFixed(3)} ∈ [0.382, ${TEZ_ZIGZAG_B_VS_A_MAX}]`,
     });
 
+    /** zz_r1 — C ve B bacak uzunlukları: C = B→C, B = A→B (`|a−end|` eski hata: C bacağını kaçırıyordu). */
     const lenB = Math.abs(b.price - a.price);
-    const lenC = Math.abs(a.price - end.price);
+    const lenC = Math.abs(b.price - end.price);
     checks.push({
       id: "zz_r1",
       passed: lenC + 1e-10 >= lenB,

@@ -54,8 +54,25 @@ describe("buildTez254AbcChecks", () => {
     expect(checks.find((c) => c.id === "zz_b_not_beyond_a_start")?.passed).toBe(true);
   });
 
-  it("zigzag bear: mirrors B/A and C-end vs A for impulse down", () => {
-    const start = z(0, 100, "high");
+  it("zigzag zz_r1: |C| = |B→C|, |B| = |A→B| — C bacağı B’den ölçülür (|a−end| ile karıştırılmaz)", () => {
+    const start = z(0, 115, "high");
+    const a = z(1, 90, "low");
+    const b = z(2, 100, "high");
+    const end = z(3, 85, "low");
+    const lenA = start.price - a.price;
+    const lenB = Math.abs(b.price - a.price);
+    const lenC = Math.abs(b.price - end.price);
+    expect(lenB).toBe(10);
+    expect(lenC).toBe(15);
+    const retrB = lenB / lenA;
+    const cVsA = lenC / lenA;
+    const checks = buildTez254AbcChecks("zigzag", retrB, cVsA, true, start, a, b, end);
+    expect(checks.find((c) => c.id === "zz_r5")?.passed).toBe(true);
+    expect(checks.find((c) => c.id === "zz_r1")?.passed).toBe(true);
+  });
+
+  it("zigzag bear: mirrors B/A and C-end vs A for impulse down (düzeltme yukarı: start low → a high → b low → end high)", () => {
+    const start = z(0, 100, "low");
     const a = z(1, 110, "high");
     const b = z(2, 105, "low");
     const end = z(3, 118, "high");

@@ -250,7 +250,7 @@ Rust ikilileri (`qtss-api`, `qtss-seed`, `qtss-worker`) proje kökündeki `.env`
 | `QTSS_RATE_LIMIT_BURST` | Jeton tavanı (varsayılan `120`) |
 | `QTSS_TRUSTED_PROXIES` | Güvenilen vekil IP/CIDR listesi; boş = vekil güveni yok; tanımsız = yalnızca loopback vekil |
 | `QTSS_METRICS_TOKEN` | Doluysa `/metrics` için `Authorization: Bearer …` veya `?token=` |
-| `QTSS_AUDIT_HTTP` | `1` ise mutasyonlar `audit_log`a yazılır (varsayılan: kapalı) |
+| `QTSS_AUDIT_HTTP` | Yalnızca `1` ise mutasyonlar `audit_log`a yazılır; tanımsız veya `1` dışı değer = kapalı |
 
 ---
 

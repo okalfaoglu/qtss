@@ -28,6 +28,7 @@ pub struct JwtIssuer {
 }
 
 impl JwtIssuer {
+    /// `secret` HMAC ham baytları; `secret.len()` UTF-8 bayt sayısıdır (karakter/grapheme değil).
     pub fn from_secret(
         secret: &[u8],
         audience: String,
@@ -35,7 +36,7 @@ impl JwtIssuer {
         access_ttl_secs: i64,
     ) -> Result<Self, String> {
         if secret.len() < 32 {
-            return Err("QTSS_JWT_SECRET en az 32 byte olmalı".into());
+            return Err("QTSS_JWT_SECRET en az 32 UTF-8 byte olmalı".into());
         }
         Ok(Self {
             encoding: EncodingKey::from_secret(secret),

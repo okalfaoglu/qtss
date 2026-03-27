@@ -19,5 +19,5 @@ pub use exchange_orders::{ExchangeOrderRepository, ExchangeOrderRow};
 pub use market_bars::{
     list_recent_bars, upsert_market_bar, MarketBarRow, MarketBarUpsert,
 };
-pub use pnl::{PnlBucket, PnlRollupRepository, PnlRollupRow};
+pub use pnl::{PnlBucket, PnlRebuildStats, PnlRollupRepository, PnlRollupRow};
 pub use pool::{create_pool, run_migrations};

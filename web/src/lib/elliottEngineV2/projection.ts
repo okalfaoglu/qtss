@@ -63,14 +63,15 @@ function startStepFromCurrentState(isBull: boolean, p5: number, latest: number, 
   const dir = isBull ? 1 : -1;
   const x = ((latest - p5) * dir) / Math.max(1e-8, base);
 
-  // x < 0: itkiye ters yone duzeltme bolgesi (A/B/C)
+  // x < 0: itkiye ters yönde düzeltme (A/B/C). Üst sınır `>` ile değil `>=` ile: örn. x = -0.22 ile
+  // x = -0.219999 aynı bantta kalsın (yarı-açık sola: A = [-0.22, 0), B = [-0.58, -0.22), C < -0.58).
   if (x < 0) {
-    if (x > -0.22) return 1; // A
-    if (x > -0.58) return 2; // B
+    if (x >= -0.22) return 1; // A
+    if (x >= -0.58) return 2; // B
     return 3; // C veya C sonu (yalnızca A/B teyidi varsa kullanılmalı)
   }
 
-  // x >= 0: p5 ustu/altinda trend yonunde; duzeltme bitmis veya devam impulsu baslamis varsay.
+  // x >= 0: p5 üstü/altında trend yönünde; [0,0.25), [0.25,0.75), … yarı-açık bantlar.
   if (x < 0.25) return 4; // yeni 1
   if (x < 0.75) return 5; // 2
   if (x < 1.6) return 6; // 3

@@ -2,8 +2,14 @@ import { chartOhlcRowsSortedChrono } from "./chartRowsToOhlcBars";
 import type { ChartOhlcRow } from "./marketBarsToCandles";
 
 /**
- * ACP tarama penceresi: TV `calculated_bars` son N mum.
- * `repaint === false` (Pine varsayılanı): sadece **kapanmış** mumlar — en yeni açık mum düşürülür (`barstate.isconfirmed` benzeri).
+ * ACP (Trendoscope) kanal taraması ve tarama sonucunun grafik üstü hizası.
+ *
+ * **Elliott (`elliottEngineV2`) bu fonksiyonu kullanmaz.** `App` içindeki `bars` durumu canlı poll ile
+ * güncellenir ve ZigZag / dalga motoru **tam seri** üzerinde çalışır (açık mum dahil). Bu, grafikte
+ * güncel fitili göstermek ve intrabar tepkiyi yansıtmak için kasıtlıdır. `repaint === false` yalnızca
+ * Pine’daki “yalnız onaylı mum” semantiğini ACP tarama + overlay hizasında uygular; `bars`’ı kısaltmaz.
+ *
+ * Uygulama: TV `calculated_bars` son N mum; `repaint === false` iken en yeni (muhtemelen açık) mum düşürülür.
  */
 export function acpOhlcWindowForScan(
   bars: ChartOhlcRow[] | null | undefined,

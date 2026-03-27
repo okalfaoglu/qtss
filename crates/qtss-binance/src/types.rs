@@ -2,10 +2,23 @@
 
 use std::collections::BTreeMap;
 
+/// Binance istek/query `side` değeri ([`Self::as_str`]: `BUY` / `SELL`).
+///
+/// Uygulama modeli [`qtss_domain::orders::OrderSide`] — yalnızca kablo katmanına geçerken [`From`] kullanın
+/// (backtest veya API gövdesi domain tipinde kalmalıdır).
 #[derive(Debug, Clone, Copy)]
 pub enum OrderSide {
     Buy,
     Sell,
+}
+
+impl From<qtss_domain::orders::OrderSide> for OrderSide {
+    fn from(value: qtss_domain::orders::OrderSide) -> Self {
+        match value {
+            qtss_domain::orders::OrderSide::Buy => Self::Buy,
+            qtss_domain::orders::OrderSide::Sell => Self::Sell,
+        }
+    }
 }
 
 impl OrderSide {
@@ -14,6 +27,18 @@ impl OrderSide {
             Self::Buy => "BUY",
             Self::Sell => "SELL",
         }
+    }
+}
+
+#[cfg(test)]
+mod order_side_from_domain_tests {
+    use super::OrderSide as WireSide;
+    use qtss_domain::orders::OrderSide as DomainSide;
+
+    #[test]
+    fn maps_to_binance_query_tokens() {
+        assert_eq!(WireSide::from(DomainSide::Buy).as_str(), "BUY");
+        assert_eq!(WireSide::from(DomainSide::Sell).as_str(), "SELL");
     }
 }
 

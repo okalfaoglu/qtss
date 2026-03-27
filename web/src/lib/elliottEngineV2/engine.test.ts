@@ -151,8 +151,25 @@ describe("decideTimeframeState", () => {
   it("returns confirmed for triangle with required checks", () => {
     const wave2 = corr("triangle", [
       { id: "tri_r5", passed: true },
+      { id: "tri_r2_channel", passed: true },
+      { id: "tri_r3_apex_after_e", passed: true },
+      { id: "tri_r4_not_parallel", passed: true },
       { id: "triangle_converging", passed: true },
       { id: "triangle_envelope_contract", passed: true },
+    ]);
+    expect(decideTimeframeState(state({ wave2 }))).toBe("confirmed");
+  });
+
+  it("returns confirmed for expanding triangle when expand checks pass", () => {
+    const wave2 = corr("triangle", [
+      { id: "tri_r5", passed: true },
+      { id: "tri_r2_channel", passed: true },
+      { id: "tri_r3_apex_after_e", passed: true },
+      { id: "tri_r4_not_parallel", passed: true },
+      { id: "triangle_converging", passed: false },
+      { id: "triangle_envelope_contract", passed: false },
+      { id: "triangle_expanding", passed: true },
+      { id: "tri_r7_expanding_shortest_ab", passed: true },
     ]);
     expect(decideTimeframeState(state({ wave2 }))).toBe("confirmed");
   });
@@ -160,13 +177,16 @@ describe("decideTimeframeState", () => {
   it("keeps candidate for triangle when a required structural check fails", () => {
     const wave2 = corr("triangle", [
       { id: "tri_r5", passed: true },
+      { id: "tri_r2_channel", passed: true },
+      { id: "tri_r3_apex_after_e", passed: true },
+      { id: "tri_r4_not_parallel", passed: true },
       { id: "triangle_converging", passed: false },
       { id: "triangle_envelope_contract", passed: true },
     ]);
     expect(decideTimeframeState(state({ wave2 }))).toBe("candidate");
   });
 
-  it("returns confirmed if either wave2 or wave4 is confirmed", () => {
+  it("returns candidate when one internal is confirmed but the other is not", () => {
     const wave2 = corr("zigzag", [
       { id: "abc_order", passed: true },
       { id: "zz_r1", passed: true },
@@ -176,6 +196,21 @@ describe("decideTimeframeState", () => {
     const wave4 = corr("flat", [
       { id: "abc_order", passed: true },
       { id: "flat_r4", passed: false },
+      { id: "flat_g7", passed: true },
+    ]);
+    expect(decideTimeframeState(state({ wave2, wave4 }))).toBe("candidate");
+  });
+
+  it("returns confirmed only when both wave2 and wave4 are confirmed", () => {
+    const wave2 = corr("zigzag", [
+      { id: "abc_order", passed: true },
+      { id: "zz_r1", passed: true },
+      { id: "zz_r5", passed: true },
+      { id: "zz_r6", passed: true },
+    ]);
+    const wave4 = corr("flat", [
+      { id: "abc_order", passed: true },
+      { id: "flat_r4", passed: true },
       { id: "flat_g7", passed: true },
     ]);
     expect(decideTimeframeState(state({ wave2, wave4 }))).toBe("confirmed");
@@ -200,16 +235,21 @@ describe("decideTimeframeState", () => {
     ).toBe("candidate");
   });
 
-  it("keeps candidate for combination without confirmed WXYXZ", () => {
+  it("keeps candidate for combination without W–X–Y or WXYXZ confirmation", () => {
     const wave4 = corr("combination", [
+      { id: "comb_confirmed", passed: false },
       { id: "wxyxz_confirmed", passed: false },
-      { id: "wxyxz_alt", passed: true },
     ]);
     expect(decideTimeframeState(state({ wave4 }))).toBe("candidate");
   });
 
   it("returns confirmed for combination when WXYXZ confirmed", () => {
     const wave4 = corr("combination", [{ id: "wxyxz_confirmed", passed: true }]);
+    expect(decideTimeframeState(state({ wave4 }))).toBe("confirmed");
+  });
+
+  it("returns confirmed for combination when W–X–Y comb_confirmed", () => {
+    const wave4 = corr("combination", [{ id: "comb_confirmed", passed: true }]);
     expect(decideTimeframeState(state({ wave4 }))).toBe("confirmed");
   });
 

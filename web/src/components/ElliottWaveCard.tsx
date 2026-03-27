@@ -167,12 +167,42 @@ export function ElliottWaveCard({
         return "Üçgen: üst/alt kanal çizgileri yakınsamıyor";
       case "triangle_envelope_contract":
         return "Üçgen: zarf daralması yetersiz";
+      case "triangle_expanding":
+        return "Üçgen: genişleyen zarf (daralan değil)";
+      case "tri_r2_channel":
+        return "Üçgen (tri_r2): A–C / B–D şeridi dışında tepe/dip";
+      case "tri_r2_e_deviation_15":
+        return "Üçgen (tri_r2): E çizgi sapması > %15";
+      case "tri_r3_apex_after_e":
+        return "Üçgen (tri_r3): bant kesişimi E sonundan önce";
+      case "tri_r4_not_parallel":
+        return "Üçgen (tri_r4): A–C ve B–D paralel";
+      case "tri_r7_expanding_shortest_ab":
+        return "Üçgen (tri_r7): genişleyende en kısa dalga A/B değil";
+      case "tri_r1_substructure_note":
+        return "Üçgen: alt derece 3’lü yapı zigzag’ta yok (bilgi)";
+      case "triangle_context_wave2_wave4_post":
+        return "Üçgen: bağlam (dalga 2 / 4 / post)";
       case "triangle_context_wave4_or_b":
         return "Üçgen: yalnız wave4/B bağlamında geçerlidir";
       case "comb_alt":
         return "Kombinasyon: W-X-Y alternasyonu bozuk";
       case "comb_progress":
         return "Kombinasyon: trend yönünde ilerleme yok";
+      case "comb_r1":
+        return "Kombinasyon (comb_r1): üç parça / X–W bandı uyumsuz";
+      case "comb_r2":
+        return "Kombinasyon (comb_r2): X bağlantısı W’yi aşıyor";
+      case "comb_r3":
+        return "Kombinasyon (comb_r3): Y bölümü gelişimi zayıf";
+      case "comb_r4":
+        return "Kombinasyon (comb_r4): W–Y kontrastı yetersiz";
+      case "comb_r5":
+        return "Kombinasyon (comb_r5): WXYXZ oranları ayrı motor";
+      case "comb_r6":
+        return "Kombinasyon (comb_r6): WXYXZ post-B / bilgi";
+      case "comb_confirmed":
+        return "W–X–Y: teyit (comb_r1–comb_r4)";
       case "wxyxz_alt":
         return "W-X-Y-X-Z: alternasyon bozuk";
       case "wxyxz_progress":
@@ -196,8 +226,9 @@ export function ElliottWaveCard({
   const patternState = useCallback((c?: { pattern: string; checks: { id: string; passed: boolean }[] } | null) => {
     if (!c) return "-";
     if (c.pattern !== "combination") return c.pattern;
-    const conf = c.checks.find((x) => x.id === "wxyxz_confirmed");
-    return conf?.passed ? "combination✓" : "combination?";
+    const wxy = c.checks.find((x) => x.id === "comb_confirmed");
+    const xz = c.checks.find((x) => x.id === "wxyxz_confirmed");
+    return wxy?.passed || xz?.passed ? "combination✓" : "combination?";
   }, []);
   const v2Rows = useMemo(
     () =>

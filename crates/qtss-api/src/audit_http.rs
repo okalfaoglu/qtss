@@ -1,4 +1,6 @@
-//! Mutasyon istekleri için `audit_log` satırı (`QTSS_AUDIT_HTTP=0` ile kapatılır).
+//! Mutasyon istekleri için `audit_log` satırı.
+//!
+//! Yalnızca ortam değişkeni tam olarak `1` iken yazılır; tanımsız veya `0` / boş / başka değer = kapalı (opt-in).
 
 use axum::extract::{Request, State};
 use axum::http::Method;
@@ -11,12 +13,16 @@ use qtss_storage::{insert_http_audit, AuditHttpRow};
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
 
+fn http_audit_enabled() -> bool {
+    matches!(std::env::var("QTSS_AUDIT_HTTP").ok().as_deref(), Some("1"))
+}
+
 pub async fn audit_http_middleware(
     State(st): State<SharedState>,
     req: Request,
     next: Next,
 ) -> Response {
-    if std::env::var("QTSS_AUDIT_HTTP").ok().as_deref() != Some("1") {
+    if !http_audit_enabled() {
         return next.run(req).await;
     }
 

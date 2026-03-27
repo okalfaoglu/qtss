@@ -1685,6 +1685,7 @@ dependencies = [
  "chrono",
  "hex",
  "hmac",
+ "qtss-domain",
  "qtss-storage",
  "reqwest",
  "serde",
