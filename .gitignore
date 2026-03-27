@@ -5,5 +5,8 @@
 *.rs.bk
 web/node_modules/
 web/dist/
+/node_modules/
+/package.json
+/package-lock.json
 .env
 .env.local
