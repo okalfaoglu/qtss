@@ -85,8 +85,7 @@ Elliott Dalga Prensipleri’ne göre başarısız olan 5. dalga, 5. dalganın 3.
 ================================================================================
 2.5.3.4 – 2.5.5 (diyagonal üçgenler, düzeltme dalgaları, almaşıklık)
 ================================================================================
-Bu bölümlerin tam metni satır satır kaynak kodda tutulur: web/src/lib/elliottTez2534.ts,
-elliottTez254.ts, elliottTez255.ts ve web/src/lib/elliottTezExtended.ts (birleşik dizi).
+Bu bölümlerin tam metni satır satır kaynak kodda tutulur: web/src/lib/elliottRulesCatalog.ts (birleşik dizi).
 Web panelinde «Teknik analiz & Elliott kuralları» açılır listesinde gösterilir.
 
 ================================================================================

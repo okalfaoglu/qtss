@@ -1,5 +1,5 @@
 /**
- * §2.5.4 (elliottTez254.ts) ile hizalı — ABC düzeltme için ölçülebilir kural kontrolleri.
+ * §2.5.4 (`elliottRulesCatalog.ts` — flat/zigzag kuralları) ile hizalı — ABC düzeltme için ölçülebilir kural kontrolleri.
  * Paragraf metinleri GUI’de; burada yalnızca sayısal eşikler uygulanır.
  */
 

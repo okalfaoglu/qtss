@@ -53,7 +53,7 @@ qtss/
 │   ├── 0008_acp_zigzag_seven_fib.sql
 │   ├── 0009_acp_pine_indicator_defaults.sql
 │   └── 0010_acp_abstract_size_filters.sql
-├── web/                     # Vite + React + TS (proxy → API)
+├── web/                     # Vite + React + TS; LWC grafik, Elliott V2, ACP kanal taraması (proxy → API)
 └── crates/
     ├── qtss-common/           # Uygulama modu (live/dry), merkezi loglama
     ├── qtss-domain/           # Domain tipleri: emir, borsa, bar, copy-trade, vb.
@@ -64,7 +64,7 @@ qtss/
     ├── qtss-binance/          # Binance spot + USDT-M REST, katalog senkronu, kline ayrıştırma
     ├── qtss-api/              # Axum HTTP API (OAuth, RBAC, piyasa uçları)
     ├── qtss-worker/           # Arka plan: heartbeat; isteğe bağlı kline WS → market_bars
-    └── qtss-chart-patterns/   # ACP benzeri çizim protokolü + çizgi fiyatı (zigzag/tarama yok)
+    └── qtss-chart-patterns/   # ACP çizim JSON, kanal/inspect/resolve; Pine `find` tam portu değil — bkz. `docs/CHART_PATTERNS_TRENDOSCOPE_PORT.md`
 ```
 
 **Migrasyonları çalıştırma:** `qtss-api` veya `qtss-worker` başlarken bekleyen `migrations/*.sql` dosyaları otomatik uygulanır: `cargo run -p qtss-api`. İlk kurulumda örnek org + admin + OAuth istemcisi için: `cargo run -p qtss-api --bin qtss-seed` (binary adı `seed` değil, `qtss-seed`).
@@ -77,7 +77,7 @@ qtss/
 - `crates/qtss-marketdata/` — WebSocket bar/tick akışı, normalizasyon
 - `crates/qtss-analysis/` — teknik analiz motoru (API’de `/analysis/*` iskeleti var)
 - `crates/qtss-notify/` — Telegram, e-posta, SMS (API’de `/notify/*` iskeleti var)
-- `web/` — **Vite + React** iskeleti var (`npm run dev`); TV benzeri grafik sonraya
+- `web/` — **Vite + React** (`npm run dev` / `npm run build`). Grafik: Lightweight Charts; Elliott Wave V2 (`web/src/lib/elliottEngineV2/`). Tez §2.5.3–2.5.5 metin kataloğu tek dosyada: `web/src/lib/elliottRulesCatalog.ts` (panel + `public/elliott_dalga_prensipleri.txt` özeti).
 
 ---
 
@@ -94,7 +94,7 @@ qtss/
 | **qtss-binance** | Spot / FAPI REST, katalog, `KlineBar`, kapanan mum WS ayrıştırma, komisyon ipucu (`exchangeInfo`) |
 | **qtss-api** | Axum + `x-request-id`, `GET /metrics`, IP tabanlı rate limit (`tower-governor`) |
 | **qtss-worker** | Heartbeat; `QTSS_KLINE_*` + `DATABASE_URL` ile Binance kline WS ve `market_bars` yazımı |
-| **qtss-chart-patterns** | Trend çizgisi bar enterpolasyonu, ACP `patternType` id → isim, `PatternDrawingBatch` (serde) — Pine `inspect`/`ZigzagLite`/`find` yok; bkz. `docs/CHART_PATTERNS_TRENDOSCOPE_PORT.md` |
+| **qtss-chart-patterns** | Trend çizgisi bar enterpolasyonu, ACP `patternType` id → isim, `PatternDrawingBatch` (serde), Zigzag iskelesi, kanal altılı tarama API; Pine ile tam özdeş değil — bkz. `docs/CHART_PATTERNS_TRENDOSCOPE_PORT.md` |
 
 ---
 
@@ -224,7 +224,7 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 5. **Analiz motoru** — ayrı crate + gerçek motor  
 6. **AI katmanı** — onay kuyruğu, policy, guardrail  
 7. **Bildirim** — `qtss-notify` + kuyruk  
-8. **Web UI** — `web/` Vite+React iskeleti; TV benzeri grafik, dashboard  
+8. **Web UI** — dashboard genişletmesi; grafik/Elliott temel akış mevcut (`web/`)  
 9. **Kurumsal** — HA, observability, uyumluluk  
 
 ---

@@ -1,17 +1,20 @@
 import { useCallback, useMemo, useState } from "react";
-import { ELLIOTT_TEZ_EXTENDED_SECTIONS, type ElliottTezSection } from "../lib/elliottTezExtended";
 import {
   ELLIOTT_DEGREE_LEVELS,
   ELLIOTT_IMPULSE_RULES,
+  ELLIOTT_IMPULSE_RULE_ENGINE_SCOPE,
   ELLIOTT_REFERENCE_RANKIA_URL,
   ELLIOTT_REFERENCE_TXT_URL,
   ELLIOTT_SUBDIVISION_RULE,
   ELLIOTT_TEZ_2531_INTRO_PARAGRAPHS,
   ELLIOTT_TEZ_2532_EXTENSION,
   ELLIOTT_TEZ_2533_FAILED_FIFTH,
+  ELLIOTT_TEZ_EXTENDED_SECTIONS,
   ELLIOTT_TEZ_IMPULSE_GUIDELINES,
   ELLIOTT_TECHNICAL_ANALYSIS_SUMMARY,
-} from "../lib/elliottWaveRules";
+  elliottImpulseRuleScopeLabelTr,
+  type ElliottTezSection,
+} from "../lib/elliottRulesCatalog";
 import { buildSwingPivots } from "../lib/elliottImpulseDetect";
 import type { ChartOhlcRow } from "../lib/marketBarsToCandles";
 import type { ElliottWaveConfig } from "../lib/elliottWaveAppConfig";
@@ -604,6 +607,11 @@ export function ElliottWaveCard({
           </button>
           {rulesOpen ? (
         <div className="tv-elliott-panel__rules">
+          <p className="muted" style={{ fontSize: "0.72rem", lineHeight: 1.45 }}>
+            <strong>Kapsam:</strong> Grafikteki sayım <code>elliottEngineV2</code> (ZigZag + itkı/düzeltme) ile üretilir.
+            Aşağıdaki etiketler tez metninin motorda ne kadarının doğrudan kontrol edildiğini gösterir; §2.5.3.4–2.5.5 ve rehber
+            satırlarının tamamı otomatik doğrulanmaz.
+          </p>
           <p className="muted" style={{ fontSize: "0.72rem" }}>
             Dereceler (örnek): {ELLIOTT_DEGREE_LEVELS.join(" → ")}
           </p>
@@ -626,17 +634,34 @@ export function ElliottWaveCard({
           <dl>
             {ELLIOTT_IMPULSE_RULES.map((r) => (
               <div key={r.id}>
-                <dt>{r.title}</dt>
+                <dt>
+                  {r.title}{" "}
+                  <span
+                    className="muted"
+                    style={{ fontSize: "0.72rem", fontWeight: 600, marginLeft: "0.25rem" }}
+                    title="elliottEngineV2 impulse kontrolleri ile örtüşme"
+                  >
+                    [{elliottImpulseRuleScopeLabelTr(ELLIOTT_IMPULSE_RULE_ENGINE_SCOPE[r.id])}]
+                  </span>
+                </dt>
                 <dd className="muted">{r.detail}</dd>
               </div>
             ))}
           </dl>
 
           <p className="muted" style={{ fontWeight: 600, marginTop: "0.35rem" }}>Rehber ilkeler</p>
+          <p className="muted" style={{ fontSize: "0.72rem", marginTop: "0.2rem", lineHeight: 1.45 }}>
+            [Rehber] — Elliott hedefi/yorum; <code>elliottEngineV2</code> bu maddeleri skorlamaz.
+          </p>
           <dl>
             {ELLIOTT_TEZ_IMPULSE_GUIDELINES.map((r) => (
               <div key={r.id}>
-                <dt>{r.title}</dt>
+                <dt>
+                  {r.title}{" "}
+                  <span className="muted" style={{ fontSize: "0.72rem", fontWeight: 600, marginLeft: "0.25rem" }}>
+                    [Rehber]
+                  </span>
+                </dt>
                 <dd className="muted">{r.detail}</dd>
               </div>
             ))}
@@ -662,8 +687,9 @@ export function ElliottWaveCard({
           ))}
 
           <p className="muted" style={{ fontSize: "0.72rem", marginTop: "0.45rem", lineHeight: 1.45 }}>
-            Aşağıdaki bölümler (2.5.3.4 – 2.5.5) tez metnindeki paragraflar ve madde işaretli kurallar/rehber
-            ilkeler ile aynıdır; otomatik zigzag/itkı modülü bu yapıların çoğunu henüz ayırt etmez.
+            Aşağıdaki bölümler (2.5.3.4 – 2.5.5) tez kaynağıdır. Zigzag/yassı ABC için kısmi sayısal kontroller{" "}
+            <code>elliottEngineV2/tezWaveChecks.ts</code> içindedir; diyagonal üçgen, ikili zigzag alt bölünmesi vb. genelde
+            manuel okuma kalır.
           </p>
           {ELLIOTT_TEZ_EXTENDED_SECTIONS.map((s) => (
             <TezExtendedBlock key={s.id} section={s} />

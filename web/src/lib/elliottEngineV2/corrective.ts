@@ -14,6 +14,27 @@ function classifyFlatVsZigzag(retrB: number): "flat" | "zigzag" {
   return retrB >= 0.9 ? "flat" : "zigzag";
 }
 
+function hasPassedCheck(checks: ElliottRuleCheckV2[], id: string): boolean {
+  return checks.some((x) => x.id === id && x.passed);
+}
+
+function abcCandidateIsValid(pattern: "zigzag" | "flat", checks: ElliottRuleCheckV2[]): boolean {
+  const baseOk =
+    hasPassedCheck(checks, "abc_order") &&
+    hasPassedCheck(checks, "abc_b_retrace") &&
+    hasPassedCheck(checks, "abc_c_extent");
+  if (!baseOk) return false;
+  if (pattern === "zigzag") {
+    return (
+      hasPassedCheck(checks, "zz_r1") &&
+      hasPassedCheck(checks, "zz_r5") &&
+      hasPassedCheck(checks, "zz_r6") &&
+      hasPassedCheck(checks, "zz_b_not_beyond_a_start")
+    );
+  }
+  return hasPassedCheck(checks, "flat_r4") && hasPassedCheck(checks, "flat_g7");
+}
+
 function collectAbcCorrectiveDown(
   start: ZigzagPivot,
   end: ZigzagPivot,
@@ -45,6 +66,7 @@ function collectAbcCorrectiveDown(
       ];
       const tezChecks = buildTez254AbcChecks(pattern, retrB, cVsA, impulseBull, start, a, b, end);
       const checks = [...baseChecks, ...tezChecks];
+      if (!abcCandidateIsValid(pattern, checks)) continue;
       const score = checks.filter((x) => x.passed).length + (pattern === "flat" ? 0.2 : 0.3);
       candidates.push({ pivots: [start, a, b, end], pattern, checks, score, labels: ["a", "b", "c"] });
     }
@@ -85,6 +107,7 @@ function collectAbcCorrectiveUp(
       ];
       const tezChecks = buildTez254AbcChecks(pattern, retrB, cVsA, impulseBull, start, a, b, end);
       const checks = [...baseChecks, ...tezChecks];
+      if (!abcCandidateIsValid(pattern, checks)) continue;
       const score = checks.filter((x) => x.passed).length + (pattern === "flat" ? 0.2 : 0.3);
       candidates.push({ pivots: [start, a, b, end], pattern, checks, score, labels: ["a", "b", "c"] });
     }

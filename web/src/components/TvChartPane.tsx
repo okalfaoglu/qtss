@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { ColorType, createChart, CrosshairMode, LineStyle } from "lightweight-charts";
 import type {
   CandlestickData,
@@ -7,6 +7,13 @@ import type {
   SeriesMarker,
   UTCTimestamp,
 } from "lightweight-charts";
+import {
+  chartResetView,
+  chartScrollLeft,
+  chartScrollRight,
+  chartZoomIn,
+  chartZoomOut,
+} from "../lib/chartTimeScaleNav";
 import { marketBarsToCandles, type ChartOhlcRow } from "../lib/marketBarsToCandles";
 import type { PatternLayerOverlay, ZigzagLayerKind } from "../lib/patternDrawingBatchOverlay";
 import type { ChartTool } from "./ChartToolbar";
@@ -531,8 +538,87 @@ export function TvChartPane({
     clearUserDrawSeries(chart);
   }, [clearDrawNonce]);
 
+  const onNavZoomOut = useCallback(() => {
+    const c = chartRef.current;
+    if (c) chartZoomOut(c);
+  }, []);
+  const onNavZoomIn = useCallback(() => {
+    const c = chartRef.current;
+    if (c) chartZoomIn(c);
+  }, []);
+  const onNavLeft = useCallback(() => {
+    const c = chartRef.current;
+    if (c) chartScrollLeft(c);
+  }, []);
+  const onNavRight = useCallback(() => {
+    const c = chartRef.current;
+    if (c) chartScrollRight(c);
+  }, []);
+  const onNavReset = useCallback(() => {
+    const c = chartRef.current;
+    if (c) chartResetView(c);
+  }, []);
+
   return (
-    <div className="tv-chart-pane" ref={wrapRef} role="img" aria-label="Mum grafiği">
+    <div className="tv-chart-pane-outer">
+      <div className="tv-chart-pane" ref={wrapRef} role="img" aria-label="Mum grafiği" />
+      {bars?.length ? (
+        <nav className="tv-chart-nav" aria-label="Grafik görünümü">
+          <div className="tv-chart-nav__group">
+            <button
+              type="button"
+              className="tv-chart-nav__btn"
+              onClick={onNavZoomOut}
+              title="Uzaklaştır"
+              aria-label="Uzaklaştır"
+            >
+              −
+            </button>
+            <button
+              type="button"
+              className="tv-chart-nav__btn"
+              onClick={onNavZoomIn}
+              title="Yakınlaştır"
+              aria-label="Yakınlaştır"
+            >
+              +
+            </button>
+          </div>
+          <div className="tv-chart-nav__sep" aria-hidden />
+          <div className="tv-chart-nav__group">
+            <button
+              type="button"
+              className="tv-chart-nav__btn"
+              onClick={onNavLeft}
+              title="Sola kaydır (geçmiş)"
+              aria-label="Sola kaydır"
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              className="tv-chart-nav__btn"
+              onClick={onNavRight}
+              title="Sağa kaydır (güncel)"
+              aria-label="Sağa kaydır"
+            >
+              ›
+            </button>
+          </div>
+          <div className="tv-chart-nav__sep" aria-hidden />
+          <div className="tv-chart-nav__group">
+            <button
+              type="button"
+              className="tv-chart-nav__btn tv-chart-nav__btn--reset"
+              onClick={onNavReset}
+              title="Görünümü sıfırla (tüm veriyi sığdır)"
+              aria-label="Görünümü sıfırla"
+            >
+              ↻
+            </button>
+          </div>
+        </nav>
+      ) : null}
       {!bars?.length ? (
         <div className="tv-chart-pane__empty muted" style={{ pointerEvents: "none" }}>
           Üst çubukta sembol ve zaman dilimi seçildiğinde grafik otomatik yüklenir (girişsiz Binance spot). Giriş
