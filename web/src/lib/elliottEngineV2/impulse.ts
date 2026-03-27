@@ -2,8 +2,8 @@ import type { ElliottRuleCheckV2, ImpulseCountV2, ZigzagPivot } from "./types";
 
 const EPS = 1e-10;
 
-/** Tez §2.5.3.4 ld_r3 — ilerleyen diyagonal: 5. dalga uzunluğu ≥ 1.38 × 4. dalga uzunluğu */
-const LD_R3_W5_VS_W4_MIN = 1.38;
+/** Tez §2.5.3.4 ld_r3 — ilerleyen diyagonal: 5. dalga uzunluğu ≥ 1.382 × 4. dalga (Fib. uzantı) */
+const LD_R3_W5_VS_W4_MIN = 1.382;
 
 export type ImpulseDetectOptions = {
   allowStandard?: boolean;
@@ -48,6 +48,15 @@ function checksBull(
     id: "w3_not_below_w1_end",
     passed: p3.price >= p1.price - EPS,
     detail: `P3>=P1 (${p3.price.toFixed(4)}>=${p1.price.toFixed(4)})`,
+  });
+
+  /** Standart itkı — dalga 4 (|P3−P4|) dalga 3’ten (|P3−P2|) uzun olmamalı */
+  const len4 = p3.price - p4.price;
+  const w4NotLongerThanW3 = len4 <= len3 + EPS;
+  checks.push({
+    id: "w4_not_longer_than_w3",
+    passed: w4NotLongerThanW3,
+    detail: `|4|=${len4.toFixed(4)} <= |3|=${len3.toFixed(4)}`,
   });
 
   const overlap = p4.price > p1.price + EPS;
@@ -128,10 +137,10 @@ function checksBullDiagonal(
     detail: `|5|=${len5.toFixed(4)} 1/3’e göre en uzun değil`,
   });
 
-  /** ld_r3 — ilerleyen diyagonal: |5| ≥ 1.38 × |4| */
+  /** ld_r3 — ilerleyen diyagonal: |5| ≥ 1.382 × |4| */
   const ldR3 = len5 + EPS >= LD_R3_W5_VS_W4_MIN * len4;
   checks.push({
-    id: "ld_r3_w5_ge_138_w4",
+    id: "ld_r3_w5_ge_1382_w4",
     passed: ldR3,
     detail: `|5|=${len5.toFixed(4)} ≥ ${LD_R3_W5_VS_W4_MIN}×|4|=${(LD_R3_W5_VS_W4_MIN * len4).toFixed(4)}`,
   });
@@ -153,7 +162,7 @@ function checksBullDiagonal(
         c.id.startsWith("w3_") ||
         c.id.startsWith("w5_") ||
         c.id === "ed_r4_w3_area_gt_w2" ||
-        c.id === "ld_r3_w5_ge_138_w4"),
+        c.id === "ld_r3_w5_ge_1382_w4"),
   );
   const score = checks.filter((c) => c.passed).length;
   return { checks, hardFail, score };
@@ -201,6 +210,14 @@ function checksBear(
     id: "w3_not_above_w1_end",
     passed: p3.price <= p1.price + EPS,
     detail: `P3<=P1 (${p3.price.toFixed(4)}<=${p1.price.toFixed(4)})`,
+  });
+
+  const len4 = p4.price - p3.price;
+  const w4NotLongerThanW3 = len4 <= len3 + EPS;
+  checks.push({
+    id: "w4_not_longer_than_w3",
+    passed: w4NotLongerThanW3,
+    detail: `|4|=${len4.toFixed(4)} <= |3|=${len3.toFixed(4)}`,
   });
 
   const overlap = p4.price < p1.price - EPS;
@@ -279,7 +296,7 @@ function checksBearDiagonal(
 
   const ldR3 = len5 + EPS >= LD_R3_W5_VS_W4_MIN * len4;
   checks.push({
-    id: "ld_r3_w5_ge_138_w4",
+    id: "ld_r3_w5_ge_1382_w4",
     passed: ldR3,
     detail: `|5|=${len5.toFixed(4)} ≥ ${LD_R3_W5_VS_W4_MIN}×|4|=${(LD_R3_W5_VS_W4_MIN * len4).toFixed(4)}`,
   });
@@ -301,7 +318,7 @@ function checksBearDiagonal(
         c.id.startsWith("w3_") ||
         c.id.startsWith("w5_") ||
         c.id === "ed_r4_w3_area_gt_w2" ||
-        c.id === "ld_r3_w5_ge_138_w4"),
+        c.id === "ld_r3_w5_ge_1382_w4"),
   );
   const score = checks.filter((c) => c.passed).length;
   return { checks, hardFail, score };

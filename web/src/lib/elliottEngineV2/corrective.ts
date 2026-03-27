@@ -145,6 +145,7 @@ function collectAbcCorrectiveDown(
       /** C bacağı B→C (a→end değil); `cVsA` ve tez `zz_r1` ile uyumlu */
       const lenC = b.price - end.price;
       const cVsA = lenA > EPS ? lenC / lenA : 0;
+      /** Üretim öncesi süzgeç + `abc_b_retrace`: klasik B ≈ %38.2–61.8’dan kasıtlı geniş (gerçek piyasa varyasyonu). */
       if (retrB < 0.12 || retrB > 2.85) continue;
 
       const pattern = classifyFlatVsZigzag(retrB);
@@ -186,6 +187,7 @@ function collectAbcCorrectiveUp(
       const retrB = (a.price - b.price) / lenA;
       const lenC = end.price - b.price;
       const cVsA = lenA > EPS ? lenC / lenA : 0;
+      /** Aşağı itkı simetrisi; B geri çekilme bandı kasıtlı geniş (yukarıdaki `collectAbcCorrectiveDown` ile aynı mantık). */
       if (retrB < 0.12 || retrB > 2.85) continue;
 
       const pattern = classifyFlatVsZigzag(retrB);

@@ -142,7 +142,14 @@ export function ElliottWaveCard({
     return first?.impulse?.checks ?? [];
   }, [v2Output]);
   const hardIds = useMemo(
-    () => new Set(["structure", "w2_not_beyond_w1_start", "w3_not_shortest_135", "w4_no_overlap_w1"]),
+    () =>
+      new Set([
+        "structure",
+        "w2_not_beyond_w1_start",
+        "w3_not_shortest_135",
+        "w4_no_overlap_w1",
+        "w4_not_longer_than_w3",
+      ]),
     [],
   );
   const v2Hard = useMemo(() => v2AllChecks.filter((c) => hardIds.has(c.id)), [hardIds, v2AllChecks]);
@@ -157,6 +164,8 @@ export function ElliottWaveCard({
         return "Dalga 3, 1/3/5 arasında en kısa olamaz";
       case "w4_no_overlap_w1":
         return "Dalga 4, Dalga 1 alanına girdi";
+      case "w4_not_longer_than_w3":
+        return "Dalga 4, Dalga 3’ten uzun (standart itkı)";
       case "trend_shape":
         return "Trend şekli zayıf / teyitsiz";
       case "triangle_alt":

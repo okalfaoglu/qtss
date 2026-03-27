@@ -27,9 +27,10 @@ const HARD_IMPULSE_CHECK_IDS = new Set([
   "w3_not_shortest_135",
   "w3_not_below_w1_end",
   "w3_not_above_w1_end",
+  "w4_not_longer_than_w3",
   "w5_not_longest_135",
   "ed_r4_w3_area_gt_w2",
-  "ld_r3_w5_ge_138_w4",
+  "ld_r3_w5_ge_1382_w4",
 ]);
 
 function hasPassedCheck(c: CorrectiveCountV2, id: string): boolean {
