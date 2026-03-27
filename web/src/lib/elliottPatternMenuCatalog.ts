@@ -21,7 +21,8 @@ export type ElliottPatternMenuItem = {
 
 export const DEFAULT_ELLIOTT_PATTERN_MENU: ElliottPatternMenuToggles = {
   motive_impulse: true,
-  motive_diagonal: true,
+  // QTSS V2 standard: diagonal overlap exception is disabled by default.
+  motive_diagonal: false,
   corrective_zigzag: true,
   corrective_flat: true,
   corrective_triangle: true,

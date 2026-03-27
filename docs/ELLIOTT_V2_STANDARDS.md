@@ -40,8 +40,11 @@ The chart anchor is `15m`. `1h` and `4h` are rendered as overlays on the same ch
 
 ### Corrective scope
 
-- Enabled: `ABC`, `zigzag (5-3-5)`, `flat (3-3-5)`.
-- Deferred to later versions: full triangle grammar, W-X-Y combinations, advanced diagonal handling.
+- Enabled: `ABC`, `zigzag (5-3-5)`, `flat (3-3-5)`, `triangle (3-3-3-3-3)`, `W-X-Y / W-X-Y-X-Z`.
+- Notes:
+  - Triangle detection is constrained to wave-4 / post-impulse corrective context (not standalone wave-2 default).
+  - Complex combinations are scored as candidates/confirmed via ratio + connector checks.
+  - Advanced diagonal handling remains optional and is disabled by default in V2.
 
 ## 5) ZigZag Policy
 

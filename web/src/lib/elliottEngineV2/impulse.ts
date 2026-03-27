@@ -26,13 +26,25 @@ function checksBull(
   checks.push({ id: "w2_not_beyond_w1_start", passed: w2, detail: `P2>${p0.price.toFixed(4)}` });
 
   const len1 = p1.price - p0.price;
+  const len2 = p1.price - p2.price;
   const len3 = p3.price - p2.price;
   const len5 = p5.price - p4.price;
+  const w2NotLongerThanW1 = len2 <= len1 + EPS;
+  checks.push({
+    id: "w2_not_longer_than_w1",
+    passed: w2NotLongerThanW1,
+    detail: `|2|=${len2.toFixed(4)} <= |1|=${len1.toFixed(4)}`,
+  });
   const w3NotShortest = !(len3 < len1 - EPS && len3 < len5 - EPS);
   checks.push({
     id: "w3_not_shortest_135",
     passed: w3NotShortest,
     detail: `|1|=${len1.toFixed(4)} |3|=${len3.toFixed(4)} |5|=${len5.toFixed(4)}`,
+  });
+  checks.push({
+    id: "w3_not_below_w1_end",
+    passed: p3.price >= p1.price - EPS,
+    detail: `P3>=P1 (${p3.price.toFixed(4)}>=${p1.price.toFixed(4)})`,
   });
 
   const overlap = p4.price > p1.price + EPS;
@@ -119,13 +131,25 @@ function checksBear(
   checks.push({ id: "w2_not_beyond_w1_start", passed: w2, detail: `P2<${p0.price.toFixed(4)}` });
 
   const len1 = p0.price - p1.price;
+  const len2 = p2.price - p1.price;
   const len3 = p2.price - p3.price;
   const len5 = p4.price - p5.price;
+  const w2NotLongerThanW1 = len2 <= len1 + EPS;
+  checks.push({
+    id: "w2_not_longer_than_w1",
+    passed: w2NotLongerThanW1,
+    detail: `|2|=${len2.toFixed(4)} <= |1|=${len1.toFixed(4)}`,
+  });
   const w3NotShortest = !(len3 < len1 - EPS && len3 < len5 - EPS);
   checks.push({
     id: "w3_not_shortest_135",
     passed: w3NotShortest,
     detail: `|1|=${len1.toFixed(4)} |3|=${len3.toFixed(4)} |5|=${len5.toFixed(4)}`,
+  });
+  checks.push({
+    id: "w3_not_above_w1_end",
+    passed: p3.price <= p1.price + EPS,
+    detail: `P3<=P1 (${p3.price.toFixed(4)}<=${p1.price.toFixed(4)})`,
   });
 
   const overlap = p4.price < p1.price - EPS;

@@ -1,4 +1,5 @@
 import type {
+  CorrectiveCountV2,
   ElliottEngineInputV2,
   ElliottEngineOutputV2,
   ImpulseCountV2,
@@ -18,16 +19,49 @@ function mergePatternToggles(t?: ElliottPatternMenuToggles): ElliottPatternMenuT
 /** 15m mikro itkide dalga 1–5 arası en az bu kadar mum aralığı; aksi halde etiketler üst üste biner. */
 const MIN_15M_IMPULSE_P1_P5_BAR_SPAN = 12;
 
-function decide(state: Omit<TimeframeStateV2, "decision">): TimeframeStateV2["decision"] {
+const HARD_IMPULSE_CHECK_IDS = new Set([
+  "structure",
+  "w2_not_beyond_w1_start",
+  "w2_not_longer_than_w1",
+  "w3_not_shortest_135",
+  "w3_not_below_w1_end",
+  "w3_not_above_w1_end",
+]);
+
+function hasPassedCheck(c: CorrectiveCountV2, id: string): boolean {
+  return c.checks.some((x) => x.id === id && x.passed);
+}
+
+function correctiveIsConfirmed(c: CorrectiveCountV2): boolean {
+  if (c.pattern === "zigzag") {
+    return hasPassedCheck(c, "abc_order") && hasPassedCheck(c, "zz_r1") && hasPassedCheck(c, "zz_r5") && hasPassedCheck(c, "zz_r6");
+  }
+  if (c.pattern === "flat") {
+    return hasPassedCheck(c, "abc_order") && hasPassedCheck(c, "flat_r4") && hasPassedCheck(c, "flat_g7");
+  }
+  if (c.pattern === "triangle") {
+    return hasPassedCheck(c, "tri_r5") && hasPassedCheck(c, "triangle_converging") && hasPassedCheck(c, "triangle_envelope_contract");
+  }
+  if (c.pattern === "combination") {
+    // W-X-Y-X-Z motoru teyit üretiyorsa confirmed; diğer kombinasyonlar candidate kalır.
+    return hasPassedCheck(c, "wxyxz_confirmed");
+  }
+  return false;
+}
+
+export function decideTimeframeState(state: Omit<TimeframeStateV2, "decision">): TimeframeStateV2["decision"] {
   if (!state.impulse) return "invalid";
-  const hardFails = state.impulse.checks.some(
-    (c) =>
-      !c.passed &&
-      (c.id === "structure" || c.id === "w2_not_beyond_w1_start" || c.id === "w3_not_shortest_135" || c.id === "w4_no_overlap_w1"),
-  );
+  const hardFails = state.impulse.checks.some((c) => !c.passed && HARD_IMPULSE_CHECK_IDS.has(c.id));
+  // Standard impulse enforces non-overlap. Diagonal variant intentionally allows overlap.
+  const standardW4Fail =
+    (state.impulse.variant ?? "standard") === "standard" &&
+    state.impulse.checks.some((c) => c.id === "w4_no_overlap_w1" && !c.passed);
   if (hardFails) return "invalid";
-  const hasInternal = !!state.wave2 || !!state.wave4;
-  return hasInternal ? "confirmed" : "candidate";
+  if (standardW4Fail) return "invalid";
+
+  const internals = [state.wave2, state.wave4].filter((x): x is CorrectiveCountV2 => !!x);
+  if (!internals.length) return "candidate";
+  return internals.some(correctiveIsConfirmed) ? "confirmed" : "candidate";
 }
 
 function microImpulseTooCompressed(imp: ImpulseCountV2): boolean {
@@ -64,7 +98,7 @@ function runForTf(tf: Timeframe, rows: OhlcV2[], input: ElliottEngineInputV2): T
     wave4: corr.wave4,
     postImpulseAbc: corr.postImpulseAbc,
   };
-  return { ...core, decision: decide(core) };
+  return { ...core, decision: decideTimeframeState(core) };
 }
 
 export function runElliottEngineV2(input: ElliottEngineInputV2): ElliottEngineOutputV2 {
