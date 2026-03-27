@@ -1,0 +1,13 @@
+[package]
+name = "qtss-common"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+dotenvy.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+chrono.workspace = true

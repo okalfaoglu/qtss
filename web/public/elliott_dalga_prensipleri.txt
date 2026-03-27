@@ -1,0 +1,120 @@
+ELLIOTT DALGA PRENSİPLERİ — Referans (yatırım tavsiyesi değildir)
+Kaynak çerçeve: klasik Elliott Wave literatürü; aşağıda tez/derleme düzeyi bölüm 2.5.3 özeti (Kurallar / Rehber İlkeler ayrımıyla).
+Dış Türkçe giriş özeti (üçüncü taraf): https://rankia.com.tr/elliott-dalgalari/
+
+================================================================================
+BÖLÜM — TEKNİK ANALİZ VE ELLİOTT’A GİRİŞ
+================================================================================
+• Teknik analiz geçmiş fiyat/hacim davranışını inceler; olasılık/tahmin üretir, kesin sonuç vermez.
+• Elliott hipotezi: kitlesel alım-satım tekrar eden kalıplar üretir; bu kalıplar fraktal (ölçekten bağımsız) olarak iç içe geçer.
+
+================================================================================
+TEMEL 5–3 YAPI (BİR TAM DÖNGÜ)
+================================================================================
+• İşaretleme (iç içe seviye; tarihsel Elliott derecesi değil): ana itkide (1)…(5), ana düzeltmede (a)(b)(c); dalga 1/3/5 gövdelerinde alt itkı 1…5; dalga 2 ve 4 (yani (1)–(2) ve (3)–(4) aralıkları) içindeki düzeltme a,b,c — parantez ana katmanı ayırır. Grafikte ana itki en kalın; alt itkı ve 2/4 içi abc daha ince kesiklidir.
+• Ana trend yönünde beş dalga (1–5 itki/motive), ardından karşı yönde üç dalgalı düzeltme (A–B–C).
+• Bir tam formasyon 8 ana etiket içerir: 1,2,3,4,5 ve a,b,c (bazı kaynaklarda A,B,C büyük harf).
+• Bu 5–3 birimi daha büyük bir üst dalganın parçası olabilir (fraktallık).
+
+================================================================================
+2.5.3 İTKİ (İMPULSE) DALGALARI
+================================================================================
+
+2.5.3.1 İtki İtici Dalga
+
+İtki yani itici dalga olarak Türkçe karşılık bulan bu kavram, yeni bir dalganın hareketine başlamasını sağlayan, ona itki veren anlamını taşımaktadır. İtki dalgaları fiyatın yeni bir tepe ya da yeni bir dip gerçekleştirmesini sağlayan ve toplamda beş dalgadan oluşan yapılardır. İtki dalgalarının ana özellikleri fiyat trendinin ana yönünü belirliyor olmasıdır. İtki dalgaları 1,2,3,4,5 rakamları ile etiketlenir ve beş dalganın bir araya gelmesiyle döngüsünü tamamlamış olurlar.
+
+Burada 1,3 ve 5. dalgalar itki dalgalarıdır ve ana hareketin yönünü belirlerler. 2 ve 4 numaralı dalgalar ise ana hareketin tam tersi yönünde oluşan düzeltme dalgalarıdır (Şengöz, 2002:41-42).
+
+İtki dalgalarının ana yapıları 5-3-5-3-5 şeklindedir ve bu biçimde ilerlerler. 5 dalgalık bir trend oluştuktan sonra 3 dalgalık bir düzeltme gerçekleşir. İdeal bir itki dalgası klasik şema ile uyumlu biçimde görülmelidir.
+
+Bir itki dalgası kendisinden sonra daha da büyük bir itki oluşturamıyorsa düzeltme dalgası olarak kalır ve bir itki dalgasından sonra meydana gelen bir düzeltme dalgası olarak ilerleyişini sürdürür. Büyük dereceye sahip bir itki dalgası, küçük dereceli üç itki dalgasının birleşiminden oluşur.
+
+Elliott Dalga Prensipleri’nde uygulamanın doğru bir biçimde yapılabilmesi için her bir kalıbın (pattern) doğru bir biçimde öğrenilmesi büyük bir önem arz etmektedir. Fiyat analizlerinde dalga kalıpları doğru bir biçimde belirlenebilirse fiyatların sadece olası hedefleri değil, aynı zamanda hangi yolu izleyerek hangi şekilde oluşabileceği hakkında tahminleri ön görmek mümkün olur.
+
+Elliott Dalga Prensipleri teorisine göre kurallar ve rehber ilkeler yol gösterici görevi üstlenmektedir (Baysal, 2011:97-99):
+
+Kurallar:
+
+• Kalıpta fiyat olarak 2. Dalga asla 1. İtki dalgasından daha uzun olamaz. Ayrıca, 2. dalga 1. dalganın başlangıç noktasını asla aşamaz. Bu kuralın aynısı 4. Dalga içinde geçerlidir. Kalıpta 4. dalga asla 3. dalgadan daha uzun olamaz ve 3. dalganın başlangıç noktasını aşamaz.
+
+• Kalıpta 3. dalga asla tüm dalgalar arasında en kısa dalga olamaz.
+
+• Kalıpta 3. Dalga hiçbir zaman 1. dalganın bitiş fiyatının altında bir fiyatta bulunamaz.
+
+• Kalıpta 4. dalga hiçbir zaman 1. dalganın oluşturduğu fiyat alanına giremez.
+
+Rehber İlkeler:
+
+• İtki dalgaları kendilerinden daha önce oluşan itki dalgalarının eğer fiyat yükseliş hareketinde ise tepe, eğer fiyat düşüş hareketinde ise dip noktalarını geçer. Eğer geçemiyorsa bu dalganın daha küçük bir dereceye sahip olma olasılığı gözden geçirilmelidir.
+
+• 2. dalga bir önceki dalganın alt dereceli 4. dalgasına kadar ilerler ve 5. dalgasının tamamını geri almalıdır.
+
+• 2. ve 4. dalgaların düzeltme yani fiyatı geri alış seviyeleri genellikle %38.2, %50.0 ya da %61.8’dir. Uzunluk olarak daha kısa süren bir düzeltme dalgasının ardından daha güçlü bir itici dalga oluşması beklenir.
+
+• 2. ve 4. dalgalar arasından 2. dalganın genellikle daha büyük, daha keskin bir düzeltme gerçekleştirmesi, 4. dalganın ise daha yatay bir düzeltme gerçekleştirmesi beklenmektedir.
+
+• 2. ve 4. dalgalar birbirlerinin almaşığıdır. Almaşıklık ilkesini ilerleyen konularda anlatacağız ancak burada kısaca özetleyelim. 2. dalga zigzag modelinde bir düzeltme gerçekleştiriyorsa, 4. dalganın daha yatay bir düzeltme gerçekleştirmesi beklenir. Aynı durum tersi ihtimal için de geçerlidir. 2. Dalga %38 bir düzeltme yani geri alım gerçekleştirdiyse, 4. Dalganın %62’lik bir geri alım yapması beklenir. Bu olay dalganın yapısı ve süresi için de geçerli bir haldir. Eğer 2. Dalga karmaşık bir düzeltme modeli oluşturuyorsa 4. Dalganın basit bir yapıda olması beklenmektedir. Süre bakımından da 2. Dalga kısa sürede düzeltme yapmış ise, 4. Dalga düzeltmesinin daha uzun bir süre alması beklenir.
+
+• Kalıpta 3. Dalganın fiyat uzunluğu 1. Dalganın %161.8’i ya da %261.8’i kadar devam eder. Eğer ki bu koşul kalıpta sağlanıyorsa, 1. ve 5. dalgaların eşit uzunlukta olması beklenir. Eğer 1. ve 3. dalgalar yaklaşık olarak birbirilerine eşit uzunlukta oluştuysa, 5. dalganın uzatma dalgası olması beklenir. 5. dalga uzatmasının da 1. dalganın başlangıç noktasından ve 3. dalganın bitiş noktasına kadar olan uzunluğunun %162’si kadar olması beklenir.
+
+• Kalıpta bir itki döngüsünde trend yönünde ilerleyen dalgalar, yani 1, 3, veya 5 numaralı dalgalardan birinin çoğunlukla uzatma yapması beklenir. Bir dalga uzatma yaptığında diğer iki dalganın birbirlerine eşit ya da yakın eşitlikte olması beklenir.
+
+• 5. dalganın bitiş seviyesi, 1. dalganın %61.8, %100 veya %161.8 olabilir.
+
+• 3. dalgayı oluşturan bir alt dereceli döngüde 5. dalga başarısız 5. dalga olamaz.
+
+• Kalıpta 5. dalga 4. dalganın minimum %61.8’i kadar hareketinin yönünde yükselir ya da düşer.
+
+================================================================================
+2.5.3.2 Uzatma
+================================================================================
+
+Elliott Dalga Prensipleri’ne göre uzatma kavramı, ana trend yönünde hareket eden itici dalgalardan birinin kendi içinde belirgin bir şekilde bölünerek hareket etmesi ve diğerlerinden ana trend yönünde daha uzun olmasıdır. Bir dalga kalıbı içinde 1, 3 ya da 5 numaralı dalgalardan biri genellikle uzatma hareketini yapmaktadırlar (Frost ve Prechter, 2000:31).
+
+İtki dalga kalıplarında daha önce de bahsedildiği üzere 3. dalga hiçbir zaman en kısa dalga olamaz ve 4. dalga hiçbir zaman 1. dalganın fiyat bölgesine giremez. Bu sebeplerden dolayı itki dalgaları içinde uzatma yapma ihtimali en yüksek olan dalga 3. dalgadır. Tabii bu konudan yola çıkarak, uzatmayı yapan dalganın 1. dalga olduğu görüldüğünde trendin uzun süreceği kanısına da varılmaktadır. Eğer uzatmayı yapan dalga 5. dalga ise döngü tamamlandıktan sonra oluşacak düzeltme dalgasının uzun süreceğine işaret edebilmektedir. 3. dalganın uzatma yapması durumunda ise, 5. dalga uzamamakta ve 1. dalgaya benzeme eğiliminde hareket etmektedir.
+
+Uzatma yapan dalganın alt dereceli dalgaları, itkinin diğer 4 büyük dalgası ile neredeyse aynı büyüklük ve süreye sahiptir. Bundan dolayı birbirine yakın 9 dalgalık bir hareketmiş gibi görünürler. Birbirinden ayrılması pek de kolay olmayan bu 9 dalgalık hareketi incelendiğinde, ilk bakışta hangi dalganın uzatma yaptığını söyleyebilmek cidden çok zordur. Burada önemli olan Ralph Nelson Elliott’a göre 5 dalgalık hareketin 9 dalgalık hareketten teknik olarak pek de farklı olmadığı gerçeğidir (Baysal, 2011:101).
+
+================================================================================
+2.5.3.3 Başarısız Beşinci Dalga
+================================================================================
+
+Elliott Dalga Prensipleri’ne göre başarısız olan 5. dalga, 5. dalganın 3. dalganın yaptığı tepe veya dibi geçememesi durumunda oluşmaktadır. Bu duruma genel olarak 3. dalganın sert ve keskin bir biçimde ilerlediği dönemlerde rast gelinmektedir. Eğer 5. dalga başarısız olduysa genellikle uzun süren derin düzeltme hareketleri görülmektedir. Eğer başarısızlıkla sonuçlanan bir 5. dalga şüphesi var ise markete çok dikkatli yaklaşılmalı ve derin bir düzeltme için belirli şartların oluşabileceği düşünülmelidir (Baştaş, 2014:66).
+
+================================================================================
+2.5.3.4 – 2.5.5 (diyagonal üçgenler, düzeltme dalgaları, almaşıklık)
+================================================================================
+Bu bölümlerin tam metni satır satır kaynak kodda tutulur: web/src/lib/elliottTez2534.ts,
+elliottTez254.ts, elliottTez255.ts ve web/src/lib/elliottTezExtended.ts (birleşik dizi).
+Web panelinde «Teknik analiz & Elliott kuralları» açılır listesinde gösterilir.
+
+================================================================================
+İÇ İNDİRME (SUBDIVISION / FRACTAL) — kısa not
+================================================================================
+• Her itki dalgası (1,3,5) kendi içinde beş daha küçük itki alt dalgasına bölünebilir.
+• Her düzeltme dalgası (2,4) genelde üç alt dalgaya (a-b-c veya iç küçük 5–3 yapılar) bölünür.
+• Pratikte otomatik sayım, pivot seçimi ve veri uzunluğuna bağlı belirsizlik taşır.
+
+================================================================================
+DÜZELTME DALGALARI — ÖZET
+================================================================================
+Ayrıntılı sınıflandırma (yassı, zigzag, üçgen, kombinasyon) ve kurallar için yukarıdaki
+2.5.4 kaynak dosyalarına veya panel metnine bakın.
+
+================================================================================
+DALGA DERECelerİ (ÖRNEK HİYERARŞİ)
+================================================================================
+Grand Supercycle → Supercycle → Cycle → Primary → Intermediate → Minor → Minute → Minuette → Subminuette
+(Uygulama: otomatik modül tek zaman diliminde bir “derece” sayımı yapar; üst/alt ölçek kullanıcı grafiğiyle belirlenir.)
+
+================================================================================
+FİBONACCİ İLİŞKİLERİ (YORUM / SKOR İPUCU)
+================================================================================
+• Geri çekilmelerde 38,2% – 50% – 61,8% sık referans alınır; zorunlu matematiksel kilit değildir.
+• Hedef projeksiyonlarda 1,618 ve türevleri kullanılabilir; sonuçlar yoruma açıktır.
+
+================================================================================
+UYARI
+================================================================================
+Dalga sınırları her zaman net değildir; farklı analistler farklı sayım üretebilir. Otomatik tespit, pivot tabanlı aday üretir; tezdeki zorunlu “Kurallar” maddeleri yazılımda uygulanır (dalga 2/4 uzunlukları, dalga 3 en kısa olmama, 3↔1 bitiş, 4↔3 başlangıç, isteğe bağlı 4/1 alanı). Rehber ilkeler, uzatma ve başarısız 5 sayısal doğrulanmaz.

@@ -1,0 +1,15 @@
+[Unit]
+Description=QTSS HTTP API (Axum)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/app/qtss
+EnvironmentFile=-/app/qtss/.env
+ExecStart=/app/qtss/target/release/qtss-api
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

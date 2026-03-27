@@ -1,0 +1,61 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/qtss-common",
+    "crates/qtss-domain",
+    "crates/qtss-storage",
+    "crates/qtss-execution",
+    "crates/qtss-backtest",
+    "crates/qtss-reporting",
+    "crates/qtss-api",
+    "crates/qtss-binance",
+    "crates/qtss-worker",
+    "crates/qtss-chart-patterns",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["QTSS"]
+
+[workspace.dependencies]
+tokio = { version = "1.43", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.11", features = ["serde", "v4"] }
+thiserror = "2"
+anyhow = "1"
+dotenvy = "0.15"
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uuid", "json", "macros", "rust_decimal", "migrate"] }
+axum = { version = "0.8", features = ["macros", "json"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "fs", "request-id"] }
+hyper = "1"
+async-trait = "0.1"
+strum = { version = "0.26", features = ["derive"] }
+
+# Yerel workspace üyeleri — member crate’lerde `*.workspace = true` ile kullanılır.
+qtss-common = { path = "crates/qtss-common" }
+qtss-domain = { path = "crates/qtss-domain" }
+qtss-storage = { path = "crates/qtss-storage" }
+qtss-execution = { path = "crates/qtss-execution" }
+qtss-backtest = { path = "crates/qtss-backtest" }
+qtss-reporting = { path = "crates/qtss-reporting" }
+qtss-binance = { path = "crates/qtss-binance" }
+qtss-chart-patterns = { path = "crates/qtss-chart-patterns" }
+
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+urlencoding = "2"
+tokio-tungstenite = { version = "0.24", default-features = false, features = [
+    "connect",
+    "rustls-tls-webpki-roots",
+] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+tower_governor = "0.7"
+ipnet = "2"

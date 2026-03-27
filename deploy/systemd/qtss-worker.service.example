@@ -1,0 +1,23 @@
+[Unit]
+Description=QTSS worker — Binance kline WebSocket to PostgreSQL (market_bars)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Proje kökü: .env ve release ikilisi buradan
+WorkingDirectory=/app/qtss
+EnvironmentFile=-/app/qtss/.env
+# .env okunmuyorsa veya sembol yoksa aşağıyı açın (satır başındaki # kaldırın):
+# Environment=QTSS_KLINE_SYMBOL=BTCUSDT
+# Environment=QTSS_KLINE_INTERVAL=1m
+# Environment=QTSS_KLINE_SEGMENT=spot
+ExecStart=/app/qtss/target/release/qtss-worker
+Restart=on-failure
+RestartSec=5
+# İsteğe bağlı: ayrı sistem kullanıcısı
+# User=qtss
+# Group=qtss
+
+[Install]
+WantedBy=multi-user.target

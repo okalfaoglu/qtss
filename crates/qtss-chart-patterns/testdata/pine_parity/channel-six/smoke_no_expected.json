@@ -1,0 +1,31 @@
+{
+  "name": "smoke-no-expected",
+  "ohlc": [
+    { "open": 100.0, "high": 101.0, "low": 99.5, "close": 100.5 },
+    { "open": 100.5, "high": 102.0, "low": 100.0, "close": 101.5 },
+    { "open": 101.5, "high": 103.0, "low": 101.0, "close": 102.5 },
+    { "open": 102.5, "high": 104.0, "low": 102.0, "close": 103.5 },
+    { "open": 103.5, "high": 105.0, "low": 103.0, "close": 104.5 },
+    { "open": 104.5, "high": 106.0, "low": 104.0, "close": 105.5 },
+    { "open": 105.5, "high": 107.0, "low": 105.0, "close": 106.5 },
+    { "open": 106.5, "high": 108.0, "low": 106.0, "close": 107.5 },
+    { "open": 107.5, "high": 109.0, "low": 107.0, "close": 108.5 },
+    { "open": 108.5, "high": 110.0, "low": 108.0, "close": 109.5 }
+  ],
+  "request": {
+    "calculated_bars": 6,
+    "repaint": false,
+    "number_of_pivots": 5,
+    "zigzag_length": 5,
+    "zigzag_max_pivots": 55,
+    "pivot_tail_skip_max": 0,
+    "max_zigzag_levels": 0,
+    "avoid_overlap": true,
+    "max_matches": 1,
+    "allowed_pattern_ids": []
+  },
+  "steps": [
+    { "current_bar_index": 9, "expected": null }
+  ]
+}
+

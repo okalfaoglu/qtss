@@ -1,0 +1,9 @@
+/target/
+**/target/
+.idea/
+.vscode/
+*.rs.bk
+web/node_modules/
+web/dist/
+.env
+.env.local

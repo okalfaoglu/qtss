@@ -1,0 +1,34 @@
+# QTSS — Güvenlik taslağı
+
+Üretim öncesi kontrol listesi ve gizli anahtar stratejisi özeti.
+
+## Ağ ve API
+
+- **TLS**: API ve web yalnızca HTTPS üzerinden yayınlanmalı; sertifika yenileme otomatik (ör. Let’s Encrypt, Ingress TLS).
+- **Rate limit**: Uygulama içi `tower-governor` eşler IP; CDN / WAF / nginx ile ek sınır ve bağlantı sınırları önerilir.
+- **Ters vekil**: `QTSS_TRUSTED_PROXIES` yalnızca güvenilen vekil ağlarını listelemeli. Aksi halde `X-Forwarded-For` sahteciliği rate limit atlamasına yol açar.
+- **Metrikler**: `QTSS_METRICS_TOKEN` üretimde doldurulmalı; `/metrics` iç ağ veya Bearer ile korunmalı.
+
+## Kimlik bilgileri
+
+- **`QTSS_JWT_SECRET`**: Güçlü rastgele (≥32 byte); döndürme politikası ve ortam başına ayrı secret.
+- **OAuth istemcileri**: `oauth_clients.client_secret` hash’li (mevcut); istemci başına grant kısıtları.
+- **Borsa API anahtarları** (`exchange_accounts`):
+  - *Geliştirme*: Düz metin kabul edilebilir.
+  - *Hedef*: **HashiCorp Vault**, AWS Secrets Manager, GCP Secret Manager veya benzeri; uygulama yalnızca kısa ömürlü okuma.
+  - *Uygulama*: Anahtarları alan servis Vault’tan çözer, DB’de sadece **referans** (path / version) tutulabilir; veya alan düzeyinde uygulama içi AEAD (ör. KMS ile data key).
+
+## Denetim
+
+- **`audit_log`**: `/api/v1/*` üzerindeki mutasyonlar yalnızca **`QTSS_AUDIT_HTTP=1`** iken kaydedilir. Saklama süresi ve PII politikası operasyonel karar.
+- İleride: imzalı denetim zinciri, ayrı immutability (WORM) storage.
+
+## Tenancy
+
+- JWT `org_id` ile hizalanan satır düzeyi kontrolleri; yönetici raporlarında çok kiracı sızıntısına karşı testler.
+
+## Bağımlılık ve tedarik
+
+- Düzenli `cargo audit` / benzeri; imaj taraması (container).
+
+Bu belge mimari hedefleri tanımlar; güvenlik onayı için kurum içi süreçlere tabidir.

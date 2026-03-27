@@ -1,0 +1,156 @@
+//! Binance canlı emir — kullanıcının `exchange_accounts` kaydından anahtar okunur.
+
+use std::sync::Arc;
+
+use axum::extract::{Extension, State};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde::Deserialize;
+use uuid::Uuid;
+
+use qtss_binance::{
+    venue_order_id_from_binance_order_response, BinanceClient, BinanceClientConfig,
+};
+use qtss_domain::exchange::MarketSegment;
+use qtss_domain::orders::OrderIntent;
+use qtss_execution::{BinanceLiveGateway, ExecutionError};
+use qtss_storage::ExchangeOrderRow;
+
+use crate::oauth::AccessClaims;
+use crate::state::SharedState;
+
+#[derive(Deserialize)]
+pub struct PlaceBinanceBody {
+    pub intent: OrderIntent,
+}
+
+#[derive(Deserialize)]
+pub struct CancelBinanceBody {
+    pub client_order_id: Uuid,
+    pub symbol: String,
+    /// `spot` veya `futures` / `fapi` / `usdt_futures`
+    pub segment: String,
+}
+
+pub fn orders_binance_read_router() -> Router<SharedState> {
+    Router::new().route("/orders/binance", get(list_my_orders))
+}
+
+pub fn orders_binance_write_router() -> Router<SharedState> {
+    Router::new()
+        .route("/orders/binance/place", post(place_order))
+        .route("/orders/binance/cancel", post(cancel_order))
+}
+
+async fn list_my_orders(
+    Extension(claims): Extension<AccessClaims>,
+    State(st): State<SharedState>,
+) -> Result<Json<Vec<ExchangeOrderRow>>, String> {
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| "geçersiz token sub".to_string())?;
+    let rows = st
+        .exchange_orders
+        .list_for_user(user_id, 200)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Json(rows))
+}
+
+fn segment_db_key(segment: MarketSegment) -> Result<&'static str, String> {
+    match segment {
+        MarketSegment::Spot => Ok("spot"),
+        MarketSegment::Futures => Ok("futures"),
+        _ => Err("bu segment için exchange_accounts eşlemesi yok".into()),
+    }
+}
+
+async fn place_order(
+    Extension(claims): Extension<AccessClaims>,
+    State(st): State<SharedState>,
+    Json(body): Json<PlaceBinanceBody>,
+) -> Result<Json<serde_json::Value>, String> {
+    let org_id =
+        Uuid::parse_str(&claims.org_id).map_err(|_| "geçersiz token org_id".to_string())?;
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| "geçersiz token sub".to_string())?;
+    let seg = segment_db_key(body.intent.instrument.segment)?;
+    let creds = st
+        .exchange_accounts
+        .binance_for_user(user_id, seg)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| {
+            format!(
+                "Binance {} API anahtarı yok — exchange_accounts tablosuna ekleyin",
+                seg
+            )
+        })?;
+    let cfg = BinanceClientConfig::mainnet_with_keys(creds.api_key, creds.api_secret);
+    let client = Arc::new(BinanceClient::new(cfg).map_err(|e| e.to_string())?);
+    let intent = body.intent;
+    let symbol = intent.instrument.symbol.clone();
+    let intent_record = intent.clone();
+    let gw = BinanceLiveGateway::new(client);
+    let (id, venue_json) = gw
+        .place_with_venue_response(intent)
+        .await
+        .map_err(|e: ExecutionError| e.to_string())?;
+    let venue_oid = venue_order_id_from_binance_order_response(&venue_json);
+    st.exchange_orders
+        .insert_submitted(
+            org_id,
+            user_id,
+            "binance",
+            seg,
+            &symbol,
+            id,
+            &intent_record,
+            venue_oid,
+            Some(venue_json),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Json(serde_json::json!({
+        "client_order_id": id,
+        "status": "accepted"
+    })))
+}
+
+async fn cancel_order(
+    Extension(claims): Extension<AccessClaims>,
+    State(st): State<SharedState>,
+    Json(body): Json<CancelBinanceBody>,
+) -> Result<Json<serde_json::Value>, String> {
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| "geçersiz token sub".to_string())?;
+    let seg = match body.segment.as_str() {
+        "futures" | "fapi" | "usdt_futures" => "futures",
+        _ => "spot",
+    };
+    let creds = st
+        .exchange_accounts
+        .binance_for_user(user_id, seg)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Binance {seg} API anahtarı yok"))?;
+    let cfg = BinanceClientConfig::mainnet_with_keys(creds.api_key, creds.api_secret);
+    let client = BinanceClient::new(cfg).map_err(|e| e.to_string())?;
+    let cid = body.client_order_id.as_simple().to_string();
+    match seg {
+        "futures" => {
+            client
+                .fapi_cancel_order(&body.symbol, None, Some(&cid))
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        _ => {
+            client
+                .spot_cancel_order(&body.symbol, None, Some(&cid), None)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    let _ = st
+        .exchange_orders
+        .mark_canceled(user_id, body.client_order_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Json(serde_json::json!({ "status": "canceled" })))
+}

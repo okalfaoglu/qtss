@@ -1,0 +1,21 @@
+// Trendoscope ZigzagLite — agent transcript’ten çıkarılmış parçalar (tam dosya değil).
+// Orijinal: CC BY-NC-SA 4.0 — Trendoscope Pty Ltd.
+//
+// Önemli semantik:
+// - zigzagPivots: unshift ile başa ekleme; .first() / get(0) = en güncel pivot.
+// - addnewpivot: önceki pivotlarla dir genişlemesi (±1 → ±2), ratio / barRatio / sizeRatio.
+// - removeOld dalı: zigzagPivots.shift() sonra Pivot.new(..., pDir) ve addnewpivot.
+// - find: p6=get(0+off) … p1=get(5+off); 6 pivot için points = [p1..p6] kronolojik.
+
+// method addnewpivot(Zigzag this, Pivot pivot) =>
+//     dir = math.sign(pivot.dir)
+//     ...
+//     newDir = dir * value > dir * llastValue ? dir * 2 : dir
+//     pivot.dir := int(newDir)
+//     ...
+//     this.zigzagPivots.unshift(pivot, this.numberOfPivots)
+
+// removeOld:
+//     this.zigzagPivots.shift()
+//     newPivotObject = Pivot.new(chart.point.from_index(newBar, value), pDir)
+//     this.addnewpivot(newPivotObject)
