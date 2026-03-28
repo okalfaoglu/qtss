@@ -28,10 +28,11 @@ fn response_token_count(v: &serde_json::Value) -> Option<usize> {
 }
 
 pub async fn nansen_token_screener_loop(pool: PgPool) {
+    // Varsayılan 30 dk — kredi tüketimini düşük tutar; sık tarama için NANSEN_TICK_SECS düşürün.
     let secs: u64 = std::env::var("NANSEN_TICK_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(600)
+        .unwrap_or(1800)
         .max(60);
 
     let client = match Client::builder()
@@ -64,6 +65,12 @@ pub async fn nansen_token_screener_loop(pool: PgPool) {
         };
 
         let body = token_screener_body_from_env();
+        let insufficient_sleep: u64 = std::env::var("NANSEN_INSUFFICIENT_CREDITS_SLEEP_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3600)
+            .max(secs);
+        let mut next_sleep = secs;
         match post_token_screener(&client, &base, &api_key, &body).await {
             Ok((json, meta)) => {
                 let meta_json = json!({
@@ -92,7 +99,12 @@ pub async fn nansen_token_screener_loop(pool: PgPool) {
                     log_critical(
                         "qtss_worker_nansen",
                         "Nansen kredisi tükendi (Insufficient credits). Token screener çağrıları başarısız; \
-                         Nansen planında kredi yükleyin veya NANSEN_TICK_SECS ile çağrı aralığını artırın.",
+                         Nansen planında kredi yükleyin veya NANSEN_TICK_SECS / NANSEN_INSUFFICIENT_CREDITS_SLEEP_SECS ile aralığı artırın.",
+                    );
+                    next_sleep = insufficient_sleep;
+                    warn!(
+                        sleep_secs = next_sleep,
+                        "nansen: kredi yetersiz — bir sonraki deneme için uzun bekleme"
                     );
                 }
                 warn!(%e, "nansen token_screener isteği başarısız");
@@ -112,6 +124,6 @@ pub async fn nansen_token_screener_loop(pool: PgPool) {
             }
         }
 
-        tokio::time::sleep(Duration::from_secs(secs)).await;
+        tokio::time::sleep(Duration::from_secs(next_sleep)).await;
     }
 }

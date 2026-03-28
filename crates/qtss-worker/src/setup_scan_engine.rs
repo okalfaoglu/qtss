@@ -24,6 +24,19 @@ use crate::nansen_query::{nansen_api_base, token_screener_body_from_env};
 const SNAPSHOT_KIND: &str = "token_screener";
 const SPEC_VERSION: &str = "nansen_setup_v3";
 
+/// Varsayılan: **açık** — setup taraması Nansen’e ikinci bir HTTP isteği yapmaz; yalnızca
+/// `nansen_snapshots` okur (kredi tek yerde: `nansen_engine`). Canlı yedek: `QTSS_SETUP_SNAPSHOT_ONLY=0`.
+fn setup_snapshot_only_mode() -> bool {
+    match std::env::var("QTSS_SETUP_SNAPSHOT_ONLY")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+    {
+        Some("0") | Some("false") | Some("no") | Some("off") => false,
+        _ => true,
+    }
+}
+
 const MIN_LIQUIDITY_USD: f64 = 8_000.0;
 const MIN_VOLUME_USD: f64 = 50.0;
 const MAX_ABS_PRICE_CHANGE: f64 = 8.0;
@@ -499,6 +512,7 @@ async fn load_screener_response(
     api_key: &str,
     request_body: &Value,
     max_age_secs: i64,
+    snapshot_only: bool,
 ) -> Result<(Value, bool), String> {
     let snap_row = fetch_nansen_snapshot(pool, SNAPSHOT_KIND)
         .await
@@ -507,6 +521,9 @@ async fn load_screener_response(
     if let Some(snap) = snap_row {
         if snap.error.is_none() {
             if let Some(resp) = snap.response_json {
+                if snapshot_only {
+                    return Ok((resp, true));
+                }
                 let age = Utc::now()
                     .signed_duration_since(snap.computed_at)
                     .num_seconds();
@@ -515,6 +532,14 @@ async fn load_screener_response(
                 }
             }
         }
+    }
+
+    if snapshot_only {
+        return Err(
+            "setup: QTSS_SETUP_SNAPSHOT_ONLY=1 — nansen_snapshots yok, hatalı veya boş; \
+             Nansen kredisi yalnızca nansen_engine ile tüketilir. Canlı yedek için QTSS_SETUP_SNAPSHOT_ONLY=0."
+                .into(),
+        );
     }
 
     let res = post_token_screener(client, base, api_key, request_body).await;
@@ -541,14 +566,23 @@ async fn run_one_scan(
     api_key: &str,
     request_body: &Value,
 ) -> Result<(), String> {
+    let snapshot_only = setup_snapshot_only_mode();
     let max_age_secs: i64 = std::env::var("QTSS_SETUP_MAX_SNAPSHOT_AGE_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(1_200)
         .max(60);
 
-    let (response_json, use_snap) =
-        load_screener_response(pool, client, base, api_key, request_body, max_age_secs).await?;
+    let (response_json, use_snap) = load_screener_response(
+        pool,
+        client,
+        base,
+        api_key,
+        request_body,
+        max_age_secs,
+        snapshot_only,
+    )
+    .await?;
 
     let data = response_json
         .get("data")
@@ -588,6 +622,7 @@ async fn run_one_scan(
 
     let meta = json!({
         "spec_version": SPEC_VERSION,
+        "nansen_snapshot_only": snapshot_only,
         "used_cached_snapshot": use_snap,
         "input_row_count": data.len(),
         "candidates_after_filters": filtered_n,
@@ -671,20 +706,30 @@ pub async fn nansen_setup_scan_loop(pool: PgPool) {
     };
 
     let base = nansen_api_base();
-    info!(%base, %secs, spec = SPEC_VERSION, "nansen setup scan döngüsü");
+    let mut logged_mode = false;
 
     loop {
-        let Some(api_key) = std::env::var("NANSEN_API_KEY")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-        else {
-            tracing::debug!("setup_scan: NANSEN_API_KEY yok — atlanıyor");
+        let snapshot_only = setup_snapshot_only_mode();
+        if !logged_mode {
+            logged_mode = true;
+            info!(
+                %base,
+                %secs,
+                spec = SPEC_VERSION,
+                %snapshot_only,
+                "nansen setup scan — snapshot_only=true iken Nansen HTTP yalnız nansen_engine’da (kredi tasarrufu)"
+            );
+        }
+
+        let api_key = std::env::var("NANSEN_API_KEY").unwrap_or_default();
+        if !snapshot_only && api_key.trim().is_empty() {
+            tracing::debug!("setup_scan: canlı Nansen için NANSEN_API_KEY gerekli — atlanıyor");
             tokio::time::sleep(Duration::from_secs(secs)).await;
             continue;
-        };
+        }
 
         let body = token_screener_body_from_env();
-        if let Err(e) = run_one_scan(&pool, &client, &base, &api_key, &body).await {
+        if let Err(e) = run_one_scan(&pool, &client, &base, api_key.trim(), &body).await {
             warn!(%e, "nansen_setup_scan başarısız");
             let run = NansenSetupRunInsert {
                 request_json: body.clone(),

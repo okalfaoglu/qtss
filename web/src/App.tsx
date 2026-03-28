@@ -2665,12 +2665,18 @@ export default function App() {
                       </p>
                       <ul className="muted" style={{ fontSize: "0.72rem", margin: "0 0 0.55rem 1rem", lineHeight: 1.45 }}>
                         <li>
-                          <code>NANSEN_TICK_SECS</code> — çağrı aralığı (varsayılan 600 sn); kredi ve rate limit için yüksek
-                          tutun.
+                          <code>NANSEN_TICK_SECS</code> — token screener çağrı aralığı (varsayılan 1800 sn); kredi için
+                          yüksek tutun. Kredi bitince bekleme:{" "}
+                          <code>NANSEN_INSUFFICIENT_CREDITS_SLEEP_SECS</code> (varsayılan 3600).
                         </li>
                         <li>
-                          <code>NANSEN_TOKEN_SCREENER_REQUEST_JSON</code> — isteğe bağlı tam JSON gövde; yoksa Smart Money
-                          + yaş filtresi + <code>buy_volume DESC</code> varsayılanı kullanılır.
+                          <code>QTSS_SETUP_SNAPSHOT_ONLY</code> — varsayılan <code>1</code>: setup <strong>ikinci</strong>{" "}
+                          Nansen isteği yapmaz, yalnız <code>nansen_snapshots</code> okur (tek kredili çağrı{" "}
+                          <code>nansen_engine</code>). Yedek canlı: <code>0</code>.
+                        </li>
+                        <li>
+                          <code>NANSEN_TOKEN_SCREENER_REQUEST_JSON</code> — isteğe bağlı tam JSON; yoksa kod varsayılanı
+                          (6h, <code>trader_type</code> sm, <code>per_page</code> 100, vb.).
                         </li>
                         <li>
                           <code>NANSEN_API_BASE</code> — varsayılan <code>https://api.nansen.ai</code>.
@@ -2680,8 +2686,9 @@ export default function App() {
                           <code>GET …/analysis/nansen/setups/latest</code> (JWT) — aşağıda özet + setup tablosu.
                         </li>
                         <li>
-                          <code>QTSS_SETUP_SCAN_SECS</code> — setup tarama aralığı (varsayılan 900 sn);{" "}
-                          <code>QTSS_SETUP_MAX_SNAPSHOT_AGE_SECS</code> — kullanılacak screener snapshot yaş sınırı.
+                          <code>QTSS_SETUP_SCAN_SECS</code> — setup tarama aralığı (varsayılan 900 sn; snapshot-only iken
+                          ek Nansen kredisi tüketmez). <code>QTSS_SETUP_MAX_SNAPSHOT_AGE_SECS</code> yalnız{" "}
+                          <code>QTSS_SETUP_SNAPSHOT_ONLY=0</code> iken canlı yedek kararını etkiler.
                         </li>
                         <li>
                           Nansen <strong>403 Insufficient credits</strong>: hesapta kredi biter; aralığı artırın (

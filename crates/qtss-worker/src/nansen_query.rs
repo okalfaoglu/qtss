@@ -24,7 +24,7 @@ pub fn default_token_screener_body() -> serde_json::Value {
             { "field": "volume", "direction": "DESC" },
             { "field": "netflow", "direction": "DESC" }
         ],
-        "pagination": { "page": 1, "per_page": 250 }
+        "pagination": { "page": 1, "per_page": 100 }
     })
 }
 
