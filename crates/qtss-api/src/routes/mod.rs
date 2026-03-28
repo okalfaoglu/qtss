@@ -3,6 +3,7 @@ mod catalog_sync;
 mod config_admin;
 mod copy_trade;
 mod dashboard;
+mod external_fetch;
 mod health;
 mod market_binance;
 mod notify;
@@ -89,6 +90,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(
             analysis::analysis_read_router()
                 .merge(notify::notify_router())
+                .merge(external_fetch::external_fetch_read_router())
                 .layer(from_fn(require_dashboard_roles)),
         )
         .merge(

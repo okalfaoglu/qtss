@@ -4,6 +4,7 @@ pub mod config;
 pub mod copy_trade;
 pub mod engine_analysis;
 pub mod error;
+pub mod external_fetch;
 pub mod exchange_accounts;
 pub mod exchange_orders;
 pub mod market_bars;
@@ -25,6 +26,12 @@ pub use engine_analysis::{
     RangeSignalEventInsert, RangeSignalEventJoinedRow,
 };
 pub use error::StorageError;
+pub use external_fetch::{
+    delete_external_source, external_snapshot_age_secs, fetch_external_snapshot,
+    list_enabled_external_sources, list_external_sources, list_external_snapshots,
+    upsert_external_snapshot, upsert_external_source, ExternalDataSnapshotRow,
+    ExternalDataSourceRow,
+};
 pub use exchange_accounts::{ExchangeAccountRepository, ExchangeCredentials};
 pub use exchange_orders::{ExchangeOrderRepository, ExchangeOrderRow};
 pub use market_bars::{

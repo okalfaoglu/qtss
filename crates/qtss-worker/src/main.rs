@@ -2,6 +2,7 @@
 //! `engine_symbols` → analiz snapshot (Trading Range, …).
 
 mod engine_analysis;
+mod external_fetch_engine;
 mod nansen_engine;
 mod nansen_query;
 mod setup_scan_engine;
@@ -62,6 +63,8 @@ async fn main() -> anyhow::Result<()> {
             tokio::spawn(nansen_engine::nansen_token_screener_loop(nansen_pool));
             let setup_pool = pool.clone();
             tokio::spawn(setup_scan_engine::nansen_setup_scan_loop(setup_pool));
+            let ext_pool = pool.clone();
+            tokio::spawn(external_fetch_engine::external_fetch_loop(ext_pool));
             Some(pool)
         }
         _ => {
