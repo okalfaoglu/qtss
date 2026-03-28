@@ -12,7 +12,7 @@ use serde_json::json;
 use sqlx::PgPool;
 use tracing::{info, warn};
 
-use crate::nansen_query::{nansen_api_base, token_screener_body_from_env};
+use crate::nansen_query::{nansen_api_base, token_screener_body};
 
 static LOGGED_MISSING_NANSEN_KEY: AtomicBool = AtomicBool::new(false);
 
@@ -64,7 +64,7 @@ pub async fn nansen_token_screener_loop(pool: PgPool) {
             continue;
         };
 
-        let body = token_screener_body_from_env();
+        let body = token_screener_body(&pool).await;
         let insufficient_sleep: u64 = std::env::var("NANSEN_INSUFFICIENT_CREDITS_SLEEP_SECS")
             .ok()
             .and_then(|s| s.parse().ok())

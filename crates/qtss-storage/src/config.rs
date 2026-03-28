@@ -84,6 +84,17 @@ impl AppConfigRepository {
         Ok(res.rows_affected())
     }
 
+    /// `app_config.value` (JSONB) — satır yoksa `None`.
+    pub async fn get_value_json(pool: &PgPool, key: &str) -> Result<Option<serde_json::Value>, StorageError> {
+        let row: Option<serde_json::Value> = sqlx::query_scalar(
+            r#"SELECT value FROM app_config WHERE key = $1"#,
+        )
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row)
+    }
+
     /// `app.mode` gibi kritik anahtarlar için tip güvenli okuma.
     pub async fn get_string(&self, key: &str) -> Result<Option<String>, StorageError> {
         let Some(e) = self.get_by_key(key).await? else {

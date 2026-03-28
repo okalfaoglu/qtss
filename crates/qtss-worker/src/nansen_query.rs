@@ -2,10 +2,15 @@
 //!
 //! Varsayılan gövde, Nansen OpenAPI `TokenScreenerRequest` ile uyumludur: `trader_type: "sm"`,
 //! akıllı para + hacim/netflow odaklı sıralama, erken aşama yaş aralığı, stabilcoin hariç.
-//! Özelleştirmek için `NANSEN_TOKEN_SCREENER_REQUEST_JSON` kullanın.
+//!
+//! **Sıra (`token_screener_body`):** `app_config` (`QTSS_NANSEN_CONFIG_KEY`, varsayılan
+//! `nansen_screener_request`) → `NANSEN_TOKEN_SCREENER_REQUEST_JSON` → [`default_token_screener_body`].
+//! Admin: `PUT /api/v1/config` ile `key` / `value` JSON; worker restart gerekmez.
 
+use qtss_storage::AppConfigRepository;
 use serde_json::json;
-use tracing::warn;
+use sqlx::PgPool;
+use tracing::{debug, warn};
 
 pub fn default_token_screener_body() -> serde_json::Value {
     json!({
@@ -38,6 +43,45 @@ pub fn token_screener_body_from_env() -> serde_json::Value {
             }
         },
         _ => default_token_screener_body(),
+    }
+}
+
+/// `app_config` anahtarı; preset değiştirmek için `nansen_screener_request_v2` gibi ayrı satır + bu env.
+pub fn nansen_app_config_key() -> String {
+    std::env::var("QTSS_NANSEN_CONFIG_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "nansen_screener_request".to_string())
+}
+
+fn is_usable_screener_body(v: &serde_json::Value) -> bool {
+    matches!(
+        v.get("chains").and_then(|c| c.as_array()),
+        Some(a) if !a.is_empty()
+    )
+}
+
+/// Her döngüde çağrılır: DB’de geçerli gövde varsa anında yeni filtreler uygulanır.
+pub async fn token_screener_body(pool: &PgPool) -> serde_json::Value {
+    let key = nansen_app_config_key();
+    match AppConfigRepository::get_value_json(pool, key.trim()).await {
+        Ok(Some(v)) if is_usable_screener_body(&v) => {
+            debug!(config_key = %key, "nansen token screener gövdesi app_config’ten");
+            v
+        }
+        Ok(Some(v)) => {
+            warn!(
+                config_key = %key,
+                value = %v,
+                "app_config’teki Nansen screener JSON kullanılamıyor (chains boş veya yok) — env/varsayılan"
+            );
+            token_screener_body_from_env()
+        }
+        Ok(None) => token_screener_body_from_env(),
+        Err(e) => {
+            warn!(%e, config_key = %key, "app_config okunamadı — env/varsayılan");
+            token_screener_body_from_env()
+        }
     }
 }
 

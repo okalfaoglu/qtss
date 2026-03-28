@@ -1,9 +1,10 @@
 //! Nansen token screener verisi + dahili skor / seviye kuralları → `nansen_setup_*` tabloları.
 //!
-//! Hyperliquid / ayrı CEX akış uçları şimdilik Nansen satırındaki metriklerle temsil edilir; OHLC
-//! Binance `market_bars` (`SYMBOLUSDT`) ile 1h + 6h zenginleştirilir; TP1 mümkünse 1h high/low
-//! ceplerine pinlenir (TP2’ye sabit % hedefi korunur).
+//! Hyperliquid: Nansen satırında `hl_long_pct` / `hl_short_pct` yoksa, tarama başına tek istekle
+//! `POST https://api.hyperliquid.xyz/info` (`metaAndAssetCtxs`) funding ile skor ve sinyal zenginleştirilir.
+//! OHLC Binance `market_bars` (`SYMBOLUSDT`) ile 1h + 6h; TP1 mümkünse 1h high/low ceplerine pinlenir.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -19,10 +20,18 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use tracing::{info, warn};
 
-use crate::nansen_query::{nansen_api_base, token_screener_body_from_env};
+use crate::nansen_query::{nansen_api_base, token_screener_body};
 
 const SNAPSHOT_KIND: &str = "token_screener";
-const SPEC_VERSION: &str = "nansen_setup_v3";
+const SPEC_VERSION: &str = "nansen_setup_v4";
+/// Hyperliquid `info` — tek istekte tüm perp coin bağlamı.
+const HL_INFO_URL: &str = "https://api.hyperliquid.xyz/info";
+/// |funding| bu eşiğin altındayken HL funding skoru/sinyali uygulanmaz.
+const HL_FUNDING_MIN_ABS: f64 = 0.00003;
+/// Bu mutlak funding ≈ tam skor tavanı (`HL_FUNDING_SCORE_CAP`).
+const HL_FUNDING_REF_ABS: f64 = 0.0003;
+/// Nansen HL L/S% ile aynı maksimum katkı.
+const HL_FUNDING_SCORE_CAP: f64 = 6.0;
 
 /// Varsayılan: **açık** — setup taraması Nansen’e ikinci bir HTTP isteği yapmaz; yalnızca
 /// `nansen_snapshots` okur (kredi tek yerde: `nansen_engine`). Canlı yedek: `QTSS_SETUP_SNAPSHOT_ONLY=0`.
@@ -328,6 +337,109 @@ async fn enrich_ohlc(pool: &PgPool, c: &mut Candidate) {
     }
 }
 
+fn hyperliquid_enrich_enabled() -> bool {
+    match std::env::var("QTSS_HYPERLIQUID_ENRICH")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+    {
+        Some("0") | Some("false") | Some("no") | Some("off") => false,
+        _ => true,
+    }
+}
+
+fn nansen_row_has_hl_long_short_pct(row: &Value) -> bool {
+    if let (Some(lp), Some(sp)) = (
+        v_f64(row, "hyperliquid_long_pct").or_else(|| v_f64(row, "hl_long_pct")),
+        v_f64(row, "hyperliquid_short_pct").or_else(|| v_f64(row, "hl_short_pct")),
+    ) {
+        return lp + sp > 1.0;
+    }
+    false
+}
+
+fn hl_listing_key(symbol: &str) -> String {
+    symbol
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_uppercase()
+}
+
+fn parse_hyperliquid_meta_asset_ctxs(resp: &Value) -> Option<HashMap<String, Value>> {
+    let arr = resp.as_array()?;
+    if arr.len() < 2 {
+        return None;
+    }
+    let uni = arr[0].get("universe")?.as_array()?;
+    let ctxs = arr[1].as_array()?;
+    let n = uni.len().min(ctxs.len());
+    let mut m = HashMap::with_capacity(n);
+    for i in 0..n {
+        let name = uni[i].get("name")?.as_str()?.to_uppercase();
+        m.insert(name, ctxs[i].clone());
+    }
+    Some(m)
+}
+
+async fn fetch_hyperliquid_asset_ctx_by_coin(client: &Client) -> Option<HashMap<String, Value>> {
+    let res = client
+        .post(HL_INFO_URL)
+        .header("Content-Type", "application/json")
+        .json(&json!({ "type": "metaAndAssetCtxs" }))
+        .send()
+        .await
+        .ok()?;
+    if !res.status().is_success() {
+        return None;
+    }
+    let v: Value = res.json().await.ok()?;
+    parse_hyperliquid_meta_asset_ctxs(&v)
+}
+
+/// Nansen’de HL yüzdesi yoksa, coin adı HL perp listesiyle eşleşen adaylara funding proxy’si uygular.
+async fn enrich_hyperliquid(client: &Client, candidates: &mut [Candidate]) {
+    if !hyperliquid_enrich_enabled() {
+        return;
+    }
+    let Some(map) = fetch_hyperliquid_asset_ctx_by_coin(client).await else {
+        warn!("hyperliquid: metaAndAssetCtxs alınamadı — setup HL API atlandı");
+        return;
+    };
+    for c in candidates.iter_mut() {
+        if nansen_row_has_hl_long_short_pct(&c.raw) {
+            continue;
+        }
+        let key = hl_listing_key(&c.token_symbol);
+        if key.is_empty() {
+            continue;
+        }
+        let Some(ctx) = map.get(&key) else {
+            continue;
+        };
+        let Some(f) = v_f64(ctx, "funding") else {
+            continue;
+        };
+        let af = f.abs();
+        if af < HL_FUNDING_MIN_ABS {
+            continue;
+        }
+        let scale = (af / HL_FUNDING_REF_ABS).clamp(0.0, 1.0);
+        let bump = scale * HL_FUNDING_SCORE_CAP;
+        if f < 0.0 {
+            c.long_score += bump;
+        } else {
+            c.short_score += bump;
+        }
+        if let Value::Object(ref mut m) = c.raw {
+            m.insert("hl_api_funding".into(), json!(f));
+            if let Some(mp) = v_f64(ctx, "markPx") {
+                m.insert("hl_api_mark_px".into(), json!(mp));
+            }
+        }
+    }
+}
+
 fn direction_and_score(c: &Candidate) -> (&'static str, i32) {
     let long = c.long_score;
     let short = c.short_score;
@@ -411,6 +523,24 @@ fn append_extra_screener_signals(raw: &Value, direction: &str, out: &mut Vec<Str
                     "Screener HL bias: short {:.1}% vs long {:.1}%",
                     sp, lp
                 ));
+            }
+        }
+    }
+    let has_screener_hl = out.iter().any(|s| s.contains("Screener HL bias"));
+    if !has_screener_hl {
+        if let Some(f) = v_f64(raw, "hl_api_funding") {
+            if f.abs() > HL_FUNDING_MIN_ABS {
+                if direction == "LONG" && f < 0.0 {
+                    out.push(format!(
+                        "Hyperliquid API funding {:.6} (short-crowding proxy)",
+                        f
+                    ));
+                } else if direction == "SHORT" && f > 0.0 {
+                    out.push(format!(
+                        "Hyperliquid API funding {:.6} (long-crowding proxy)",
+                        f
+                    ));
+                }
             }
         }
     }
@@ -598,6 +728,8 @@ async fn run_one_scan(
         }
     }
 
+    enrich_hyperliquid(client, &mut candidates).await;
+
     let filtered_n = candidates.len();
     let mut long_ranked: Vec<(f64, Candidate, &'static str, i32)> = Vec::new();
     let mut short_ranked: Vec<(f64, Candidate, &'static str, i32)> = Vec::new();
@@ -728,7 +860,7 @@ pub async fn nansen_setup_scan_loop(pool: PgPool) {
             continue;
         }
 
-        let body = token_screener_body_from_env();
+        let body = token_screener_body(&pool).await;
         if let Err(e) = run_one_scan(&pool, &client, &base, api_key.trim(), &body).await {
             warn!(%e, "nansen_setup_scan başarısız");
             let run = NansenSetupRunInsert {
