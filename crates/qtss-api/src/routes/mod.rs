@@ -95,6 +95,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         )
         .merge(
             analysis::analysis_write_router()
+                .merge(external_fetch::external_fetch_write_router())
                 .layer(from_fn(require_ops_roles)),
         )
         .layer(audit_layer)
