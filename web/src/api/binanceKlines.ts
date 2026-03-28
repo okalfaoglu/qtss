@@ -29,14 +29,36 @@ function maxPagesEnv(): number {
   return Math.min(200, Math.max(1, Number.isFinite(n) ? n : 50));
 }
 
+function isBinanceFuturesSegment(segment: string | undefined): boolean {
+  const s = (segment ?? "spot").trim().toLowerCase();
+  return s === "futures" || s === "usdt_futures" || s === "fapi";
+}
+
+function formatBinanceKlinesError(status: number, body: string): string {
+  const slice = body.slice(0, 280);
+  try {
+    const j = JSON.parse(body) as { code?: number; msg?: string };
+    if (j.code === -1121) {
+      return `Binance klines ${status}: Geçersiz sembol (-1121). Çift spot’ta yoksa segment’i USDT vadeli (futures/usdt_futures) yapın; yine olmazsa sembolü Binance’te doğrulayın. Ham: ${slice}`;
+    }
+  } catch {
+    /* ignore */
+  }
+  return `Binance klines ${status}: ${slice}`;
+}
+
 function klinesUrl(
   symbol: string,
   interval: string,
   limit: number,
+  segment: string | undefined,
   startTimeMs?: number,
   endTimeMs?: number,
 ): string {
-  const base = (import.meta.env.VITE_BINANCE_API_BASE as string | undefined)?.replace(/\/$/, "") ?? "";
+  const futures = isBinanceFuturesSegment(segment);
+  const spotBase = (import.meta.env.VITE_BINANCE_API_BASE as string | undefined)?.replace(/\/$/, "") ?? "";
+  const fapiBase =
+    (import.meta.env.VITE_BINANCE_FAPI_API_BASE as string | undefined)?.replace(/\/$/, "") ?? "https://fapi.binance.com";
   const q = new URLSearchParams({
     symbol: symbol.toUpperCase(),
     interval,
@@ -48,8 +70,13 @@ function klinesUrl(
   if (endTimeMs != null && Number.isFinite(endTimeMs)) {
     q.set("endTime", String(Math.floor(endTimeMs)));
   }
+  if (futures) {
+    const path = `/fapi/v1/klines?${q}`;
+    if (spotBase) return `${fapiBase}${path}`;
+    return `/__binance_fapi${path}`;
+  }
   const path = `/api/v3/klines?${q}`;
-  if (base) return `${base}${path}`;
+  if (spotBase) return `${spotBase}${path}`;
   return `/__binance${path}`;
 }
 
@@ -100,11 +127,11 @@ async function fetchBinanceKlinesOneRequest(params: {
     });
   }
 
-  const url = klinesUrl(sym, iv, lim, params.startTimeMs, params.endTimeMs);
+  const url = klinesUrl(sym, iv, lim, params.segment, params.startTimeMs, params.endTimeMs);
   const r = await fetch(url);
   if (!r.ok) {
     const t = await r.text();
-    throw new Error(`Binance klines ${r.status}: ${t.slice(0, 200)}`);
+    throw new Error(formatBinanceKlinesError(r.status, t));
   }
   const raw = (await r.json()) as unknown;
   return rowsFromBinanceJson(raw);
@@ -189,7 +216,7 @@ async function fetchBinanceKlinesRecentTotal(params: {
 
 /**
  * Binance klines → grafik satırı.
- * - Varsayılan: tarayıcı → Vite `/__binance` (proxy hedefi `.env` → `VITE_BINANCE_PROXY_TARGET`) veya doğrudan `VITE_BINANCE_API_BASE` (CORS; OAuth gerekmez).
+ * - Varsayılan: tarayıcı → Vite `/__binance` (spot) ve `/__binance_fapi` (USDT-M; `.env` → `VITE_BINANCE_PROXY_TARGET` / `VITE_BINANCE_FAPI_PROXY_TARGET`) veya doğrudan `VITE_BINANCE_API_BASE` + `VITE_BINANCE_FAPI_API_BASE` (CORS; OAuth gerekmez).
  * - `VITE_BINANCE_KLINES_VIA_API=1` ve `accessToken` doluysa: `GET /api/v1/market/binance/klines`.
  *
  * `startTimeMs` + `endTimeMs`: aynı takvim penceresi — limit aşılsa bile sayfalanır (MTF hizası için).

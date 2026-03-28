@@ -14,6 +14,8 @@ type Props = {
   onSaveToDb: () => void;
   saveBusy: boolean;
   saveHint?: string;
+  /** `false`: salt okunur — `app_config` yazılamaz (admin değil). */
+  allowPersistConfig?: boolean;
 };
 
 function row<K extends keyof AcpChartPatternsConfig>(
@@ -25,7 +27,14 @@ function row<K extends keyof AcpChartPatternsConfig>(
   onChange({ ...cfg, [key]: val });
 }
 
-export function AcpTrendoscopeSettingsCard({ value, onChange, onSaveToDb, saveBusy, saveHint }: Props) {
+export function AcpTrendoscopeSettingsCard({
+  value,
+  onChange,
+  onSaveToDb,
+  saveBusy,
+  saveHint,
+  allowPersistConfig = true,
+}: Props) {
   const setScan = (patch: Partial<AcpChartPatternsConfig["scanning"]>) =>
     onChange({ ...value, scanning: { ...value.scanning, ...patch } });
   const setSizeFilters = (patch: Partial<AcpSizeFilters>) =>
@@ -226,6 +235,29 @@ export function AcpTrendoscopeSettingsCard({ value, onChange, onSaveToDb, saveBu
             <span className="muted">Verify bar ratio</span>
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: "0.35rem", marginTop: "1.25rem" }}>
+            <input
+              type="checkbox"
+              checked={value.scanning.ratio_diff_enabled}
+              onChange={(e) => setScan({ ratio_diff_enabled: e.target.checked })}
+            />
+            <span className="muted" title="Pine ratioDiffEnabled — üçlü tepe/dip eğim tutarlılığı (getRatioDiff).">
+              Ratio diff filter
+            </span>
+          </label>
+          <label>
+            <span className="muted" style={{ display: "block", fontSize: "0.75rem" }}>
+              ratio_diff_max (Pine ratioDiff)
+            </span>
+            <input
+              className="mono"
+              type="number"
+              step="0.01"
+              min={0.000001}
+              value={value.scanning.ratio_diff_max}
+              onChange={(e) => setScan({ ratio_diff_max: parseFloat(e.target.value) || 1 })}
+            />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "0.35rem", marginTop: "1.25rem" }}>
             <input type="checkbox" checked={value.scanning.avoid_overlap} onChange={(e) => setScan({ avoid_overlap: e.target.checked })} />
             <span className="muted">Avoid overlap</span>
           </label>
@@ -233,6 +265,24 @@ export function AcpTrendoscopeSettingsCard({ value, onChange, onSaveToDb, saveBu
             <input type="checkbox" checked={value.scanning.repaint} onChange={(e) => setScan({ repaint: e.target.checked })} />
             <span className="muted" title="Açık: son (oluşan) mum taramada kullanılır. Kapalı: TV gibi yalnız kapanmış mumlar.">
               Repaint (açık mum)
+            </span>
+          </label>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.35rem",
+              marginTop: "1.25rem",
+              gridColumn: "1 / -1",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={value.scanning.auto_scan_on_timeframe_change}
+              onChange={(e) => setScan({ auto_scan_on_timeframe_change: e.target.checked })}
+            />
+            <span className="muted" title="Üst şeritteki timeframe (interval) her değiştiğinde kanal taramasını otomatik çalıştırır.">
+              Timeframe değişince otomatik kanal taraması
             </span>
           </label>
           <label>
@@ -562,6 +612,10 @@ export function AcpTrendoscopeSettingsCard({ value, onChange, onSaveToDb, saveBu
               value={value.display.max_patterns}
               onChange={(e) => setDisplay({ max_patterns: parseInt(e.target.value, 10) || 1 })}
             />
+            <span className="muted" style={{ display: "block", fontSize: "0.65rem", marginTop: "0.2rem" }}>
+              API <code>max_matches</code> — geçmişte çoklu eşleşme için &gt;1; tarama +{" "}
+              <code>pivot_tail_skip_max</code> birlikte kullanın.
+            </span>
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: "0.35rem", marginTop: "1rem" }}>
             <input
@@ -604,7 +658,13 @@ export function AcpTrendoscopeSettingsCard({ value, onChange, onSaveToDb, saveBu
       </label>
 
       <div style={{ marginTop: "1rem", display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
-        <button type="button" className="theme-toggle" disabled={saveBusy} onClick={() => onSaveToDb()}>
+        <button
+          type="button"
+          className="theme-toggle"
+          disabled={saveBusy || !allowPersistConfig}
+          title={allowPersistConfig ? undefined : "Yalnızca admin rolü app_config yazabilir"}
+          onClick={() => onSaveToDb()}
+        >
           {saveBusy ? "Kaydediliyor…" : "Veritabanına kaydet (admin)"}
         </button>
         {saveHint ? <span className="muted" style={{ fontSize: "0.85rem" }}>{saveHint}</span> : null}

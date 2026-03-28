@@ -1,8 +1,10 @@
-//! Bildirim kanalları — iskelet.
+//! Bildirim kanalları — `qtss-notify` + ortam değişkenleri.
 
 use axum::extract::Extension;
+use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
+use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher, NotifyError};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -10,7 +12,7 @@ use crate::oauth::AccessClaims;
 use crate::state::SharedState;
 
 pub fn notify_router() -> Router<SharedState> {
-    Router::new().route("/notify/test", post(notify_test_stub))
+    Router::new().route("/notify/test", post(notify_test))
 }
 
 #[derive(Deserialize)]
@@ -19,15 +21,29 @@ pub struct NotifyTestBody {
     pub message: Option<String>,
 }
 
-async fn notify_test_stub(
+async fn notify_test(
     Extension(_claims): Extension<AccessClaims>,
     Json(body): Json<NotifyTestBody>,
-) -> Json<serde_json::Value> {
-    Json(json!({
-        "status": "stub",
-        "channel": body.channel.unwrap_or_else(|| "telegram".into()),
-        "message_preview": body.message.unwrap_or_default(),
-        "queued": false,
-        "detail": "qtss-notify bağlanınca kuyruğa alınacak"
-    }))
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let ch = body
+        .channel
+        .as_deref()
+        .and_then(NotificationChannel::parse)
+        .unwrap_or(NotificationChannel::Telegram);
+    let msg = body
+        .message
+        .unwrap_or_else(|| "QTSS panel — bildirim testi".into());
+    let n = Notification::new("QTSS test", msg);
+    let d = NotificationDispatcher::from_env();
+    match d.send(ch, &n).await {
+        Ok(rec) => Ok(Json(json!({
+            "status": "sent",
+            "receipt": rec,
+        }))),
+        Err(NotifyError::ChannelNotConfigured(msg)) => Err((
+            StatusCode::BAD_REQUEST,
+            format!("kanal yapılandırılmadı: {msg}"),
+        )),
+        Err(e) => Err((StatusCode::BAD_GATEWAY, e.to_string())),
+    }
 }

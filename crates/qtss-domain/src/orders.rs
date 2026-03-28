@@ -76,6 +76,17 @@ pub enum OrderType {
     },
 }
 
+/// USDT-M (Binance FAPI) emrinde kullanılacak ek alanlar — spot için yok sayılır.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FuturesExecutionExtras {
+    /// Hedge modu: `LONG`, `SHORT`; tek yönlü (one-way) modda genelde boş bırakılır.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_side: Option<String>,
+    /// Yalnızca pozisyon azaltan emir.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduce_only: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderIntent {
     pub instrument: InstrumentId,
@@ -85,4 +96,7 @@ pub struct OrderIntent {
     pub time_in_force: TimeInForce,
     /// İnsan onayı gerektiren strateji/AI modu için meta.
     pub requires_human_approval: bool,
+    /// Yalnızca `MarketSegment::Futures` — `positionSide`, `reduceOnly` vb.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub futures: Option<FuturesExecutionExtras>,
 }

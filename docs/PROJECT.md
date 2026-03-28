@@ -71,6 +71,10 @@ qtss/
 
 **Migrasyon checksum uyarısı:** Uygulanmış bir `migrations/*.sql` dosyasını değiştirirseniz SQLx `migration … was previously applied but has been modified` hatası verir. Önce (repo kökünden, `qtss-api` ile aynı `.env`): `cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums` — ardından `cargo run -p qtss-api`. `sqlx-cli` şart değil. Doğru kalıp: eski migrasyonu ellemeden yeni numaralı `.sql` eklemek.
 
+**Tekil sürüm numarası:** `0014_a.sql` ve `0014_b.sql` gibi **aynı önek** iki dosya olamaz — `_sqlx_migrations` satır başına tek checksum vardır; senkron aracı da son dosyanın özetini yazar ve `migrate` yine kırılır. `qtss-sync-sqlx-checksums` çift `NNNN_` önekini artık başta reddeder. Yeni dosya eklemeden önce repo kökünde `ls migrations/*.sql | sort | tail` ile son numarayı kontrol edin; bir sonraki boş sürümü kullanın (ör. `0019_...sql`).
+
+**Nansen setup scan:** `0020_nansen_setup_scans.sql` — `nansen_setup_runs` / `nansen_setup_rows`; worker `setup_scan_engine` (`QTSS_SETUP_SCAN_SECS`, `QTSS_SETUP_MAX_SNAPSHOT_AGE_SECS`); TP1 için 1h OHLC likidite vekili + 6h vol genişlemesi; sürüm `meta_json.spec_version` (ör. `nansen_setup_v3`); çıktı 5 LONG + 5 SHORT; API `GET /api/v1/analysis/nansen/setups/latest`.
+
 **Planlanan genişlemeler** (henüz ayrı crate olarak yok):
 
 - `crates/qtss-connectors/` — ek borsa adapter’ları (`qtss-binance` yanında)
@@ -216,6 +220,8 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 ---
 
 ## 10. Yol haritası
+
+**Teknik şartname (işlem modları, range sinyalleri, grafik işaretleri, dashboard):** [SPEC_EXECUTION_RANGE_SIGNALS_UI.md](./SPEC_EXECUTION_RANGE_SIGNALS_UI.md)
 
 1. **Kimlik ve RBAC** — OAuth + JWT + uç bazlı roller (**kısmen**: token ve RBAC API’de; ince taneli izinler / audit sonra)  
 2. **Binance spot + futures** — REST + katalog + kline + stream URL + komisyon fallback + sunucu tarafı kline WS → DB (**kısmen**; hesap bazlı gerçek fee / trade fee API sonra)  

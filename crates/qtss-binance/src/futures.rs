@@ -202,6 +202,27 @@ impl BinanceClient {
             .await
     }
 
+    /// USDT-M — hesaba özel komisyon oranları (`/fapi/v1/commissionRate`).
+    pub async fn fapi_commission_rate(&self, symbol: &str) -> Result<serde_json::Value, BinanceError> {
+        let c = self.fapi_creds()?;
+        let mut p = BTreeMap::new();
+        p.insert("symbol".into(), symbol.trim().to_uppercase());
+        self.core
+            .get_signed(self.fapi_base(), "/fapi/v1/commissionRate", p, c)
+            .await
+    }
+
+    /// Kaldıraç — `POST /fapi/v1/leverage` (sembol başına; borsa üst sınırına tabi).
+    pub async fn fapi_change_leverage(&self, symbol: &str, leverage: u32) -> Result<serde_json::Value, BinanceError> {
+        let c = self.fapi_creds()?;
+        let mut p = BTreeMap::new();
+        p.insert("symbol".into(), symbol.trim().to_uppercase());
+        p.insert("leverage".into(), leverage.to_string());
+        self.core
+            .post_signed_form(self.fapi_base(), "/fapi/v1/leverage", p, c)
+            .await
+    }
+
     pub async fn fapi_balance(&self) -> Result<serde_json::Value, BinanceError> {
         let c = self.fapi_creds()?;
         self.core

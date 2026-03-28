@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/qtss-common",
+    "crates/qtss-notify",
     "crates/qtss-domain",
     "crates/qtss-storage",
     "crates/qtss-execution",
@@ -11,6 +12,7 @@ members = [
     "crates/qtss-binance",
     "crates/qtss-worker",
     "crates/qtss-chart-patterns",
+    "crates/qtss-nansen",
 ]
 
 [workspace.package]
@@ -39,6 +41,7 @@ strum = { version = "0.26", features = ["derive"] }
 
 # Yerel workspace üyeleri — member crate’lerde `*.workspace = true` ile kullanılır.
 qtss-common = { path = "crates/qtss-common" }
+qtss-notify = { path = "crates/qtss-notify" }
 qtss-domain = { path = "crates/qtss-domain" }
 qtss-storage = { path = "crates/qtss-storage" }
 qtss-execution = { path = "crates/qtss-execution" }
@@ -46,6 +49,7 @@ qtss-backtest = { path = "crates/qtss-backtest" }
 qtss-reporting = { path = "crates/qtss-reporting" }
 qtss-binance = { path = "crates/qtss-binance" }
 qtss-chart-patterns = { path = "crates/qtss-chart-patterns" }
+qtss-nansen = { path = "crates/qtss-nansen" }
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 hmac = "0.12"

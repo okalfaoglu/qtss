@@ -21,9 +21,10 @@ pub mod catalog_sync;
 
 pub use catalog_sync::{sync_full_binance_catalog, sync_spot_instruments, sync_usdt_futures_instruments, CatalogSyncStats};
 pub use commission::{
+    commission_rate_from_fapi_response,
     default_spot_commission_bps, default_usdt_futures_commission_bps,
     futures_commission_hint_from_exchange_info, resolve_from_exchange_info_stub,
-    spot_commission_hint_from_exchange_info, CommissionBps,
+    spot_commission_hint_from_exchange_info, trade_fee_from_sapi_response, CommissionBps,
 };
 pub use config::{BinanceClientConfig, BinanceCredentials, BinanceEndpoints};
 pub use error::BinanceError;

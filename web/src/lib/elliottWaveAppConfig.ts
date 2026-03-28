@@ -89,6 +89,8 @@ export type ElliottWaveConfig = {
   show_projection_15m: boolean;
   /** Geçmiş verilerde Elliott itki yapıları ara ve grafikte göster (ince katman). */
   show_historical_waves: boolean;
+  /** Ana itkı içindeki alt itkı (1/3/5) ve dalga 2/4 içi mikro a–b–c çizimleri. */
+  show_nested_formations: boolean;
   /** Projeksiyonda her adım = kaç mum süresi (Pine varsayılan 22). */
   projection_bar_hop: number;
   /** Kaç segment ileri (Pine 12; üst sınır 24). */
@@ -102,9 +104,15 @@ export type ElliottWaveConfig = {
   acp_zigzag_row_index: number;
   /**
    * Elliott V2 ZigZag (fraktal pencere): her iki yanda kaç mum (TradingView ZigZag ile uyumlu).
-   * ACP `zigzag[]` değişkeninden bağımsızdır.
+   * ACP `zigzag[]` değişkeninden bağımsızdır. Geriye dönük: tek değer; yeni kayıtlar TF başına alanlarla senkron tutulur.
    */
   elliott_zigzag_depth: number;
+  /** Elliott V2 ZigZag depth — 4H MTF. */
+  elliott_zigzag_depth_4h: number;
+  /** Elliott V2 ZigZag depth — 1H MTF. */
+  elliott_zigzag_depth_1h: number;
+  /** Elliott V2 ZigZag depth — 15M MTF. */
+  elliott_zigzag_depth_15m: number;
   /** @deprecated Eski alan; normalize `elliott_zigzag_depth` ile doldurulur. */
   swing_depth: number;
   max_pivot_windows: number;
@@ -189,11 +197,15 @@ export const DEFAULT_ELLIOTT_WAVE_CONFIG: ElliottWaveConfig = {
   show_projection_1h: false,
   show_projection_15m: false,
   show_historical_waves: false,
+  show_nested_formations: true,
   projection_bar_hop: 22,
   projection_steps: 12,
   use_acp_zigzag_swing: false,
   acp_zigzag_row_index: 0,
   elliott_zigzag_depth: 21,
+  elliott_zigzag_depth_4h: 21,
+  elliott_zigzag_depth_1h: 21,
+  elliott_zigzag_depth_15m: 21,
   swing_depth: 21,
   max_pivot_windows: 120,
   strict_wave4_overlap: false,
@@ -264,6 +276,17 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
 
   const swing_depth = elliott_zigzag_depth;
 
+  const zzDepth = (k: string) => {
+    const v = raw[k];
+    if (typeof v === "number" && Number.isFinite(v)) {
+      return Math.min(ELLIOTT_ZZ_MAX, Math.max(ELLIOTT_ZZ_MIN, Math.floor(v)));
+    }
+    return elliott_zigzag_depth;
+  };
+  const elliott_zigzag_depth_4h = zzDepth("elliott_zigzag_depth_4h");
+  const elliott_zigzag_depth_1h = zzDepth("elliott_zigzag_depth_1h");
+  const elliott_zigzag_depth_15m = zzDepth("elliott_zigzag_depth_15m");
+
   const max_pivot_windows =
     typeof raw.max_pivot_windows === "number" && Number.isFinite(raw.max_pivot_windows)
       ? Math.min(400, Math.max(5, Math.floor(raw.max_pivot_windows)))
@@ -286,6 +309,8 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
   const show_projection_15m = projTri("show_projection_15m");
   const show_historical_waves =
     typeof raw.show_historical_waves === "boolean" ? raw.show_historical_waves : base.show_historical_waves;
+  const show_nested_formations =
+    typeof raw.show_nested_formations === "boolean" ? raw.show_nested_formations : base.show_nested_formations;
 
   const projection_bar_hop =
     typeof raw.projection_bar_hop === "number" && Number.isFinite(raw.projection_bar_hop)
@@ -396,11 +421,15 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
     show_projection_1h,
     show_projection_15m,
     show_historical_waves,
+    show_nested_formations,
     projection_bar_hop,
     projection_steps,
     use_acp_zigzag_swing,
     acp_zigzag_row_index,
     elliott_zigzag_depth,
+    elliott_zigzag_depth_4h,
+    elliott_zigzag_depth_1h,
+    elliott_zigzag_depth_15m,
     swing_depth,
     max_pivot_windows,
     strict_wave4_overlap,

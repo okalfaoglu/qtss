@@ -18,6 +18,7 @@ qtss-binance.workspace = true
 qtss-backtest.workspace = true
 qtss-reporting.workspace = true
 qtss-chart-patterns.workspace = true
+qtss-notify.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true

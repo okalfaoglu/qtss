@@ -1,5 +1,18 @@
-import type { CorrectiveCountV2, ElliottRuleCheckV2, ImpulseCountV2, ZigzagPivot } from "./types";
-import { buildTez254AbcChecks } from "./tezWaveChecks";
+import type {
+  CorrectiveCountV2,
+  ElliottRuleCheckV2,
+  ImpulseCountV2,
+  OhlcV2,
+  ZigzagParams,
+  ZigzagPivot,
+} from "./types";
+import { buildZigzagPivotsV2 } from "./zigzag";
+import {
+  buildTez254AbcChecks,
+  TEZ_FLAT_B_VS_A_MAX,
+  TEZ_FLAT_B_VS_A_MIN,
+  TEZ_ZIGZAG_B_VS_A_MAX,
+} from "./tezWaveChecks";
 import { DEFAULT_ELLIOTT_PATTERN_MENU, type ElliottPatternMenuToggles } from "../elliottPatternMenuCatalog";
 
 function mergePatternToggles(t?: ElliottPatternMenuToggles): ElliottPatternMenuToggles {
@@ -97,9 +110,20 @@ function triangleTriR7ExpandingShortestAb(pts: ZigzagPivot[]): boolean {
   return idx === 0 || idx === 1;
 }
 
+/** Flat etiketi için B/A tabanı (≈düzenli yassı); altı zigzag adayı. */
+const FLAT_LABEL_MIN_RETR_B = 0.9;
+
 /** Yassı: B, A’nın büyük bölümünü geri alır; değilse zigzag adayı (§2.5.4.1 / 2.5.4.2). */
 function classifyFlatVsZigzag(retrB: number): "flat" | "zigzag" {
-  return retrB >= 0.9 ? "flat" : "zigzag";
+  return retrB >= FLAT_LABEL_MIN_RETR_B ? "flat" : "zigzag";
+}
+
+/** Tez B/A aralığı + zigzag/flat ayrımı: (0.618, 0.9) aralığında geçerli desen yok → erken çık. */
+function abcRetrBPassesPrefilter(retrB: number): boolean {
+  if (retrB < TEZ_FLAT_B_VS_A_MIN - 1e-12) return false;
+  if (retrB > TEZ_FLAT_B_VS_A_MAX + 1e-9) return false;
+  if (retrB > TEZ_ZIGZAG_B_VS_A_MAX + 1e-12 && retrB < FLAT_LABEL_MIN_RETR_B - 1e-12) return false;
+  return true;
 }
 
 function hasPassedCheck(checks: ElliottRuleCheckV2[], id: string): boolean {
@@ -145,13 +169,16 @@ function collectAbcCorrectiveDown(
       /** C bacağı B→C (a→end değil); `cVsA` ve tez `zz_r1` ile uyumlu */
       const lenC = b.price - end.price;
       const cVsA = lenA > EPS ? lenC / lenA : 0;
-      /** Üretim öncesi süzgeç + `abc_b_retrace`: klasik B ≈ %38.2–61.8’dan kasıtlı geniş (gerçek piyasa varyasyonu). */
-      if (retrB < 0.12 || retrB > 2.85) continue;
+      if (!abcRetrBPassesPrefilter(retrB)) continue;
 
       const pattern = classifyFlatVsZigzag(retrB);
       const baseChecks: ElliottRuleCheckV2[] = [
         { id: "abc_order", passed: start.index < a.index && a.index < b.index && b.index < end.index },
-        { id: "abc_b_retrace", passed: retrB >= 0.15 && retrB <= 2.8, detail: retrB.toFixed(3) },
+        {
+          id: "abc_b_retrace",
+          passed: retrB >= TEZ_FLAT_B_VS_A_MIN - 1e-12 && retrB <= TEZ_FLAT_B_VS_A_MAX + 1e-12,
+          detail: retrB.toFixed(3),
+        },
         { id: "abc_c_extent", passed: cVsA >= 0.3 && cVsA <= 2.4, detail: cVsA.toFixed(3) },
       ];
       const tezChecks = buildTez254AbcChecks(pattern, retrB, cVsA, impulseBull, start, a, b, end);
@@ -187,13 +214,16 @@ function collectAbcCorrectiveUp(
       const retrB = (a.price - b.price) / lenA;
       const lenC = end.price - b.price;
       const cVsA = lenA > EPS ? lenC / lenA : 0;
-      /** Aşağı itkı simetrisi; B geri çekilme bandı kasıtlı geniş (yukarıdaki `collectAbcCorrectiveDown` ile aynı mantık). */
-      if (retrB < 0.12 || retrB > 2.85) continue;
+      if (!abcRetrBPassesPrefilter(retrB)) continue;
 
       const pattern = classifyFlatVsZigzag(retrB);
       const baseChecks: ElliottRuleCheckV2[] = [
         { id: "abc_order", passed: start.index < a.index && a.index < b.index && b.index < end.index },
-        { id: "abc_b_retrace", passed: retrB >= 0.15 && retrB <= 2.8, detail: retrB.toFixed(3) },
+        {
+          id: "abc_b_retrace",
+          passed: retrB >= TEZ_FLAT_B_VS_A_MIN - 1e-12 && retrB <= TEZ_FLAT_B_VS_A_MAX + 1e-12,
+          detail: retrB.toFixed(3),
+        },
         { id: "abc_c_extent", passed: cVsA >= 0.3 && cVsA <= 2.4, detail: cVsA.toFixed(3) },
       ];
       const tezChecks = buildTez254AbcChecks(pattern, retrB, cVsA, impulseBull, start, a, b, end);
@@ -543,5 +573,60 @@ export function detectImpulseCorrectionsV2(
     postImpulseAbc = findCorrectiveBetween(pivots, p5, end, isBull ? "down" : "up", "post", patternToggles);
   }
   return { wave2, wave4, postImpulseAbc };
+}
+
+function microDepthCandidatesForNestedLeg(mainDepth: number): number[] {
+  const mainD = Math.max(2, Math.floor(mainDepth || 0));
+  const candDepths: number[] = [];
+  for (const div of [2, 3, 4, 5, 6]) {
+    const d = Math.max(2, Math.floor(mainD / div));
+    if (d < mainD) candDepths.push(d);
+  }
+  candDepths.push(Math.max(2, mainD - 4), Math.max(2, mainD - 8), 5, 4, 3, 2);
+  return [...new Set(candDepths)]
+    .filter((d) => d >= 2 && d < mainD)
+    .sort((a, b) => a - b);
+}
+
+function mergeLegEndpointsMicro(micro: ZigzagPivot[], a: ZigzagPivot, b: ZigzagPivot): ZigzagPivot[] {
+  const byIdx = new Map<number, ZigzagPivot>();
+  for (const p of micro) {
+    byIdx.set(p.index, p);
+  }
+  byIdx.set(a.index, a);
+  byIdx.set(b.index, b);
+  return [...byIdx.values()].sort((x, y) => x.index - y.index);
+}
+
+/**
+ * Düzeltme bacakları (dalga 2 / 4): p1–p2 veya p3–p4 üzerinde mikro zigzag ile aynı düzeltme kuralları.
+ */
+export function detectNestedCorrectiveInLeg(
+  mainPivots: ZigzagPivot[],
+  start: ZigzagPivot,
+  end: ZigzagPivot,
+  direction: "down" | "up",
+  context: "wave2" | "wave4",
+  toggles: ElliottPatternMenuToggles | undefined,
+  ohlc: OhlcV2[] | undefined,
+  zigzag: ZigzagParams | undefined,
+): CorrectiveCountV2 | null {
+  if (!ohlc?.length || !zigzag) return null;
+  const lo = Math.min(start.index, end.index);
+  const hi = Math.max(start.index, end.index);
+  const sub = ohlc.slice(lo, hi + 1);
+  if (sub.length < 7) return null;
+
+  const mainDepth = Math.max(2, Math.floor(zigzag.depth || 0));
+  for (const depth of microDepthCandidatesForNestedLeg(mainDepth)) {
+    if (sub.length < depth * 2 + 1) continue;
+    const microLocal = buildZigzagPivotsV2(sub, { ...zigzag, depth });
+    if (microLocal.length < 4) continue;
+    const micro = microLocal.map((x) => ({ ...x, index: lo + x.index }));
+    const merged = mergeLegEndpointsMicro(micro, start, end);
+    const hit = findCorrectiveBetween(merged, start, end, direction, context, toggles);
+    if (hit) return hit;
+  }
+  return null;
 }
 

@@ -16,6 +16,7 @@ pub struct BacktestConfig {
     pub initial_equity: Decimal,
     /// İşlem başına basit slip (fiyat yönüne göre uygulanır).
     pub slippage_bps: u32,
+    /// [`qtss_domain::commission::CommissionPolicy::ManualBps`] ile aynı mantık (backtest yerel).
     pub maker_fee_bps: u32,
     pub taker_fee_bps: u32,
     pub max_leverage: Decimal,

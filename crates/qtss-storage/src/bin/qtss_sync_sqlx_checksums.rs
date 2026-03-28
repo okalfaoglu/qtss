@@ -9,7 +9,11 @@
 //!
 //! Uyarı: Şema dosyayla uyumsuzsa bu araç hatayı gizler; yalnızca dosya yorum/satır sonu
 //! gibi değişikliklerde veya yanlışlıkla düzenlenmiş migration’larda checksum uyumsuzluğunu giderir.
+//!
+//! **Önemli:** Aynı sürüm numarası (`0014_*.sql`) birden fazla dosyada kullanılamaz — SQLx tek checksum tutar;
+//! ikinci dosya birincinin özetini ezer ve `migrate` sürekli hata verir.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -35,6 +39,34 @@ async fn main() -> anyhow::Result<()> {
     let migrations_dir = migrations_dir
         .canonicalize()
         .with_context(|| format!("migrations dizini okunamadı: {}", migrations_dir.display()))?;
+
+    let mut by_version: HashMap<i64, Vec<String>> = HashMap::new();
+    for entry in fs::read_dir(&migrations_dir).with_context(|| migrations_dir.display().to_string())? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let parts: Vec<&str> = file_name.splitn(2, '_').collect();
+        if parts.len() != 2 || !parts[1].ends_with(".sql") {
+            continue;
+        }
+        let version: i64 = parts[0]
+            .parse()
+            .with_context(|| format!("migration dosya adı: {file_name}"))?;
+        by_version.entry(version).or_default().push(file_name);
+    }
+
+    for (v, names) in &by_version {
+        if names.len() > 1 {
+            bail!(
+                "Çift migration sürümü v{v}: SQLx her sürüm için tek dosya bekler. Dosyalar: {}. \
+                 Birini yeniden numaralandırın (ör. 0015_...sql).",
+                names.join(", ")
+            );
+        }
+    }
 
     let pool = PgPoolOptions::new()
         .max_connections(1)

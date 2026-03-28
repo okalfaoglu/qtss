@@ -1,6 +1,7 @@
 //! Grafik formasyonları: Pine **Auto Chart Patterns** ile uyumlu **sayısal** parçalar, çizim JSON’u ve doğrusal fiyat.
 //!
-//! **Taşınan (Pine ile aynı kural):** `check_bar_ratio`, `get_ratio_diff`, `trend_line_inspect`,
+//! **Taşınan (Pine ile aynı kural):** `check_bar_ratio`, `get_ratio_diff`, `ratio_diff_enabled`/`ratio_diff_max` (`find`),
+//! `trend_line_inspect`,
 //! `inspect_pick_best_three_point_line`, `resolve_pattern_type_id`, tema RGB tabloları, `line_price_at_bar_index`,
 //! `pattern_name_by_acp_id`, [`PatternDrawingBatch`](PatternDrawingBatch).
 //!
@@ -11,12 +12,14 @@
 //! **Trendoscope/utils:** `Theme.getColors` → [`THEME_DARK_RGB`]/[`THEME_LIGHT_RGB`] (`theme` modülü); `Line.get_price` → [`line_price_at_bar_index`].
 //! `check_overflow` / `get_trend_series` ayrı fonksiyon olarak yok; `trend_line_inspect` ve zigzag akışı ile örtüşür.
 
+mod dashboard_v1;
 mod find;
 mod ohlc;
 mod pattern_catalog;
 mod resolve;
 mod scan;
 mod theme;
+mod trading_range;
 mod zigzag;
 
 pub use pattern_catalog::{pattern_name_by_id, PatternId};
@@ -34,6 +37,11 @@ pub use scan::{
     check_bar_ratio, get_ratio_diff, in_range, inspect_pick_best_three_point_line, inspect_two_point_line,
     trend_line_inspect,
 };
+pub use dashboard_v1::{
+    compute_signal_dashboard_v1, compute_signal_dashboard_v1_with_policy, SignalDashboardV1,
+    SignalDirectionPolicy,
+};
+pub use trading_range::{analyze_trading_range, TradingRangeParams, TradingRangeResult};
 pub use theme::{rgb_to_hex, THEME_DARK_RGB, THEME_LIGHT_RGB};
 pub use zigzag::{
     next_level_from_pivot_prices, next_level_from_zigzag, pivots_chronological, ChartPoint, ZigzagFlags, ZigzagLite,

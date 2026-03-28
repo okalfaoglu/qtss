@@ -1,4 +1,5 @@
-import type { ElliottRuleCheckV2, ImpulseCountV2, ZigzagPivot } from "./types";
+import type { ElliottRuleCheckV2, ImpulseCountV2, OhlcV2, ZigzagParams, ZigzagPivot } from "./types";
+import { buildZigzagPivotsV2 } from "./zigzag";
 
 const EPS = 1e-10;
 
@@ -64,6 +65,15 @@ function checksBull(
 
   const trendShape = p3.price > p1.price && p5.price >= p3.price - EPS;
   checks.push({ id: "trend_shape", passed: trendShape });
+
+  const w5ExtendsW3 = p5.price > p3.price + EPS;
+  checks.push({
+    id: "extension_w5_vs_w3",
+    passed: w5ExtendsW3,
+    detail: w5ExtendsW3
+      ? `P5>P3 (${p5.price.toFixed(4)}>${p3.price.toFixed(4)})`
+      : `kısaltılmış beşinci olası (P5≤P3)`,
+  });
 
   const hardFail = checks.some(
     (c) =>
@@ -154,6 +164,15 @@ function checksBullDiagonal(
   const trendShape = p3.price > p1.price && p5.price >= p3.price - EPS;
   checks.push({ id: "trend_shape", passed: trendShape });
 
+  const w5ExtendsW3 = p5.price > p3.price + EPS;
+  checks.push({
+    id: "extension_w5_vs_w3",
+    passed: w5ExtendsW3,
+    detail: w5ExtendsW3
+      ? `P5>P3 (${p5.price.toFixed(4)}>${p3.price.toFixed(4)})`
+      : `kısaltılmış beşinci olası (P5≤P3)`,
+  });
+
   const hardFail = checks.some(
     (c) =>
       !c.passed &&
@@ -225,6 +244,15 @@ function checksBear(
 
   const trendShape = p3.price < p1.price && p5.price <= p3.price + EPS;
   checks.push({ id: "trend_shape", passed: trendShape });
+
+  const w5ExtendsW3 = p5.price < p3.price - EPS;
+  checks.push({
+    id: "extension_w5_vs_w3",
+    passed: w5ExtendsW3,
+    detail: w5ExtendsW3
+      ? `P5<P3 (${p5.price.toFixed(4)}<${p3.price.toFixed(4)})`
+      : `kısaltılmış beşinci olası (P5≥P3)`,
+  });
 
   const hardFail = checks.some(
     (c) =>
@@ -309,6 +337,15 @@ function checksBearDiagonal(
 
   const trendShape = p3.price < p1.price && p5.price <= p3.price + EPS;
   checks.push({ id: "trend_shape", passed: trendShape });
+
+  const w5ExtendsW3 = p5.price < p3.price - EPS;
+  checks.push({
+    id: "extension_w5_vs_w3",
+    passed: w5ExtendsW3,
+    detail: w5ExtendsW3
+      ? `P5<P3 (${p5.price.toFixed(4)}<${p3.price.toFixed(4)})`
+      : `kısaltılmış beşinci olası (P5≥P3)`,
+  });
 
   const hardFail = checks.some(
     (c) =>
@@ -443,4 +480,162 @@ export function detectHistoricalImpulsesV2(
     if (out.length >= maxCount) break;
   }
   return out;
+}
+
+function bestImpulseForSixPivots(
+  win: [
+    ZigzagPivot,
+    ZigzagPivot,
+    ZigzagPivot,
+    ZigzagPivot,
+    ZigzagPivot,
+    ZigzagPivot,
+  ],
+  bull: boolean,
+  opts?: ImpulseDetectOptions,
+): ImpulseCountV2 | null {
+  const allowStandard = opts?.allowStandard !== false;
+  const allowDiagonal = opts?.allowDiagonal !== false;
+  if (!allowStandard && !allowDiagonal) return null;
+  let best: ImpulseCountV2 | null = null;
+  if (allowStandard) {
+    const r = bull ? checksBull(win) : checksBear(win);
+    if (!r.hardFail) {
+      const c: ImpulseCountV2 = {
+        direction: bull ? "bull" : "bear",
+        pivots: win,
+        checks: r.checks,
+        score: r.score,
+        variant: "standard",
+      };
+      if (beatsImpulseCandidate(best, c)) best = c;
+    }
+  }
+  if (allowDiagonal) {
+    const r = bull ? checksBullDiagonal(win) : checksBearDiagonal(win);
+    if (!r.hardFail) {
+      const c: ImpulseCountV2 = {
+        direction: bull ? "bull" : "bear",
+        pivots: win,
+        checks: r.checks,
+        score: r.score,
+        variant: "diagonal",
+      };
+      if (beatsImpulseCandidate(best, c)) best = c;
+    }
+  }
+  return best;
+}
+
+/** Mikro pivotlar + bacak uçları (aynı bar indeksinde ana zigzag uçlarını zorunlu tutar). */
+export function mergeLegEndpointsWithMicro(micro: ZigzagPivot[], p0: ZigzagPivot, p1: ZigzagPivot): ZigzagPivot[] {
+  const byIdx = new Map<number, ZigzagPivot>();
+  for (const p of micro) {
+    byIdx.set(p.index, p);
+  }
+  byIdx.set(p0.index, p0);
+  byIdx.set(p1.index, p1);
+  return [...byIdx.values()].sort((a, b) => a.index - b.index);
+}
+
+/**
+ * Zincirde ardışık 6 pivotluk tek pencere: tam olarak p0 (w0) ile p1 (w5) — iç itkı dalga 1 ile aynı mumlarda biter.
+ */
+function nestedImpulseExactEndpointsInMerged(
+  merged: ZigzagPivot[],
+  pa: ZigzagPivot,
+  pb: ZigzagPivot,
+  bull: boolean,
+  opts?: ImpulseDetectOptions,
+): ImpulseCountV2 | null {
+  const i = merged.findIndex((p) => p.index === pa.index);
+  if (i < 0 || merged.length < i + 6) return null;
+  if (merged[i + 5]!.index !== pb.index) return null;
+  const win = merged.slice(i, i + 6) as [
+    ZigzagPivot,
+    ZigzagPivot,
+    ZigzagPivot,
+    ZigzagPivot,
+    ZigzagPivot,
+    ZigzagPivot,
+  ];
+  return bestImpulseForSixPivots(win, bull, opts);
+}
+
+function microDepthCandidatesForNestedLeg(mainDepth: number): number[] {
+  const mainD = Math.max(2, Math.floor(mainDepth || 0));
+  const candDepths: number[] = [];
+  for (const div of [2, 3, 4, 5, 6]) {
+    const d = Math.max(2, Math.floor(mainD / div));
+    if (d < mainD) candDepths.push(d);
+  }
+  candDepths.push(Math.max(2, mainD - 4), Math.max(2, mainD - 8), 5, 4, 3, 2);
+  return [...new Set(candDepths)]
+    .filter((d) => d >= 2 && d < mainD)
+    .sort((a, b) => a - b);
+}
+
+/**
+ * İtkı bacakları (dalga 1 / 3 / 5): pa→pb arasında alt derece 5’li itkı.
+ * Uçlar pa ve pb ile tam hizalı tek 6’lı zincir; mikro zigzag ile aynı kural.
+ */
+export function detectNestedImpulseInLeg(
+  pivots: ZigzagPivot[],
+  pa: ZigzagPivot,
+  pb: ZigzagPivot,
+  opts?: ImpulseDetectOptions,
+  ohlc?: OhlcV2[],
+  zigzag?: ZigzagParams,
+): ImpulseCountV2 | null {
+  const lo = Math.min(pa.index, pb.index);
+  const hi = Math.max(pa.index, pb.index);
+  const bull = pb.price > pa.price;
+
+  const slice = pivots.filter((p) => p.index >= lo && p.index <= hi);
+  if (slice.length >= 6) {
+    for (let start = 0; start + 6 <= slice.length; start++) {
+      const win = slice.slice(start, start + 6) as [
+        ZigzagPivot,
+        ZigzagPivot,
+        ZigzagPivot,
+        ZigzagPivot,
+        ZigzagPivot,
+        ZigzagPivot,
+      ];
+      if (win[0].index !== pa.index || win[5].index !== pb.index) continue;
+      const hit = bestImpulseForSixPivots(win, bull, opts);
+      if (hit) return hit;
+    }
+  }
+
+  if (!ohlc?.length || !zigzag) return null;
+  const sub = ohlc.slice(lo, hi + 1);
+  const n = sub.length;
+  if (n < 7) return null;
+
+  const mainDepth = Math.max(2, Math.floor(zigzag.depth || 0));
+  for (const depth of microDepthCandidatesForNestedLeg(mainDepth)) {
+    if (n < depth * 2 + 1) continue;
+    const microLocal = buildZigzagPivotsV2(sub, { ...zigzag, depth });
+    if (microLocal.length < 4) continue;
+    const micro = microLocal.map((x) => ({ ...x, index: lo + x.index }));
+    const merged = mergeLegEndpointsWithMicro(micro, pa, pb);
+    const hit = nestedImpulseExactEndpointsInMerged(merged, pa, pb, bull, opts);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** Dalga 1 (p0→p1) için {@link detectNestedImpulseInLeg} sarmalayıcısı. */
+export function detectWave1NestedImpulse(
+  pivots: ZigzagPivot[],
+  mainImpulse: ImpulseCountV2,
+  opts?: ImpulseDetectOptions,
+  ohlc?: OhlcV2[],
+  zigzag?: ZigzagParams,
+): ImpulseCountV2 | null {
+  const p0 = mainImpulse.pivots[0];
+  const p1 = mainImpulse.pivots[1];
+  if (!p0 || !p1) return null;
+  return detectNestedImpulseInLeg(pivots, p0, p1, opts, ohlc, zigzag);
 }

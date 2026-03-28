@@ -161,6 +161,21 @@ impl BinanceClient {
             .await
     }
 
+    /// SAPI — hesaba özel maker/taker (`/sapi/v1/asset/tradeFee`, USER_DATA).
+    pub async fn sapi_asset_trade_fee(&self, symbol: Option<&str>) -> Result<serde_json::Value, BinanceError> {
+        let c = self.spot_creds()?;
+        let mut p = BTreeMap::new();
+        if let Some(s) = symbol {
+            let u = s.trim().to_uppercase();
+            if !u.is_empty() {
+                p.insert("symbol".into(), u);
+            }
+        }
+        self.core
+            .get_signed(self.spot_base(), "/sapi/v1/asset/tradeFee", p, c)
+            .await
+    }
+
     pub async fn spot_new_order_params(
         &self,
         p: BTreeMap<String, String>,

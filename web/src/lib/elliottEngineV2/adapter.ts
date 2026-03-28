@@ -72,6 +72,63 @@ function correctiveRolePrefix(role: "wave2" | "wave4" | "post", tf: "4h" | "1h" 
   return tf === "4h" ? "④" : tf === "1h" ? "(4)" : "iv";
 }
 
+/** Ana dalga rengini açarak iç (dalga 1 alt itkı) çizgisini ayırır. */
+function blendTowardWhite(hex: string, t: number): string {
+  const h = hex.replace(/^#/, "");
+  if (h.length !== 6 || !/^[0-9a-fA-F]{6}$/.test(h)) return hex;
+  const mix = (c: number) => Math.round(c + (255 - c) * t);
+  const r = mix(parseInt(h.slice(0, 2), 16));
+  const g = mix(parseInt(h.slice(2, 4), 16));
+  const b = mix(parseInt(h.slice(4, 6), 16));
+  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+}
+
+/** Alt itkı bacak uçları (dalga 1 / 3 / 5). */
+function nestedImpulseMarkers(
+  nested: ImpulseCountV2,
+  names: [string, string, string, string, string],
+  wc: ElliottMtfWaveColors,
+  labelColors: ElliottMtfWaveColors,
+  tf: TfKey,
+): SeriesMarker<UTCTimestamp>[] {
+  const [, p1, p2, p3, p4, p5] = nested.pivots;
+  const pts = [p1, p2, p3, p4, p5];
+  const color = labelColors[tf] ?? wc[tf];
+  return pts.map((p, i) => ({
+    time: p.time as UTCTimestamp,
+    position: p.kind === "high" ? "aboveBar" : "belowBar",
+    shape: "circle" as const,
+    color,
+    text: names[i],
+  }));
+}
+
+/** Dalga 2 / 4 mikro düzeltme etiketleri (`w2·a` benzeri). */
+function correctiveNestedLegLabels(
+  c: CorrectiveCountV2,
+  role: "wave2" | "wave4",
+  tf: TfKey,
+  wc: ElliottMtfWaveColors,
+  labelColors: ElliottMtfWaveColors,
+): SeriesMarker<UTCTimestamp>[] {
+  const path = c.path?.length ? c.path : c.pivots;
+  const labels = c.labels?.length ? c.labels : ["a", "b", "c"];
+  const pts = path.slice(1);
+  const n = labels.length;
+  const prefix = role === "wave2" ? "w2·" : "w4·";
+  const color = labelColors[tf] ?? wc[tf];
+  return pts.map((p, i) => {
+    const li = n < 1 ? "a" : i < n ? labels[i]! : labels[i % n]!;
+    return {
+      time: p.time as UTCTimestamp,
+      position: p.kind === "high" ? "aboveBar" : "belowBar",
+      shape: "square",
+      color,
+      text: `${prefix}${correctiveSymbolByTf(tf, li)}`,
+    };
+  });
+}
+
 function waveLabels(
   tf: TfKey,
   s: TimeframeStateV2,
@@ -161,6 +218,8 @@ export function v2ToChartOverlays(
     zigzagColors?: ElliottMtfWaveColors;
     zigzagLineStyles?: TfTriStyle;
     zigzagLineWidths?: TfTriWidth;
+    /** Dalga 1/3/5 alt itkı ve 2/4 içi mikro düzeltme çizgileri + etiketleri. */
+    showNestedFormations?: boolean;
   },
 ): {
   layers: PatternLayerOverlay[];
@@ -178,6 +237,7 @@ export function v2ToChartOverlays(
   const zigzagColors = styleOptions?.zigzagColors ?? wc;
   const zigzagLineStyles = styleOptions?.zigzagLineStyles ?? { "4h": "dotted", "1h": "dotted", "15m": "dotted" };
   const zigzagLineWidths = styleOptions?.zigzagLineWidths ?? { "4h": 2, "1h": 2, "15m": 2 };
+  const showNestedFormations = styleOptions?.showNestedFormations ?? true;
   const layers: PatternLayerOverlay[] = [];
   const labels: SeriesMarker<UTCTimestamp>[] = [];
 
@@ -204,7 +264,7 @@ export function v2ToChartOverlays(
     const rows = out.ohlcByTf?.[tf];
     const pivotsForLine =
       rows?.length && s.pivots.length >= 2
-        ? extendZigzagPivotsForChartLine(rows, s.pivots, out.zigzagParams)
+        ? extendZigzagPivotsForChartLine(rows, s.pivots, out.zigzagParamsByTf?.[tf] ?? out.zigzagParams)
         : s.pivots;
     layers.push({
       upper: [],
@@ -233,6 +293,20 @@ export function v2ToChartOverlays(
       });
       if (showLabels[tf]) labels.push(...waveLabels(tf, s, wc, labelColors));
     }
+    const pushNestedImpulse = (imp: ImpulseCountV2 | null | undefined, label5: [string, string, string, string, string]) => {
+      if (!showNestedFormations || !showLines[tf] || !imp || !showImpulseOverlay(m, imp)) return;
+      layers.push({
+        upper: [],
+        lower: [],
+        zigzag: toPts(imp.pivots),
+        zigzagKind: kind,
+        zigzagLineColor: blendTowardWhite(wc[tf], 0.38),
+        zigzagLineStyle: "dashed",
+        zigzagLineWidth: Math.max(1, lineWidths[tf] - 1),
+      });
+      if (showLabels[tf]) labels.push(...nestedImpulseMarkers(imp, label5, wc, labelColors, tf));
+    };
+    pushNestedImpulse(s.wave1NestedImpulse, ["n1", "n2", "n3", "n4", "n5"]);
     if (showLines[tf] && s.wave2 && showCorrectiveOverlay(m, s.wave2)) {
       const p = s.wave2.path?.length ? s.wave2.path : s.wave2.pivots;
       layers.push({
@@ -246,6 +320,25 @@ export function v2ToChartOverlays(
       });
       if (showLabels[tf]) labels.push(...correctiveLabels(s.wave2, "wave2", tf, wc, labelColors));
     }
+    if (
+      showNestedFormations &&
+      showLines[tf] &&
+      s.wave2NestedCorrective &&
+      showCorrectiveOverlay(m, s.wave2NestedCorrective)
+    ) {
+      const p = s.wave2NestedCorrective.path?.length ? s.wave2NestedCorrective.path : s.wave2NestedCorrective.pivots;
+      layers.push({
+        upper: [],
+        lower: [],
+        zigzag: toPts(p),
+        zigzagKind: kind,
+        zigzagLineColor: blendTowardWhite(wc[tf], 0.42),
+        zigzagLineStyle: "dashed",
+        zigzagLineWidth: Math.max(1, lineWidths[tf] - 1),
+      });
+      if (showLabels[tf]) labels.push(...correctiveNestedLegLabels(s.wave2NestedCorrective, "wave2", tf, wc, labelColors));
+    }
+    pushNestedImpulse(s.wave3NestedImpulse, ["u1", "u2", "u3", "u4", "u5"]);
     if (showLines[tf] && s.wave4 && showCorrectiveOverlay(m, s.wave4)) {
       const p = s.wave4.path?.length ? s.wave4.path : s.wave4.pivots;
       layers.push({
@@ -259,6 +352,25 @@ export function v2ToChartOverlays(
       });
       if (showLabels[tf]) labels.push(...correctiveLabels(s.wave4, "wave4", tf, wc, labelColors));
     }
+    if (
+      showNestedFormations &&
+      showLines[tf] &&
+      s.wave4NestedCorrective &&
+      showCorrectiveOverlay(m, s.wave4NestedCorrective)
+    ) {
+      const p = s.wave4NestedCorrective.path?.length ? s.wave4NestedCorrective.path : s.wave4NestedCorrective.pivots;
+      layers.push({
+        upper: [],
+        lower: [],
+        zigzag: toPts(p),
+        zigzagKind: kind,
+        zigzagLineColor: blendTowardWhite(wc[tf], 0.42),
+        zigzagLineStyle: "dashed",
+        zigzagLineWidth: Math.max(1, lineWidths[tf] - 1),
+      });
+      if (showLabels[tf]) labels.push(...correctiveNestedLegLabels(s.wave4NestedCorrective, "wave4", tf, wc, labelColors));
+    }
+    pushNestedImpulse(s.wave5NestedImpulse, ["v1", "v2", "v3", "v4", "v5"]);
     if (showLines[tf] && s.postImpulseAbc && showCorrectiveOverlay(m, s.postImpulseAbc)) {
       const p = s.postImpulseAbc.path?.length ? s.postImpulseAbc.path : s.postImpulseAbc.pivots;
       layers.push({

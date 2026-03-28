@@ -7,10 +7,15 @@ license.workspace = true
 [dependencies]
 qtss-common.workspace = true
 qtss-binance.workspace = true
+qtss-chart-patterns.workspace = true
 qtss-storage.workspace = true
+qtss-notify.workspace = true
+qtss-nansen.workspace = true
 sqlx.workspace = true
+reqwest.workspace = true
 chrono.workspace = true
 serde_json.workspace = true
+uuid.workspace = true
 rust_decimal = { version = "1.36", features = ["serde"] }
 tokio.workspace = true
 tracing.workspace = true

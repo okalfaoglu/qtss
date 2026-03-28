@@ -7,7 +7,9 @@ mod health;
 mod market_binance;
 mod notify;
 mod orders_binance;
+mod orders_dry;
 mod reconcile;
+mod session;
 
 use axum::middleware::from_fn;
 use axum::middleware::from_fn_with_state;
@@ -29,6 +31,9 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
     let audit_layer = from_fn_with_state(state.clone(), audit_http_middleware);
 
     Router::new()
+        .merge(
+            session::session_router().layer(from_fn(require_dashboard_roles)),
+        )
         .merge(
             config_router()
                 .layer(from_fn(require_admin)),
@@ -66,6 +71,14 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
                 .layer(from_fn(require_ops_roles)),
         )
         .merge(
+            orders_dry::orders_dry_read_router()
+                .layer(from_fn(require_dashboard_roles)),
+        )
+        .merge(
+            orders_dry::orders_dry_write_router()
+                .layer(from_fn(require_ops_roles)),
+        )
+        .merge(
             copy_trade::copy_trade_read_router()
                 .layer(from_fn(require_dashboard_roles)),
         )
@@ -74,9 +87,13 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
                 .layer(from_fn(require_ops_roles)),
         )
         .merge(
-            analysis::analysis_router()
+            analysis::analysis_read_router()
                 .merge(notify::notify_router())
                 .layer(from_fn(require_dashboard_roles)),
+        )
+        .merge(
+            analysis::analysis_write_router()
+                .layer(from_fn(require_ops_roles)),
         )
         .layer(audit_layer)
         .layer(jwt_layer)

@@ -1,0 +1,13 @@
+---
+description: Code identifiers must be English; follow language best practices
+alwaysApply: true
+---
+
+# Identifiers and naming (strict)
+
+- **Never use Turkish words in code identifiers**: variables, parameters, functions, methods, struct/enum fields, type aliases, modules, and file names that encode API (e.g. `user_status`, not `kullanici_durumu`).
+- **Rust**: `snake_case` for functions, locals, modules; `UpperCamelCase` for types; constants `SCREAMING_SNAKE_CASE`. Follow the idioms in [Rust API guidelines](https://rust-lang.github.io/api-guidelines/).
+- **TypeScript/React**: `camelCase` for variables and functions; `PascalCase` for components and types; avoid Hungarian notation unless already project-standard.
+- **Wire format vs code**: If a JSON/API field must stay Turkish for backward compatibility, keep the **Rust/TS identifier in English** and map with `#[serde(rename = "...")]` / explicit DTO mapping — do not encode Turkish in the symbol name used in logic.
+
+When touching legacy Turkish-named fields, prefer incremental migration (English in code + serde rename) rather than adding new Turkish identifiers.

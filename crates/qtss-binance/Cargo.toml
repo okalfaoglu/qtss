@@ -20,3 +20,4 @@ hex.workspace = true
 
 urlencoding.workspace = true
 chrono.workspace = true
+rust_decimal = { version = "1.36", features = ["serde"] }

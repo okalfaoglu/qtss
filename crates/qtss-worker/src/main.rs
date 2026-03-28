@@ -1,4 +1,10 @@
-//! Arka plan işleri: rollup, mutabakat; isteğe bağlı kline WebSocket → `market_bars`.
+//! Arka plan işleri: rollup, mutabakat; isteğe bağlı kline WebSocket → `market_bars`;
+//! `engine_symbols` → analiz snapshot (Trading Range, …).
+
+mod engine_analysis;
+mod nansen_engine;
+mod nansen_query;
+mod setup_scan_engine;
 
 use std::str::FromStr;
 use std::time::Duration;
@@ -9,6 +15,7 @@ use qtss_binance::{
     connect_url, parse_closed_kline_json, public_spot_kline_url, public_usdm_kline_url,
 };
 use qtss_common::{init_logging, load_dotenv};
+use anyhow::Context;
 use qtss_storage::{
     create_pool, run_migrations, upsert_market_bar, MarketBarUpsert, PnlRollupRepository,
 };
@@ -40,10 +47,21 @@ async fn main() -> anyhow::Result<()> {
 
     let pool_opt: Option<PgPool> = match std::env::var("DATABASE_URL") {
         Ok(db_url) if !db_url.trim().is_empty() => {
-            let pool = create_pool(&db_url, 3).await?;
-            run_migrations(&pool).await?;
+            let pool = create_pool(&db_url, 3)
+                .await
+                .context("qtss-worker: PostgreSQL pool failed (check DATABASE_URL, host, port, credentials)")?;
+            run_migrations(&pool).await.context(
+                "qtss-worker: SQL migrations failed — run: journalctl -u qtss-worker -n 100 --no-pager \
+                 | Common: checksum drift after editing applied migrations; missing table engine_symbols (apply engine_analysis migration first); duplicate migration version numbers.",
+            )?;
             let pnl_pool = pool.clone();
             tokio::spawn(pnl_rollup_loop(pnl_pool));
+            let engine_pool = pool.clone();
+            tokio::spawn(engine_analysis::engine_analysis_loop(engine_pool));
+            let nansen_pool = pool.clone();
+            tokio::spawn(nansen_engine::nansen_token_screener_loop(nansen_pool));
+            let setup_pool = pool.clone();
+            tokio::spawn(setup_scan_engine::nansen_setup_scan_loop(setup_pool));
             Some(pool)
         }
         _ => {

@@ -104,7 +104,13 @@ export type ZigzagLayerKind =
   /** Projeksiyon: gerçekleşmiş/teyitli bölüm (düz çizgi). */
   | "elliott_projection_done"
   /** Projeksiyon: aktif C bacağı (kesik). */
-  | "elliott_projection_c_active";
+  | "elliott_projection_c_active"
+  /** DB motoru `trading_range` orta hat. */
+  | "trading_range_mid"
+  /** DB `range_signal_events` — türetilmiş açık long giriş seviyesi. */
+  | "range_position_long"
+  /** DB `range_signal_events` — türetilmiş açık short giriş seviyesi. */
+  | "range_position_short";
 
 /** Tek formasyon: üst/alt çizgi + zigzag (aynı indeks bileşende hizalı). */
 export type PatternLayerOverlay = {

@@ -6,11 +6,12 @@ import type {
   OhlcV2,
   Timeframe,
   TimeframeStateV2,
+  ZigzagParams,
 } from "./types";
 import { DEFAULT_ELLIOTT_PATTERN_MENU, type ElliottPatternMenuToggles } from "../elliottPatternMenuCatalog";
 import { buildZigzagPivotsV2 } from "./zigzag";
-import { detectBestImpulseV2, detectHistoricalImpulsesV2 } from "./impulse";
-import { detectImpulseCorrectionsV2 } from "./corrective";
+import { detectBestImpulseV2, detectHistoricalImpulsesV2, detectNestedImpulseInLeg } from "./impulse";
+import { detectImpulseCorrectionsV2, detectNestedCorrectiveInLeg } from "./corrective";
 
 function mergePatternToggles(t?: ElliottPatternMenuToggles): ElliottPatternMenuToggles {
   return { ...DEFAULT_ELLIOTT_PATTERN_MENU, ...t };
@@ -103,10 +104,34 @@ function runForTf(tf: Timeframe, rows: OhlcV2[], input: ElliottEngineInputV2): T
   const corr = impulse
     ? detectImpulseCorrectionsV2(pivots, impulse, menu)
     : { wave2: null, wave4: null, postImpulseAbc: null };
+  const nestedImpulseOpts = {
+    allowStandard: menu.motive_impulse,
+    allowDiagonal: menu.motive_diagonal,
+  };
+  let wave1NestedImpulse: ImpulseCountV2 | null = null;
+  let wave2NestedCorrective: CorrectiveCountV2 | null = null;
+  let wave3NestedImpulse: ImpulseCountV2 | null = null;
+  let wave4NestedCorrective: CorrectiveCountV2 | null = null;
+  let wave5NestedImpulse: ImpulseCountV2 | null = null;
+  if (impulse) {
+    const [p0, p1, p2, p3, p4, p5] = impulse.pivots;
+    const isBull = impulse.direction === "bull";
+    const dir2 = isBull ? ("down" as const) : ("up" as const);
+    wave1NestedImpulse = detectNestedImpulseInLeg(pivots, p0, p1, nestedImpulseOpts, rows, input.zigzag);
+    wave2NestedCorrective = detectNestedCorrectiveInLeg(pivots, p1, p2, dir2, "wave2", menu, rows, input.zigzag);
+    wave3NestedImpulse = detectNestedImpulseInLeg(pivots, p2, p3, nestedImpulseOpts, rows, input.zigzag);
+    wave4NestedCorrective = detectNestedCorrectiveInLeg(pivots, p3, p4, dir2, "wave4", menu, rows, input.zigzag);
+    wave5NestedImpulse = detectNestedImpulseInLeg(pivots, p4, p5, nestedImpulseOpts, rows, input.zigzag);
+  }
   const core = {
     timeframe: tf,
     pivots,
     impulse,
+    wave1NestedImpulse,
+    wave2NestedCorrective,
+    wave3NestedImpulse,
+    wave4NestedCorrective,
+    wave5NestedImpulse,
     historicalImpulses,
     wave2: corr.wave2,
     wave4: corr.wave4,
@@ -117,12 +142,16 @@ function runForTf(tf: Timeframe, rows: OhlcV2[], input: ElliottEngineInputV2): T
 
 export function runElliottEngineV2(input: ElliottEngineInputV2): ElliottEngineOutputV2 {
   const states: ElliottEngineOutputV2["states"] = {};
+  const zigzagParamsByTf: Partial<Record<Timeframe, ZigzagParams>> = {};
 
   const ordered: Timeframe[] = ["4h", "1h", "15m"];
   for (const tf of ordered) {
     const rows = input.byTimeframe[tf];
     if (!rows?.length) continue;
-    states[tf] = runForTf(tf, rows, input);
+    const depth = input.zigzagDepthByTimeframe?.[tf] ?? input.zigzag.depth;
+    const zigzag = { ...input.zigzag, depth };
+    zigzagParamsByTf[tf] = zigzag;
+    states[tf] = runForTf(tf, rows, { ...input, zigzag });
   }
 
   return {
@@ -134,6 +163,7 @@ export function runElliottEngineV2(input: ElliottEngineInputV2): ElliottEngineOu
     },
     ohlcByTf: input.byTimeframe,
     zigzagParams: input.zigzag,
+    zigzagParamsByTf,
   };
 }
 

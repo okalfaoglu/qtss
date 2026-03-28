@@ -1,4 +1,5 @@
 import type { ChartOhlcRow } from "../lib/marketBarsToCandles";
+import type { AuthSession } from "../lib/rbac";
 
 /**
  * API tabanı: geliştirmede Vite proxy kullanıldığı için "" (relative).
@@ -54,6 +55,24 @@ export async function oauthTokenPassword(params: {
     throw new Error(`oauth ${r.status}: ${detail}${hint}`);
   }
   return JSON.parse(t) as TokenResponse;
+}
+
+/** JWT doğrulandıktan sonra rol / org özeti (GUI RBAC). */
+export async function fetchAuthMe(accessToken: string): Promise<AuthSession> {
+  const r = await fetch(`${API_BASE}/api/v1/me`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (!r.ok) {
+    throw new Error(`me ${r.status}: ${t.slice(0, 300)}`);
+  }
+  const j = JSON.parse(t) as { sub: string; org_id: string; roles: string[]; azp: string };
+  return {
+    userId: j.sub,
+    orgId: j.org_id,
+    roles: Array.isArray(j.roles) ? j.roles : [],
+    oauthClientId: j.azp,
+  };
 }
 
 export async function fetchConfigList(accessToken: string): Promise<unknown> {
@@ -180,6 +199,7 @@ export async function fetchMarketBinanceKlinesForChart(
     endTimeMs?: number;
   },
 ): Promise<ChartOhlcRow[]> {
+  /** Binance klines tek istek üst sınırı 1000; daha uzun seri `binanceKlines.ts` sayfalaması ile. */
   const limit = Math.min(1000, Math.max(1, params.limit ?? 500));
   const q = new URLSearchParams({
     symbol: params.symbol.trim().toUpperCase(),
@@ -288,6 +308,7 @@ export type ChannelSixRejectCode =
   | "duplicate_pivot_window"
   | "last_pivot_direction"
   | "size_filter"
+  | "ratio_diff"
   | "entry_not_in_channel";
 
 export type ChannelSixRejectJson = {
@@ -314,6 +335,8 @@ export type ChannelSixResponse = {
   pattern_name?: string;
   pattern_drawing_batch?: PatternDrawingBatchJson;
   pattern_matches?: PatternMatchPayloadJson[];
+  /** `pattern_matches` içinde `pivot_tail_skip === 0` ve `zigzag_level === 0` olan ilk satırın indeksi — robot / canlı sinyal. */
+  live_robot_match_index?: number | null;
   used_zigzag?: { length: number; depth: number };
 };
 
@@ -402,4 +425,254 @@ export async function scanChannelSix(
     throw new Error(`channel-six ${r.status}: ${t.slice(0, 400)}`);
   }
   return JSON.parse(t) as ChannelSixResponse;
+}
+
+export type EngineSymbolApiRow = {
+  id: string;
+  exchange: string;
+  segment: string;
+  symbol: string;
+  interval: string;
+  enabled: boolean;
+  sort_order: number;
+  label: string | null;
+  /** `both` | `long_only` | `short_only` | `auto_segment` */
+  signal_direction_mode?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EngineSnapshotJoinedApiRow = {
+  engine_symbol_id: string;
+  exchange: string;
+  segment: string;
+  symbol: string;
+  interval: string;
+  engine_kind: string;
+  payload: unknown;
+  last_bar_open_time: string | null;
+  bar_count: number | null;
+  computed_at: string;
+  error: string | null;
+};
+
+export async function fetchEngineSymbols(accessToken: string): Promise<EngineSymbolApiRow[]> {
+  const r = await fetch(`${API_BASE}/api/v1/analysis/engine/symbols`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`engine/symbols ${r.status}: ${t.slice(0, 300)}`);
+  return JSON.parse(t) as EngineSymbolApiRow[];
+}
+
+export async function fetchEngineSnapshots(accessToken: string): Promise<EngineSnapshotJoinedApiRow[]> {
+  const r = await fetch(`${API_BASE}/api/v1/analysis/engine/snapshots`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`engine/snapshots ${r.status}: ${t.slice(0, 300)}`);
+  return JSON.parse(t) as EngineSnapshotJoinedApiRow[];
+}
+
+/** Worker’ın `nansen_snapshots` tablosuna yazdığı son token screener sonucu; henüz yoksa `null`. */
+export type NansenSnapshotApiRow = {
+  snapshot_kind: string;
+  request_json: unknown;
+  response_json: unknown | null;
+  meta_json: unknown | null;
+  computed_at: string;
+  error: string | null;
+};
+
+export async function fetchNansenSnapshot(accessToken: string): Promise<NansenSnapshotApiRow | null> {
+  const r = await fetch(`${API_BASE}/api/v1/analysis/nansen/snapshot`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`nansen/snapshot ${r.status}: ${t.slice(0, 300)}`);
+  const j = JSON.parse(t) as NansenSnapshotApiRow | null;
+  return j ?? null;
+}
+
+/** `nansen_setup_runs` — worker’ın son setup taraması özet satırı. */
+export type NansenSetupRunApiRow = {
+  id: string;
+  computed_at: string;
+  request_json: unknown;
+  source: string;
+  candidate_count: number;
+  meta_json: unknown | null;
+  error: string | null;
+};
+
+/** `nansen_setup_rows` — sıralı aday / seviye çıktısı. */
+export type NansenSetupRowApiRow = {
+  id: string;
+  run_id: string;
+  rank: number;
+  chain: string;
+  token_address: string;
+  token_symbol: string;
+  direction: string;
+  score: number;
+  probability: number;
+  setup: string;
+  key_signals: unknown;
+  entry: number;
+  stop_loss: number;
+  tp1: number;
+  tp2: number;
+  tp3: number;
+  rr: number;
+  pct_to_tp2: number;
+  ohlc_enriched: boolean;
+  raw_metrics: unknown;
+};
+
+export type NansenSetupsLatestApiResponse = {
+  run: NansenSetupRunApiRow | null;
+  rows: NansenSetupRowApiRow[];
+  /**
+   * Yalnız istemci: sunucu 404 döndüyse (eski `qtss-api` veya yanlış `VITE_API_BASE`).
+   * API gövdesinde yoktur.
+   */
+  setup_endpoint_missing?: boolean;
+};
+
+/** Son setup taraması + en iyi 5 LONG ve 5 SHORT satırı (`nansen_setup_*`, migration 0020). */
+export async function fetchNansenSetupsLatest(accessToken: string): Promise<NansenSetupsLatestApiResponse> {
+  const r = await fetch(`${API_BASE}/api/v1/analysis/nansen/setups/latest`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (r.status === 404) {
+    return {
+      run: null,
+      rows: [],
+      setup_endpoint_missing: true,
+    };
+  }
+  if (!r.ok) throw new Error(`nansen/setups/latest ${r.status}: ${t.slice(0, 300)}`);
+  const parsed = JSON.parse(t) as NansenSetupsLatestApiResponse;
+  return { ...parsed, setup_endpoint_missing: false };
+}
+
+export async function postEngineSymbol(
+  accessToken: string,
+  body: {
+    exchange?: string;
+    segment?: string;
+    symbol: string;
+    interval: string;
+    label?: string;
+    signal_direction_mode?: string;
+  },
+): Promise<EngineSymbolApiRow> {
+  const r = await fetch(`${API_BASE}/api/v1/analysis/engine/symbols`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`engine/symbols POST ${r.status}: ${t.slice(0, 300)}`);
+  return JSON.parse(t) as EngineSymbolApiRow;
+}
+
+export async function patchEngineSymbol(
+  accessToken: string,
+  id: string,
+  body: { enabled?: boolean; signal_direction_mode?: string },
+): Promise<void> {
+  const r = await fetch(`${API_BASE}/api/v1/analysis/engine/symbols/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`engine/symbols PATCH ${r.status}: ${t.slice(0, 300)}`);
+  }
+}
+
+/** F1: `range_signal_events` — `signal_dashboard.durum` kenarı. */
+export type RangeSignalEventApiRow = {
+  id: string;
+  engine_symbol_id: string;
+  exchange: string;
+  segment: string;
+  symbol: string;
+  interval: string;
+  event_kind: string;
+  bar_open_time: string;
+  reference_price: number | null;
+  source: string;
+  payload: unknown;
+  created_at: string;
+};
+
+export async function fetchEngineRangeSignals(
+  accessToken: string,
+  opts?: { limit?: number; engineSymbolId?: string },
+): Promise<RangeSignalEventApiRow[]> {
+  const lim = opts?.limit ?? 80;
+  const params = new URLSearchParams({ limit: String(lim) });
+  if (opts?.engineSymbolId) params.set("engine_symbol_id", opts.engineSymbolId);
+  const r = await fetch(`${API_BASE}/api/v1/analysis/engine/range-signals?${params}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`engine/range-signals ${r.status}: ${t.slice(0, 300)}`);
+  return JSON.parse(t) as RangeSignalEventApiRow[];
+}
+
+/** F3: `paper_balances` — Decimal alanları genelde JSON string. */
+export type PaperBalanceRow = {
+  user_id: string;
+  org_id: string;
+  quote_balance: string | number;
+  base_positions: Record<string, string | number>;
+  updated_at: string;
+};
+
+export type PaperFillRow = {
+  id: string;
+  org_id: string;
+  user_id: string;
+  exchange: string;
+  segment: string;
+  symbol: string;
+  client_order_id: string;
+  side: string;
+  quantity: string | number;
+  avg_price: string | number;
+  fee: string | number;
+  quote_balance_after: string | number;
+  base_positions_after: Record<string, string | number>;
+  intent: unknown;
+  created_at: string;
+};
+
+export async function fetchPaperBalance(accessToken: string): Promise<PaperBalanceRow | null> {
+  const r = await fetch(`${API_BASE}/api/v1/orders/dry/balance`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`orders/dry/balance ${r.status}: ${t.slice(0, 300)}`);
+  return JSON.parse(t) as PaperBalanceRow | null;
+}
+
+export async function fetchPaperFills(accessToken: string, limit = 20): Promise<PaperFillRow[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const r = await fetch(`${API_BASE}/api/v1/orders/dry/fills?${params}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`orders/dry/fills ${r.status}: ${t.slice(0, 300)}`);
+  return JSON.parse(t) as PaperFillRow[];
 }

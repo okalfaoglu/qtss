@@ -19,9 +19,16 @@ async fn main() -> anyhow::Result<()> {
         .context("QTSS_SEED_ADMIN_PASSWORD gerekli")?;
 
     let pool = create_pool(&database_url, 2).await.context("veritabanı bağlantısı")?;
-    run_migrations(&pool)
-        .await
-        .context("SQL migrasyonları (tablo oluşturma)")?;
+    run_migrations(&pool).await.map_err(|e| {
+        let msg = format!("{e:#}");
+        if msg.contains("has been modified") {
+            anyhow::anyhow!(
+                "{msg}\n\nİpucu — geliştirme veritabanı: uygulanmış bir migrations/*.sql dosyası diskte değişti. Repo kökünden (/app/qtss) checksum’ları güncelleyin, sonra seed’i tekrarlayın:\n  cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums\nKalıcı kalıp: eski migrasyonu ellemeden yeni numaralı .sql eklemek (docs/PROJECT.md)."
+            )
+        } else {
+            anyhow::Error::from(e)
+        }
+    }).context("SQL migrasyonları (tablo oluşturma)")?;
 
     let org_id: Uuid =
         match sqlx::query_scalar::<_, Uuid>("SELECT id FROM organizations WHERE name = 'Default'")

@@ -90,6 +90,8 @@ type Props = {
   refreshBusy: boolean;
   onSaveToDb: () => void;
   onRefreshFromServer: () => void;
+  /** `false`: veritabanına yazma kapalı (admin değil). */
+  allowPersistConfig?: boolean;
   /**
    * `impulse` / `corrective`: menü sekmeleri — yalnız ilgili çizim ve parametreler; JSON/kurallar yok.
    * İçerik `details` ile açılıp kapanabilir.
@@ -109,6 +111,7 @@ export function ElliottWaveCard({
   refreshBusy,
   onSaveToDb,
   onRefreshFromServer,
+  allowPersistConfig = true,
   layout = "full",
 }: Props) {
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -168,6 +171,8 @@ export function ElliottWaveCard({
         return "Dalga 4, Dalga 3’ten uzun (standart itkı)";
       case "trend_shape":
         return "Trend şekli zayıf / teyitsiz";
+      case "extension_w5_vs_w3":
+        return "Dalga 5 / Dalga 3 uzantısı (✓ = aştı; ○ = kısaltılmış beşinci olası)";
       case "triangle_alt":
         return "Üçgen: a-b-c-d-e alternasyonu bozuk";
       case "triangle_tightening":
@@ -253,26 +258,61 @@ export function ElliottWaveCard({
   const zigzagDepthBlock = (
     <div style={{ marginTop: "0.45rem" }}>
       <p className="muted" style={{ fontSize: "0.72rem", lineHeight: 1.45, margin: "0 0 0.35rem" }}>
-        ACP <code>zigzag[]</code> kanal/tarama içindir; Elliott ZigZag burada ayrı derinlik kullanır.
+        ACP <code>zigzag[]</code> kanal/tarama içindir; Elliott ZigZag TF başına derinlik (Ana Elliott sekmesindeki tablo
+        ile aynı alanlar).
       </p>
-      <label className="muted tv-elliott-panel__field">
-        <span>Elliott ZigZag derinliği (her iki yanda mum)</span>
-        <input
-          type="number"
-          min={2}
-          max={100}
-          title="Varsayılan 21; ZigZag V2 fraktal penceresi (ACP’den bağımsız)"
-          value={value.elliott_zigzag_depth}
-          onChange={(e) => {
-            const n = parseInt(e.target.value, 10);
-            const z = Math.min(100, Math.max(2, Number.isFinite(n) ? n : 21));
-            onChange({ ...value, elliott_zigzag_depth: z, swing_depth: z });
-          }}
-          className="mono"
-        />
-      </label>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.35rem" }}>
+        <label className="muted tv-elliott-panel__field" style={{ margin: 0 }}>
+          <span style={{ fontSize: "0.7rem" }}>ZigZag depth 4H</span>
+          <input
+            type="number"
+            min={2}
+            max={100}
+            title="Fraktal penceresi — 4H MTF"
+            value={value.elliott_zigzag_depth_4h}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              const z = Math.min(100, Math.max(2, Number.isFinite(n) ? n : 21));
+              onChange({ ...value, elliott_zigzag_depth_4h: z, elliott_zigzag_depth: z, swing_depth: z });
+            }}
+            className="mono"
+          />
+        </label>
+        <label className="muted tv-elliott-panel__field" style={{ margin: 0 }}>
+          <span style={{ fontSize: "0.7rem" }}>ZigZag depth 1H</span>
+          <input
+            type="number"
+            min={2}
+            max={100}
+            title="Fraktal penceresi — 1H MTF"
+            value={value.elliott_zigzag_depth_1h}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              const z = Math.min(100, Math.max(2, Number.isFinite(n) ? n : 21));
+              onChange({ ...value, elliott_zigzag_depth_1h: z });
+            }}
+            className="mono"
+          />
+        </label>
+        <label className="muted tv-elliott-panel__field" style={{ margin: 0 }}>
+          <span style={{ fontSize: "0.7rem" }}>ZigZag depth 15M</span>
+          <input
+            type="number"
+            min={2}
+            max={100}
+            title="Fraktal penceresi — 15M MTF"
+            value={value.elliott_zigzag_depth_15m}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              const z = Math.min(100, Math.max(2, Number.isFinite(n) ? n : 21));
+              onChange({ ...value, elliott_zigzag_depth_15m: z });
+            }}
+            className="mono"
+          />
+        </label>
+      </div>
       <p className="muted" style={{ fontSize: "0.72rem", margin: "0.25rem 0 0" }}>
-        Etkin derinlik: <span className="mono">{effectiveSwingDepth}</span> (grafik ve sayım)
+        Bu grafik için etkin derinlik: <span className="mono">{effectiveSwingDepth}</span>
       </p>
     </div>
   );
@@ -339,6 +379,16 @@ export function ElliottWaveCard({
               <span>Geçmişte Elliott itki ara (tarihsel 1–5 katmanı)</span>
             </label>
           </>
+        ) : null}
+        {value.enabled ? (
+          <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
+            <input
+              type="checkbox"
+              checked={value.show_nested_formations}
+              onChange={(e) => onChange({ ...value, show_nested_formations: e.target.checked })}
+            />
+            <span>Ana formasyon içindeki alt formasyonları göster (alt itkı; 2/4 içi a–b–c)</span>
+          </label>
         ) : null}
       </div>
       {layout !== "full" ? zigzagDepthBlock : null}
@@ -593,9 +643,13 @@ export function ElliottWaveCard({
         <button
           type="button"
           className="theme-toggle"
-          disabled={saveBusy}
+          disabled={saveBusy || !allowPersistConfig}
           onClick={() => onSaveToDb()}
-          title="POST /api/v1/config — admin rolü gerekir"
+          title={
+            allowPersistConfig
+              ? "POST /api/v1/config — admin rolü gerekir"
+              : "Yalnızca admin rolü app_config yazabilir"
+          }
         >
           {saveBusy ? "Kaydediliyor…" : "Veritabanına kaydet"}
         </button>

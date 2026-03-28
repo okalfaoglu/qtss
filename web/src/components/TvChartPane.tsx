@@ -133,6 +133,12 @@ function zigzagLineOptions(
       return applyOverride({ color: "#42A5F5", lineWidth: 3, lineStyle: LineStyle.Solid });
     case "elliott_projection_c_active":
       return applyOverride({ color: "#FFB74D", lineWidth: 2, lineStyle: LineStyle.Dashed });
+    case "trading_range_mid":
+      return applyOverride({ color: "#ffb300", lineWidth: 2, lineStyle: LineStyle.Dotted });
+    case "range_position_long":
+      return applyOverride({ color: "#00c853", lineWidth: 2, lineStyle: LineStyle.Dashed });
+    case "range_position_short":
+      return applyOverride({ color: "#ff1744", lineWidth: 2, lineStyle: LineStyle.Dashed });
     default:
       return applyOverride({
         color: zzPal[layerIndex % zzPal.length],

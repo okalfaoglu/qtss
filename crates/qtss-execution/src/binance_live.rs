@@ -77,6 +77,18 @@ impl BinanceLiveGateway {
         }
     }
 
+    fn futures_position_side_reduce(intent: &OrderIntent) -> (Option<&str>, Option<bool>) {
+        let Some(f) = intent.futures.as_ref() else {
+            return (None, None);
+        };
+        let pos = f
+            .position_side
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        (pos, f.reduce_only)
+    }
+
     async fn place_spot(
         &self,
         intent: &OrderIntent,
@@ -141,6 +153,7 @@ impl BinanceLiveGateway {
     ) -> Result<Value, ExecutionError> {
         let side: BSide = intent.side.into();
         let qty = Self::dec_str(intent.quantity);
+        let (position_side, reduce_only) = Self::futures_position_side_reduce(intent);
 
         match &intent.order_type {
             OrderType::Market => self
@@ -148,11 +161,11 @@ impl BinanceLiveGateway {
                 .fapi_new_order(
                     symbol,
                     side,
-                    None,
+                    position_side,
                     FuturesOrderType::Market,
                     None,
                     Some(&qty),
-                    None,
+                    reduce_only,
                     None,
                     Some(cid),
                     None,
@@ -176,11 +189,11 @@ impl BinanceLiveGateway {
                     .fapi_new_order(
                         symbol,
                         side,
-                        None,
+                        position_side,
                         FuturesOrderType::Limit,
                         Some(tif),
                         Some(&qty),
-                        None,
+                        reduce_only,
                         Some(&price_s),
                         Some(cid),
                         None,

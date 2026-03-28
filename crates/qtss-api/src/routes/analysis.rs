@@ -2,11 +2,12 @@
 
 use std::collections::BTreeMap;
 
-use axum::extract::{Extension, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
+use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -15,6 +16,13 @@ use qtss_chart_patterns::{
     pattern_name_by_acp_id, ChannelSixDrawingHints, ChannelSixReject, ChannelSixScanOutcome,
     ChannelSixWindowFilter, OhlcBar, PatternDrawingBatch, SizeFilters, SixPivotScanParams,
 };
+use qtss_storage::{
+    fetch_latest_nansen_setup_with_rows, fetch_nansen_snapshot, insert_engine_symbol,
+    list_analysis_snapshots_with_symbols, list_engine_symbols_all,
+    list_range_signal_events_joined, update_engine_symbol_patch, AnalysisSnapshotJoinedRow,
+    EngineSymbolInsert, EngineSymbolRow, NansenSetupRowDetail, NansenSetupRunRow,
+    NansenSnapshotRow, RangeSignalEventJoinedRow,
+};
 
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
@@ -22,7 +30,8 @@ use crate::state::SharedState;
 const ACP_CHART_PATTERNS_CONFIG_KEY: &str = "acp_chart_patterns";
 const ELLIOTT_WAVE_CONFIG_KEY: &str = "elliott_wave";
 
-pub fn analysis_router() -> Router<SharedState> {
+/// Salt okunur / dashboard rolleri (`viewer`+).
+pub fn analysis_read_router() -> Router<SharedState> {
     Router::new()
         .route("/analysis/health", get(analysis_health))
         .route(
@@ -31,6 +40,186 @@ pub fn analysis_router() -> Router<SharedState> {
         )
         .route("/analysis/elliott-wave-config", get(get_elliott_wave_config))
         .route("/analysis/patterns/channel-six", post(channel_six_scan))
+        .route("/analysis/engine/symbols", get(list_engine_symbols_api))
+        .route("/analysis/engine/snapshots", get(list_engine_snapshots_api))
+        .route("/analysis/engine/range-signals", get(list_range_signals_api))
+        .route("/analysis/nansen/snapshot", get(get_nansen_snapshot_api))
+        .route("/analysis/nansen/setups/latest", get(get_nansen_setups_latest_api))
+}
+
+/// `engine_symbols` yazımı — `trader` / `admin` (`require_ops_roles`).
+pub fn analysis_write_router() -> Router<SharedState> {
+    Router::new()
+        .route("/analysis/engine/symbols", post(post_engine_symbol_api))
+        .route("/analysis/engine/symbols/{id}", patch(patch_engine_symbol_api))
+}
+
+async fn list_engine_symbols_api(State(st): State<SharedState>) -> Result<Json<Vec<EngineSymbolRow>>, String> {
+    list_engine_symbols_all(&st.pool)
+        .await
+        .map(Json)
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Deserialize)]
+struct PostEngineSymbolBody {
+    #[serde(default)]
+    pub exchange: Option<String>,
+    #[serde(default)]
+    pub segment: Option<String>,
+    pub symbol: String,
+    pub interval: String,
+    pub label: Option<String>,
+    /// `both` | `long_only` | `short_only` | `auto_segment`
+    #[serde(default)]
+    pub signal_direction_mode: Option<String>,
+}
+
+async fn post_engine_symbol_api(
+    State(st): State<SharedState>,
+    Json(body): Json<PostEngineSymbolBody>,
+) -> Result<Json<EngineSymbolRow>, String> {
+    let sym = body.symbol.trim().to_uppercase();
+    if sym.is_empty() {
+        return Err("symbol boş olamaz".to_string());
+    }
+    let iv = body.interval.trim().to_string();
+    if iv.is_empty() {
+        return Err("interval boş olamaz".to_string());
+    }
+    let mode = body
+        .signal_direction_mode
+        .as_deref()
+        .map(normalize_signal_direction_mode)
+        .transpose()?;
+    let row = EngineSymbolInsert {
+        exchange: body
+            .exchange
+            .unwrap_or_else(|| "binance".into())
+            .trim()
+            .to_lowercase(),
+        segment: body
+            .segment
+            .unwrap_or_else(|| "spot".into())
+            .trim()
+            .to_lowercase(),
+        symbol: sym,
+        interval: iv,
+        label: body.label,
+        signal_direction_mode: mode,
+    };
+    insert_engine_symbol(&st.pool, &row)
+        .await
+        .map(Json)
+        .map_err(|e| e.to_string())
+}
+
+async fn list_engine_snapshots_api(
+    State(st): State<SharedState>,
+) -> Result<Json<Vec<AnalysisSnapshotJoinedRow>>, String> {
+    list_analysis_snapshots_with_symbols(&st.pool)
+        .await
+        .map(Json)
+        .map_err(|e| e.to_string())
+}
+
+/// Son Nansen token screener snapshot’ı (`qtss-worker` + `NANSEN_API_KEY`). Satır yoksa `null`.
+async fn get_nansen_snapshot_api(
+    State(st): State<SharedState>,
+) -> Result<Json<Option<NansenSnapshotRow>>, String> {
+    fetch_nansen_snapshot(&st.pool, "token_screener")
+        .await
+        .map(Json)
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+struct NansenSetupsLatestResponse {
+    pub run: Option<NansenSetupRunRow>,
+    pub rows: Vec<NansenSetupRowDetail>,
+}
+
+/// Son başarılı `nansen_setup_scan` koşusu + en fazla 10 sıralı satır (`qtss-worker` + migration 0020).
+async fn get_nansen_setups_latest_api(
+    State(st): State<SharedState>,
+) -> Result<Json<NansenSetupsLatestResponse>, String> {
+    let out = fetch_latest_nansen_setup_with_rows(&st.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    let resp = match out {
+        Some((run, rows)) => NansenSetupsLatestResponse {
+            run: Some(run),
+            rows,
+        },
+        None => NansenSetupsLatestResponse {
+            run: None,
+            rows: vec![],
+        },
+    };
+    Ok(Json(resp))
+}
+
+#[derive(Deserialize)]
+struct RangeSignalsQuery {
+    #[serde(default = "default_range_signals_limit")]
+    limit: i64,
+    engine_symbol_id: Option<Uuid>,
+}
+
+fn default_range_signals_limit() -> i64 {
+    100
+}
+
+async fn list_range_signals_api(
+    State(st): State<SharedState>,
+    Query(q): Query<RangeSignalsQuery>,
+) -> Result<Json<Vec<RangeSignalEventJoinedRow>>, String> {
+    list_range_signal_events_joined(&st.pool, q.engine_symbol_id, q.limit)
+        .await
+        .map(Json)
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Deserialize, Default)]
+struct PatchEngineSymbolBody {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub signal_direction_mode: Option<String>,
+}
+
+fn normalize_signal_direction_mode(raw: &str) -> Result<String, String> {
+    match raw.trim().to_lowercase().as_str() {
+        "both" | "bidirectional" | "long_short" | "long_and_short" => Ok("both".into()),
+        "long_only" | "longonly" => Ok("long_only".into()),
+        "short_only" | "shortonly" => Ok("short_only".into()),
+        "auto_segment" | "auto" => Ok("auto_segment".into()),
+        _ => Err(format!(
+            "signal_direction_mode geçersiz: {raw} (both | long_only | short_only | auto_segment)"
+        )),
+    }
+}
+
+async fn patch_engine_symbol_api(
+    State(st): State<SharedState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PatchEngineSymbolBody>,
+) -> Result<StatusCode, String> {
+    if body.enabled.is_none() && body.signal_direction_mode.is_none() {
+        return Err("gövdede enabled veya signal_direction_mode gerekli".into());
+    }
+    let mode = body
+        .signal_direction_mode
+        .as_deref()
+        .map(normalize_signal_direction_mode)
+        .transpose()?;
+    let n = update_engine_symbol_patch(&st.pool, id, body.enabled, mode.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err("engine_symbol bulunamadı".into());
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `app_config.acp_chart_patterns` — DB’de yoksa Pine ACP v6 fabrika varsayılanları (migrations 0007–0009).
@@ -76,6 +265,7 @@ fn default_elliott_wave_json() -> serde_json::Value {
         "show_projection_1h": false,
         "show_projection_15m": false,
         "show_historical_waves": false,
+        "show_nested_formations": true,
         "projection_bar_hop": 22,
         "projection_steps": 12,
         "use_acp_zigzag_swing": false,
@@ -172,6 +362,9 @@ fn default_acp_chart_patterns_json() -> serde_json::Value {
             "upper_direction": 1,
             "lower_direction": -1,
             "ignore_if_entry_crossed": false,
+            "ratio_diff_enabled": false,
+            "ratio_diff_max": 1.0,
+            "auto_scan_on_timeframe_change": false,
             "size_filters": {
                 "filter_by_bar": false,
                 "min_pattern_bars": 0,
@@ -285,6 +478,12 @@ pub struct ChannelSixBody {
     /// Pine `ignoreIfEntryCrossed` — son mum kapanışı kanal bandı dışındaysa elenir.
     #[serde(default)]
     pub ignore_if_entry_crossed: bool,
+    /// Pine `ratioDiffEnabled` — `getRatioDiff` (üçlü tepeler / üçlü dipler) üst sınır denetimi.
+    #[serde(default)]
+    pub ratio_diff_enabled: bool,
+    /// Pine `ratioDiff` eşiği (`getRatioDiff` ≤ bu değer).
+    #[serde(default = "default_ratio_diff_max")]
+    pub ratio_diff_max: f64,
     /// Pine `repaint`: `false` ise en yeni (genelde açık) mum taramaya dahil edilmez — yalnız kapanmış mumlar.
     #[serde(default)]
     pub repaint: bool,
@@ -347,6 +546,9 @@ fn default_max_zigzag_levels() -> usize {
 fn default_error_score_ratio_max() -> f64 {
     0.2
 }
+fn default_ratio_diff_max() -> f64 {
+    1.0
+}
 fn default_pattern_line_width() -> u32 {
     2
 }
@@ -367,6 +569,8 @@ impl ChannelSixBody {
             lower_direction: self.lower_direction,
             size_filters: self.size_filters.clone(),
             ignore_if_entry_crossed: self.ignore_if_entry_crossed,
+            ratio_diff_enabled: self.ratio_diff_enabled,
+            ratio_diff_max: self.ratio_diff_max,
         }
     }
 }
@@ -400,6 +604,9 @@ struct ChannelSixResponse {
     used_zigzag: Option<UsedZigzagConfig>,
     /// İstek gövdesindeki `repaint` (Pine: açık mum). Tarama mumları istemcinin gönderdiği dilimdedir; kırpma tipik olarak web `acpOhlcWindowForScan`.
     repaint: bool,
+    /// `pattern_matches` içinde canlı/robot adayı: `pivot_tail_skip == 0` ve `zigzag_level == 0` olan ilk eşleşme.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    live_robot_match_index: Option<usize>,
 }
 
 async fn channel_six_scan(
@@ -542,6 +749,10 @@ async fn channel_six_scan(
         })
         .collect();
 
+    let live_robot_match_index = all_outcomes
+        .iter()
+        .position(|o| o.pivot_tail_skip == 0 && o.zigzag_level == 0);
+
     let first = all_outcomes.first();
     let outcome = first.cloned();
     let drawing = first.map(channel_six_drawing_hints);
@@ -572,6 +783,7 @@ async fn channel_six_scan(
             pattern_matches,
             used_zigzag,
             repaint,
+            live_robot_match_index,
         }),
     )
         .into_response()

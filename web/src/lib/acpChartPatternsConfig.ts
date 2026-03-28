@@ -46,6 +46,12 @@ export type AcpScanning = {
   lower_direction: number;
   /** Pine `ScanProperties.ignoreIfEntryCrossed`. */
   ignore_if_entry_crossed: boolean;
+  /** Pine `ratioDiffEnabled` — üst/alt üçlü pivotlarda `getRatioDiff` ≤ `ratio_diff_max`. */
+  ratio_diff_enabled: boolean;
+  /** Pine `ratioDiff` (eşik; fiyat/eğim farkı üst sınırı). */
+  ratio_diff_max: number;
+  /** Açıkken üst şerit timeframe değişince kanal taraması otomatik çalışır. */
+  auto_scan_on_timeframe_change: boolean;
   size_filters: AcpSizeFilters;
 };
 
@@ -175,6 +181,9 @@ export const DEFAULT_ACP_CONFIG: AcpChartPatternsConfig = {
     upper_direction: 1,
     lower_direction: -1,
     ignore_if_entry_crossed: false,
+    ratio_diff_enabled: false,
+    ratio_diff_max: 1.0,
+    auto_scan_on_timeframe_change: false,
     size_filters: { ...DEFAULT_SIZE_FILTERS },
   },
   pattern_groups: defaultPatternGroups(),
@@ -268,6 +277,9 @@ export function normalizeAcpChartPatternsConfig(raw: unknown): AcpChartPatternsC
     upper_direction: asNum(scanIn?.upper_direction, 1),
     lower_direction: asNum(scanIn?.lower_direction, -1),
     ignore_if_entry_crossed: asBool(scanIn?.ignore_if_entry_crossed, false),
+    ratio_diff_enabled: asBool(scanIn?.ratio_diff_enabled, false),
+    ratio_diff_max: clamp(asNum(scanIn?.ratio_diff_max, 1.0), 0.000_001, 1_000_000),
+    auto_scan_on_timeframe_change: asBool(scanIn?.auto_scan_on_timeframe_change, false),
     size_filters,
   };
 
@@ -441,6 +453,8 @@ export function acpConfigToChannelSixOptions(
     avoid_overlap: s.avoid_overlap,
     repaint: s.repaint,
     ignore_if_entry_crossed: s.ignore_if_entry_crossed,
+    ratio_diff_enabled: s.ratio_diff_enabled,
+    ratio_diff_max: s.ratio_diff_max,
     size_filters: s.size_filters,
     max_matches: d.max_patterns,
     theme_dark: appTheme === "dark",
