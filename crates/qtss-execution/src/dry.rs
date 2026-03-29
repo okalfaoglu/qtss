@@ -70,8 +70,11 @@ fn fill_price(intent: &OrderIntent, mark: Decimal) -> Result<Decimal, ExecutionE
     match &intent.order_type {
         OrderType::Market => Ok(mark),
         OrderType::Limit { price, .. } => Ok(*price),
+        // Bracket / reduce-only simülasyonu: tetik fiyatı ile anında dolum (paper).
+        OrderType::StopMarket { stop_price }
+        | OrderType::TakeProfitMarket { stop_price } => Ok(*stop_price),
         _ => Err(ExecutionError::Other(
-            "dry: yalnızca Market ve Limit emirleri simüle edilir".into(),
+            "dry: bu emir tipi paper’da simüle edilmez (Market/Limit/StopMarket/TakeProfitMarket)".into(),
         )),
     }
 }
@@ -130,19 +133,32 @@ pub fn apply_place(
             *ledger.base_by_symbol.entry(key.clone()).or_insert(Decimal::ZERO) += intent.quantity;
         }
         OrderSide::Sell => {
-            let base = ledger.base_qty(&key);
-            if base < intent.quantity {
-                return Err(ExecutionError::InsufficientPaper);
-            }
             let proceeds = notional - fee;
             if proceeds < Decimal::ZERO {
                 return Err(ExecutionError::Other("dry: komisyon brüt tutarı aştı".into()));
             }
-            *ledger.base_by_symbol.entry(key.clone()).or_insert(Decimal::ZERO) -= intent.quantity;
-            if ledger.base_by_symbol[&key].is_zero() {
-                ledger.base_by_symbol.remove(&key);
+            match intent.instrument.segment {
+                MarketSegment::Futures => {
+                    let new_base = ledger.base_qty(&key) - intent.quantity;
+                    ledger.quote_balance += proceeds;
+                    if new_base.is_zero() {
+                        ledger.base_by_symbol.remove(&key);
+                    } else {
+                        ledger.base_by_symbol.insert(key.clone(), new_base);
+                    }
+                }
+                _ => {
+                    let base = ledger.base_qty(&key);
+                    if base < intent.quantity {
+                        return Err(ExecutionError::InsufficientPaper);
+                    }
+                    *ledger.base_by_symbol.entry(key.clone()).or_insert(Decimal::ZERO) -= intent.quantity;
+                    if ledger.base_by_symbol[&key].is_zero() {
+                        ledger.base_by_symbol.remove(&key);
+                    }
+                    ledger.quote_balance += proceeds;
+                }
             }
-            ledger.quote_balance += proceeds;
         }
     }
 
@@ -236,6 +252,14 @@ impl DryRunGateway {
 
 #[async_trait]
 impl ExecutionGateway for DryRunGateway {
+    fn set_reference_price(
+        &self,
+        instrument: &qtss_domain::symbol::InstrumentId,
+        price: Decimal,
+    ) -> Result<(), ExecutionError> {
+        self.set_mark(instrument, price)
+    }
+
     #[instrument(skip(self, intent))]
     async fn place(&self, intent: OrderIntent) -> Result<Uuid, ExecutionError> {
         let out = self.place_detailed(intent, None)?;
@@ -348,5 +372,43 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, ExecutionError::InsufficientPaper));
+    }
+
+    fn btcusdt_futures() -> InstrumentId {
+        InstrumentId {
+            exchange: ExchangeId::Binance,
+            segment: MarketSegment::Futures,
+            symbol: "BTCUSDT".into(),
+        }
+    }
+
+    #[test]
+    fn futures_sell_opens_short_without_prior_base() {
+        let mut ledger = DryLedgerState::from_params(VirtualLedgerParams {
+            initial_quote_balance: Decimal::new(50_000, 0),
+        });
+        let intent = OrderIntent {
+            instrument: btcusdt_futures(),
+            side: OrderSide::Sell,
+            quantity: Decimal::new(1, 1),
+            order_type: OrderType::Market,
+            time_in_force: qtss_domain::orders::TimeInForce::Gtc,
+            requires_human_approval: false,
+            futures: None,
+        };
+        let out = apply_place(
+            &mut ledger,
+            &CommissionPolicy::default(),
+            None,
+            intent,
+            Some(Decimal::new(40_000, 0)),
+        )
+        .unwrap();
+        let k = instrument_position_key(&btcusdt_futures());
+        assert_eq!(
+            out.base_positions_after.get(&k).copied().unwrap_or(Decimal::ZERO),
+            Decimal::new(-1, 1)
+        );
+        assert!(out.quote_balance_after > Decimal::new(50_000, 0));
     }
 }

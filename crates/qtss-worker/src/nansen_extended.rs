@@ -2,6 +2,7 @@
 //!
 //! Her döngü `NANSEN_*_ENABLED=0|false|off|no` ile kapatılabilir (varsayılan: açık).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use qtss_storage::{
@@ -15,7 +16,7 @@ use tracing::{info, warn};
 use crate::data_sources::registry::{
     NANSEN_FLOW_INTEL_DATA_KEY, NANSEN_HOLDINGS_DATA_KEY, NANSEN_NETFLOWS_DATA_KEY,
     NANSEN_PERP_TRADES_DATA_KEY, NANSEN_WHALE_PERP_AGGREGATE_DATA_KEY,
-    NANSEN_WHALE_WATCHLIST_CONFIG_KEY, NANSEN_WHO_BOUGHT_DATA_KEY,
+    NANSEN_WHALE_WATCHLIST_KEY, NANSEN_WHO_BOUGHT_DATA_KEY,
 };
 
 fn nansen_api_base() -> String {
@@ -35,6 +36,63 @@ fn loop_enabled(var: &str) -> bool {
 
 fn default_pagination_body() -> Value {
     json!({ "pagination": { "page": 1, "per_page": 100 } })
+}
+
+fn json_merge(base: &mut Value, extra: Value) {
+    let Some(bo) = base.as_object_mut() else {
+        return;
+    };
+    if let Some(eo) = extra.as_object() {
+        for (k, v) in eo {
+            bo.insert(k.clone(), v.clone());
+        }
+    }
+}
+
+/// `smart-money/netflow` + `holdings`: API `chains` dizisi bekler.
+fn default_chains_for_smart_money() -> Value {
+    std::env::var("NANSEN_SMART_MONEY_CHAINS_JSON")
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(s.trim()).ok())
+        .unwrap_or_else(|| json!(["ethereum"]))
+}
+
+fn default_netflows_request_body() -> Value {
+    let mut body = default_pagination_body();
+    json_merge(&mut body, json!({ "chains": default_chains_for_smart_money() }));
+    body
+}
+
+fn default_holdings_request_body() -> Value {
+    let mut body = default_pagination_body();
+    json_merge(&mut body, json!({ "chains": default_chains_for_smart_money() }));
+    body
+}
+
+static WHO_BOUGHT_MISSING_CONFIG_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// Tam gövde: `NANSEN_WHO_BOUGHT_BODY_JSON` (JSON object).
+fn who_bought_body_from_env_json() -> Option<Value> {
+    let raw = std::env::var("NANSEN_WHO_BOUGHT_BODY_JSON").ok()?;
+    serde_json::from_str::<Value>(raw.trim()).ok().filter(|v| v.is_object())
+}
+
+/// `tgm/who-bought-sold`: API `chain` + `token_address` zorunlu.
+fn who_bought_body_chain_and_token() -> Option<Value> {
+    let token = std::env::var("NANSEN_WHO_BOUGHT_TOKEN_ADDRESS")
+        .ok()
+        .filter(|s| !s.trim().is_empty())?;
+    let chain = std::env::var("NANSEN_WHO_BOUGHT_CHAIN").unwrap_or_else(|_| "ethereum".into());
+    let mut body = default_pagination_body();
+    json_merge(
+        &mut body,
+        json!({ "chain": chain.trim(), "token_address": token.trim() }),
+    );
+    Some(body)
+}
+
+fn resolve_who_bought_request_body() -> Option<Value> {
+    who_bought_body_from_env_json().or_else(who_bought_body_chain_and_token)
 }
 
 fn leaderboard_body() -> Value {
@@ -147,7 +205,7 @@ pub async fn nansen_netflows_loop(pool: PgPool) {
         return;
     };
     let base = nansen_api_base();
-    let body = default_pagination_body();
+    let body = default_netflows_request_body();
     loop {
         let Some(key) = std::env::var("NANSEN_API_KEY").ok().filter(|s| !s.trim().is_empty()) else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
@@ -178,7 +236,7 @@ pub async fn nansen_holdings_loop(pool: PgPool) {
         return;
     };
     let base = nansen_api_base();
-    let body = default_pagination_body();
+    let body = default_holdings_request_body();
     loop {
         let Some(key) = std::env::var("NANSEN_API_KEY").ok().filter(|s| !s.trim().is_empty()) else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
@@ -241,8 +299,17 @@ pub async fn nansen_who_bought_loop(pool: PgPool) {
         return;
     };
     let base = nansen_api_base();
-    let body = default_pagination_body();
     loop {
+        let Some(body) = resolve_who_bought_request_body() else {
+            if !WHO_BOUGHT_MISSING_CONFIG_LOGGED.swap(true, Ordering::SeqCst) {
+                warn!(
+                    "NANSEN_WHO_BOUGHT_BODY_JSON veya NANSEN_WHO_BOUGHT_TOKEN_ADDRESS tanımsız — \
+                     tgm/who-bought-sold çağrılmıyor (422 önlemi)"
+                );
+            }
+            tokio::time::sleep(Duration::from_secs(tick)).await;
+            continue;
+        };
         let Some(key) = std::env::var("NANSEN_API_KEY").ok().filter(|s| !s.trim().is_empty()) else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
@@ -366,6 +433,11 @@ pub async fn nansen_perp_leaderboard_loop(pool: PgPool) {
     };
     let base = nansen_api_base();
     let body = leaderboard_body();
+    let leaderboard_path = std::env::var("NANSEN_PERP_LEADERBOARD_PATH")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "api/v1/profiler/perp-leaderboard".to_string());
     let repo = AppConfigRepository::new(pool.clone());
     loop {
         let Some(api_key) = std::env::var("NANSEN_API_KEY").ok().filter(|s| !s.trim().is_empty()) else {
@@ -373,7 +445,14 @@ pub async fn nansen_perp_leaderboard_loop(pool: PgPool) {
             continue;
         };
         let started = Instant::now();
-        let res = qtss_nansen::post_profiler_perp_leaderboard(&client, &base, api_key.trim(), &body).await;
+        let res = qtss_nansen::post_profiler_perp_leaderboard(
+            &client,
+            &base,
+            api_key.trim(),
+            &leaderboard_path,
+            &body,
+        )
+        .await;
         if let Ok((ref v, _)) = res {
             let wallets = extract_wallet_addresses(v);
             let cfg = json!({
@@ -382,7 +461,7 @@ pub async fn nansen_perp_leaderboard_loop(pool: PgPool) {
             });
             if let Err(e) = repo
                 .upsert(
-                    NANSEN_WHALE_WATCHLIST_CONFIG_KEY,
+                    NANSEN_WHALE_WATCHLIST_KEY,
                     cfg,
                     Some("Whale watchlist from Nansen perp-leaderboard"),
                     None,
@@ -423,7 +502,7 @@ pub async fn nansen_whale_perp_aggregate_loop(pool: PgPool) {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
-        let wl = AppConfigRepository::get_value_json(&pool, NANSEN_WHALE_WATCHLIST_CONFIG_KEY)
+        let wl = AppConfigRepository::get_value_json(&pool, NANSEN_WHALE_WATCHLIST_KEY)
             .await
             .ok()
             .flatten();

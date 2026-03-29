@@ -30,8 +30,12 @@ crates/
 ├── qtss-api             # Axum HTTP API
 ├── qtss-worker          # Tüm arka plan loop'ları (ana çalışma yeri)
 ├── qtss-chart-patterns  # Elliott Wave, ACP pattern taraması
-└── qtss-nansen          # Nansen HTTP istemcisi (şu an sadece token-screener)
+├── qtss-nansen          # Nansen HTTP (token screener + smart-money / TGM / profiler)
+├── qtss-strategy        # Strateji (signal_filter, whale_momentum, arb_funding, copy_trade, risk)
+└── qtss-notify          # Bildirim kanalları (Telegram, webhook, …)
 ```
+
+**Migrasyonlar:** `migrations/*.sql` — geliştirme makinesi ile üretim/CI aynı dosya setini kullanmalı (`ls migrations | wc -l` uyumsuzsa repo senkronu eksik). Özet şema notları: `docs/PROJECT.md` §7; sürüm numarası ve çift önek yasağı: **§6** (bu belge).
 
 ---
 
@@ -79,10 +83,17 @@ API: GET /api/v1/analysis/onchain-signals/*
 Tüm `tokio::spawn` çağrılarının başladığı yer. Yeni bir loop eklendiğinde buraya da spawn eklenmeli.
 
 ```rust
-// Mevcut spawn'lar (sırasıyla):
+// Mevcut spawn'lar (sırasıyla, `main.rs` — DATABASE_URL varken):
 tokio::spawn(pnl_rollup_loop(pool.clone()));
-tokio::spawn(engine_analysis::engine_analysis_loop(pool.clone()));
+tokio::spawn(engine_analysis::engine_analysis_loop(pool.clone())); // içinde confluence::compute_and_persist
 tokio::spawn(nansen_engine::nansen_token_screener_loop(pool.clone()));
+tokio::spawn(nansen_engine::nansen_netflows_loop(pool.clone()));
+tokio::spawn(nansen_engine::nansen_holdings_loop(pool.clone()));
+tokio::spawn(nansen_engine::nansen_perp_trades_loop(pool.clone()));
+tokio::spawn(nansen_engine::nansen_who_bought_loop(pool.clone()));
+tokio::spawn(nansen_engine::nansen_flow_intel_loop(pool.clone()));
+tokio::spawn(nansen_engine::nansen_perp_leaderboard_loop(pool.clone()));
+tokio::spawn(nansen_engine::nansen_whale_perp_aggregate_loop(pool.clone()));
 tokio::spawn(setup_scan_engine::nansen_setup_scan_loop(pool.clone()));
 tokio::spawn(engines::external_binance_loop(pool.clone()));
 tokio::spawn(engines::external_coinglass_loop(pool.clone()));
@@ -91,23 +102,20 @@ tokio::spawn(engines::external_misc_loop(pool.clone()));
 tokio::spawn(onchain_signal_scorer::onchain_signal_loop(pool.clone()));
 tokio::spawn(paper_fill_notify::paper_position_notify_loop(pool.clone()));
 tokio::spawn(live_position_notify::live_position_notify_loop(pool.clone()));
+tokio::spawn(kill_switch::kill_switch_loop(pool.clone()));
+tokio::spawn(position_manager::position_manager_loop(pool.clone()));
+tokio::spawn(copy_trade_follower::copy_trade_follower_loop(pool.clone()));
+strategy_runner::spawn_if_enabled(&pool);
+// Kline: QTSS_KLINE_SYMBOLS → multi_kline_ws_loop; yoksa QTSS_KLINE_SYMBOL → kline_ws_loop
 ```
+
+`run_migrations` hata ayrıntısı: `crates/qtss-storage/src/pool.rs` (checksum, çift önek, `bar_intervals` eksikliği); worker `main.rs` bağlam satırı ve **§6**.
 
 ### 2.2 qtss-nansen/src/lib.rs
 
-Nansen HTTP istemcisi. Şu an **yalnızca** `post_token_screener()` fonksiyonu var. Tüm yeni Nansen endpoint'leri buraya eklenmeli. Pattern:
+Nansen HTTP istemcisi. `post_json_path` + `apiKey` header. Mevcut çağrılar: `post_token_screener`, `post_smart_money_netflows` (**yol:** `api/v1/smart-money/netflow` — çoğul `/netflows` birçok planda **404**), `post_smart_money_holdings`, `post_smart_money_perp_trades`, `post_tgm_flow_intelligence`, `post_tgm_who_bought_sold`, `post_profiler_perp_leaderboard` (göreli yol parametresi; varsayılan worker env: `NANSEN_PERP_LEADERBOARD_PATH`), `post_profiler_perp_positions`.
 
-```rust
-pub async fn post_smart_money_netflows(
-    client: &reqwest::Client,
-    base_url: &str,
-    api_key: &str,
-    body: &Value,
-) -> Result<(Value, NansenResponseMeta), NansenError> {
-    let url = format!("{}/api/v1/smart-money/netflows", base_url.trim_end_matches('/'));
-    // ... post_token_screener ile aynı HTTP pattern
-}
-```
+İstek gövdeleri: `smart-money/netflow` ve `holdings` için **`chains`** dizisi; `tgm/who-bought-sold` için **`chain`** — bkz. `nansen_extended.rs` ve kök `.env.example` (`NANSEN_SMART_MONEY_CHAINS_JSON`, `NANSEN_WHO_BOUGHT_CHAIN`).
 
 ### 2.3 qtss-worker/src/signal_scorer.rs
 
@@ -133,12 +141,13 @@ Yeni Nansen bileşeni eklenince bu fonksiyon içine yeni bir `snapshot_score_wit
 ```rust
 #[async_trait]
 pub trait ExecutionGateway: Send + Sync {
+    fn set_reference_price(&self, instrument: &InstrumentId, price: Decimal) -> Result<(), ExecutionError>;
     async fn place(&self, intent: OrderIntent) -> Result<Uuid, ExecutionError>;
     async fn cancel(&self, client_order_id: Uuid) -> Result<(), ExecutionError>;
 }
 ```
 
-Tüm strateji kodu bu trait üzerinden çalışır. `BinanceLiveGateway` (canlı) ve `DryRunGateway` (paper) mevcut implementasyonlar.
+Tüm strateji kodu bu trait üzerinden çalışır. `BinanceLiveGateway` (canlı) ve `DryRunGateway` (paper) mevcut implementasyonlar. `set_reference_price` dry/paper’da market dolum fiyatı için kullanılır.
 
 ---
 
@@ -146,88 +155,47 @@ Tüm strateji kodu bu trait üzerinden çalışır. `BinanceLiveGateway` (canlı
 
 > ⚠️ Bu bölüm önemli — geliştirme başlamadan önce oku.
 
-### 3.1 HATA: `nansen_sm_score` tek bir skora sıkıştırılmış
+### 3.1 ~~HATA: `nansen_sm_score` tek bir skora sıkıştırılmış~~ (giderildi)
 
-**Sorun:** `onchain_signal_scorer.rs` içinde Nansen skoru `depth` ve `dex` olmak üzere iki alt skoru tek `nansen_sm_score` kolonuna birleştiriyor:
+**Durum:** `nansen_sm_score` kolonu artık yalnızca DEX baskı skoru (`score_nansen_dex_buy_sell_pressure`); ayrı kolonlarda `nansen_netflow_score`, `nansen_perp_score`, `nansen_buyer_quality_score`. Eski `depth`+`dex` birleşimi kaldırıldı; meta’da `nansen_note` ile belgelenir.
 
-```rust
-// Mevcut — yanlış tasarım
-let (nansen_v, ...) = snapshot_score_with_conf(..., |j| {
-    let depth = score_nansen_smart_money_depth(j);
-    let dex = score_nansen_dex_buy_sell_pressure(j);
-    (0.55 * depth + 0.45 * dex).clamp(-1.0, 1.0)
-})
-```
+**Arşiv — eski sorun:** Token screener satır sayısı (`depth`) gerçek bir sinyal değildi; `score_nansen_response_coverage` ayrı kullanım için `signal_scorer.rs` içinde kalır, `nansen_sm_score` ile karıştırılmaz.
 
-**Sorun:** Token screener satır sayısı (`depth`) gerçek bir sinyal değil — Nansen'in kaç token döndürdüğünü ölçüyor, smart money yönünü değil.
+### 3.2 ~~HATA: `coinglass_netflow` ve `tgm/flow-intelligence` çakışması~~ (giderildi)
 
-**Çözüm:** `score_nansen_smart_money_depth()` kaldırılmalı veya ağırlığı sıfırlanmalı. Yalnızca `score_nansen_dex_buy_sell_pressure()` kullanılmalı ve adı `nansen_dex_pressure_score` olarak açıklanmalı.
+**Durum:** `onchain_signal_scorer.rs` içinde Nansen flow-intelligence aktif ve geçerliyken Coinglass netflow bileşen ağırlığı etkin olarak **yarıya** indirilir (`coinglass_netflow_effective`); `meta_json` içinde izlenebilir.
 
-### 3.2 HATA: `coinglass_netflow` ve `tgm/flow-intelligence` çakışması riski
+### 3.3 ~~EKSİKLİK: Çoklu sembol WebSocket stream~~ (giderildi)
 
-**Sorun:** Coinglass netflow (`coinglass_netflow_btc`) ve Nansen `tgm/flow-intelligence` aynı "borsadan coin çıkışı" metriğini ölçüyor. İkisi birlikte `onchain_signal_weights`'te eşit ağırlık alırsa aynı sinyal iki kez sayılmış olur (double-counting).
+**Durum:** `QTSS_KLINE_SYMBOLS` → `multi_kline_ws_loop` + combined URL (`qtss-binance`); yoksa `QTSS_KLINE_SYMBOL` tekil akış. Bkz. `main.rs`.
 
-**Çözüm:** `tgm/flow-intelligence` eklendiğinde `coinglass_netflow` ağırlığı `0.5`'e düşürülmeli. Ya da ikisi birleştirilip tek `exchange_netflow_score` kolonuna yazılmalı, hangisi daha taze ise o kullanılmalı.
+### 3.4 ~~EKSİKLİK: Copy trade yürütme~~ (giderildi)
 
-### 3.3 EKSİKLİK: Çoklu sembol WebSocket stream
+**Durum:** `copy_trade_follower_loop` + `qtss-strategy::copy_trade` (dry runner). Abonelikler `copy_subscriptions` / `CopyRule`; env ile otomatik emir opsiyonel.
 
-**Mevcut:** `QTSS_KLINE_SYMBOL` env ile tek sembol dinleniyor.
+### 3.5 ~~EKSİKLİK: Otomatik SL/TP yönetimi~~ (kısmen giderildi)
 
-**Sorun:** 4 strateji ve çoklu market için onlarca sembol gerekiyor. Her biri için ayrı WS bağlantısı açmak Binance'ın bağlantı limitini aşar.
+**Durum:** `position_manager_loop` mevcut (`QTSS_POSITION_MANAGER_ENABLED`). Canlı bildirim ayrıca `live_position_notify.rs`. Tam otomasyon kapsamı env ve gateway moduna bağlıdır.
 
-**Çözüm:** Binance Combined Stream URL kullanılmalı:
-```
-wss://stream.binance.com:9443/stream?streams=btcusdt@kline_1m/ethusdt@kline_1m/...
-```
-`QTSS_KLINE_SYMBOLS` (virgülle ayrılmış liste) env ile kontrol edilmeli.
+### 3.6 ~~EKSİKLİK: Kill switch / drawdown koruması~~ (giderildi)
 
-### 3.4 EKSİKLİK: Copy trade yürütme eksik
+**Durum:** `kill_switch_loop` + `qtss_common::halt_trading` / `is_trading_halted`; `QTSS_KILL_SWITCH_ENABLED`, `QTSS_MAX_DRAWDOWN_PCT` (referans equity ile günlük realized eşiği). **Not:** Varsayılan tasarım açık pozisyonları otomatik market kapatmaz; stratejiler `is_trading_halted` ile yeni emri durdurur. Acil kapatma `position_manager` / manuel.
 
-**Mevcut:** `qtss-domain/copy_trade.rs` ve `qtss-storage/copy_trade.rs` domain tipleri var (`CopySubscription`, `CopyRule`). Ancak lider işlemini algılayıp takipçiye çoğaltacak yürütme katmanı yok.
+### 3.7 ~~EKSİKLİK: Funding rate arbitraj stratejisi~~ (giderildi)
 
-**Gerekli:**
-1. Lider pozisyon değişikliklerini izleyen `copy_trade_follower_loop`
-2. `CopyRule` parametrelerine göre `OrderIntent` üretimi
-3. `ExecutionGateway::place()` çağrısı
+**Durum:** `qtss-strategy::arb_funding` + dry gateway; eşik env (`QTSS_ARB_FUNDING_THRESHOLD` vb.). Bkz. ADIM 7 / `.env.example`.
 
-### 3.5 EKSİKLİK: Otomatik SL/TP yönetimi
+### 3.8 ~~EKSİKLİK: Nansen perp leaderboard → watchlist pipeline~~ (giderildi)
 
-**Mevcut:** `live_position_notify.rs` var ama yalnızca bildirim gönderiyor. Otomatik stop-loss ve take-profit emirleri vermiyor.
+**Durum:** `nansen_perp_leaderboard_loop` → `app_config` (`NANSEN_WHALE_WATCHLIST_KEY`); `nansen_whale_perp_aggregate_loop` → `profiler/perp-positions` birleşik yanıt → `nansen_whale_perp_aggregate` snapshot → skorlama `hl_whale_score`. Leaderboard yolu: `NANSEN_PERP_LEADERBOARD_PATH` (varsayılan Hyperliquid PnL leaderboard).
 
-**Sorun:** `OrderType::StopMarket` ve `OrderType::TakeProfitMarket` domain'de tanımlı, `BinanceLiveGateway`'de implement edilmiş — ancak açık pozisyonları izleyip bu emirleri otomatik veren bir loop yok.
+### 3.9 ~~KOD KALİTESİ: `score_nansen_smart_money_depth`~~ (giderildi)
 
-**Gerekli:** `position_manager_loop` — açık pozisyonları DB'den okur, SL/TP tetiklendiyse `ExecutionGateway::cancel()` + yeni emir verir.
+**Durum:** `signal_scorer.rs` içinde `score_nansen_response_coverage`; eski yanıltıcı isim kaldırıldı.
 
-### 3.6 EKSİKLİK: Kill switch / drawdown koruması
+### 3.10 ~~KOD KALİTESİ: `confluence.rs` boş iskelet~~ (giderildi)
 
-**Mevcut:** Yok.
-
-**Gerekli:** `QTSS_MAX_DRAWDOWN_PCT` env değişkeni ile günlük/haftalık drawdown limiti. Limit aşılınca tüm açık pozisyonlar market emirle kapatılır ve yeni emir açılması engellenir.
-
-### 3.7 EKSİKLİK: Funding rate arbitraj stratejisi
-
-**Mevcut:** `score_binance_premium_funding()` ve `score_hl_meta_asset_ctxs_for_coin()` hazır skor fonksiyonları var. Ancak spot–futures fark ticareti yapan strateji yok.
-
-**Gerekli:** Binance funding rate > eşik olduğunda spot AL + futures SHORT (veya tersi) yapan strateji.
-
-### 3.8 EKSİKLİK: Nansen `perp-leaderboard` → watchlist pipeline
-
-**Mevcut:** `perp-leaderboard` endpoint hiç çağrılmıyor.
-
-**Sorun:** `profiler/perp-positions` çağrısı anlamlı olabilmesi için izlenecek cüzdanlar listesi (watchlist) gerekiyor. Bu liste `perp-leaderboard`'dan otomatik oluşturulabilir.
-
-**Gerekli:**
-1. `perp_leaderboard_loop` — haftada 1 çalışır, top 20 cüzdanı `app_config`'e yazar
-2. `nansen_whale_watchlist_loop` — watchlist'teki cüzdanlar için `profiler/perp-positions` çağırır
-3. Sonuç `hl_whale_score` kolonuna yazılır (şu an her zaman `None`)
-
-### 3.9 KOD KALİTESİ: `score_nansen_smart_money_depth` ismi yanıltıcı
-
-Fonksiyon aslında Nansen'in döndürdüğü **satır sayısını** skora çeviriyor. Bu "smart money depth" değil, sadece API yanıtının doluluk oranı. Rename: `score_nansen_response_coverage` veya tamamen kaldır.
-
-### 3.10 KOD KALİTESİ: `confluence.rs` boş iskelet
-
-`qtss-worker/src/confluence.rs` var ama içi neredeyse boş. `market_confluence_snapshots` tablosu mevcut (migration 0027, 0029) ama buraya hiçbir şey yazılmıyor. Confluence skoru `onchain_signal_scorer.rs` içinde hesaplanıyor ancak `market_confluence_snapshots`'a yazılmıyor — bu tutarsızlık giderilmeli.
+`qtss-worker/src/confluence.rs` rejim ağırlıkları + `data_snapshots` ile bileşik skor üretir; `insert_market_confluence_snapshot` + `upsert_analysis_snapshot` (`engine_kind = confluence`) ile kalıcı yazım yapılır.
 
 ---
 
@@ -283,7 +251,7 @@ pub async fn post_tgm_who_bought_sold(
 ```
 
 **URL'ler:**
-- `/api/v1/smart-money/netflows`
+- `/api/v1/smart-money/netflow` (production’da çoğul `/netflows` sık 404 verir; `source_key` yine `nansen_netflows`)
 - `/api/v1/smart-money/holdings`
 - `/api/v1/smart-money/perp-trades`
 - `/api/v1/tgm/flow-intelligence`
@@ -310,11 +278,11 @@ pub const NANSEN_WHALE_WATCHLIST_KEY: &str = "nansen_whale_watchlist";  // profi
 
 ---
 
-### ADIM 3: nansen_engine.rs genişlemesi
+### ADIM 3: Nansen genişletilmiş HTTP döngüleri
 
-**Dosya:** `crates/qtss-worker/src/nansen_engine.rs`
+**Dosyalar:** `crates/qtss-worker/src/nansen_extended.rs` (loop gövdeleri + istek JSON), `nansen_engine.rs` (token screener + bu loop’ların **re-export**’u). `main.rs` spawn’ları `nansen_engine::nansen_*_loop` üzerinden.
 
-Mevcut `nansen_token_screener_loop`'u şablon olarak kullan. Her yeni endpoint için ayrı loop fonksiyonu:
+Mevcut `nansen_token_screener_loop` ayrı kalır (`DataSourceProvider`). Diğer endpoint’ler için örnek şablon:
 
 ```rust
 pub async fn nansen_netflows_loop(pool: PgPool) {
@@ -336,18 +304,7 @@ pub async fn nansen_flow_intel_loop(pool: PgPool) {
 }
 ```
 
-**main.rs'e eklenecek spawn'lar:**
-
-```rust
-let nansen_nf_pool = pool.clone();
-tokio::spawn(nansen_engine::nansen_netflows_loop(nansen_nf_pool));
-
-let nansen_pt_pool = pool.clone();
-tokio::spawn(nansen_engine::nansen_perp_trades_loop(nansen_pt_pool));
-
-let nansen_fi_pool = pool.clone();
-tokio::spawn(nansen_engine::nansen_flow_intel_loop(nansen_fi_pool));
-```
+**main.rs:** Tüm Nansen extended spawn’ları zaten tanımlı (netflows, holdings, perp_trades, who_bought, flow_intel, perp_leaderboard, whale_aggregate).
 
 ---
 
@@ -460,7 +417,9 @@ if let Some(s) = nansen_pt_v {
 
 ### ADIM 6: Migration ekle
 
-**Dosya:** `migrations/0032_nansen_extended_scores.sql`
+**Tam zincir** (tipik sunucu): `0013`… worker / analiz, `0029`–`0033` confluence + on-chain + Nansen genişletme + ağırlıklar, **`0034_engine_symbols_fk_columns.sql`** / **`0035_engine_symbols_bar_interval_fk_if_ready.sql`** → `engine_symbols` katalog FK’ları (`bar_interval_id` yalnızca `bar_intervals` varsa 0034’te; 0035 telafi). Sürüm ↔ dosya eşlemesi ve **çift `0013`/`0014` önek hatası** için **§6**’ya bak.
+
+**Arşiv örnek** (yalnızca `ALTER` + `app_config` fikri; ayrı dosya adı başka dallarda `0032_*.sql` olabilir):
 
 ```sql
 -- Nansen genişletilmiş skor kolonları
@@ -485,13 +444,15 @@ VALUES (
 ON CONFLICT (key) DO NOTHING;
 ```
 
+`app_config` güncellemeleri yönetim/seed ile ayrı uygulanabilir. Yeni değişiklikler için bir sonraki boş numara (ör. `0036_*.sql`; mevcut son dosya için `ls migrations/*.sql | sort | tail`).
+
 ---
 
-### ADIM 7: qtss-strategy crate (yeni crate — en kritik eksiklik)
+### ADIM 7: qtss-strategy crate (workspace’te mevcut)
 
-**Klasör:** `crates/qtss-strategy/`
+**Klasör:** `crates/qtss-strategy/` — `conflict_policy` modülü rehberdeki `todo!` iskeletinin ötesinde; `strategy_runner` dry döngüleri env ile açılır.
 
-**Cargo.toml eklentisi (workspace):**
+**Cargo.toml eklentisi (workspace):** (depoda zaten varsa yalnızca referans; yeni klon kontrolü.)
 ```toml
 # Cargo.toml (workspace) members listesine:
 "crates/qtss-strategy",
@@ -533,34 +494,7 @@ pub mod risk;
 pub mod context;
 ```
 
-**crates/qtss-strategy/src/context.rs:**
-```rust
-use qtss_storage::OnchainSignalScoreRow;
-use rust_decimal::Decimal;
-
-/// Her strateji döngüsünün okuduğu piyasa bağlamı.
-/// DB'den tek seferde derlenir, stratejilere Arc ile paylaşılır.
-#[derive(Debug, Clone)]
-pub struct MarketContext {
-    pub symbol: String,
-    pub aggregate_score: f64,       // onchain_signal_scores.aggregate_score
-    pub confidence: f64,            // onchain_signal_scores.confidence
-    pub direction: String,          // "strong_buy" | "buy" | "neutral" | "sell" | "strong_sell"
-    pub conflict_detected: bool,    // TA vs on-chain çelişkisi
-    pub market_regime: Option<String>, // "RANGE" | "TREND" | "KOPUS" | "BELIRSIZ"
-    pub funding_score: Option<f64>,
-    pub nansen_perp_score: Option<f64>,
-    pub last_close: Option<Decimal>, // market_bars'dan son kapanış fiyatı
-}
-
-impl MarketContext {
-    /// onchain_signal_scores'dan yükle.
-    pub async fn load(pool: &sqlx::PgPool, symbol: &str) -> Option<Self> {
-        // fetch_latest_onchain_signal_score kullan
-        todo!()
-    }
-}
-```
+**crates/qtss-strategy/src/context.rs:** `MarketContext::load(pool, symbol, bar_exchange, bar_segment, bar_interval)` — `fetch_latest_onchain_signal_score` + `list_recent_bars` (son kapanış). Alanlar: `aggregate_score`, `confidence`, `direction`, `conflict_detected`, `market_regime`, `funding_score`, `nansen_perp_score`, `nansen_netflow_score`, `last_close`.
 
 **crates/qtss-strategy/src/risk.rs:**
 ```rust
@@ -727,28 +661,7 @@ pub async fn run(pool: sqlx::PgPool, gateway: std::sync::Arc<dyn qtss_execution:
 
 ### ADIM 8: Çoklu sembol WebSocket
 
-**Dosya:** `crates/qtss-worker/src/main.rs`
-
-```rust
-// Mevcut tekil QTSS_KLINE_SYMBOL yerine:
-// QTSS_KLINE_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT
-
-if let Ok(symbols_raw) = std::env::var("QTSS_KLINE_SYMBOLS") {
-    let symbols: Vec<String> = symbols_raw.split(',')
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    if !symbols.is_empty() {
-        let interval = std::env::var("QTSS_KLINE_INTERVAL").unwrap_or_else(|_| "1m".into());
-        let segment = std::env::var("QTSS_KLINE_SEGMENT").unwrap_or_else(|_| "futures".into());
-        
-        // Combined stream URL:
-        // wss://stream.binance.com:9443/stream?streams=btcusdt@kline_1m/ethusdt@kline_1m
-        tokio::spawn(multi_kline_ws_loop(symbols, interval, segment, pool.clone()));
-    }
-}
-```
+**Dosya:** `crates/qtss-worker/src/main.rs` — uygulandı: `QTSS_KLINE_SYMBOLS` tanımlıysa `multi_kline_ws_loop` + `public_*_combined_kline_url`; aksi halde `QTSS_KLINE_SYMBOL` ile tekil akış. Semboller **büyük harf** (örn. `BTCUSDT`) kabul edilir; URL üretimi crate içinde küçük harfe çevrilir.
 
 ---
 
@@ -869,6 +782,10 @@ QTSS_MAX_DRAWDOWN_PCT=5.0               # günlük maks kayıp yüzdesi
 QTSS_KILL_SWITCH_ENABLED=0              # 1=aktif, 0=pasif
 QTSS_MAX_POSITION_NOTIONAL_USDT=10000   # tek pozisyon maks USDT değeri
 QTSS_DEFAULT_LEVERAGE=3                 # futures kaldıraç (1-20)
+QTSS_KELLY_APPLY=0                      # 1=strateji taban miktarına Kelly çarpanı
+QTSS_KELLY_WIN_RATE=0.55
+QTSS_KELLY_AVG_WIN_LOSS_RATIO=1.5
+QTSS_KELLY_MAX_FRACTION=0.25
 
 # Position manager
 QTSS_POSITION_MANAGER_TICK_SECS=10
@@ -880,14 +797,49 @@ QTSS_DEFAULT_TAKE_PROFIT_PCT=4.0
 
 ## 6. Migration numaralandırma kuralı
 
-**ÖNEMLİ:** Migration dosyalarını eklemeden önce son numarayı kontrol et:
-```bash
-ls migrations/*.sql | sort | tail -5
+### 6.1 SQLx sürümü = dosya adındaki sayı
+
+`sqlx::migrate!` dosya adının **ilk alt çizgiye kadar olan sayısal önekini** `_sqlx_migrations.version` olarak kullanır.
+
+- `0029_market_confluence_payload_column.sql` → sürüm **29**
+- `0030_onchain_signal_scores.sql` → sürüm **30**
+- `0034_engine_symbols_fk_columns.sql` → sürüm **34**
+- `0035_engine_symbols_bar_interval_fk_if_ready.sql` → sürüm **35**
+
+Örnek canlı DB sırası (özet):
+
+| version | Örnek dosya / açıklama |
+|--------|-------------------------|
+| 29 | `market_confluence_payload_column` |
+| 30 | `onchain_signal_scores` |
+| 31 | `onchain_signal_weights_app_config` |
+| 32 | `nansen_extended_scores` |
+| 33 | `onchain_weights_hl_whale` |
+| 34 | `engine_symbols_fk_columns` — `exchange_id` vb.; `bar_interval_id` yalnızca `bar_intervals` tablosu varsa |
+| 35 | `engine_symbols_bar_interval_fk_if_ready` — `bar_intervals` sonradan gelirse `bar_interval_id` telafisi |
+
+Kontrol:
+
+```sql
+SELECT version, description FROM _sqlx_migrations ORDER BY version DESC LIMIT 10;
 ```
 
-Şu an son migration: `0031_onchain_signal_weights_app_config.sql`
+```bash
+ls migrations/*.sql | sort | tail -10
+```
 
-Yeni migration eklenince: `0032_...`, `0033_...` şeklinde sıralı ilerle. Aynı prefix'li iki dosya açmak SQLx'i bozar.
+### 6.2 Aynı önek iki kez kullanılamaz (kritik)
+
+Aynı numaralı iki dosya SQLx’i bozar; depoda **tek** önek kalmalı:
+
+- **0013:** `0013_worker_analytics_schema.sql` — `bar_intervals` genişletmesi (eski `0013_bar_intervals.sql`) bu dosyada birleştirildi; ayrı `0013_*.sql` yok.
+- **0014:** yalnızca `0014_catalog_fk_columns.sql` (eski `0014_engine_symbols_catalog_fk_repair.sql` kaldırıldı).
+
+`0034_engine_symbols_fk_columns.sql` eksik FK kolonları için idempotent `ADD COLUMN` sağlar (`bar_intervals` yoksa `bar_interval_id` atlanır). `0035_engine_symbols_bar_interval_fk_if_ready.sql` tablo sonradan oluşunca tamamlar. Uygulanmış migrasyon dosyasını değiştirmeyin (§8 kural 6).
+
+### 6.3 Yeni migration
+
+Bir sonraki boş sürümü kullanın (ör. dizinde en yüksek önek 35 ise **`0036_yeni_ozellik.sql`**). Çift `0013_*.sql` / `0014_*.sql` açmayın.
 
 ---
 
@@ -963,24 +915,22 @@ Mevcut kodda uygulanan kurallar — yeni dosyalarda da uygulanmalı:
 
 ## 9. Öncelik sırası özeti
 
-| Adım | Dosya/Crate | Öncelik | Süre tahmini |
-|------|-------------|---------|--------------|
-| 1 | qtss-nansen: 5 yeni endpoint fonksiyonu | Yüksek | 2 saat |
-| 2 | registry.rs: yeni source_key'ler | Düşük | 15 dk |
-| 3 | nansen_engine.rs: 3 yeni loop | Yüksek | 3 saat |
-| 4 | signal_scorer.rs: 4 yeni score_fn | Yüksek | 2 saat |
-| 5 | onchain_signal_scorer.rs: yeni bileşenler | Orta | 1 saat |
-| 6 | Migration 0032 | Orta | 30 dk |
-| 7 | qtss-strategy crate (iskelet + signal_filter) | Kritik | 1 gün |
-| 8 | Çoklu sembol WS | Orta | 3 saat |
-| 9 | position_manager.rs | Yüksek | 4 saat |
-| 10 | kill_switch.rs | Yüksek | 2 saat |
+| Adım | Dosya/Crate | Durum (bu repo) |
+|------|-------------|-----------------|
+| 1 | qtss-nansen: smart-money / TGM / profiler | Tamam |
+| 2 | registry.rs: Nansen + harici source_key | Tamam |
+| 3 | nansen_extended + nansen_engine re-export | Tamam |
+| 4 | signal_scorer.rs: netflows, perp, flow-intel, buyer quality, … | Tamam |
+| 5 | onchain_signal_scorer.rs: bileşenler + Coinglass/flow-intel yarım ağırlık | Tamam |
+| 6 | migrations `0013`→`0035` (worker, on-chain, confluence, `0034`/`0035` engine_symbols FK) | Tamam; sunucu `ls migrations` ile doğrula; çift `0013`/`0014` önek yok |
+| 7 | qtss-strategy + strategy_runner (dry) | Tamam |
+| 8 | Çoklu sembol WS (`QTSS_KLINE_SYMBOLS`) | Tamam |
+| 9 | position_manager.rs | Tamam (env ile kapalı) |
+| 10 | kill_switch.rs | Tamam (env ile kapalı) |
 
-**Önce 1-6 arası adımları tamamla** — bunlar mevcut altyapıyı Nansen endpoint'lerle zenginleştirir, risk almadan test edilebilir.
+**Sonraki işler:** yeni özellik = yeni migration numarası (§6); üretimde `DATABASE_URL` + Nansen/plan limitleri; strateji canlı gateway için ayrı onay ve risk kontrolleri.
 
-**Sonra 7'yi yaz** — strateji crate'i tüm diğer parçaları bir araya getirir. Bu adım en uzun sürer ve en dikkatli tasarım gerektirir.
-
-**8-10 paralel geliştirilebilir** — birbirinden bağımsız.
+**Geçmiş plan:** Aşağıdaki ADIM 1–10 metinleri referans içindir — uygulama yukarıdaki tabloyla hizalanmıştır.
 
 ---
 
@@ -1001,4 +951,4 @@ SELECT version, description FROM _sqlx_migrations ORDER BY version DESC LIMIT 5;
 `DryRunGateway` aktif olduğunda hiçbir gerçek emir Binance'a gitmez. Sadece `paper_fills` ve `paper_ledger` tabloları güncellenir. Veri toplama (Nansen, Coinglass, WS) dry run'da da çalışır.
 
 **S: `conflict_detected=true` olduğunda strateji ne yapmalı?**
-Mevcut tasarım: sinyal üretiliyor ama `conflict_detected` bilgisi API'ye iletiliyor. Strateji katmanında: `conflict_detected=true` ise pozisyon büyüklüğünü `0.5×` ile çarp (half-size) veya pozisyon açma. Bu karar strateji crate'inde implement edilmeli.
+API tarafında bilgi dönüyor. `qtss-strategy::signal_filter` içinde `QTSS_SIGNAL_FILTER_ON_CONFLICT=half` (veya `none` / `skip`) ile çatışmada yarım miktar veya atlama uygulanır; bkz. `conflict_policy.rs`.

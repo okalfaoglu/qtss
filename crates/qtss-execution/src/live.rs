@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use qtss_common::{log_business, Loggable, QtssLogLevel};
 use qtss_domain::orders::OrderIntent;
+use qtss_domain::symbol::InstrumentId;
+use rust_decimal::Decimal;
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -15,6 +17,14 @@ impl Loggable for LiveGateway {
 
 #[async_trait]
 impl ExecutionGateway for LiveGateway {
+    fn set_reference_price(
+        &self,
+        _instrument: &InstrumentId,
+        _price: Decimal,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+
     #[instrument(skip(self, _intent))]
     async fn place(&self, _intent: OrderIntent) -> Result<Uuid, ExecutionError> {
         log_business(

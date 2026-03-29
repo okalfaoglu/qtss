@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use qtss_domain::orders::OrderIntent;
+use qtss_domain::symbol::InstrumentId;
 use rust_decimal::Decimal;
 use thiserror::Error;
 use uuid::Uuid;
@@ -26,6 +27,9 @@ pub struct FillEvent {
 
 #[async_trait]
 pub trait ExecutionGateway: Send + Sync {
+    /// Paper/dry: referans fiyat (market dolumu); canlı ağ geçitleri genelde no-op.
+    fn set_reference_price(&self, instrument: &InstrumentId, price: Decimal) -> Result<(), ExecutionError>;
+
     async fn place(&self, intent: OrderIntent) -> Result<Uuid, ExecutionError>;
     async fn cancel(&self, client_order_id: Uuid) -> Result<(), ExecutionError>;
 }

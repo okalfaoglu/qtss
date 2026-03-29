@@ -42,17 +42,11 @@ qtss/
 ├── docs/
 │   └── PROJECT.md             # Bu dosya
 ├── deploy/                    # systemd birim şablonları, worker/API notları
-├── migrations/                # SQLx migrasyonları (PostgreSQL)
-│   ├── 0001_init.sql
-│   ├── 0002_oauth.sql
-│   ├── 0003_market_catalog.sql
-│   ├── 0004_exchange_orders.sql
-│   ├── 0005_audit_log.sql
-│   ├── 0006_market_bars.sql
-│   ├── 0007_acp_chart_patterns.sql
-│   ├── 0008_acp_zigzag_seven_fib.sql
-│   ├── 0009_acp_pine_indicator_defaults.sql
-│   └── 0010_acp_abstract_size_filters.sql
+├── migrations/                # SQLx migrasyonları (PostgreSQL); tam liste `ls migrations`
+│   ├── README.md              # sürüm = önek, çift önek yasağı; §6 / PROJECT §7 bağlantıları
+│   ├── 0001_init.sql … 0012_acp_pattern_groups.sql  # çekirdek + ACP
+│   ├── 0013+ … 0035+        # bar_intervals, engine_symbols, data_snapshots, on-chain, confluence, Nansen setup, …
+│   └── Sürüm = dosya öneki (örn. 0034 → 34, 0035 → 35). Aynı numaradan iki dosya yasak — bkz. `docs/QTSS_CURSOR_DEV_GUIDE.md` §6
 ├── web/                     # Vite + React + TS; LWC grafik, Elliott V2, ACP kanal taraması (proxy → API)
 └── crates/
     ├── qtss-common/           # Uygulama modu (live/dry), merkezi loglama
@@ -64,6 +58,9 @@ qtss/
     ├── qtss-binance/          # Binance spot + USDT-M REST, katalog senkronu, kline ayrıştırma
     ├── qtss-api/              # Axum HTTP API (OAuth, RBAC, piyasa uçları)
     ├── qtss-worker/           # Arka plan: heartbeat; isteğe bağlı kline WS → market_bars
+    ├── qtss-nansen/           # Nansen HTTP (token screener, smart-money, TGM, profiler)
+    ├── qtss-notify/           # Telegram, webhook, … (`POST /notify/test` + worker uyarıları)
+    ├── qtss-strategy/         # Dry strateji döngüleri (signal_filter, whale_momentum, risk, …)
     └── qtss-chart-patterns/   # ACP çizim JSON, kanal/inspect/resolve; Pine `find` tam portu değil — bkz. `docs/CHART_PATTERNS_TRENDOSCOPE_PORT.md`
 ```
 
@@ -71,7 +68,7 @@ qtss/
 
 **Migrasyon checksum uyarısı:** Uygulanmış bir `migrations/*.sql` dosyasını değiştirirseniz SQLx `migration … was previously applied but has been modified` hatası verir. Önce (repo kökünden, `qtss-api` ile aynı `.env`): `cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums` — ardından `cargo run -p qtss-api`. `sqlx-cli` şart değil. Doğru kalıp: eski migrasyonu ellemeden yeni numaralı `.sql` eklemek.
 
-**Tekil sürüm numarası:** `0014_a.sql` ve `0014_b.sql` gibi **aynı önek** iki dosya olamaz — `_sqlx_migrations` satır başına tek checksum vardır; senkron aracı da son dosyanın özetini yazar ve `migrate` yine kırılır. `qtss-sync-sqlx-checksums` çift `NNNN_` önekini artık başta reddeder. Yeni dosya eklemeden önce repo kökünde `ls migrations/*.sql | sort | tail` ile son numarayı kontrol edin; bir sonraki boş sürümü kullanın (ör. `0019_...sql`).
+**Tekil sürüm numarası:** `0014_a.sql` ve `0014_b.sql` gibi **aynı önek** iki dosya olamaz — `_sqlx_migrations` satır başına tek checksum vardır; senkron aracı da son dosyanın özetini yazar ve `migrate` yine kırılır. `qtss-sync-sqlx-checksums` çift `NNNN_` önekini artık başta reddeder. Yeni dosya eklemeden önce repo kökünde `ls migrations/*.sql | sort | tail` ile son numarayı kontrol edin; bir sonraki boş sürümü kullanın (ör. `0036_...sql` — güncel son dosya dalınıza göre değişir; §6).
 
 **Nansen setup scan:** `0020_nansen_setup_scans.sql` — `nansen_setup_runs` / `nansen_setup_rows`; worker `setup_scan_engine` (`QTSS_SETUP_SCAN_SECS`, `QTSS_SETUP_MAX_SNAPSHOT_AGE_SECS`); varsayılan `QTSS_SETUP_SNAPSHOT_ONLY=1` ile setup Nansen’e ikinci HTTP göndermez (kredi yalnız `nansen_engine`); TP1 için 1h OHLC + 6h vol; `meta_json.spec_version` (ör. `nansen_setup_v3`); 5 LONG + 5 SHORT; API `GET /api/v1/analysis/nansen/setups/latest`.
 
@@ -80,8 +77,9 @@ qtss/
 - `crates/qtss-connectors/` — ek borsa adapter’ları (`qtss-binance` yanında)
 - `crates/qtss-marketdata/` — WebSocket bar/tick akışı, normalizasyon
 - `crates/qtss-analysis/` — teknik analiz motoru (API’de `/analysis/*` iskeleti var)
-- `crates/qtss-notify/` — Telegram, e-posta, SMS (API’de `/notify/*` iskeleti var)
 - `web/` — **Vite + React** (`npm run dev` / `npm run build`). Grafik: Lightweight Charts; Elliott Wave V2 (`web/src/lib/elliottEngineV2/`). Tez §2.5.3–2.5.5 metin kataloğu tek dosyada: `web/src/lib/elliottRulesCatalog.ts` (panel + `public/elliott_dalga_prensipleri.txt` özeti).
+
+Mevcut ayrı crate’ler: `qtss-nansen`, `qtss-notify`, `qtss-strategy` — bkz. §3 tablo ve `docs/QTSS_CURSOR_DEV_GUIDE.md` §0.
 
 ---
 
@@ -91,13 +89,16 @@ qtss/
 |--------|------------|
 | **qtss-common** | `AppMode` (Live / Dry), `tracing` tabanlı log, iş seviyesi (`QtssLogLevel`), kritik olay işaretleme |
 | **qtss-domain** | `ExchangeId`, `MarketSegment`, `InstrumentId`, `TimestampBar`, `OrderType` (tam set), copy-trade modelleri, komisyon trait’i, tenancy tipleri |
-| **qtss-storage** | Bağlantı havuzu, migrasyon, `app_config`, `pnl_rollups`, `market_bars` (upsert / son barlar) |
-| **qtss-execution** | `ExecutionGateway`, `BinanceLiveGateway` (spot/FAPI market+limit + borsa yanıtı) |
+| **qtss-storage** | Bağlantı havuzu, migrasyon, `app_config`, `engine_symbols`, `data_snapshots`, `onchain_signal_scores`, `market_bars`, paper, Nansen setup, … |
+| **qtss-execution** | `ExecutionGateway`, `BinanceLiveGateway`, `DryRunGateway`; `set_reference_price` (paper) |
+| **qtss-nansen** | Nansen HTTP istemcisi (token screener, smart-money, TGM, profiler) |
+| **qtss-notify** | Telegram / webhook / … bildirim gönderimi |
+| **qtss-strategy** | `signal_filter`, `whale_momentum`, `arb_funding`, `copy_trade`, `risk` — worker `strategy_runner` ile dry |
 | **qtss-backtest** | Senkron backtest motoru, performans metrikleri, walk-forward ve parametre ızgarası optimizasyonu |
 | **qtss-reporting** | PDF üretimi (printpdf) |
 | **qtss-binance** | Spot / FAPI REST, katalog, `KlineBar`, kapanan mum WS ayrıştırma, komisyon ipucu (`exchangeInfo`) |
 | **qtss-api** | Axum + `x-request-id`, `GET /metrics`, IP tabanlı rate limit (`tower-governor`) |
-| **qtss-worker** | Heartbeat; `QTSS_KLINE_*` + `DATABASE_URL` ile Binance kline WS ve `market_bars` yazımı |
+| **qtss-worker** | PnL rollup, `engine_analysis` (+ confluence), Nansen (screener + extended HTTP), harici çekim motorları, on-chain skor, setup scan, kill switch, position manager, copy follower, isteğe bağlı strateji dry döngüleri; `QTSS_KLINE_SYMBOL` / `QTSS_KLINE_SYMBOLS` + `DATABASE_URL` |
 | **qtss-chart-patterns** | Trend çizgisi bar enterpolasyonu, ACP `patternType` id → isim, `PatternDrawingBatch` (serde), Zigzag iskelesi, kanal altılı tarama API; Pine ile tam özdeş değil — bkz. `docs/CHART_PATTERNS_TRENDOSCOPE_PORT.md` |
 
 ---
@@ -146,6 +147,8 @@ Bu ayrım, iş kurallarının tek kaynağının kod kalmasını sağlar; veritab
 - **`0008_acp_zigzag_seven_fib.sql`** — mevcut `acp_chart_patterns` satırını TV fabrikasına hizalar (dosya adı tarihsel)
 - **`0009_acp_pine_indicator_defaults.sql`** — eski 7 Fib veya bozuk ayarlar için aynı hizalamayı tekrar uygular
 - **`0010_acp_abstract_size_filters.sql`** — `ignore_if_entry_crossed` + `size_filters` (abstractchartpatterns) eksikse ekler
+- **`0011` … `0012`** — ACP pivot yönü, pattern grupları
+- **`0013`–`0035+`** — `bar_intervals`, `engine_symbols` / analiz snapshot’ları, paper, Nansen, `data_snapshots`, external fetch, confluence, `onchain_signal_scores`, ağırlık seed’leri, `engine_symbols` katalog FK (`0034`/`0035`, `bar_intervals` yoksa `bar_interval_id` 0035’te). Tam dosya adları kurulumdaki `migrations/` ile aynı olmalı; özet tablo: `docs/QTSS_CURSOR_DEV_GUIDE.md` §6.
 
 Ayrıntılı güvenlik hedefleri: [SECURITY.md](SECURITY.md).
 
@@ -199,9 +202,9 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 - `PATCH /api/v1/copy-trade/subscriptions/{id}/active` — `{ "active": bool }`
 - `DELETE /api/v1/copy-trade/subscriptions/{id}`
 - `GET /api/v1/analysis/health` — iskelet
-- `POST /api/v1/notify/test` — iskelet
+- `POST /api/v1/notify/test` — `qtss-notify` ile test bildirimi (kanal env’leri kök `.env.example`)
 
-`qtss-worker`: `QTSS_KLINE_SYMBOL` (ör. `BTCUSDT`), isteğe bağlı `QTSS_KLINE_INTERVAL` (varsayılan `1m`), `QTSS_KLINE_SEGMENT` (`spot` varsayılan; `futures` / `fapi` / `usdt_futures` → USDT-M WS). **`DATABASE_URL` doluysa** migrasyon + kapanan mumlar `market_bars` tablosuna yazılır; yoksa yalnızca log. Kalıcı çalıştırma: [deploy/README.md](../deploy/README.md) (systemd birim örnekleri).
+`qtss-worker`: `QTSS_KLINE_SYMBOL` veya `QTSS_KLINE_SYMBOLS` (combined stream), `QTSS_KLINE_INTERVAL`, `QTSS_KLINE_SEGMENT` (`spot` / `futures`). **`DATABASE_URL` doluysa** migrasyon + `market_bars` + analiz / Nansen / on-chain loop’ları; yoksa kline yalnız log. Ortam anahtarları: kök `.env.example`, ayrıntı: `docs/QTSS_CURSOR_DEV_GUIDE.md` §5. Kalıcı çalıştırma: [deploy/README.md](../deploy/README.md).
 
 ---
 

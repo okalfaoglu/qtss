@@ -25,7 +25,15 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), StorageError> {
                      `cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums` \
                      — `_sqlx_migrations.checksum` diskteki dosyayla hizalanır. \
                      Gerçek şema farkı varsa dosyayı eski haline getirin veya yeni numaralı migration ekleyin; \
-                     çift `0013_*.sql` kullanmayın."
+                     aynı sayısal önekli iki dosya kullanmayın (ör. çift `0013_*.sql`) — bkz. docs/QTSS_CURSOR_DEV_GUIDE.md §6."
+                ));
+            }
+            if msg.contains("bar_intervals") && msg.contains("does not exist") {
+                return StorageError::Other(format!(
+                    "{msg}\n\
+                     [QTSS] `bar_intervals` tablosu eksik — tipik neden: `0013_worker_analytics_schema.sql` şeması uygulanmamış veya tablo silinmiş. \
+                     Geliştirme DB: migrasyon zincirini doğrula veya 0013 içeriğini güvenli uygula. \
+                     `0034`/`0035` ve çift önek kuralları: docs/QTSS_CURSOR_DEV_GUIDE.md §6."
                 ));
             }
             StorageError::Migrate(e)

@@ -16,6 +16,7 @@ mod onchain_signal_scorer;
 mod kill_switch;
 mod position_manager;
 mod copy_trade_follower;
+mod strategy_runner;
 
 use std::str::FromStr;
 use std::time::Duration;
@@ -79,8 +80,10 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .context("qtss-worker: PostgreSQL pool failed (check DATABASE_URL, host, port, credentials)")?;
             run_migrations(&pool).await.context(
-                "qtss-worker: SQL migrations failed — run: journalctl -u qtss-worker -n 100 --no-pager \
-                 | Common: checksum drift after editing applied migrations; missing table engine_symbols (apply engine_analysis migration first); duplicate migration version numbers.",
+                "qtss-worker: SQL migrations failed — journalctl -u qtss-worker -n 100 --no-pager. \
+                 Yaygın: checksum uyuşmazlığı → `cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums` (DATABASE_URL); \
+                 eksik `bar_intervals` / `engine_symbols` → 0013+ zinciri; çift aynı `NNNN_*.sql` öneki. \
+                 Ayrıntı: docs/QTSS_CURSOR_DEV_GUIDE.md §6.",
             )?;
             let pnl_pool = pool.clone();
             tokio::spawn(pnl_rollup_loop(pnl_pool));
@@ -89,19 +92,19 @@ async fn main() -> anyhow::Result<()> {
             let nansen_pool = pool.clone();
             tokio::spawn(nansen_engine::nansen_token_screener_loop(nansen_pool));
             let nansen_nf = pool.clone();
-            tokio::spawn(nansen_extended::nansen_netflows_loop(nansen_nf));
+            tokio::spawn(nansen_engine::nansen_netflows_loop(nansen_nf));
             let nansen_h = pool.clone();
-            tokio::spawn(nansen_extended::nansen_holdings_loop(nansen_h));
+            tokio::spawn(nansen_engine::nansen_holdings_loop(nansen_h));
             let nansen_pt = pool.clone();
-            tokio::spawn(nansen_extended::nansen_perp_trades_loop(nansen_pt));
+            tokio::spawn(nansen_engine::nansen_perp_trades_loop(nansen_pt));
             let nansen_wb = pool.clone();
-            tokio::spawn(nansen_extended::nansen_who_bought_loop(nansen_wb));
+            tokio::spawn(nansen_engine::nansen_who_bought_loop(nansen_wb));
             let nansen_fi = pool.clone();
-            tokio::spawn(nansen_extended::nansen_flow_intel_loop(nansen_fi));
+            tokio::spawn(nansen_engine::nansen_flow_intel_loop(nansen_fi));
             let nansen_lb = pool.clone();
-            tokio::spawn(nansen_extended::nansen_perp_leaderboard_loop(nansen_lb));
+            tokio::spawn(nansen_engine::nansen_perp_leaderboard_loop(nansen_lb));
             let nansen_wh = pool.clone();
-            tokio::spawn(nansen_extended::nansen_whale_perp_aggregate_loop(nansen_wh));
+            tokio::spawn(nansen_engine::nansen_whale_perp_aggregate_loop(nansen_wh));
             let setup_pool = pool.clone();
             tokio::spawn(setup_scan_engine::nansen_setup_scan_loop(setup_pool));
             let b_pool = pool.clone();
@@ -124,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
             tokio::spawn(position_manager::position_manager_loop(pm_pool));
             let ct_pool = pool.clone();
             tokio::spawn(copy_trade_follower::copy_trade_follower_loop(ct_pool));
+            strategy_runner::spawn_if_enabled(&pool);
             Some(pool)
         }
         _ => {

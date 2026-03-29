@@ -13,7 +13,9 @@ use rust_decimal::Decimal;
 use sqlx::PgPool;
 use tracing::{info, warn};
 
+use crate::conflict_policy::{conflict_size_policy_from_env, ConflictSizePolicy};
 use crate::context::MarketContext;
+use crate::risk::{apply_kelly_scale_to_qty, clamp_qty_by_max_notional_usdt};
 
 fn tick_secs() -> u64 {
     std::env::var("QTSS_WHALE_MOMENTUM_TICK_SECS")
@@ -44,10 +46,11 @@ fn auto_place() -> bool {
 }
 
 fn order_qty() -> Decimal {
-    std::env::var("QTSS_STRATEGY_ORDER_QTY")
+    let base = std::env::var("QTSS_STRATEGY_ORDER_QTY")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| Decimal::new(1, 3))
+        .unwrap_or_else(|| Decimal::new(1, 3));
+    apply_kelly_scale_to_qty(base)
 }
 
 pub async fn run(pool: PgPool, gateway: Arc<dyn ExecutionGateway>) {
@@ -86,6 +89,30 @@ async fn tick_once(pool: &PgPool, gateway: Arc<dyn ExecutionGateway>) -> anyhow:
         if mom.abs() < th {
             continue;
         }
+        let mut qty = order_qty();
+        if ctx.conflict_detected {
+            match conflict_size_policy_from_env() {
+                ConflictSizePolicy::Skip => {
+                    tracing::debug!(%sym, "whale_momentum: TA vs on-chain conflict — atlandı");
+                    continue;
+                }
+                ConflictSizePolicy::Half => {
+                    qty = qty / Decimal::from(2u32);
+                    if qty < Decimal::new(1, 8) {
+                        tracing::debug!(%sym, "whale_momentum: çatışmada yarım miktar çok küçük");
+                        continue;
+                    }
+                    tracing::debug!(%sym, "whale_momentum: çatışmada yarım miktar");
+                }
+            }
+        }
+        if let Some(mark) = ctx.last_close {
+            qty = clamp_qty_by_max_notional_usdt(qty, mark);
+            if qty < Decimal::new(1, 8) {
+                tracing::debug!(%sym, "whale_momentum: max-notional clamp — atlandı");
+                continue;
+            }
+        }
         let fund = ctx.funding_score.unwrap_or(0.0);
         if mom > 0.0 && fund > funding_crowding_block() {
             tracing::debug!(%sym, "whale_momentum: long yönünde kalabalık funding — atlandı");
@@ -107,7 +134,7 @@ async fn tick_once(pool: &PgPool, gateway: Arc<dyn ExecutionGateway>) -> anyhow:
                 symbol: sym.clone(),
             },
             side,
-            quantity: order_qty(),
+            quantity: qty,
             order_type: OrderType::Market,
             time_in_force: TimeInForce::Gtc,
             requires_human_approval: true,

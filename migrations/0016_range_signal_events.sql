@@ -1,6 +1,7 @@
 -- Range sinyal olayları (F1): worker `insert_range_signal_event` — aynı (hedef, tür, bar) tekrar yazılmaz.
+-- `0013_worker_analytics_schema.sql` bu tabloyu da oluşturabildiği için IF NOT EXISTS.
 
-CREATE TABLE range_signal_events (
+CREATE TABLE IF NOT EXISTS range_signal_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     engine_symbol_id UUID NOT NULL REFERENCES engine_symbols (id) ON DELETE CASCADE,
     event_kind TEXT NOT NULL,
@@ -12,5 +13,5 @@ CREATE TABLE range_signal_events (
     UNIQUE (engine_symbol_id, event_kind, bar_open_time)
 );
 
-CREATE INDEX idx_range_signal_events_engine_time
+CREATE INDEX IF NOT EXISTS idx_range_signal_events_engine_time
   ON range_signal_events (engine_symbol_id, bar_open_time DESC);

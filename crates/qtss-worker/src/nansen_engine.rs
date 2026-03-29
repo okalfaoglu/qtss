@@ -94,3 +94,9 @@ pub async fn nansen_token_screener_loop(pool: PgPool) {
         tokio::time::sleep(Duration::from_secs(next_sleep)).await;
     }
 }
+
+// ADIM 3 — genişletilmiş Nansen HTTP döngüleri `nansen_extended.rs` içinde; buradan re-export.
+pub use crate::nansen_extended::{
+    nansen_flow_intel_loop, nansen_holdings_loop, nansen_netflows_loop, nansen_perp_leaderboard_loop,
+    nansen_perp_trades_loop, nansen_whale_perp_aggregate_loop, nansen_who_bought_loop,
+};

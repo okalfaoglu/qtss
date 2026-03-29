@@ -82,3 +82,17 @@ FROM instruments i
 WHERE es.instrument_id IS NULL
   AND es.market_id = i.market_id
   AND UPPER(TRIM(es.symbol)) = UPPER(i.native_symbol);
+
+-- ACP: üst çubuk TF değişince otomatik kanal taraması (varsayılan kapalı).
+
+UPDATE app_config
+SET value = jsonb_set(
+    value,
+    '{scanning}',
+    coalesce(value->'scanning', '{}'::jsonb)
+      || '{"auto_scan_on_timeframe_change": false}'::jsonb,
+    true
+  ),
+  updated_at = now()
+WHERE key = 'acp_chart_patterns'
+  AND (value->'scanning'->'auto_scan_on_timeframe_change' IS NULL);

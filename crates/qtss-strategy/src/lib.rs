@@ -3,6 +3,7 @@
 //! Skeleton per `docs/QTSS_CURSOR_DEV_GUIDE.md` §4 ADIM 7 — implement each strategy module incrementally.
 
 pub mod arb_funding;
+pub mod conflict_policy;
 pub mod context;
 pub mod copy_trade;
 pub mod risk;

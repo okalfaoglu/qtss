@@ -7,6 +7,7 @@ use qtss_binance::{
 use qtss_common::{log_business, Loggable, QtssLogLevel};
 use qtss_domain::exchange::{ExchangeId, MarketSegment};
 use qtss_domain::orders::{OrderIntent, OrderType, TimeInForce};
+use qtss_domain::symbol::InstrumentId;
 use rust_decimal::Decimal;
 use serde_json::Value;
 use tracing::instrument;
@@ -216,6 +217,14 @@ impl BinanceLiveGateway {
 
 #[async_trait]
 impl ExecutionGateway for BinanceLiveGateway {
+    fn set_reference_price(
+        &self,
+        _instrument: &InstrumentId,
+        _price: Decimal,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+
     #[instrument(skip(self, intent))]
     async fn place(&self, intent: OrderIntent) -> Result<Uuid, ExecutionError> {
         self.place_with_venue_response(intent)

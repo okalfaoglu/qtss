@@ -114,7 +114,7 @@ pub async fn post_token_screener(
     .await
 }
 
-/// `POST /api/v1/smart-money/netflows`
+/// `POST /api/v1/smart-money/netflow` (çoğu hesapta çoğul `/netflows` 404 döner).
 pub async fn post_smart_money_netflows(
     client: &reqwest::Client,
     base_url: &str,
@@ -125,7 +125,7 @@ pub async fn post_smart_money_netflows(
         client,
         base_url,
         api_key,
-        "api/v1/smart-money/netflows",
+        "api/v1/smart-money/netflow",
         body,
     )
     .await
@@ -199,21 +199,17 @@ pub async fn post_tgm_who_bought_sold(
     .await
 }
 
-/// `POST /api/v1/profiler/perp-leaderboard` — top wallets for watchlist (dev guide §3.8).
+/// Perp PnL / leaderboard — Nansen dokümantasyonunda çoğunlukla Hyperliquid altında (`/api/v1/hyperliquid/...`).
+/// Eski `profiler/perp-leaderboard` birçok anahtarda 404; yol `relative_api_path` ile değiştirilebilir.
 pub async fn post_profiler_perp_leaderboard(
     client: &reqwest::Client,
     base_url: &str,
     api_key: &str,
+    relative_api_path: &str,
     body: &Value,
 ) -> Result<(Value, NansenResponseMeta), NansenError> {
-    post_json_path(
-        client,
-        base_url,
-        api_key,
-        "api/v1/profiler/perp-leaderboard",
-        body,
-    )
-    .await
+    let path = relative_api_path.trim().trim_start_matches('/');
+    post_json_path(client, base_url, api_key, path, body).await
 }
 
 /// `POST /api/v1/profiler/perp-positions` — body includes wallet address(es) per Nansen API.

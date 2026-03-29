@@ -17,7 +17,8 @@ pub const NANSEN_WHO_BOUGHT_DATA_KEY: &str = NANSEN_WHO_BOUGHT_SOLD_DATA_KEY;
 pub const NANSEN_HOLDINGS_DATA_KEY: &str = "nansen_holdings";
 /// Merged profiler perp-positions across whale watchlist → on-chain `hl_whale_score`.
 pub const NANSEN_WHALE_PERP_AGGREGATE_DATA_KEY: &str = "nansen_whale_perp_aggregate";
-pub const NANSEN_WHALE_WATCHLIST_CONFIG_KEY: &str = "nansen_whale_watchlist";
+/// `app_config` satırı (`nansen_whale_watchlist`); perp-leaderboard → watchlist JSON.
+pub const NANSEN_WHALE_WATCHLIST_KEY: &str = "nansen_whale_watchlist";
 
 pub const REGISTERED_NANSEN_HTTP_KEYS: &[&str] = &[
     NANSEN_TOKEN_SCREENER_DATA_KEY,
@@ -46,7 +47,7 @@ pub const REGISTERED_DATA_SOURCES: &[RegisteredDataSource] = &[
     RegisteredDataSource {
         source_key: NANSEN_NETFLOWS_DATA_KEY,
         provider_kind: "NansenHttpLoop",
-        description: "`nansen_extended` → `data_snapshots` smart-money/netflows",
+        description: "`nansen_extended` → `data_snapshots` smart-money/netflow (source_key=nansen_netflows)",
     },
     RegisteredDataSource {
         source_key: NANSEN_HOLDINGS_DATA_KEY,

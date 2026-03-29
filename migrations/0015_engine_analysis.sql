@@ -1,6 +1,7 @@
 -- Arka plan motor hedefleri + analiz snapshot’ları (`qtss-worker` engine_analysis, confluence).
+-- `0013_worker_analytics_schema.sql` zaten `engine_symbols` / `analysis_snapshots` oluşturabildiği için IF NOT EXISTS.
 
-CREATE TABLE engine_symbols (
+CREATE TABLE IF NOT EXISTS engine_symbols (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     exchange TEXT NOT NULL DEFAULT 'binance',
     segment TEXT NOT NULL DEFAULT 'spot',
@@ -14,10 +15,10 @@ CREATE TABLE engine_symbols (
     UNIQUE (exchange, segment, symbol, interval)
 );
 
-CREATE INDEX idx_engine_symbols_symbol ON engine_symbols (symbol);
-CREATE INDEX idx_engine_symbols_enabled ON engine_symbols (enabled) WHERE enabled = true;
+CREATE INDEX IF NOT EXISTS idx_engine_symbols_symbol ON engine_symbols (symbol);
+CREATE INDEX IF NOT EXISTS idx_engine_symbols_enabled ON engine_symbols (enabled) WHERE enabled = true;
 
-CREATE TABLE analysis_snapshots (
+CREATE TABLE IF NOT EXISTS analysis_snapshots (
     engine_symbol_id UUID NOT NULL REFERENCES engine_symbols (id) ON DELETE CASCADE,
     engine_kind TEXT NOT NULL,
     payload JSONB NOT NULL,
@@ -28,4 +29,4 @@ CREATE TABLE analysis_snapshots (
     PRIMARY KEY (engine_symbol_id, engine_kind)
 );
 
-CREATE INDEX idx_analysis_snapshots_kind ON analysis_snapshots (engine_kind);
+CREATE INDEX IF NOT EXISTS idx_analysis_snapshots_kind ON analysis_snapshots (engine_kind);
