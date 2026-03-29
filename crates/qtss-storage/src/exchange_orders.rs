@@ -167,4 +167,34 @@ impl ExchangeOrderRepository {
         .await?;
         Ok(rows)
     }
+
+    /// `list_recent_filled_orders_global` ile aynı filtre; `created_at >= since` (copy-trade kuyruk taraması).
+    pub async fn list_recent_filled_orders_global_since(
+        &self,
+        since: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<ExchangeOrderRow>, StorageError> {
+        let lim = limit.clamp(1, 2000);
+        let rows = sqlx::query_as::<_, ExchangeOrderRow>(
+            r#"SELECT id, org_id, user_id, exchange, segment, symbol,
+                      client_order_id, status, intent, venue_order_id,
+                      venue_response, created_at, updated_at
+               FROM exchange_orders
+               WHERE venue_response IS NOT NULL
+               AND created_at >= $1
+               AND (
+                   venue_response->>'status' IN ('FILLED', 'PARTIALLY_FILLED')
+                   OR (
+                       COALESCE(NULLIF(TRIM(venue_response->>'executedQty'), ''), '0')::numeric > 0
+                   )
+               )
+               ORDER BY created_at DESC
+               LIMIT $2"#,
+        )
+        .bind(since)
+        .bind(lim)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
 }

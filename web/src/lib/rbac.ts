@@ -9,6 +9,8 @@ export type AuthSession = {
   userId: string;
   orgId: string;
   roles: string[];
+  /** JWT `permissions` claim (e.g. `qtss:read`, `qtss:ops`, `qtss:admin`) when issued by API. */
+  permissions: string[];
   oauthClientId: string;
 };
 

@@ -22,7 +22,8 @@ pub use dry::{
 pub use gateway::{ExecutionError, ExecutionGateway, FillEvent};
 pub use live::LiveGateway;
 pub use reconcile::{
-    reconcile_binance_spot_open_orders, ExchangeOrderVenueSnapshot, ReconcileReport,
+    reconcile_binance_futures_open_orders, reconcile_binance_spot_open_orders,
+    ExchangeOrderVenueSnapshot, ReconcileReport,
 };
 
 pub use qtss_domain::execution::{ExecutionMode, VirtualLedgerParams};

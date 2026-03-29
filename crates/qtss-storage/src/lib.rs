@@ -1,7 +1,9 @@
+pub mod ai_approval;
 pub mod audit_log;
 pub mod catalog;
 pub mod config;
 pub mod copy_trade;
+pub mod copy_trade_jobs;
 pub mod data_snapshots;
 pub mod engine_analysis;
 pub mod error;
@@ -13,10 +15,12 @@ pub mod market_confluence_snapshots;
 pub mod onchain_signal_scores;
 pub mod nansen;
 pub mod nansen_setup_scan;
+pub mod notify_outbox;
 pub mod pool;
 pub mod paper;
 pub mod pnl;
 
+pub use ai_approval::{AiApprovalRepository, AiApprovalRequestRow};
 pub use audit_log::{insert_http_audit, list_recent as audit_list_recent, AuditHttpListRow, AuditHttpRow};
 pub use catalog::{
     resolve_series_catalog_ids, BarIntervalRow, CatalogRepository, ExchangeRow, InstrumentRow,
@@ -24,6 +28,7 @@ pub use catalog::{
 };
 pub use config::{AppConfigEntry, AppConfigRepository};
 pub use copy_trade::{CopySubscriptionRepository, CopySubscriptionRow};
+pub use copy_trade_jobs::{CopyTradeJobRepository, CopyTradeJobRow};
 pub use data_snapshots::{
     data_snapshot_age_secs, fetch_data_snapshot, fetch_data_snapshot_for_external_http_source,
     list_data_snapshots, list_snapshots_for_external_http_sources, upsert_data_snapshot,
@@ -57,6 +62,7 @@ pub use onchain_signal_scores::{
     OnchainSignalScoreRow,
 };
 pub use nansen::{fetch_nansen_snapshot, upsert_nansen_snapshot, NansenSnapshotRow};
+pub use notify_outbox::{NotifyOutboxRepository, NotifyOutboxRow};
 pub use nansen_setup_scan::{
     fetch_latest_nansen_setup_with_rows, insert_nansen_setup_run, insert_nansen_setup_row,
     NansenSetupRowDetail, NansenSetupRowInsert, NansenSetupRunInsert, NansenSetupRunRow,

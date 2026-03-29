@@ -1,6 +1,7 @@
 use qtss_storage::{
-    AppConfigRepository, CopySubscriptionRepository, ExchangeAccountRepository,
-    ExchangeOrderRepository, PaperLedgerRepository, PnlRollupRepository,
+    AiApprovalRepository, AppConfigRepository, CopySubscriptionRepository,
+    ExchangeAccountRepository, ExchangeOrderRepository, NotifyOutboxRepository,
+    PaperLedgerRepository, PnlRollupRepository,
 };
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -15,6 +16,8 @@ pub struct AppState {
     pub exchange_orders: ExchangeOrderRepository,
     pub paper: PaperLedgerRepository,
     pub copy: CopySubscriptionRepository,
+    pub ai_approval: AiApprovalRepository,
+    pub notify_outbox: NotifyOutboxRepository,
     pub jwt: Option<JwtIssuer>,
     pub refresh_ttl_secs: i64,
 }
@@ -42,6 +45,8 @@ impl AppState {
         let exchange_orders = ExchangeOrderRepository::new(pool.clone());
         let paper = PaperLedgerRepository::new(pool.clone());
         let copy = CopySubscriptionRepository::new(pool.clone());
+        let ai_approval = AiApprovalRepository::new(pool.clone());
+        let notify_outbox = NotifyOutboxRepository::new(pool.clone());
         Ok(Self {
             pool,
             config,
@@ -50,6 +55,8 @@ impl AppState {
             exchange_orders,
             paper,
             copy,
+            ai_approval,
+            notify_outbox,
             jwt: Some(jwt),
             refresh_ttl_secs: refresh_ttl,
         })

@@ -63,6 +63,7 @@ qtss/
     ├── qtss-nansen/           # Nansen HTTP (screener, smart-money, TGM, `tgm/perp-pnl-leaderboard`, `profiler/perp-positions`)
     ├── qtss-notify/           # Telegram, webhook, … (`POST /notify/test` + worker uyarıları)
     ├── qtss-strategy/         # Dry strateji döngüleri (signal_filter, whale_momentum, risk, …)
+    ├── qtss-analysis/         # `engine_symbols` → trading_range + signal_dashboard snapshot döngüsü (worker spawn)
     └── qtss-chart-patterns/   # ACP çizim JSON, kanal/inspect/resolve; Pine `find` tam portu değil — bkz. `docs/CHART_PATTERNS_TRENDOSCOPE_PORT.md`
 ```
 
@@ -82,10 +83,11 @@ qtss/
 
 - `crates/qtss-connectors/` — ek borsa adapter’ları (`qtss-binance` yanında)
 - `crates/qtss-marketdata/` — WebSocket bar/tick akışı, normalizasyon
-- `crates/qtss-analysis/` — teknik analiz motoru (API’de `/analysis/*` iskeleti var)
+
+Mevcut: `crates/qtss-analysis/` — `engine_symbols` snapshot döngüsü (worker); API `/analysis/*` iskeleti ayrı.
 - `web/` — **Vite + React** (`npm run dev` / `npm run build`). Grafik: Lightweight Charts; Elliott Wave V2 (`web/src/lib/elliottEngineV2/`). Tez §2.5.3–2.5.5 metin kataloğu tek dosyada: `web/src/lib/elliottRulesCatalog.ts` (panel + `public/elliott_dalga_prensipleri.txt` özeti).
 
-Mevcut ayrı crate’ler: `qtss-nansen`, `qtss-notify`, `qtss-strategy` — bkz. §3 tablo ve `docs/QTSS_CURSOR_DEV_GUIDE.md` §0.
+Mevcut ayrı crate’ler: `qtss-nansen`, `qtss-notify`, `qtss-strategy`, `qtss-analysis` — bkz. §3 tablo ve `docs/QTSS_CURSOR_DEV_GUIDE.md` §0.
 
 ---
 
@@ -104,7 +106,7 @@ Mevcut ayrı crate’ler: `qtss-nansen`, `qtss-notify`, `qtss-strategy` — bkz.
 | **qtss-reporting** | PDF üretimi (printpdf) |
 | **qtss-binance** | Spot / FAPI REST, katalog, `KlineBar`, kapanan mum WS ayrıştırma, komisyon ipucu (`exchangeInfo`) |
 | **qtss-api** | Axum + `x-request-id`, `GET /metrics`, IP tabanlı rate limit (`tower-governor`) |
-| **qtss-worker** | PnL rollup, `engine_analysis` (+ confluence), Nansen (screener + extended HTTP), harici çekim motorları, on-chain skor, setup scan, kill switch, position manager, copy follower, isteğe bağlı strateji dry döngüleri; `QTSS_KLINE_SYMBOL` / `QTSS_KLINE_SYMBOLS` + `DATABASE_URL` |
+| **qtss-worker** | PnL rollup, `qtss_analysis` spawn + `confluence_hook`, Nansen (screener + extended HTTP), harici çekim motorları, on-chain skor, setup scan, kill switch, position manager, copy follower, `notify_outbox` (`QTSS_NOTIFY_OUTBOX_*`), isteğe bağlı strateji dry döngüleri; `QTSS_KLINE_SYMBOL` / `QTSS_KLINE_SYMBOLS` + `DATABASE_URL` |
 | **qtss-chart-patterns** | Trend çizgisi bar enterpolasyonu, ACP `patternType` id → isim, `PatternDrawingBatch` (serde), Zigzag iskelesi, kanal altılı tarama API; Pine ile tam özdeş değil — bkz. `docs/CHART_PATTERNS_TRENDOSCOPE_PORT.md` |
 
 ---
@@ -175,13 +177,16 @@ Tüm yanıtlarda **`x-request-id`** (UUID) üretilir veya istemci gönderdiyse y
 | Uç | Gerekli roller |
 |----|----------------|
 | `GET/POST /api/v1/config`, `DELETE /api/v1/config/{key}` | `admin` |
-| `POST /api/v1/reconcile/binance` | `admin` |
+| `POST /api/v1/reconcile/binance`, `POST /api/v1/reconcile/binance/futures` | `admin` |
 | `POST /api/v1/catalog/sync/binance` | `admin`, `trader` |
 | `POST /api/v1/market/binance/bars/backfill` | `admin`, `trader` |
 | `GET /api/v1/orders/binance` | `admin`, `trader`, `analyst`, `viewer` |
 | `POST /api/v1/orders/binance/place`, `POST /api/v1/orders/binance/cancel` | `admin`, `trader` |
 | `POST /api/v1/copy-trade/subscriptions`, `PATCH .../{id}/active`, `DELETE .../{id}` | `admin`, `trader` |
-| `GET /api/v1/dashboard/pnl`, `GET /api/v1/market/binance/*`, `GET /api/v1/market/bars/recent`, `GET /api/v1/copy-trade/subscriptions`, analysis / notify iskeletleri | `admin`, `trader`, `analyst`, `viewer` |
+| `GET /api/v1/dashboard/pnl`, `GET /api/v1/market/binance/*`, `GET /api/v1/market/bars/recent`, `GET /api/v1/copy-trade/subscriptions`, `GET /api/v1/ai/approval-requests`, `GET /api/v1/notify/outbox`, analysis / notify iskeletleri | `admin`, `trader`, `analyst`, `viewer` |
+| `POST /api/v1/notify/outbox` | `admin`, `trader` |
+| `POST /api/v1/ai/approval-requests` | `admin`, `trader` |
+| `PATCH /api/v1/ai/approval-requests/{id}` | `admin` |
 
 Yetersiz rol → HTTP **403** (`insufficient_scope`).
 
@@ -200,7 +205,9 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 - `GET /api/v1/market/binance/stream-urls?symbol=&interval=` — spot ve USDT-M kline WebSocket URL’leri (istemci doğrudan bağlanır)
 - `GET /api/v1/market/bars/recent?exchange=&segment=&symbol=&interval=&limit=` — `market_bars` (varsayılan `limit=500`, üst sınır 5000)
 - `POST /api/v1/market/binance/bars/backfill` — gövde: `{ "symbol", "interval", "segment?": "spot"|"futures", "limit?": 1..1000 }`; Binance REST klines → `market_bars` upsert (worker olmadan geçmiş dolum)
-- `POST /api/v1/reconcile/binance` — Binance **spot** `openOrders` ile yerel `exchange_orders` (`venue_order_id`); JWT kullanıcısının spot API anahtarı gerekir
+- `POST /api/v1/reconcile/binance` — Binance **spot** `openOrders` ile yerel `exchange_orders` (`venue_order_id`); spot API anahtarı gerekir
+- `POST /api/v1/reconcile/binance/futures` — USDT-M **futures** `fapi/v1/openOrders` ile yerel `exchange_orders`; futures API anahtarı gerekir
+- `GET /api/v1/market/binance/commission-account` — hesaba özel maker/taker (`symbol`, `segment`)
 - `GET /api/v1/orders/binance` — son emirler (kullanıcıya göre, `exchange_orders`)
 - `POST /api/v1/orders/binance/place` — gövde: `{ "intent": OrderIntent }`; `exchange_accounts` + `exchange_orders` (`venue_order_id` / `venue_response` Binance yanıtından)
 - `POST /api/v1/orders/binance/cancel` — gövde: `client_order_id`, `symbol`, `segment`; yerel kayıt `canceled` olarak işaretlenir
@@ -210,6 +217,8 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 - `DELETE /api/v1/copy-trade/subscriptions/{id}`
 - `GET /api/v1/analysis/health` — iskelet
 - `POST /api/v1/notify/test` — `qtss-notify` ile test bildirimi (kanal env’leri kök `.env.example`)
+- `GET /api/v1/notify/outbox?limit=` — org için `notify_outbox` geçmişi
+- `POST /api/v1/notify/outbox` — kuyruğa ekle (`title`, `body`, `channels?`; boşsa `webhook`)
 
 `qtss-worker`: `QTSS_KLINE_SYMBOL` veya `QTSS_KLINE_SYMBOLS` (combined stream), `QTSS_KLINE_INTERVAL`, `QTSS_KLINE_SEGMENT` (`spot` / `futures`). **`DATABASE_URL` doluysa** migrasyon + `market_bars` + analiz / Nansen / on-chain loop’ları; yoksa kline yalnız log. Ortam anahtarları: kök `.env.example`, ayrıntı: `docs/QTSS_CURSOR_DEV_GUIDE.md` §5. Kalıcı çalıştırma: [deploy/README.md](../deploy/README.md).
 
@@ -222,7 +231,8 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 - **RBAC**: JWT `roles` + uç bazlı middleware; ayrıntı §8.
 - **Rate limit**: `tower-governor`; anahtar = TCP peer veya güvenilen vekil + `X-Forwarded-For` ilk adresi (`QTSS_TRUSTED_PROXIES`). Üretimde ek katman (nginx, cloud WAF) önerilir.
 - **Denetim**: `audit_log` tablosu — `/api/v1/*` mutasyonları yalnızca `QTSS_AUDIT_HTTP=1` iken yazılır.
-- **Metrikler**: `QTSS_METRICS_TOKEN` doluysa `/metrics` Bearer veya `?token=` ister.
+- **Metrikler**: `QTSS_METRICS_TOKEN` doluysa `/metrics` Bearer veya `?token=` ister; metriklerde `qtss_build_info` + HTTP sayacı.
+- **Probe**: `GET /live` (liveness), `GET /ready` (DB readiness, 503 = kube trafiği kesilir); `GET /health` özet JSON.
 - **Gizli anahtarlar**: `exchange_accounts.api_secret` düz metin — üretimde KMS / Vault ile şifreleme veya harici secret store hedefi.
 - Ayrıntılı audit log ve oturum yönetimi sonraki adımlar.
 - Çok kiracı: JWT’de `org_id`; şema veya satır düzeyi `org_id` ile genişletme.
@@ -235,14 +245,14 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 **F7 — Çok kaynaklı piyasa verisi, confluence, bildirimler, İngilizce alan adları:** [PLAN_CONFLUENCE_AND_MARKET_DATA.md](./PLAN_CONFLUENCE_AND_MARKET_DATA.md)
 
 1. **Kimlik ve RBAC** — OAuth + JWT + uç middleware + JWT `permissions` + `GET /api/v1/me` (**kısmen**; DB’de kullanıcı başına izin, daha ince yetkiler, geniş audit sonra)  
-2. **Binance spot + futures** — REST + katalog + kline + stream URL + komisyon fallback + sunucu tarafı kline WS → DB (**kısmen**; hesap bazlı gerçek fee / trade fee API sonra)  
-3. **Emir ve mutabakat** — `BinanceLiveGateway` + HTTP place/Cancel; worker’da periyodik **spot** açık emir reconcile (`QTSS_RECONCILE_BINANCE_SPOT_*`, `binance_spot_reconcile.rs`); futures / tam otomasyon sonra  
-4. **Copy trade** — CRUD API; yürütme kuyruğu ve lead fill dinleme sonra  
-5. **Analiz motoru** — ayrı crate + gerçek motor  
-6. **AI katmanı** — onay kuyruğu, policy, guardrail  
-7. **Bildirim** — `qtss-notify` + kuyruk  
-8. **Web UI** — dashboard genişletmesi; grafik/Elliott temel akış mevcut (`web/`)  
-9. **Kurumsal** — HA, observability, uyumluluk  
+2. **Binance spot + futures** — REST + katalog + kline + stream URL + komisyon fallback + kline WS → DB; hesap bazlı fee: `commission-account` (**v1 tamam**)  
+3. **Emir ve mutabakat** — `BinanceLiveGateway` + HTTP place/Cancel; worker’da periyodik spot + futures açık emir reconcile (`QTSS_RECONCILE_BINANCE_SPOT_*`, `QTSS_RECONCILE_BINANCE_FUTURES_*`); otomatik durum güncelleme sonra  
+4. **Copy trade** — CRUD API + `copy_trade_follower` + `copy_trade_queue` / `copy_trade_execution_jobs` (**kısmen**); Binance user-stream fill + canlı follower emir sonraki iterasyon  
+5. **Analiz motoru** — `qtss-analysis` crate + worker entegrasyonu (**kısmen**; genişletilmiş motor / tam API yüzeyi sonra)  
+6. **AI katmanı** — onay kuyruğu DB + HTTP (**kısmen**; worker/LLM/policy sonraki)  
+7. **Bildirim** — `qtss-notify` + `notify_outbox` worker (**kısmen**; retry/DLQ/çoklu tüketici sonra)  
+8. **Web UI** — grafik/Elliott temel akış + çekmece **Kuyruklar** (notify outbox + AI onay listesi/aksiyonları, `permissions` özeti) (**kısmen**; PnL grafikleri / emir defteri / audit UI sonra)  
+9. **Kurumsal** — API `/live` + `/ready` + `/metrics` genişletmesi (**kısmen**); çok örnek HA, worker probe, uyumluluk raporları sonra  
 
 ---
 

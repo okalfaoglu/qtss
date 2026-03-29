@@ -8,6 +8,7 @@
 - **Rate limit**: Uygulama içi `tower-governor` eşler IP; CDN / WAF / nginx ile ek sınır ve bağlantı sınırları önerilir.
 - **Ters vekil**: `QTSS_TRUSTED_PROXIES` yalnızca güvenilen vekil ağlarını listelemeli. Aksi halde `X-Forwarded-For` sahteciliği rate limit atlamasına yol açar.
 - **Metrikler**: `QTSS_METRICS_TOKEN` üretimde doldurulmalı; `/metrics` iç ağ veya Bearer ile korunmalı.
+- **Probe uçları**: `GET /live` ve `GET /ready` kimlik doğrulaması istemez (kube / LB için); yalnızca iç ağ veya Ingress kısıtlaması ile kullanın; `/ready` DB erişimini doğrular.
 
 ## Kimlik bilgileri
 

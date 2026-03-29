@@ -1,24 +1,45 @@
-//! Bildirim kanalları — `qtss-notify` + ortam değişkenleri.
+//! Bildirim kanalları — `qtss-notify` + ortam değişkenleri; kalıcı kuyruk `notify_outbox`.
 
-use axum::extract::Extension;
+use axum::extract::{Extension, Query, State};
 use axum::http::StatusCode;
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher, NotifyError};
+use qtss_storage::NotifyOutboxRow;
 use serde::Deserialize;
 use serde_json::json;
+use uuid::Uuid;
 
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
 
 pub fn notify_router() -> Router<SharedState> {
-    Router::new().route("/notify/test", post(notify_test))
+    Router::new()
+        .route("/notify/test", post(notify_test))
+        .route("/notify/outbox", get(list_notify_outbox))
+}
+
+/// `POST /notify/outbox` — `require_ops_roles`.
+pub fn notify_outbox_write_router() -> Router<SharedState> {
+    Router::new().route("/notify/outbox", post(enqueue_notify_outbox))
 }
 
 #[derive(Deserialize)]
 pub struct NotifyTestBody {
     pub channel: Option<String>,
     pub message: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ListOutboxQuery {
+    pub limit: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct EnqueueOutboxBody {
+    pub title: String,
+    pub body: String,
+    pub channels: Option<Vec<String>>,
 }
 
 async fn notify_test(
@@ -46,4 +67,47 @@ async fn notify_test(
         )),
         Err(e) => Err((StatusCode::BAD_GATEWAY, e.to_string())),
     }
+}
+
+fn parse_org(claims: &AccessClaims) -> Result<Uuid, String> {
+    Uuid::parse_str(claims.org_id.trim()).map_err(|_| "geçersiz token org_id".to_string())
+}
+
+async fn list_notify_outbox(
+    Extension(claims): Extension<AccessClaims>,
+    State(st): State<SharedState>,
+    Query(q): Query<ListOutboxQuery>,
+) -> Result<Json<Vec<NotifyOutboxRow>>, String> {
+    let org_id = parse_org(&claims)?;
+    let limit = q.limit.unwrap_or(50);
+    let rows = st
+        .notify_outbox
+        .list_recent_for_org(org_id, limit)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Json(rows))
+}
+
+async fn enqueue_notify_outbox(
+    Extension(claims): Extension<AccessClaims>,
+    State(st): State<SharedState>,
+    Json(body): Json<EnqueueOutboxBody>,
+) -> Result<Json<NotifyOutboxRow>, String> {
+    let org_id = parse_org(&claims)?;
+    let title = body.title.trim().to_string();
+    let body_text = body.body.trim().to_string();
+    if title.is_empty() || body_text.is_empty() {
+        return Err("title ve body dolu olmalı".into());
+    }
+    let mut channels = body.channels.unwrap_or_default();
+    channels.retain(|s| !s.trim().is_empty());
+    if channels.is_empty() {
+        channels.push("webhook".to_string());
+    }
+    let row = st
+        .notify_outbox
+        .enqueue(Some(org_id), &title, &body_text, channels)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Json(row))
 }

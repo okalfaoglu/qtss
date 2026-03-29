@@ -1741,6 +1741,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "qtss-analysis"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "qtss-chart-patterns",
+ "qtss-notify",
+ "qtss-storage",
+ "rust_decimal",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "qtss-api"
 version = "0.1.0"
 dependencies = [
@@ -1940,6 +1957,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures-util",
+ "qtss-analysis",
  "qtss-binance",
  "qtss-chart-patterns",
  "qtss-common",

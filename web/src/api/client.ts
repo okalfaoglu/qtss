@@ -66,11 +66,18 @@ export async function fetchAuthMe(accessToken: string): Promise<AuthSession> {
   if (!r.ok) {
     throw new Error(`me ${r.status}: ${t.slice(0, 300)}`);
   }
-  const j = JSON.parse(t) as { sub: string; org_id: string; roles: string[]; azp: string };
+  const j = JSON.parse(t) as {
+    sub: string;
+    org_id: string;
+    roles: string[];
+    azp: string;
+    permissions?: string[];
+  };
   return {
     userId: j.sub,
     orgId: j.org_id,
     roles: Array.isArray(j.roles) ? j.roles : [],
+    permissions: Array.isArray(j.permissions) ? j.permissions : [],
     oauthClientId: j.azp,
   };
 }
@@ -932,4 +939,113 @@ export async function fetchBinanceCommissionAccount(
   const t = await r.text();
   if (!r.ok) throw new Error(`commission-account ${r.status}: ${t.slice(0, 300)}`);
   return JSON.parse(t) as BinanceCommissionAccountApi;
+}
+
+/** `notify_outbox` row — mirrors `qtss_storage::NotifyOutboxRow` JSON. */
+export type NotifyOutboxRowApi = {
+  id: string;
+  org_id: string | null;
+  title: string;
+  body: string;
+  channels: string[];
+  status: string;
+  attempt_count: number;
+  last_error: string | null;
+  sent_at: string | null;
+  delivery_detail: unknown;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function fetchNotifyOutbox(accessToken: string, limit = 50): Promise<NotifyOutboxRowApi[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const r = await fetch(`${API_BASE}/api/v1/notify/outbox?${params}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`notify/outbox ${r.status}: ${t.slice(0, 400)}`);
+  return JSON.parse(t) as NotifyOutboxRowApi[];
+}
+
+export async function postNotifyOutbox(
+  accessToken: string,
+  body: { title: string; body: string; channels?: string[] },
+): Promise<NotifyOutboxRowApi> {
+  const r = await fetch(`${API_BASE}/api/v1/notify/outbox`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`notify/outbox POST ${r.status}: ${t.slice(0, 400)}`);
+  return JSON.parse(t) as NotifyOutboxRowApi;
+}
+
+/** `ai_approval_requests` row — mirrors `qtss_storage::AiApprovalRequestRow` JSON. */
+export type AiApprovalRequestRowApi = {
+  id: string;
+  org_id: string;
+  requester_user_id: string;
+  status: string;
+  kind: string;
+  payload: unknown;
+  model_hint: string | null;
+  admin_note: string | null;
+  decided_by_user_id: string | null;
+  decided_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function fetchAiApprovalRequests(
+  accessToken: string,
+  q?: { status?: string; limit?: number },
+): Promise<AiApprovalRequestRowApi[]> {
+  const params = new URLSearchParams();
+  if (q?.status?.trim()) params.set("status", q.status.trim());
+  params.set("limit", String(q?.limit ?? 50));
+  const r = await fetch(`${API_BASE}/api/v1/ai/approval-requests?${params}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`ai/approval-requests ${r.status}: ${t.slice(0, 400)}`);
+  return JSON.parse(t) as AiApprovalRequestRowApi[];
+}
+
+export async function postAiApprovalRequest(
+  accessToken: string,
+  body: { kind?: string; payload: unknown; model_hint?: string },
+): Promise<AiApprovalRequestRowApi> {
+  const r = await fetch(`${API_BASE}/api/v1/ai/approval-requests`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`ai/approval-requests POST ${r.status}: ${t.slice(0, 400)}`);
+  return JSON.parse(t) as AiApprovalRequestRowApi;
+}
+
+export async function patchAiApprovalRequest(
+  accessToken: string,
+  id: string,
+  body: { status: "approved" | "rejected"; admin_note?: string },
+): Promise<{ updated: number }> {
+  const r = await fetch(`${API_BASE}/api/v1/ai/approval-requests/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`ai/approval-requests PATCH ${r.status}: ${t.slice(0, 400)}`);
+  return JSON.parse(t) as { updated: number };
 }

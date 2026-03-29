@@ -1,3 +1,4 @@
+mod ai_approval;
 mod analysis;
 mod catalog_admin;
 mod catalog_sync;
@@ -98,6 +99,22 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(
             copy_trade::copy_trade_write_router()
                 .layer(from_fn(require_ops_roles)),
+        )
+        .merge(
+            notify::notify_outbox_write_router()
+                .layer(from_fn(require_ops_roles)),
+        )
+        .merge(
+            ai_approval::ai_approval_read_router()
+                .layer(from_fn(require_dashboard_roles)),
+        )
+        .merge(
+            ai_approval::ai_approval_submit_router()
+                .layer(from_fn(require_ops_roles)),
+        )
+        .merge(
+            ai_approval::ai_approval_admin_router()
+                .layer(from_fn(require_admin)),
         )
         .merge(
             analysis::analysis_read_router()

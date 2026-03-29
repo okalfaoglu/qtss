@@ -23,8 +23,12 @@ pub async fn count_http_requests_middleware(req: Request, next: Next) -> Respons
 
 pub fn prometheus_text() -> String {
     let n = HTTP_REQUESTS.load(Ordering::Relaxed);
+    let ver = env!("CARGO_PKG_VERSION");
     format!(
-        "# HELP qtss_http_requests_total Yaklaşık HTTP istek sayısı (sayım middleware)\n\
+        "# HELP qtss_build_info Sabit derleme bilgisi (etiketler)\n\
+         # TYPE qtss_build_info gauge\n\
+         qtss_build_info{{version=\"{ver}\",service=\"qtss-api\"}} 1\n\
+         # HELP qtss_http_requests_total Yaklaşık HTTP istek sayısı (sayım middleware)\n\
          # TYPE qtss_http_requests_total counter\n\
          qtss_http_requests_total {n}\n"
     )

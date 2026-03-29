@@ -89,7 +89,9 @@ Tüm `tokio::spawn` çağrılarının başladığı yer. Yeni bir loop eklendiğ
 // Mevcut spawn sırası (`main.rs`, DATABASE_URL varken). Gerçek kodda her görev `pool.clone()` ile ayrı değişkene alınır (`pnl_pool`, `engine_pool`, …); sıra aşağıdaki ile aynıdır.
 tokio::spawn(pnl_rollup_loop(pool.clone()));
 tokio::spawn(binance_spot_reconcile::binance_spot_reconcile_loop(pool.clone())); // QTSS_RECONCILE_BINANCE_SPOT_ENABLED
-tokio::spawn(engine_analysis::engine_analysis_loop(pool.clone())); // içinde confluence::compute_and_persist
+tokio::spawn(binance_futures_reconcile::binance_futures_reconcile_loop(pool.clone())); // QTSS_RECONCILE_BINANCE_FUTURES_ENABLED
+let confluence_hook = std::sync::Arc::new(confluence_hook::WorkerConfluenceHook);
+tokio::spawn(qtss_analysis::engine_analysis_loop(pool.clone(), confluence_hook)); // crate qtss-analysis; confluence worker `confluence_hook`
 tokio::spawn(nansen_engine::nansen_token_screener_loop(pool.clone()));
 tokio::spawn(nansen_engine::nansen_netflows_loop(pool.clone()));
 tokio::spawn(nansen_engine::nansen_holdings_loop(pool.clone()));
@@ -105,10 +107,12 @@ tokio::spawn(engines::external_hyperliquid_loop(pool.clone()));
 tokio::spawn(engines::external_misc_loop(pool.clone()));
 tokio::spawn(onchain_signal_scorer::onchain_signal_loop(pool.clone()));
 tokio::spawn(paper_fill_notify::paper_position_notify_loop(pool.clone()));
+tokio::spawn(notify_outbox::notify_outbox_loop(pool.clone())); // QTSS_NOTIFY_OUTBOX_ENABLED
 tokio::spawn(live_position_notify::live_position_notify_loop(pool.clone()));
 tokio::spawn(kill_switch::kill_switch_loop(pool.clone()));
 tokio::spawn(position_manager::position_manager_loop(pool.clone()));
 tokio::spawn(copy_trade_follower::copy_trade_follower_loop(pool.clone()));
+tokio::spawn(copy_trade_queue::copy_trade_queue_loop(pool.clone())); // QTSS_COPY_TRADE_QUEUE_ENABLED
 strategy_runner::spawn_if_enabled(&pool);
 // Kline: QTSS_KLINE_SYMBOLS → multi_kline_ws_loop; yoksa QTSS_KLINE_SYMBOL → kline_ws_loop
 ```
@@ -472,16 +476,16 @@ Mevcut kodda uygulanan kurallar — yeni dosyalarda da uygulanmalı:
 Bu rehberdeki ADIM 1–10 bittikten sonraki **ürün** işleri `docs/PROJECT.md` **§10 Yol haritası** üzerinden takip edilir. Özet sıra (oradaki numaralarla):
 
 1. Kimlik / RBAC ince taneli izinler ve denetim derinliği — **kısmen:** JWT `permissions` (`qtss:read` \| `qtss:ops` \| `qtss:admin`), yeni tokenlarda claim; eski tokenlarda `require_jwt` sonrası `roles` ile doldurulur; `GET /api/v1/me` `permissions` döner; `require_admin` / `require_ops_roles` / `require_dashboard_roles` bu izinlere göre karar verir. Kullanıcı başına DB izinleri, daha ince stringler ve denetim derinliği sonraki iterasyon.  
-2. Binance hesap bazlı gerçek ücret / trade fee API  
-3. Emir + mutabakat (`reconcile`) sıklığı ve worker entegrasyonu — **kısmen:** periyodik **Binance spot** mutabakat döngüsü `binance_spot_reconcile.rs` (`QTSS_RECONCILE_BINANCE_SPOT_ENABLED`, `QTSS_RECONCILE_BINANCE_SPOT_TICK_SECS`); API `POST /api/v1/reconcile/binance` ile aynı `reconcile_binance_spot_open_orders`. Futures / otomatik durum güncelleme sonraki iterasyon.  
-4. Copy trade — lider dolum dinleme + takipçi yürütme kuyruğu  
-5. Analiz motoru ayrı crate  
-6. AI onay kuyruğu  
-7. Bildirim kuyruğu (`qtss-notify` ötesi)  
-8. Web dashboard genişlemesi  
-9. HA / observability  
+2. Binance hesap bazlı gerçek ücret / trade fee API — **Tamam (v1):** `GET /api/v1/market/binance/commission-account` (`symbol`, `segment`); spot `sapi/v1/asset/tradeFee`, futures `fapi/v1/commissionRate`. `commission-defaults` = exchangeInfo + tier fallback.  
+3. Emir + mutabakat (`reconcile`) sıklığı ve worker entegrasyonu — **kısmen:** spot `binance_spot_reconcile.rs` (`QTSS_RECONCILE_BINANCE_SPOT_*`) + futures `binance_futures_reconcile.rs` (`QTSS_RECONCILE_BINANCE_FUTURES_*`); API `POST /api/v1/reconcile/binance` ve `POST /api/v1/reconcile/binance/futures`. Otomatik `exchange_orders.status` güncelleme sonraki iterasyon.  
+4. Copy trade — **kısmen:** lider **dolum** taraması (`exchange_orders` + `venue_response`) → `copy_trade_execution_jobs` + worker `copy_trade_queue.rs` (`QTSS_COPY_TRADE_QUEUE_*`, isteğe bağlı `QTSS_COPY_TRADE_QUEUE_AUTO_PLACE` dry); migration `0037_copy_trade_execution_jobs.sql`. Binance user stream / anlık fill WebSocket sonraki iterasyon; `copy_trade_follower.rs` (Nansen) ayrı kanal.  
+5. Analiz motoru ayrı crate — **kısmen:** `crates/qtss-analysis` (`engine_analysis_loop`, `ConfluencePersist`); worker `confluence_hook.rs` → `confluence::compute_and_persist`. Ek motor / test ayrımı sonraki iterasyon.  
+6. AI onay kuyruğu — **kısmen:** `ai_approval_requests` (`0038_ai_approval_requests.sql`); API `GET /api/v1/ai/approval-requests`, `POST` (ops), `PATCH /api/v1/ai/approval-requests/{id}` (`approved` / `rejected`, admin). Worker tüketimi / LLM bağlayıcısı sonraki iterasyon.  
+7. Bildirim kuyruğu (`qtss-notify` ötesi) — **kısmen:** `notify_outbox` (`0039_notify_outbox.sql`); API `GET/POST /api/v1/notify/outbox`; worker `notify_outbox.rs` (`QTSS_NOTIFY_OUTBOX_*`, `qtss-notify`). Çoklu worker / retry politikası / DLQ sonraki iterasyon.  
+8. Web dashboard genişlemesi — **kısmen:** çekmece sekmesi **Kuyruklar** (`web/src/components/OperationsQueuesPanel.tsx`): salt okunur `notify_outbox` ve `ai_approval_requests` tabloları; ops için outbox enqueue + test AI isteği; admin için `pending` onay/red. `fetchAuthMe` + Genel oturumda JWT `permissions` özeti. PnL grafikleri, emir defteri, ayrıntılı audit UI sonraki iterasyon.  
+9. HA / observability — **kısmen:** `GET /live` (liveness), `GET /ready` (PostgreSQL `SELECT 1`, 503 yoksa trafik dışı); `/metrics` içinde `qtss_build_info` + `qtss_http_requests_total` (mevcut `QTSS_METRICS_TOKEN` koruması). Dağıtılmış HA, trace örnekleme, alarm kuralları, worker probe’ları sonraki iterasyon.  
 
-**Önerilen bir sonraki teknik adım (küçük kapsam):** depoda **CI** ile `cargo check --workspace` (ve zaman içinde `cargo audit`) — `docs/SECURITY.md` §Bağımlılık. Büyük özellik seçimi: §10 satır 4 (copy trade kuyruk) veya satır 3 (reconcile) ürün önceliğine göre.
+**Önerilen bir sonraki teknik adım (küçük kapsam):** depoda **CI** ile `cargo check --workspace` (ve zaman içinde `cargo audit`) — `docs/SECURITY.md` §Bağımlılık. Büyük özellik seçimi: §9.1 satır 9 derinleştirmesi (worker health, dağıtılmış HA) veya §10 ürün önceliğine göre reconcile / copy trade.
 
 **§4 ile bu tablo:** Aynı ADIM numaraları; §4’te her adımın **uygulandı** özeti ve dosya/env referansları var.
 

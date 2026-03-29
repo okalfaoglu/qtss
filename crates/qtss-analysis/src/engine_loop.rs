@@ -1,11 +1,13 @@
-//! DB’deki `engine_symbols` satırları için mum çekip analiz snapshot yazar:
-//! `trading_range` + `signal_dashboard`.
+//! `engine_symbols` rows → `trading_range` + `signal_dashboard` snapshots (see crate root).
 //!
-//! İsteğe bağlı: `QTSS_NOTIFY_ON_SWEEP=1` ve `QTSS_NOTIFY_ON_SWEEP_CHANNELS` ile yükselen sweep kenarında bildirim.
+//! Optional sweep notify: `QTSS_NOTIFY_ON_SWEEP` + `QTSS_NOTIFY_ON_SWEEP_CHANNELS`.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+
+use super::ConfluencePersist;
 use qtss_chart_patterns::{
     analyze_trading_range, compute_signal_dashboard_v1_with_policy, signal_dashboard_v2_envelope_from_v1,
     OhlcBar, SignalDirectionPolicy,
@@ -449,7 +451,12 @@ async fn maybe_notify_sweep_transitions(
     }
 }
 
-async fn run_engines_for_symbol(pool: &PgPool, bar_limit: i64, params: &TradingRangeParams) {
+async fn run_engines_for_symbol(
+    pool: &PgPool,
+    bar_limit: i64,
+    params: &TradingRangeParams,
+    confluence: &Arc<dyn ConfluencePersist>,
+) {
     let sweep_bundle = sweep_notify_bundle();
     let targets = match list_enabled_engine_symbols(pool).await {
         Ok(t) => t,
@@ -590,14 +597,9 @@ async fn run_engines_for_symbol(pool: &PgPool, bar_limit: i64, params: &TradingR
             .and_then(|r| r.close.to_f64())
             .unwrap_or(f64::NAN);
 
-        if let Err(e) = crate::confluence::compute_and_persist(
-            pool,
-            &t,
-            &dash_payload,
-            last_bar_ot,
-            n as i32,
-        )
-        .await
+        if let Err(e) = confluence
+            .compute_and_persist(pool, &t, &dash_payload, last_bar_ot, n as i32)
+            .await
         {
             warn!(%e, symbol = %t.symbol, "confluence snapshot");
         }
@@ -631,7 +633,7 @@ async fn run_engines_for_symbol(pool: &PgPool, bar_limit: i64, params: &TradingR
     }
 }
 
-pub async fn engine_analysis_loop(pool: PgPool) {
+pub async fn engine_analysis_loop(pool: PgPool, confluence: Arc<dyn ConfluencePersist>) {
     let secs: u64 = std::env::var("QTSS_ENGINE_TICK_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -647,7 +649,7 @@ pub async fn engine_analysis_loop(pool: PgPool) {
     let params = trading_range_params_from_env();
 
     loop {
-        run_engines_for_symbol(&pool, bar_limit, &params).await;
+        run_engines_for_symbol(&pool, bar_limit, &params, &confluence).await;
         tokio::time::sleep(Duration::from_secs(secs)).await;
     }
 }

@@ -2,13 +2,14 @@
 //! `engine_symbols` → analiz snapshot (Trading Range, …).
 
 mod data_sources;
-mod engine_analysis;
+mod confluence_hook;
 mod engines;
 mod confluence;
 mod nansen_engine;
 mod nansen_extended;
 mod signal_scorer;
 mod nansen_query;
+mod notify_outbox;
 mod paper_fill_notify;
 mod live_position_notify;
 mod setup_scan_engine;
@@ -16,10 +17,13 @@ mod onchain_signal_scorer;
 mod kill_switch;
 mod position_manager;
 mod copy_trade_follower;
+mod copy_trade_queue;
+mod binance_futures_reconcile;
 mod binance_spot_reconcile;
 mod strategy_runner;
 
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
@@ -93,8 +97,16 @@ async fn main() -> anyhow::Result<()> {
             tokio::spawn(binance_spot_reconcile::binance_spot_reconcile_loop(
                 reconcile_pool,
             ));
+            let reconcile_fut_pool = pool.clone();
+            tokio::spawn(binance_futures_reconcile::binance_futures_reconcile_loop(
+                reconcile_fut_pool,
+            ));
             let engine_pool = pool.clone();
-            tokio::spawn(engine_analysis::engine_analysis_loop(engine_pool));
+            let confluence_hook = Arc::new(confluence_hook::WorkerConfluenceHook);
+            tokio::spawn(qtss_analysis::engine_analysis_loop(
+                engine_pool,
+                confluence_hook,
+            ));
             let nansen_pool = pool.clone();
             tokio::spawn(nansen_engine::nansen_token_screener_loop(nansen_pool));
             let nansen_nf = pool.clone();
@@ -125,6 +137,8 @@ async fn main() -> anyhow::Result<()> {
             tokio::spawn(onchain_signal_scorer::onchain_signal_loop(onchain_pool));
             let paper_notify_pool = pool.clone();
             tokio::spawn(paper_fill_notify::paper_position_notify_loop(paper_notify_pool));
+            let outbox_pool = pool.clone();
+            tokio::spawn(notify_outbox::notify_outbox_loop(outbox_pool));
             let live_notify_pool = pool.clone();
             tokio::spawn(live_position_notify::live_position_notify_loop(live_notify_pool));
             let ks_pool = pool.clone();
@@ -133,6 +147,8 @@ async fn main() -> anyhow::Result<()> {
             tokio::spawn(position_manager::position_manager_loop(pm_pool));
             let ct_pool = pool.clone();
             tokio::spawn(copy_trade_follower::copy_trade_follower_loop(ct_pool));
+            let ctq_pool = pool.clone();
+            tokio::spawn(copy_trade_queue::copy_trade_queue_loop(ctq_pool));
             strategy_runner::spawn_if_enabled(&pool);
             Some(pool)
         }

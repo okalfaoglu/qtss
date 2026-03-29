@@ -72,4 +72,26 @@ veya `tmux` / `screen` içinde sürekli çalıştırın.
 
 ### 5. API ile birlikte
 
-API (`qtss-api`) ayrı bir servis olarak çalışır; worker yalnızca veri yazar. İkisi de PostgreSQL’e bağlanır; API’yi durdurmak worker’ı etkilemez (tersi de geçerli).
+API (`qtss-api`) ayrı bir süreç olarak çalışır; worker yalnızca veri yazar. İkisi de PostgreSQL’e bağlanır; API’yi durdurmak worker’ı etkilemez (tersi de geçerli).
+
+### 6. `qtss-api` sağlık ve metrik uçları
+
+Kubernetes veya benzeri düzenleyiciler için:
+
+- **`GET /live`** — liveness; süreç cevap veriyorsa 200 (dış bağımlılık yok).
+- **`GET /ready`** — readiness; PostgreSQL `SELECT 1` başarılıysa 200, aksi 503 (pod trafiği kesilir).
+- **`GET /health`** — özet JSON (`status`, `service`).
+- **`GET /metrics`** — Prometheus metin çıktısı; üretimde `QTSS_METRICS_TOKEN` ile koruyun (`Authorization: Bearer …` veya `?token=`).
+
+Örnek probe (Ingress / Deployment yorumu olarak):
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /live
+    port: 8080
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+```

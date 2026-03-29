@@ -53,6 +53,7 @@ import {
   type MultiPatternChartOverlay,
 } from "./lib/patternDrawingBatchOverlay";
 import { ChannelScanMatchesTable } from "./components/ChannelScanMatchesTable";
+import { OperationsQueuesPanel } from "./components/OperationsQueuesPanel";
 import { mergeChartOhlcRowsByOpenTime } from "./lib/mergeChartOhlcRows";
 import type { ChartOhlcRow } from "./lib/marketBarsToCandles";
 import { chartOhlcRowsToScanBars, chartOhlcRowsSortedChrono } from "./lib/chartRowsToOhlcBars";
@@ -127,6 +128,7 @@ type SettingsTab =
   | "engine"
   | "market_context"
   | "nansen"
+  | "queues"
   | "setting";
 
 type ElliottLineStyle = "solid" | "dotted" | "dashed";
@@ -1787,6 +1789,15 @@ export default function App() {
                 <button
                   type="button"
                   role="tab"
+                  aria-selected={drawerTab === "queues"}
+                  className={`tv-settings__tab ${drawerTab === "queues" ? "is-active" : ""}`}
+                  onClick={() => setDrawerTab("queues")}
+                >
+                  Kuyruklar
+                </button>
+                <button
+                  type="button"
+                  role="tab"
                   aria-selected={drawerTab === "setting"}
                   className={`tv-settings__tab ${drawerTab === "setting" ? "is-active" : ""}`}
                   onClick={() => setDrawerTab("setting")}
@@ -1875,6 +1886,9 @@ export default function App() {
                           orgId={authSession.orgId}
                           <br />
                           roles={authSession.roles.length ? authSession.roles.join(", ") : "—"}
+                          <br />
+                          permissions=
+                          {authSession.permissions.length ? authSession.permissions.join(", ") : "—"}
                           {rbacIsAdmin ? " · admin" : ""}
                           {rbacIsOps && !rbacIsAdmin ? " · ops (trader/admin)" : ""}
                           {authSession && !rbacIsOps ? " · salt okunur (viewer/analyst)" : ""}
@@ -3850,6 +3864,29 @@ export default function App() {
                         <p className="muted">Nansen snapshot için giriş yapın.</p>
                       )}
                     </div>
+                  ) : null}
+                </>
+              ) : null}
+
+              {drawerTab === "queues" ? (
+                <>
+                  {matchesSetting(
+                    "kuyruk",
+                    "queue",
+                    "notify",
+                    "outbox",
+                    "bildirim",
+                    "ai",
+                    "onay",
+                    "approval",
+                    "ops",
+                    "worker",
+                  ) ? (
+                    <OperationsQueuesPanel
+                      accessToken={token}
+                      canOps={rbacIsOps}
+                      canAdmin={rbacIsAdmin}
+                    />
                   ) : null}
                 </>
               ) : null}
