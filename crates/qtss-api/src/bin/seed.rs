@@ -2,7 +2,7 @@
 //! `DATABASE_URL=... QTSS_SEED_ADMIN_PASSWORD=... cargo run -p qtss-api --bin qtss-seed`
 
 use anyhow::Context;
-use qtss_common::load_dotenv;
+use qtss_common::{load_dotenv, require_postgres_database_url};
 use argon2::password_hash::{PasswordHasher, SaltString};
 use argon2::Argon2;
 use qtss_storage::{create_pool, run_migrations};
@@ -11,8 +11,7 @@ use uuid::Uuid;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     load_dotenv();
-    let database_url =
-        std::env::var("DATABASE_URL").context("DATABASE_URL gerekli")?;
+    let database_url = require_postgres_database_url().map_err(anyhow::Error::msg)?;
     let admin_email =
         std::env::var("QTSS_SEED_ADMIN_EMAIL").unwrap_or_else(|_| "admin@localhost".into());
     let admin_password = std::env::var("QTSS_SEED_ADMIN_PASSWORD")

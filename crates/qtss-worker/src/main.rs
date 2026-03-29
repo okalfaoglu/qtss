@@ -33,7 +33,7 @@ use qtss_binance::{
     connect_url, parse_closed_kline_json, public_spot_combined_kline_url, public_spot_kline_url,
     public_usdm_combined_kline_url, public_usdm_kline_url,
 };
-use qtss_common::{ensure_postgres_scheme, init_logging, load_dotenv};
+use qtss_common::{init_logging, load_dotenv, postgres_url_from_env_or_default};
 use anyhow::Context;
 use qtss_storage::{
     create_pool, run_migrations, upsert_market_bar, MarketBarUpsert, PnlRollupRepository,
@@ -81,86 +81,80 @@ async fn main() -> anyhow::Result<()> {
         tracing::debug!(source_key = *k, "nansen HTTP snapshot key (nansen_extended)");
     }
 
-    let pool_opt: Option<PgPool> = match std::env::var("DATABASE_URL") {
-        Ok(db_url) if !db_url.trim().is_empty() => {
-            let db_url = db_url.trim().to_string();
-            ensure_postgres_scheme(&db_url).context(
-                "qtss-worker: DATABASE_URL postgres:// veya postgresql:// ile başlamalı (boş şema sqlx hatası verir)",
-            )?;
-            let pool = create_pool(&db_url, 3)
-                .await
-                .context("qtss-worker: PostgreSQL pool failed (check DATABASE_URL, host, port, credentials)")?;
-            run_migrations(&pool).await.context(
-                "qtss-worker: SQL migrations failed — journalctl -u qtss-worker -n 100 --no-pager. \
-                 Yaygın: checksum uyuşmazlığı → `cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums` (DATABASE_URL); \
-                 `to_regclass('public.bar_intervals')` NULL → `0036_bar_intervals_repair_if_missing.sql` (API/worker migrate); \
-                 çift aynı `NNNN_*.sql` öneki. Ayrıntı: docs/QTSS_CURSOR_DEV_GUIDE.md §6.",
-            )?;
-            let pnl_pool = pool.clone();
-            tokio::spawn(pnl_rollup_loop(pnl_pool));
-            let reconcile_pool = pool.clone();
-            tokio::spawn(binance_spot_reconcile::binance_spot_reconcile_loop(
-                reconcile_pool,
-            ));
-            let reconcile_fut_pool = pool.clone();
-            tokio::spawn(binance_futures_reconcile::binance_futures_reconcile_loop(
-                reconcile_fut_pool,
-            ));
-            let engine_pool = pool.clone();
-            let confluence_hook = Arc::new(confluence_hook::WorkerConfluenceHook);
-            tokio::spawn(qtss_analysis::engine_analysis_loop(
-                engine_pool,
-                confluence_hook,
-            ));
-            let nansen_pool = pool.clone();
-            tokio::spawn(nansen_engine::nansen_token_screener_loop(nansen_pool));
-            let nansen_nf = pool.clone();
-            tokio::spawn(nansen_engine::nansen_netflows_loop(nansen_nf));
-            let nansen_h = pool.clone();
-            tokio::spawn(nansen_engine::nansen_holdings_loop(nansen_h));
-            let nansen_pt = pool.clone();
-            tokio::spawn(nansen_engine::nansen_perp_trades_loop(nansen_pt));
-            let nansen_wb = pool.clone();
-            tokio::spawn(nansen_engine::nansen_who_bought_loop(nansen_wb));
-            let nansen_fi = pool.clone();
-            tokio::spawn(nansen_engine::nansen_flow_intel_loop(nansen_fi));
-            let nansen_lb = pool.clone();
-            tokio::spawn(nansen_engine::nansen_perp_leaderboard_loop(nansen_lb));
-            let nansen_wh = pool.clone();
-            tokio::spawn(nansen_engine::nansen_whale_perp_aggregate_loop(nansen_wh));
-            let setup_pool = pool.clone();
-            tokio::spawn(setup_scan_engine::nansen_setup_scan_loop(setup_pool));
-            let b_pool = pool.clone();
-            tokio::spawn(engines::external_binance_loop(b_pool));
-            let cg_pool = pool.clone();
-            tokio::spawn(engines::external_coinglass_loop(cg_pool));
-            let hl_pool = pool.clone();
-            tokio::spawn(engines::external_hyperliquid_loop(hl_pool));
-            let misc_pool = pool.clone();
-            tokio::spawn(engines::external_misc_loop(misc_pool));
-            let onchain_pool = pool.clone();
-            tokio::spawn(onchain_signal_scorer::onchain_signal_loop(onchain_pool));
-            let paper_notify_pool = pool.clone();
-            tokio::spawn(paper_fill_notify::paper_position_notify_loop(paper_notify_pool));
-            let outbox_pool = pool.clone();
-            tokio::spawn(notify_outbox::notify_outbox_loop(outbox_pool));
-            let live_notify_pool = pool.clone();
-            tokio::spawn(live_position_notify::live_position_notify_loop(live_notify_pool));
-            let ks_pool = pool.clone();
-            tokio::spawn(kill_switch::kill_switch_loop(ks_pool));
-            let pm_pool = pool.clone();
-            tokio::spawn(position_manager::position_manager_loop(pm_pool));
-            let ct_pool = pool.clone();
-            tokio::spawn(copy_trade_follower::copy_trade_follower_loop(ct_pool));
-            let ctq_pool = pool.clone();
-            tokio::spawn(copy_trade_queue::copy_trade_queue_loop(ctq_pool));
-            strategy_runner::spawn_if_enabled(&pool);
-            Some(pool)
-        }
-        _ => {
-            warn!("DATABASE_URL yok — pnl_rollups / market_bars DB yazımı kapalı");
-            None
-        }
+    let db_url = postgres_url_from_env_or_default("");
+    let pool_opt: Option<PgPool> = if !db_url.trim().is_empty() {
+        let pool = create_pool(&db_url, 3)
+            .await
+            .context("qtss-worker: PostgreSQL pool failed (check DATABASE_URL, host, port, credentials)")?;
+        run_migrations(&pool).await.context(
+            "qtss-worker: SQL migrations failed — journalctl -u qtss-worker -n 100 --no-pager. \
+             Yaygın: checksum uyuşmazlığı → `cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums` (DATABASE_URL); \
+             `to_regclass('public.bar_intervals')` NULL → `0036_bar_intervals_repair_if_missing.sql` (API/worker migrate); \
+             çift aynı `NNNN_*.sql` öneki. Ayrıntı: docs/QTSS_CURSOR_DEV_GUIDE.md §6.",
+        )?;
+        let pnl_pool = pool.clone();
+        tokio::spawn(pnl_rollup_loop(pnl_pool));
+        let reconcile_pool = pool.clone();
+        tokio::spawn(binance_spot_reconcile::binance_spot_reconcile_loop(
+            reconcile_pool,
+        ));
+        let reconcile_fut_pool = pool.clone();
+        tokio::spawn(binance_futures_reconcile::binance_futures_reconcile_loop(
+            reconcile_fut_pool,
+        ));
+        let engine_pool = pool.clone();
+        let confluence_hook = Arc::new(confluence_hook::WorkerConfluenceHook);
+        tokio::spawn(qtss_analysis::engine_analysis_loop(
+            engine_pool,
+            confluence_hook,
+        ));
+        let nansen_pool = pool.clone();
+        tokio::spawn(nansen_engine::nansen_token_screener_loop(nansen_pool));
+        let nansen_nf = pool.clone();
+        tokio::spawn(nansen_engine::nansen_netflows_loop(nansen_nf));
+        let nansen_h = pool.clone();
+        tokio::spawn(nansen_engine::nansen_holdings_loop(nansen_h));
+        let nansen_pt = pool.clone();
+        tokio::spawn(nansen_engine::nansen_perp_trades_loop(nansen_pt));
+        let nansen_wb = pool.clone();
+        tokio::spawn(nansen_engine::nansen_who_bought_loop(nansen_wb));
+        let nansen_fi = pool.clone();
+        tokio::spawn(nansen_engine::nansen_flow_intel_loop(nansen_fi));
+        let nansen_lb = pool.clone();
+        tokio::spawn(nansen_engine::nansen_perp_leaderboard_loop(nansen_lb));
+        let nansen_wh = pool.clone();
+        tokio::spawn(nansen_engine::nansen_whale_perp_aggregate_loop(nansen_wh));
+        let setup_pool = pool.clone();
+        tokio::spawn(setup_scan_engine::nansen_setup_scan_loop(setup_pool));
+        let b_pool = pool.clone();
+        tokio::spawn(engines::external_binance_loop(b_pool));
+        let cg_pool = pool.clone();
+        tokio::spawn(engines::external_coinglass_loop(cg_pool));
+        let hl_pool = pool.clone();
+        tokio::spawn(engines::external_hyperliquid_loop(hl_pool));
+        let misc_pool = pool.clone();
+        tokio::spawn(engines::external_misc_loop(misc_pool));
+        let onchain_pool = pool.clone();
+        tokio::spawn(onchain_signal_scorer::onchain_signal_loop(onchain_pool));
+        let paper_notify_pool = pool.clone();
+        tokio::spawn(paper_fill_notify::paper_position_notify_loop(paper_notify_pool));
+        let outbox_pool = pool.clone();
+        tokio::spawn(notify_outbox::notify_outbox_loop(outbox_pool));
+        let live_notify_pool = pool.clone();
+        tokio::spawn(live_position_notify::live_position_notify_loop(live_notify_pool));
+        let ks_pool = pool.clone();
+        tokio::spawn(kill_switch::kill_switch_loop(ks_pool));
+        let pm_pool = pool.clone();
+        tokio::spawn(position_manager::position_manager_loop(pm_pool));
+        let ct_pool = pool.clone();
+        tokio::spawn(copy_trade_follower::copy_trade_follower_loop(ct_pool));
+        let ctq_pool = pool.clone();
+        tokio::spawn(copy_trade_queue::copy_trade_queue_loop(ctq_pool));
+        strategy_runner::spawn_if_enabled(&pool);
+        Some(pool)
+    } else {
+        warn!("DATABASE_URL yok — pnl_rollups / market_bars DB yazımı kapalı");
+        None
     };
 
     let interval = std::env::var("QTSS_KLINE_INTERVAL").unwrap_or_else(|_| "1m".into());

@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use qtss_storage::{insert_http_audit, AuditHttpRow};
 
+use crate::audit_event::HttpMutationDetailsV1;
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
 
@@ -63,6 +64,9 @@ pub async fn audit_http_middleware(
         let org_id = Uuid::parse_str(&c.org_id).ok();
         let roles = c.roles.clone();
         let pool = st.pool.clone();
+        let details = Some(
+            HttpMutationDetailsV1::new(method.as_str(), &path, status).to_value(),
+        );
         let row = AuditHttpRow {
             request_id,
             user_id,
@@ -71,7 +75,7 @@ pub async fn audit_http_middleware(
             path,
             status_code: status,
             roles,
-            details: None,
+            details,
         };
         tokio::spawn(async move {
             if let Err(e) = insert_http_audit(&pool, row).await {

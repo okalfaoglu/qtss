@@ -6,7 +6,9 @@ pub mod kill_switch;
 pub mod logging;
 
 pub use app_mode::{AppMode, DbPersistenceMode};
-pub use database_url::{ensure_postgres_scheme, postgres_url_from_env_or_default};
+pub use database_url::{
+    ensure_postgres_scheme, postgres_url_from_env_or_default, require_postgres_database_url,
+};
 pub use kill_switch::{clear_trading_halt, halt_trading, is_trading_halted, set_trading_halted};
 pub use logging::{init_logging, log_business, log_critical, LogEvent, Loggable, QtssLogLevel};
 

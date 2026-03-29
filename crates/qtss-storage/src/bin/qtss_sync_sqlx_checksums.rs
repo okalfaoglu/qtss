@@ -18,7 +18,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{bail, Context};
-use qtss_common::load_dotenv;
+use qtss_common::{load_dotenv, require_postgres_database_url};
 use sha2::{Digest, Sha384};
 use sqlx::postgres::PgPoolOptions;
 
@@ -29,21 +29,7 @@ fn default_migrations_dir() -> std::path::PathBuf {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     load_dotenv();
-    let database_url = std::env::var("DATABASE_URL")
-        .ok()
-        .and_then(|s| {
-            let t = s.trim();
-            if t.is_empty() {
-                None
-            } else {
-                Some(t.to_string())
-            }
-        })
-        .context(
-            "DATABASE_URL gerekli ve boş olamaz (.env veya export). \
-             Dokümandaki `export DATABASE_URL='...'` örneğindeki `...` yerine gerçek postgres://... adresini yazın; \
-             boş `DATABASE_URL=` satırını silin veya doldurun.",
-        )?;
+    let database_url = require_postgres_database_url().map_err(anyhow::Error::msg)?;
 
     let migrations_dir = std::env::args()
         .nth(1)
