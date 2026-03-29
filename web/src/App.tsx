@@ -376,6 +376,84 @@ export default function App() {
   const chartLoadSeqRef = useRef(0);
   const livePollEpochRef = useRef(0);
 
+  const runChannelSixScanWithBars = useCallback(
+    async (barsInput: ChartOhlcRow[]) => {
+      if (!token || !barsInput.length) return;
+      setChannelScanError("");
+      setChannelScanJson("");
+      setChannelScanLoading(true);
+      try {
+        const scanWindow = acpOhlcWindowForScan(
+          barsInput,
+          acpConfig.calculated_bars,
+          acpConfig.scanning.repaint,
+        );
+        if (!scanWindow.length) {
+          setChannelScanError(
+            acpConfig.scanning.repaint
+              ? "ACP taraması için yeterli mum yok."
+              : "ACP taraması (repaint kapalı): en az iki kapanmış mum gerekir.",
+          );
+          setLastChannelScan(null);
+          setChannelScanJson("");
+          setChannelScanSummary("");
+          setChannelScanHoverTitle("");
+          return;
+        }
+        const payload = chartOhlcRowsToScanBars(scanWindow);
+        const base = acpConfigToChannelSixOptions(acpConfig, theme);
+        const res = await scanChannelSix(token, { bars: payload, ...(base as Record<string, unknown>) });
+        setLastChannelScan(res);
+        setChannelScanJson(JSON.stringify(res, null, 2));
+        if (res.matched && res.outcome) {
+          const id = res.outcome.scan.pattern_type_id;
+          const name = res.pattern_name ?? `id ${id}`;
+          const sk = res.outcome.pivot_tail_skip ?? 0;
+          const skipNote = sk > 0 ? ` · pivot_skip ${sk}` : "";
+          const lvl = res.outcome.zigzag_level ?? 0;
+          const lvlNote = lvl > 0 ? ` · level ${lvl}` : "";
+          const zzNote = res.used_zigzag ? ` · zg ${res.used_zigzag.length}/${res.used_zigzag.depth}` : "";
+          const nMatch = res.pattern_matches?.length ?? 1;
+          const multiNames =
+            nMatch > 1
+              ? (res.pattern_matches ?? [])
+                  .slice(0, 5)
+                  .map((m) => m.pattern_name ?? `id ${m.outcome.scan.pattern_type_id}`)
+                  .join(" · ")
+              : "";
+          const multiTail = nMatch > 5 ? "…" : "";
+          const multi = nMatch > 1 ? ` · ${nMatch} formasyon (${multiNames}${multiTail})` : "";
+          const hoverNames =
+            res.pattern_matches?.map((m) => m.pattern_name ?? `id ${m.outcome.scan.pattern_type_id}`).join(" · ") ??
+            name;
+          const repaintNote = acpConfig.scanning.repaint ? "" : " · kapanmış mum";
+          setChannelScanHoverTitle(`Formasyonlar: ${hoverNames}`);
+          setChannelScanSummary(
+            `${name} · pick ${res.outcome.scan.pick_upper}/${res.outcome.scan.pick_lower} · zz ${res.outcome.zigzag_pivot_count} pivot${skipNote}${lvlNote}${zzNote}${multi}${repaintNote}`,
+          );
+        } else {
+          setChannelScanHoverTitle("");
+          setChannelScanSummary(
+            `Eşleşme yok · ${channelSixRejectTr(res.reject)} · ${res.bar_count} mum · ${res.zigzag_pivot_count} zz pivot${acpConfig.scanning.repaint ? "" : " · kapanmış mum"}`,
+          );
+        }
+      } catch (e) {
+        setChannelScanError(String(e));
+        setLastChannelScan(null);
+        setChannelScanSummary("");
+        setChannelScanHoverTitle("");
+      } finally {
+        setChannelScanLoading(false);
+      }
+    },
+    [token, acpConfig, theme],
+  );
+
+  const runChannelSixScan = useCallback(() => {
+    if (!bars?.length) return;
+    void runChannelSixScanWithBars(bars);
+  }, [bars, runChannelSixScanWithBars]);
+
   const [chartTool, setChartTool] = useState<ChartTool>("crosshair");
   const [clearDrawNonce, setClearDrawNonce] = useState(0);
   const [profitCalcOpen, setProfitCalcOpen] = useState(false);
@@ -1268,6 +1346,9 @@ export default function App() {
         if (seq !== chartLoadSeqRef.current) return;
         setBars(rows);
         setChartFitKey((k) => k + 1);
+        if (acpConfig.scanning.auto_scan_on_timeframe_change) {
+          void runChannelSixScanWithBars(rows);
+        }
       } else if (token) {
         const lim = Math.min(50_000, Math.max(1, parseInt(barLimit, 10) || 24));
         const rows = await fetchMarketBarsRecent(token, {
@@ -1280,6 +1361,9 @@ export default function App() {
         if (seq !== chartLoadSeqRef.current) return;
         setBars(rows);
         setChartFitKey((k) => k + 1);
+        if (acpConfig.scanning.auto_scan_on_timeframe_change) {
+          void runChannelSixScanWithBars(rows);
+        }
       } else {
         if (seq !== chartLoadSeqRef.current) return;
         setBarsError("OHLC kaynağı Veritabanı seçili — giriş yapın veya kaynağı Otomatik / Borsa yapın.");
@@ -1292,7 +1376,18 @@ export default function App() {
         setBarsLoading(false);
       }
     }
-  }, [token, barExchange, barSegment, barSymbol, barInterval, barLimit, clearChannelScanUi, ohlcFromBinance]);
+  }, [
+    token,
+    barExchange,
+    barSegment,
+    barSymbol,
+    barInterval,
+    barLimit,
+    clearChannelScanUi,
+    ohlcFromBinance,
+    acpConfig.scanning.auto_scan_on_timeframe_change,
+    runChannelSixScanWithBars,
+  ]);
 
   // Sembol/zaman dilimi değişince grafiği otomatik yenile (Yükle butonsuz akış).
   useEffect(() => {
@@ -1346,71 +1441,6 @@ export default function App() {
       window.clearInterval(id);
     };
   }, [bars?.length, token, barSymbol, barInterval, barLimit, barExchange, barSegment, ohlcFromBinance]);
-
-  const runChannelSixScan = useCallback(async () => {
-    if (!token || !bars?.length) return;
-    setChannelScanError("");
-    setChannelScanJson("");
-    setChannelScanLoading(true);
-    try {
-      const scanWindow = acpOhlcWindowForScan(bars, acpConfig.calculated_bars, acpConfig.scanning.repaint);
-      if (!scanWindow.length) {
-        setChannelScanError(
-          acpConfig.scanning.repaint
-            ? "ACP taraması için yeterli mum yok."
-            : "ACP taraması (repaint kapalı): en az iki kapanmış mum gerekir.",
-        );
-        setLastChannelScan(null);
-        setChannelScanJson("");
-        setChannelScanSummary("");
-        setChannelScanHoverTitle("");
-        return;
-      }
-      const payload = chartOhlcRowsToScanBars(scanWindow);
-      const base = acpConfigToChannelSixOptions(acpConfig, theme);
-      const res = await scanChannelSix(token, { bars: payload, ...(base as Record<string, unknown>) });
-      setLastChannelScan(res);
-      setChannelScanJson(JSON.stringify(res, null, 2));
-      if (res.matched && res.outcome) {
-        const id = res.outcome.scan.pattern_type_id;
-        const name = res.pattern_name ?? `id ${id}`;
-        const sk = res.outcome.pivot_tail_skip ?? 0;
-        const skipNote = sk > 0 ? ` · pivot_skip ${sk}` : "";
-        const lvl = res.outcome.zigzag_level ?? 0;
-        const lvlNote = lvl > 0 ? ` · level ${lvl}` : "";
-        const zzNote = res.used_zigzag ? ` · zg ${res.used_zigzag.length}/${res.used_zigzag.depth}` : "";
-        const nMatch = res.pattern_matches?.length ?? 1;
-        const multiNames =
-          nMatch > 1
-            ? (res.pattern_matches ?? [])
-                .slice(0, 5)
-                .map((m) => m.pattern_name ?? `id ${m.outcome.scan.pattern_type_id}`)
-                .join(" · ")
-            : "";
-        const multiTail = nMatch > 5 ? "…" : "";
-        const multi = nMatch > 1 ? ` · ${nMatch} formasyon (${multiNames}${multiTail})` : "";
-        const hoverNames =
-          res.pattern_matches?.map((m) => m.pattern_name ?? `id ${m.outcome.scan.pattern_type_id}`).join(" · ") ?? name;
-        const repaintNote = acpConfig.scanning.repaint ? "" : " · kapanmış mum";
-        setChannelScanHoverTitle(`Formasyonlar: ${hoverNames}`);
-        setChannelScanSummary(
-          `${name} · pick ${res.outcome.scan.pick_upper}/${res.outcome.scan.pick_lower} · zz ${res.outcome.zigzag_pivot_count} pivot${skipNote}${lvlNote}${zzNote}${multi}${repaintNote}`,
-        );
-      } else {
-        setChannelScanHoverTitle("");
-        setChannelScanSummary(
-          `Eşleşme yok · ${channelSixRejectTr(res.reject)} · ${res.bar_count} mum · ${res.zigzag_pivot_count} zz pivot${acpConfig.scanning.repaint ? "" : " · kapanmış mum"}`,
-        );
-      }
-    } catch (e) {
-      setChannelScanError(String(e));
-      setLastChannelScan(null);
-      setChannelScanSummary("");
-      setChannelScanHoverTitle("");
-    } finally {
-      setChannelScanLoading(false);
-    }
-  }, [token, bars, acpConfig, theme]);
 
   const autoScanTfRef = useRef<string | null>(null);
   useEffect(() => {

@@ -183,7 +183,8 @@ export const DEFAULT_ACP_CONFIG: AcpChartPatternsConfig = {
     ignore_if_entry_crossed: false,
     ratio_diff_enabled: false,
     ratio_diff_max: 1.0,
-    auto_scan_on_timeframe_change: false,
+    /** Grafik (sembol/TF) yüklendiğinde ve TF değişince kanal taraması; ACP çizimi için gerekli. */
+    auto_scan_on_timeframe_change: true,
     size_filters: { ...DEFAULT_SIZE_FILTERS },
   },
   pattern_groups: defaultPatternGroups(),
@@ -279,7 +280,10 @@ export function normalizeAcpChartPatternsConfig(raw: unknown): AcpChartPatternsC
     ignore_if_entry_crossed: asBool(scanIn?.ignore_if_entry_crossed, false),
     ratio_diff_enabled: asBool(scanIn?.ratio_diff_enabled, false),
     ratio_diff_max: clamp(asNum(scanIn?.ratio_diff_max, 1.0), 0.000_001, 1_000_000),
-    auto_scan_on_timeframe_change: asBool(scanIn?.auto_scan_on_timeframe_change, false),
+    auto_scan_on_timeframe_change: asBool(
+      scanIn?.auto_scan_on_timeframe_change,
+      DEFAULT_ACP_CONFIG.scanning.auto_scan_on_timeframe_change,
+    ),
     size_filters,
   };
 
