@@ -17,12 +17,17 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use tracing::{info, warn};
 
-use crate::data_sources::registry::NANSEN_TOKEN_SCREENER_DATA_KEY;
+use crate::data_sources::registry::{
+    NANSEN_FLOW_INTELLIGENCE_DATA_KEY, NANSEN_NETFLOWS_DATA_KEY, NANSEN_PERP_TRADES_DATA_KEY,
+    NANSEN_TOKEN_SCREENER_DATA_KEY, NANSEN_WHALE_PERP_AGGREGATE_DATA_KEY,
+    NANSEN_WHO_BOUGHT_SOLD_DATA_KEY,
+};
 use crate::signal_scorer::{
     score_binance_global_long_short_account_ratio, score_binance_open_interest_heat,
     score_binance_premium_funding, score_binance_taker_ratio, score_coinglass_liquidations_like,
-    score_coinglass_netflow_like, score_hl_meta_asset_ctxs_for_coin, score_nansen_dex_buy_sell_pressure,
-    score_nansen_smart_money_depth,
+    score_coinglass_netflow_like, score_hl_meta_asset_ctxs_for_coin, score_nansen_buyer_quality,
+    score_nansen_dex_buy_sell_pressure, score_nansen_flow_intelligence, score_nansen_netflows,
+    score_nansen_perp_direction,
 };
 
 fn engine_enabled() -> bool {
@@ -90,6 +95,11 @@ struct ComponentWeights {
     coinglass_liquidations: f64,
     hl_meta: f64,
     nansen: f64,
+    nansen_netflows: f64,
+    nansen_perp: f64,
+    nansen_buyer_quality: f64,
+    nansen_flow_intelligence: f64,
+    hl_whale: f64,
 }
 
 async fn load_component_weights(pool: &PgPool) -> ComponentWeights {
@@ -119,6 +129,11 @@ async fn load_component_weights(pool: &PgPool) -> ComponentWeights {
         coinglass_liquidations: g("coinglass_liquidations"),
         hl_meta: g("hl_meta"),
         nansen: g("nansen"),
+        nansen_netflows: g("nansen_netflows"),
+        nansen_perp: g("nansen_perp"),
+        nansen_buyer_quality: g("nansen_buyer_quality"),
+        nansen_flow_intelligence: g("nansen_flow_intelligence"),
+        hl_whale: g("hl_whale"),
     }
 }
 
@@ -351,19 +366,59 @@ pub async fn compute_and_persist_for_symbol(pool: &PgPool, symbol: &str) -> Resu
     })
     .await;
 
-    let (nansen_v, nansen_c, nansen_ok) =
-        snapshot_score_with_conf(&pool, NANSEN_TOKEN_SCREENER_DATA_KEY, 1800, |j| {
-            let depth = score_nansen_smart_money_depth(j);
-            let dex = score_nansen_dex_buy_sell_pressure(j);
-            if dex.abs() < 1e-12 {
-                depth
-            } else {
-                (0.55 * depth + 0.45 * dex).clamp(-1.0, 1.0)
-            }
-        })
-        .await;
+    // Token screener: DEX buy/sell pressure only (no row-count “depth” blend — dev guide §3.1).
+    let (nansen_dex_v, nansen_dex_c, nansen_dex_ok) = snapshot_score_with_conf(
+        &pool,
+        NANSEN_TOKEN_SCREENER_DATA_KEY,
+        1800,
+        score_nansen_dex_buy_sell_pressure,
+    )
+    .await;
+
+    let (nansen_nf_v, nansen_nf_c, nansen_nf_ok) = snapshot_score_with_conf(
+        &pool,
+        NANSEN_NETFLOWS_DATA_KEY,
+        1800,
+        score_nansen_netflows,
+    )
+    .await;
+    let (nansen_pt_v, nansen_pt_c, nansen_pt_ok) = snapshot_score_with_conf(
+        &pool,
+        NANSEN_PERP_TRADES_DATA_KEY,
+        1800,
+        score_nansen_perp_direction,
+    )
+    .await;
+    let (nansen_fi_v, nansen_fi_c, nansen_fi_ok) = snapshot_score_with_conf(
+        &pool,
+        NANSEN_FLOW_INTELLIGENCE_DATA_KEY,
+        1800,
+        score_nansen_flow_intelligence,
+    )
+    .await;
+    let (nansen_bq_v, nansen_bq_c, nansen_bq_ok) = snapshot_score_with_conf(
+        &pool,
+        NANSEN_WHO_BOUGHT_SOLD_DATA_KEY,
+        1800,
+        score_nansen_buyer_quality,
+    )
+    .await;
+
+    let (hl_whale_v, hl_whale_c, hl_whale_ok) = snapshot_score_with_conf(
+        &pool,
+        NANSEN_WHALE_PERP_AGGREGATE_DATA_KEY,
+        1800,
+        score_nansen_perp_direction,
+    )
+    .await;
 
     let w = load_component_weights(pool).await;
+    // §3.2: same exchange-flow idea as Coinglass netflow — halve Coinglass weight when both contribute.
+    let coinglass_nf_effective_w = if nf_v.is_some() && nf_ok && nansen_fi_v.is_some() && nansen_fi_ok {
+        w.coinglass_netflow * 0.5
+    } else {
+        w.coinglass_netflow
+    };
 
     let mut parts: Vec<(f64, f64, f64)> = Vec::new();
     let mut breakdown: Vec<Value> = Vec::new();
@@ -416,14 +471,16 @@ pub async fn compute_and_persist_for_symbol(pool: &PgPool, symbol: &str) -> Resu
         }
     }
     if let Some(s) = nf_v {
-        parts.push((s, nf_c, w.coinglass_netflow));
+        parts.push((s, nf_c, coinglass_nf_effective_w));
         if nf_ok {
             breakdown.push(json!({
                 "component": "coinglass_netflow",
                 "source_key": "coinglass_netflow_btc",
                 "score": s,
                 "confidence": nf_c,
-                "weight": w.coinglass_netflow
+                "weight": coinglass_nf_effective_w,
+                "weight_base": w.coinglass_netflow,
+                "nansen_flow_intelligence_active": nansen_fi_v.is_some() && nansen_fi_ok
             }));
         }
     }
@@ -451,15 +508,75 @@ pub async fn compute_and_persist_for_symbol(pool: &PgPool, symbol: &str) -> Resu
             }));
         }
     }
-    if let Some(s) = nansen_v {
-        parts.push((s, nansen_c, w.nansen));
-        if nansen_ok {
+    if let Some(s) = nansen_dex_v {
+        parts.push((s, nansen_dex_c, w.nansen));
+        if nansen_dex_ok {
             breakdown.push(json!({
-                "component": "nansen",
+                "component": "nansen_dex_pressure",
                 "source_key": NANSEN_TOKEN_SCREENER_DATA_KEY,
                 "score": s,
-                "confidence": nansen_c,
+                "confidence": nansen_dex_c,
                 "weight": w.nansen
+            }));
+        }
+    }
+    if let Some(s) = nansen_nf_v {
+        parts.push((s, nansen_nf_c, w.nansen_netflows));
+        if nansen_nf_ok {
+            breakdown.push(json!({
+                "component": "nansen_netflows",
+                "source_key": NANSEN_NETFLOWS_DATA_KEY,
+                "score": s,
+                "confidence": nansen_nf_c,
+                "weight": w.nansen_netflows
+            }));
+        }
+    }
+    if let Some(s) = nansen_pt_v {
+        parts.push((s, nansen_pt_c, w.nansen_perp));
+        if nansen_pt_ok {
+            breakdown.push(json!({
+                "component": "nansen_perp",
+                "source_key": NANSEN_PERP_TRADES_DATA_KEY,
+                "score": s,
+                "confidence": nansen_pt_c,
+                "weight": w.nansen_perp
+            }));
+        }
+    }
+    if let Some(s) = nansen_fi_v {
+        parts.push((s, nansen_fi_c, w.nansen_flow_intelligence));
+        if nansen_fi_ok {
+            breakdown.push(json!({
+                "component": "nansen_flow_intelligence",
+                "source_key": NANSEN_FLOW_INTELLIGENCE_DATA_KEY,
+                "score": s,
+                "confidence": nansen_fi_c,
+                "weight": w.nansen_flow_intelligence
+            }));
+        }
+    }
+    if let Some(s) = nansen_bq_v {
+        parts.push((s, nansen_bq_c, w.nansen_buyer_quality));
+        if nansen_bq_ok {
+            breakdown.push(json!({
+                "component": "nansen_buyer_quality",
+                "source_key": NANSEN_WHO_BOUGHT_SOLD_DATA_KEY,
+                "score": s,
+                "confidence": nansen_bq_c,
+                "weight": w.nansen_buyer_quality
+            }));
+        }
+    }
+    if let Some(s) = hl_whale_v {
+        parts.push((s, hl_whale_c, w.hl_whale));
+        if hl_whale_ok {
+            breakdown.push(json!({
+                "component": "hl_whale",
+                "source_key": NANSEN_WHALE_PERP_AGGREGATE_DATA_KEY,
+                "score": s,
+                "confidence": hl_whale_c,
+                "weight": w.hl_whale
             }));
         }
     }
@@ -512,12 +629,27 @@ pub async fn compute_and_persist_for_symbol(pool: &PgPool, symbol: &str) -> Resu
     if hl_ok {
         snapshot_keys.push("hl_meta_asset_ctxs".into());
     }
-    if nansen_ok {
+    if nansen_dex_ok {
         snapshot_keys.push(NANSEN_TOKEN_SCREENER_DATA_KEY.to_string());
+    }
+    if nansen_nf_ok {
+        snapshot_keys.push(NANSEN_NETFLOWS_DATA_KEY.to_string());
+    }
+    if nansen_pt_ok {
+        snapshot_keys.push(NANSEN_PERP_TRADES_DATA_KEY.to_string());
+    }
+    if nansen_fi_ok {
+        snapshot_keys.push(NANSEN_FLOW_INTELLIGENCE_DATA_KEY.to_string());
+    }
+    if nansen_bq_ok {
+        snapshot_keys.push(NANSEN_WHO_BOUGHT_SOLD_DATA_KEY.to_string());
+    }
+    if hl_whale_ok {
+        snapshot_keys.push(NANSEN_WHALE_PERP_AGGREGATE_DATA_KEY.to_string());
     }
 
     let meta_json = json!({
-        "schema_version": 2,
+        "schema_version": 3,
         "weights_config_key": onchain_weights_config_key(),
         "weights_used": {
             "taker": w.taker,
@@ -525,9 +657,15 @@ pub async fn compute_and_persist_for_symbol(pool: &PgPool, symbol: &str) -> Resu
             "oi": w.oi,
             "ls_ratio": w.ls_ratio,
             "coinglass_netflow": w.coinglass_netflow,
+            "coinglass_netflow_effective": coinglass_nf_effective_w,
             "coinglass_liquidations": w.coinglass_liquidations,
             "hl_meta": w.hl_meta,
-            "nansen": w.nansen
+            "nansen": w.nansen,
+            "nansen_netflows": w.nansen_netflows,
+            "nansen_perp": w.nansen_perp,
+            "nansen_buyer_quality": w.nansen_buyer_quality,
+            "nansen_flow_intelligence": w.nansen_flow_intelligence,
+            "hl_whale": w.hl_whale
         },
         "source_breakdown": breakdown,
         "per_key_confidence": {
@@ -538,10 +676,16 @@ pub async fn compute_and_persist_for_symbol(pool: &PgPool, symbol: &str) -> Resu
             "coinglass_netflow_btc": nf_c,
             "coinglass_liquidations_btc": liq_c,
             "hl_meta": hl_c,
-            "nansen": nansen_c,
+            "nansen_token_screener_dex": nansen_dex_c,
+            "nansen_netflows": nansen_nf_c,
+            "nansen_perp_trades": nansen_pt_c,
+            "nansen_flow_intelligence": nansen_fi_c,
+            "nansen_who_bought_sold": nansen_bq_c,
+            "nansen_whale_perp_aggregate": hl_whale_c
         },
         "aggregate_formula": "SPEC §4.2: sum(score*conf*weight)/sum(conf*weight)",
-        "note": "exchange_balance / hl_whale / tvl: kapalı veya seri yok — null kolonlar"
+        "nansen_note": "nansen_sm_score column stores DEX pressure only (legacy name); extended Nansen in dedicated columns",
+        "note": "exchange_balance / tvl: kapalı veya seri yok — null kolonlar; hl_whale Nansen profiler aggregate ile dolar"
     });
 
     let prev = fetch_latest_onchain_signal_score(pool, &sym)
@@ -557,9 +701,12 @@ pub async fn compute_and_persist_for_symbol(pool: &PgPool, symbol: &str) -> Resu
         exchange_netflow_score: nf_v,
         exchange_balance_score: None,
         hl_bias_score: hl_v,
-        hl_whale_score: None,
+        hl_whale_score: hl_whale_v,
         liquidation_score: liq_v,
-        nansen_sm_score: nansen_v,
+        nansen_sm_score: nansen_dex_v,
+        nansen_netflow_score: nansen_nf_v,
+        nansen_perp_score: nansen_pt_v,
+        nansen_buyer_quality_score: nansen_bq_v,
         tvl_trend_score: None,
         aggregate_score,
         confidence,

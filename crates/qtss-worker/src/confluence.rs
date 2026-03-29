@@ -15,7 +15,7 @@ use crate::signal_scorer::{
     score_binance_open_interest_heat, score_binance_premium_funding,
     score_coinglass_liquidations_like, score_coinglass_netflow_like, score_for_source_key,
     score_hl_meta_asset_ctxs_for_coin, score_nansen_dex_buy_sell_pressure,
-    score_nansen_smart_money_depth,
+    score_nansen_response_coverage,
 };
 
 const CONF_CONFIG_KEY: &str = "confluence_weights_by_regime";
@@ -257,13 +257,7 @@ fn smart_money_pillar_from_nansen(nansen_json: Option<&Value>) -> f64 {
     let Some(j) = nansen_json else {
         return 0.0;
     };
-    let depth = score_nansen_smart_money_depth(j);
-    let dex = score_nansen_dex_buy_sell_pressure(j);
-    if dex.abs() < 1e-12 {
-        depth
-    } else {
-        (0.55 * depth + 0.45 * dex).clamp(-1.0, 1.0)
-    }
+    score_nansen_dex_buy_sell_pressure(j)
 }
 
 fn category_funding_oi(premium_json: Option<&Value>, oi_json: Option<&Value>) -> f64 {
@@ -283,7 +277,7 @@ fn category_funding_oi(premium_json: Option<&Value>, oi_json: Option<&Value>) ->
 
 /// PLAN Phase B / pazar matrisi — ham kategori skorları (payload + `market_confluence_snapshots.scores_json`).
 fn build_category_scores_json(
-    smart_money_depth: f64,
+    smart_money: f64,
     cex_flow: f64,
     dex_pressure: f64,
     hyperliquid: f64,
@@ -292,7 +286,7 @@ fn build_category_scores_json(
     composite: f64,
 ) -> Value {
     json!({
-        "smart_money": smart_money_depth,
+        "smart_money": smart_money,
         "cex_flow": cex_flow,
         "dex_pressure": dex_pressure,
         "hyperliquid": hyperliquid,
@@ -335,8 +329,8 @@ pub async fn compute_and_persist(
     let dex_pressure_cat = nansen_ref
         .map(score_nansen_dex_buy_sell_pressure)
         .unwrap_or(0.0);
-    let smart_money_depth_cat = nansen_ref
-        .map(score_nansen_smart_money_depth)
+    let nansen_response_coverage_cat = nansen_ref
+        .map(score_nansen_response_coverage)
         .unwrap_or(0.0);
 
     let prem_json = data_snapshot_json(pool, &format!("binance_premium_{base}usdt")).await;
@@ -439,7 +433,7 @@ pub async fn compute_and_persist(
         "interval": t.interval,
         "data_sources_considered": data_sources_considered,
         "category_scores": {
-            "smart_money_depth": smart_money_depth_cat,
+            "nansen_response_coverage": nansen_response_coverage_cat,
             "dex_pressure": dex_pressure_cat,
             "cex_flow": cex_flow_cat,
             "hyperliquid": hyperliquid_cat,
@@ -461,7 +455,7 @@ pub async fn compute_and_persist(
     .map_err(|e| e.to_string())?;
 
     let scores_json = build_category_scores_json(
-        smart_money_depth_cat,
+        smart_money,
         cex_flow_cat,
         dex_pressure_cat,
         hyperliquid_cat,

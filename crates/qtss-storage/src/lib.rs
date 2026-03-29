@@ -62,5 +62,7 @@ pub use nansen_setup_scan::{
     NansenSetupRowDetail, NansenSetupRowInsert, NansenSetupRunInsert, NansenSetupRunRow,
 };
 pub use paper::{PaperBalanceRow, PaperFillRow, PaperLedgerRepository};
-pub use pnl::{PnlBucket, PnlRebuildStats, PnlRollupRepository, PnlRollupRow};
+pub use pnl::{
+    sum_today_daily_realized_pnl, PnlBucket, PnlRebuildStats, PnlRollupRepository, PnlRollupRow,
+};
 pub use pool::{create_pool, run_migrations};

@@ -23,7 +23,19 @@ fn parse_json_f64(v: Option<&Value>) -> Option<f64> {
 #[must_use]
 pub fn score_for_source_key(source_key: &str, response: &Value) -> f64 {
     if source_key == "nansen_token_screener" {
-        return score_nansen_smart_money_depth(response);
+        return score_nansen_dex_buy_sell_pressure(response);
+    }
+    if source_key == "nansen_netflows" {
+        return score_nansen_netflows(response);
+    }
+    if source_key == "nansen_perp_trades" {
+        return score_nansen_perp_direction(response);
+    }
+    if source_key == "nansen_flow_intelligence" {
+        return score_nansen_flow_intelligence(response);
+    }
+    if source_key == "nansen_who_bought_sold" {
+        return score_nansen_buyer_quality(response);
     }
     if source_key.starts_with("binance_taker_") && source_key.ends_with("usdt") {
         return score_binance_taker_ratio(response).unwrap_or(0.0);
@@ -49,9 +61,10 @@ pub fn score_for_source_key(source_key: &str, response: &Value) -> f64 {
     0.0
 }
 
-/// Nansen: screener satır sayısı → smart-money bağlam derinliği (mevcut heuristik).
+/// Nansen: API response row count → coverage only (not directional smart money). For diagnostics;
+/// do not blend into aggregate on-chain score (see dev guide §3.1 / §3.9).
 #[must_use]
-pub fn score_nansen_smart_money_depth(response: &Value) -> f64 {
+pub fn score_nansen_response_coverage(response: &Value) -> f64 {
     let n = response
         .get("data")
         .and_then(|d| d.as_array())
@@ -66,6 +79,109 @@ pub fn score_nansen_smart_money_depth(response: &Value) -> f64 {
     } else {
         0.0
     }
+}
+
+/// smart-money/netflows: sum `net_flow` / sum |net_flow| → [-1, 1].
+#[must_use]
+pub fn score_nansen_netflows(response: &Value) -> f64 {
+    let data = match response.get("data") {
+        Some(d) => d,
+        None => return 0.0,
+    };
+    let rows: Vec<&Value> = if let Some(a) = data.as_array() {
+        a.iter().collect()
+    } else {
+        vec![data]
+    };
+    let mut net_sum = 0_f64;
+    let mut abs_sum = 0_f64;
+    for row in rows.iter().take(2000) {
+        let nf = parse_json_f64(row.get("net_flow"))
+            .or_else(|| parse_json_f64(row.get("netFlow")))
+            .or_else(|| parse_json_f64(row.get("net_volume")))
+            .unwrap_or(0.0);
+        net_sum += nf;
+        abs_sum += nf.abs();
+    }
+    if abs_sum < 1e-12 {
+        return 0.0;
+    }
+    (net_sum / abs_sum).clamp(-1.0, 1.0)
+}
+
+/// smart-money/perp-trades: long vs short notional share → [-1, 1] (0.5-centered).
+#[must_use]
+pub fn score_nansen_perp_direction(response: &Value) -> f64 {
+    let Some(rows) = response.get("data").and_then(|d| d.as_array()) else {
+        return 0.0;
+    };
+    let mut long_n = 0_f64;
+    let mut short_n = 0_f64;
+    for row in rows.iter().take(2000) {
+        let side = row
+            .get("side")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let n = parse_json_f64(row.get("notional_usd"))
+            .or_else(|| parse_json_f64(row.get("notionalUsd")))
+            .or_else(|| parse_json_f64(row.get("position_value_usd")))
+            .unwrap_or(0.0)
+            .max(0.0);
+        if side.contains("long") {
+            long_n += n;
+        } else if side.contains("short") {
+            short_n += n;
+        }
+    }
+    let t = long_n + short_n;
+    if t < 1e-12 {
+        return 0.0;
+    }
+    let ratio = long_n / t;
+    ((ratio - 0.5) * 2.0).clamp(-1.0, 1.0)
+}
+
+/// tgm/flow-intelligence: same normalization idea as Coinglass netflow (exchange flow).
+#[must_use]
+pub fn score_nansen_flow_intelligence(response: &Value) -> f64 {
+    score_coinglass_netflow_like(response)
+}
+
+/// tgm/who-bought-sold: wallet label quality ratio → [-1, 1].
+#[must_use]
+pub fn score_nansen_buyer_quality(response: &Value) -> f64 {
+    let Some(rows) = response.get("data").and_then(|d| d.as_array()) else {
+        return 0.0;
+    };
+    let mut good = 0_usize;
+    let mut bad = 0_usize;
+    for row in rows.iter().take(500) {
+        let label = row
+            .get("wallet_label")
+            .or_else(|| row.get("label"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if label.contains("smart")
+            || label.contains("fund")
+            || label.contains("vc")
+            || label.contains("institution")
+        {
+            good += 1;
+        } else if label.contains("bot")
+            || label.contains("mev")
+            || label.contains("wash")
+        {
+            bad += 1;
+        }
+    }
+    let denom = good + bad;
+    if denom == 0 {
+        return 0.0;
+    }
+    let ratio = good as f64 / denom as f64;
+    (ratio * 2.0 - 1.0).clamp(-1.0, 1.0)
 }
 
 /// Nansen token screener satırlarında DEX alım/satım dengesi (buy vs sell volume alanları).
@@ -304,10 +420,57 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn dispatch_nansen_key() {
-        let v = json!({ "data": (0..25).map(|_| json!({})).collect::<Vec<_>>() });
+    fn dispatch_nansen_token_screener_uses_dex_pressure() {
+        let v = json!({
+            "data": [
+                { "buy_volume": 100.0, "sell_volume": 0.0 }
+            ]
+        });
         let s = score_for_source_key("nansen_token_screener", &v);
-        assert!((s - 0.35).abs() < 1e-9);
+        assert!((s - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn nansen_response_coverage_rows() {
+        let v = json!({ "data": (0..25).map(|_| json!({})).collect::<Vec<_>>() });
+        assert!((score_nansen_response_coverage(&v) - 0.35).abs() < 1e-9);
+    }
+
+    #[test]
+    fn nansen_netflows_signed() {
+        let v = json!({
+            "data": [
+                { "net_flow": 30.0 },
+                { "net_flow": -10.0 }
+            ]
+        });
+        let s = score_nansen_netflows(&v);
+        assert!(s > 0.0);
+    }
+
+    #[test]
+    fn nansen_netflows_bullish_dev_guide() {
+        let v = json!({
+            "data": [
+                { "net_flow": 1_000_000.0, "symbol": "ETH" },
+                { "net_flow": 500_000.0, "symbol": "BTC" }
+            ]
+        });
+        let s = score_nansen_netflows(&v);
+        assert!(s > 0.0, "positive netflow sum should be bullish");
+        assert!(s <= 1.0);
+    }
+
+    #[test]
+    fn nansen_perp_direction_heavy_long_dev_guide() {
+        let v = json!({
+            "data": [
+                { "side": "long", "notional_usd": 8_000_000.0 },
+                { "side": "short", "notional_usd": 2_000_000.0 }
+            ]
+        });
+        let s = score_nansen_perp_direction(&v);
+        assert!(s > 0.3, "heavy long notional should skew positive");
     }
 
     #[test]

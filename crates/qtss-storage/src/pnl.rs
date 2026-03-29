@@ -234,3 +234,18 @@ impl PnlRollupRepository {
         })
     }
 }
+
+/// Kill-switch / risk: sum `realized_pnl` across all rows for the current UTC `daily` bucket start.
+pub async fn sum_today_daily_realized_pnl(pool: &PgPool) -> Result<Decimal, StorageError> {
+    let d = Utc::now().date_naive();
+    let t0 = utc_day_start(d);
+    let sum: Option<Decimal> = sqlx::query_scalar(
+        r#"SELECT COALESCE(SUM(realized_pnl), 0)
+           FROM pnl_rollups
+           WHERE bucket = 'daily' AND period_start = $1"#,
+    )
+    .bind(t0)
+    .fetch_one(pool)
+    .await?;
+    Ok(sum.unwrap_or(Decimal::ZERO))
+}

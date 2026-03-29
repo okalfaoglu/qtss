@@ -23,6 +23,9 @@ pub struct OnchainSignalScoreRow {
     pub hl_whale_score: Option<f64>,
     pub liquidation_score: Option<f64>,
     pub nansen_sm_score: Option<f64>,
+    pub nansen_netflow_score: Option<f64>,
+    pub nansen_perp_score: Option<f64>,
+    pub nansen_buyer_quality_score: Option<f64>,
     pub tvl_trend_score: Option<f64>,
     pub aggregate_score: f64,
     pub confidence: f64,
@@ -47,6 +50,9 @@ pub struct OnchainSignalScoreInsert {
     pub hl_whale_score: Option<f64>,
     pub liquidation_score: Option<f64>,
     pub nansen_sm_score: Option<f64>,
+    pub nansen_netflow_score: Option<f64>,
+    pub nansen_perp_score: Option<f64>,
+    pub nansen_buyer_quality_score: Option<f64>,
     pub tvl_trend_score: Option<f64>,
     pub aggregate_score: f64,
     pub confidence: f64,
@@ -69,14 +75,17 @@ pub async fn insert_onchain_signal_score(
             funding_score, oi_score, ls_ratio_score, taker_vol_score,
             exchange_netflow_score, exchange_balance_score,
             hl_bias_score, hl_whale_score, liquidation_score,
-            nansen_sm_score, tvl_trend_score,
+            nansen_sm_score,
+            nansen_netflow_score, nansen_perp_score, nansen_buyer_quality_score,
+            tvl_trend_score,
             aggregate_score, confidence, direction,
             market_regime, conflict_detected, conflict_detail,
             snapshot_keys, meta_json
         ) VALUES (
             $1,
-            $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-            $13, $14, $15, $16, $17, $18, $19, $20
+            $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+            $12, $13, $14, $15,
+            $16, $17, $18, $19, $20, $21, $22, $23
         )
         RETURNING id
         "#,
@@ -92,6 +101,9 @@ pub async fn insert_onchain_signal_score(
     .bind(row.hl_whale_score)
     .bind(row.liquidation_score)
     .bind(row.nansen_sm_score)
+    .bind(row.nansen_netflow_score)
+    .bind(row.nansen_perp_score)
+    .bind(row.nansen_buyer_quality_score)
     .bind(row.tvl_trend_score)
     .bind(row.aggregate_score)
     .bind(row.confidence)
@@ -116,7 +128,9 @@ pub async fn fetch_latest_onchain_signal_score(
                   funding_score, oi_score, ls_ratio_score, taker_vol_score,
                   exchange_netflow_score, exchange_balance_score,
                   hl_bias_score, hl_whale_score, liquidation_score,
-                  nansen_sm_score, tvl_trend_score,
+                  nansen_sm_score,
+                  nansen_netflow_score, nansen_perp_score, nansen_buyer_quality_score,
+                  tvl_trend_score,
                   aggregate_score, confidence, direction,
                   market_regime, conflict_detected, conflict_detail,
                   snapshot_keys, meta_json
@@ -143,7 +157,9 @@ pub async fn list_onchain_signal_scores_history(
                   funding_score, oi_score, ls_ratio_score, taker_vol_score,
                   exchange_netflow_score, exchange_balance_score,
                   hl_bias_score, hl_whale_score, liquidation_score,
-                  nansen_sm_score, tvl_trend_score,
+                  nansen_sm_score,
+                  nansen_netflow_score, nansen_perp_score, nansen_buyer_quality_score,
+                  tvl_trend_score,
                   aggregate_score, confidence, direction,
                   market_regime, conflict_detected, conflict_detail,
                   snapshot_keys, meta_json

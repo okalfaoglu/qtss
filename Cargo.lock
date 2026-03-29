@@ -1913,6 +1913,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "qtss-strategy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "qtss-common",
+ "qtss-domain",
+ "qtss-execution",
+ "qtss-storage",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "qtss-worker"
 version = "0.1.0"
 dependencies = [

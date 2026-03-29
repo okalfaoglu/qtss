@@ -30,7 +30,10 @@ pub use config::{BinanceClientConfig, BinanceCredentials, BinanceEndpoints};
 pub use error::BinanceError;
 pub use klines::{parse_klines_json, KlineBar};
 pub use order_parse::venue_order_id_from_binance_order_response;
-pub use ws::{connect_url, public_spot_kline_url, public_usdm_kline_url, WsStream};
+pub use ws::{
+    connect_url, public_spot_combined_kline_url, public_spot_kline_url, public_usdm_combined_kline_url,
+    public_usdm_kline_url, WsStream,
+};
 pub use ws_kline::{parse_closed_kline_json, ClosedKline};
 pub use types::{
     insert_opt, FuturesOrderType, OrderSide, SpotOrderType, TimeInForce,

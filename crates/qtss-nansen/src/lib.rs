@@ -47,15 +47,16 @@ fn header_first(headers: &HeaderMap, name: &'static str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// `POST /api/v1/token-screener` — request body is API-specific JSON (chains, filters, pagination).
-pub async fn post_token_screener(
+async fn post_json_path(
     client: &reqwest::Client,
     base_url: &str,
     api_key: &str,
+    path: &str,
     body: &Value,
 ) -> Result<(Value, NansenResponseMeta), NansenError> {
     let base = base_url.trim_end_matches('/');
-    let url = format!("{base}/api/v1/token-screener");
+    let path = path.trim_start_matches('/');
+    let url = format!("{base}/{path}");
     let res = client
         .post(url)
         .header(
@@ -94,6 +95,142 @@ pub async fn post_token_screener(
 
     let v: Value = serde_json::from_str(&text)?;
     Ok((v, meta))
+}
+
+/// `POST /api/v1/token-screener` — request body is API-specific JSON (chains, filters, pagination).
+pub async fn post_token_screener(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    body: &Value,
+) -> Result<(Value, NansenResponseMeta), NansenError> {
+    post_json_path(
+        client,
+        base_url,
+        api_key,
+        "api/v1/token-screener",
+        body,
+    )
+    .await
+}
+
+/// `POST /api/v1/smart-money/netflows`
+pub async fn post_smart_money_netflows(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    body: &Value,
+) -> Result<(Value, NansenResponseMeta), NansenError> {
+    post_json_path(
+        client,
+        base_url,
+        api_key,
+        "api/v1/smart-money/netflows",
+        body,
+    )
+    .await
+}
+
+/// `POST /api/v1/smart-money/holdings`
+pub async fn post_smart_money_holdings(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    body: &Value,
+) -> Result<(Value, NansenResponseMeta), NansenError> {
+    post_json_path(
+        client,
+        base_url,
+        api_key,
+        "api/v1/smart-money/holdings",
+        body,
+    )
+    .await
+}
+
+/// `POST /api/v1/smart-money/perp-trades`
+pub async fn post_smart_money_perp_trades(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    body: &Value,
+) -> Result<(Value, NansenResponseMeta), NansenError> {
+    post_json_path(
+        client,
+        base_url,
+        api_key,
+        "api/v1/smart-money/perp-trades",
+        body,
+    )
+    .await
+}
+
+/// `POST /api/v1/tgm/flow-intelligence`
+pub async fn post_tgm_flow_intelligence(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    body: &Value,
+) -> Result<(Value, NansenResponseMeta), NansenError> {
+    post_json_path(
+        client,
+        base_url,
+        api_key,
+        "api/v1/tgm/flow-intelligence",
+        body,
+    )
+    .await
+}
+
+/// `POST /api/v1/tgm/who-bought-sold`
+pub async fn post_tgm_who_bought_sold(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    body: &Value,
+) -> Result<(Value, NansenResponseMeta), NansenError> {
+    post_json_path(
+        client,
+        base_url,
+        api_key,
+        "api/v1/tgm/who-bought-sold",
+        body,
+    )
+    .await
+}
+
+/// `POST /api/v1/profiler/perp-leaderboard` — top wallets for watchlist (dev guide §3.8).
+pub async fn post_profiler_perp_leaderboard(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    body: &Value,
+) -> Result<(Value, NansenResponseMeta), NansenError> {
+    post_json_path(
+        client,
+        base_url,
+        api_key,
+        "api/v1/profiler/perp-leaderboard",
+        body,
+    )
+    .await
+}
+
+/// `POST /api/v1/profiler/perp-positions` — body includes wallet address(es) per Nansen API.
+pub async fn post_profiler_perp_positions(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    body: &Value,
+) -> Result<(Value, NansenResponseMeta), NansenError> {
+    post_json_path(
+        client,
+        base_url,
+        api_key,
+        "api/v1/profiler/perp-positions",
+        body,
+    )
+    .await
 }
 
 /// Default production API host when `NANSEN_API_BASE` is unset (caller may read env).

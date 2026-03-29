@@ -26,6 +26,19 @@ impl CopySubscriptionRepository {
         Self { pool }
     }
 
+    /// Active copy subscriptions (follower execution / monitoring).
+    pub async fn list_active_subscriptions(&self) -> Result<Vec<CopySubscriptionRow>, StorageError> {
+        let rows = sqlx::query_as::<_, CopySubscriptionRow>(
+            r#"SELECT id, leader_user_id, follower_user_id, rule, active, created_at
+               FROM copy_subscriptions
+               WHERE active = true
+               ORDER BY created_at ASC"#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     pub async fn list_for_user(
         &self,
         user_id: Uuid,
