@@ -1,0 +1,9 @@
+# cargo-audit (≥0.22): https://github.com/RustSec/rustsec/tree/main/cargo-audit
+#
+# RUSTSEC-2023-0071 (rsa / Marvin): sqlx 0.8 `macros` → sqlx-macros-core → sqlx-mysql → rsa.
+# QTSS yalnızca PostgreSQL kullanır (kök Cargo.toml: sqlx `default-features = false`, `postgres`).
+# MySQL sürücüsü kilit dosyasında yalnızca makro/şema yardımcıları için bulunur; çalışma zamanında kullanılmaz.
+# sqlx 0.8 için mysql’i makro zincirinden çıkaran bir sürüm yok; yok sayma gerekçesi budur.
+
+[advisories]
+ignore = ["RUSTSEC-2023-0071"]

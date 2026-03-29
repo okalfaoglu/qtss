@@ -1453,18 +1453,15 @@ export default function App() {
     }
   }, [barInterval, acpConfig.scanning.auto_scan_on_timeframe_change, token, bars?.length, runChannelSixScan]);
 
-  const autoScanAwaitEnableRef = useRef(true);
+  /** ACP’de otomatik tarama kapalıyken açılırsa (grafik zaten yüklü) bir kez tara. */
+  const prevAutoScanRef = useRef<boolean | null>(null);
   useEffect(() => {
     const on = acpConfig.scanning.auto_scan_on_timeframe_change;
-    if (!on) {
-      autoScanAwaitEnableRef.current = true;
-      return;
-    }
-    if (!token || !bars?.length) return;
-    if (autoScanAwaitEnableRef.current) {
-      autoScanAwaitEnableRef.current = false;
+    const prev = prevAutoScanRef.current;
+    if (prev === false && on && token && bars?.length) {
       void runChannelSixScan();
     }
+    prevAutoScanRef.current = on;
   }, [acpConfig.scanning.auto_scan_on_timeframe_change, token, bars?.length, runChannelSixScan]);
 
   const backfillFromRest = async () => {
@@ -2449,9 +2446,9 @@ export default function App() {
                     <div className="card">
                       <p className="tv-drawer__section-head">Kanal Taraması</p>
                       <p className="muted" style={{ fontSize: "0.8rem", marginBottom: "0.5rem" }}>
-                        Manuel buton yok. ACP ayarlarında{" "}
-                        <strong>Timeframe değişince otomatik kanal taraması</strong> ile üst şerit interval her
-                        değiştiğinde tarama çalışır; açılışta veya seçeneği açtığınızda da bir kez tetiklenir.
+                        ACP ayarlarında <strong>Timeframe değişince otomatik kanal taraması</strong> açıkken: grafik
+                        mumları her yüklendiğinde (sembol / kaynak / limit yenileme) ve üst şerit interval
+                        değiştiğinde tarama çalışır; seçeneği sonradan açarsanız bir kez daha tetiklenir.
                       </p>
                       {channelScanLoading ? <p className="muted">Taranıyor…</p> : null}
                       {channelScanError ? <p className="err">{channelScanError}</p> : null}

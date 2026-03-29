@@ -30,7 +30,7 @@
 
 ## Bağımlılık ve tedarik
 
-- **sqlx**: Kök `Cargo.toml` içinde `default-features = false` ve yalnızca `postgres` (+ `runtime-tokio-rustls`, …) — MySQL/SQLite sürücüleri kapalı; aksi halde kilit dosyası `rsa` çeker ve **RUSTSEC-2023-0071** (Marvin / sqlx-mysql) `cargo audit`’te görünür. `Cargo.lock`, `Cargo.toml` ile uyumlu olmalı (`cargo generate-lockfile` veya `cargo build --workspace`).
+- **sqlx**: Kök `Cargo.toml` içinde `default-features = false` ve yalnızca `postgres` (+ `runtime-tokio-rustls`, `macros`, …). `macros` zinciri (`sqlx-macros-core`) yine de kilit dosyasına `sqlx-mysql` ve **RUSTSEC-2023-0071** (`rsa` / Marvin) ekler; QTSS çalışma zamanında MySQL kullanmaz. Depoda **`.cargo/audit.toml`** bu danışmanlığı bilinçli yok sayar; sqlx tarafında makro bağımlılığı kalkana kadar `cargo audit` bunun dışında temiz kalmalıdır. `Cargo.lock`, `Cargo.toml` ile uyumlu olmalı.
 - Düzenli `cargo audit` / benzeri; imaj taraması (container). Yerelde **cargo-audit ≥ 0.22** kullanın: RustSec veritabanındaki `CVSS:4.0` vektörlerini 0.21.x okuyamaz (`unsupported CVSS version: 4.0`). Güncelleme: `cargo install cargo-audit --version 0.22.1 --locked` (veya daha yeni patch).
 - **CI:** `.github/workflows/rust-ci.yml` — push/PR’de `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo audit` (sabitlenmiş `cargo-audit@0.22.1`), `web` için `npm ci` + `npm run build`.
 
