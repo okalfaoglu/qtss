@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use chrono::Utc;
 use qtss_chart_patterns::{
-    analyze_trading_range, compute_signal_dashboard_v1_with_policy, OhlcBar, SignalDirectionPolicy,
+    analyze_trading_range, compute_signal_dashboard_v1_with_policy, signal_dashboard_v2_envelope_from_v1,
+    OhlcBar, SignalDirectionPolicy,
     TradingRangeParams, TradingRangeResult,
 };
 use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
@@ -23,6 +24,17 @@ use uuid::Uuid;
 
 fn d_to_f(d: rust_decimal::Decimal) -> f64 {
     d.to_f64().unwrap_or(f64::NAN)
+}
+
+/// İngilizce `snake_case` — payload içinde sembol bağlamı (JOIN’siz okuyan istemciler için).
+fn attach_engine_context(t: &EngineSymbolRow, v: &mut serde_json::Value) {
+    if let serde_json::Value::Object(ref mut m) = v {
+        m.insert("symbol".into(), json!(t.symbol));
+        m.insert("exchange".into(), json!(t.exchange));
+        m.insert("segment".into(), json!(t.segment));
+        m.insert("interval".into(), json!(t.interval));
+        m.insert("engine_symbol_id".into(), json!(t.id.to_string()));
+    }
 }
 
 fn trading_range_params_from_env() -> TradingRangeParams {
@@ -54,6 +66,7 @@ fn enrich_tr_payload(
     window_start_idx: usize,
     window_end_idx: usize,
     chrono_open_times: &[chrono::DateTime<chrono::Utc>],
+    t: &EngineSymbolRow,
 ) -> serde_json::Value {
     let mut v = serde_json::to_value(tr).unwrap_or(json!({}));
     if let serde_json::Value::Object(ref mut m) = v {
@@ -73,6 +86,7 @@ fn enrich_tr_payload(
             m.insert("last_bar_open_time".into(), json!(last.to_rfc3339()));
         }
     }
+    attach_engine_context(t, &mut v);
     v
 }
 
@@ -140,7 +154,11 @@ fn enrich_dashboard_payload(
             "signal_direction_effective".into(),
             json!(effective.as_api_str()),
         );
+        if let Ok(v2) = serde_json::to_value(signal_dashboard_v2_envelope_from_v1(dash)) {
+            m.insert("signal_dashboard_v2".into(), v2);
+        }
     }
+    attach_engine_context(t, &mut v);
     v
 }
 
@@ -385,7 +403,9 @@ async fn run_engines_for_symbol(pool: &PgPool, bar_limit: i64, params: &TradingR
 
         let need = params.lookback.max(5) + 2;
         if rows.len() < need {
-            let err_payload = json!({"reason": "insufficient_bars", "need": need, "have": rows.len()});
+            let mut err_payload =
+                json!({"reason": "insufficient_bars", "need": need, "have": rows.len()});
+            attach_engine_context(&t, &mut err_payload);
             let _ = upsert_analysis_snapshot(
                 pool,
                 t.id,
@@ -429,7 +449,7 @@ async fn run_engines_for_symbol(pool: &PgPool, bar_limit: i64, params: &TradingR
 
         let tr = analyze_trading_range(&bars, params);
         let times: Vec<_> = rows_chrono.iter().map(|r| r.open_time).collect();
-        let tr_payload = enrich_tr_payload(&tr, win_start, win_end, &times);
+        let tr_payload = enrich_tr_payload(&tr, win_start, win_end, &times, &t);
         let last_ot = rows_chrono.last().map(|r| r.open_time);
         let tr_err = if tr.bar_count > 0 && !tr.valid {
             tr.reason.clone().or_else(|| Some("geçersiz".into()))
@@ -497,6 +517,17 @@ async fn run_engines_for_symbol(pool: &PgPool, bar_limit: i64, params: &TradingR
                 last_close,
             )
             .await;
+            if let Err(e) = crate::confluence::compute_and_persist(
+                pool,
+                &t,
+                &dash_payload,
+                last_bar_ot,
+                n as i32,
+            )
+            .await
+            {
+                warn!(%e, symbol = %t.symbol, "confluence snapshot");
+            }
         }
     }
 }

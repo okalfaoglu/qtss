@@ -10,6 +10,7 @@ use std::time::Duration;
 use chrono::Utc;
 use qtss_common::log_critical;
 use qtss_nansen::post_token_screener;
+use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
 use qtss_storage::{
     fetch_nansen_snapshot, insert_nansen_setup_run, insert_nansen_setup_row, list_recent_bars,
     NansenSetupRowInsert, NansenSetupRunInsert,
@@ -19,6 +20,7 @@ use rust_decimal::prelude::ToPrimitive;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use crate::nansen_query::{nansen_api_base, token_screener_body};
 
@@ -43,6 +45,96 @@ fn setup_snapshot_only_mode() -> bool {
     {
         Some("0") | Some("false") | Some("no") | Some("off") => false,
         _ => true,
+    }
+}
+
+fn notify_setup_env_enabled() -> bool {
+    std::env::var("QTSS_NOTIFY_SETUP_ENABLED")
+        .ok()
+        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
+}
+
+fn setup_notify_channels_from_env() -> Vec<NotificationChannel> {
+    let raw = std::env::var("QTSS_NOTIFY_SETUP_CHANNELS").unwrap_or_else(|_| "telegram".into());
+    raw.split(',')
+        .filter_map(|s| NotificationChannel::parse(s.trim()))
+        .collect()
+}
+
+fn setup_notify_min_score() -> f64 {
+    std::env::var("QTSS_NOTIFY_SETUP_MIN_SCORE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8.0)
+}
+
+/// 0–100 (iç skor `probability()` 0–1; karşılaştırma `prob * 100.0` ile).
+fn setup_notify_min_probability_pct() -> f64 {
+    std::env::var("QTSS_NOTIFY_SETUP_MIN_PROBABILITY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(45.0)
+}
+
+fn setup_notify_max_items() -> usize {
+    std::env::var("QTSS_NOTIFY_SETUP_MAX_ITEMS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5)
+        .clamp(1, 20)
+}
+
+/// PLAN Phase D — eşik üstü adaylar için tek özet bildirimi (gövde Türkçe; `run_id` başlıkta).
+async fn maybe_notify_nansen_setup_run(run_id: Uuid, ranked: &[(f64, Candidate, &'static str, i32)]) {
+    if !notify_setup_env_enabled() || ranked.is_empty() {
+        return;
+    }
+    let chans = setup_notify_channels_from_env();
+    if chans.is_empty() {
+        warn!("QTSS_NOTIFY_SETUP_ENABLED açık fakat QTSS_NOTIFY_SETUP_CHANNELS boş veya geçersiz");
+        return;
+    }
+    let min_sc = setup_notify_min_score();
+    let min_pr_pct = setup_notify_min_probability_pct();
+    let max_items = setup_notify_max_items();
+    let mut lines: Vec<String> = Vec::new();
+    for (_k, c, dir, sc) in ranked {
+        let entry = c.price_usd;
+        let (_sl, _tp1, _tp2, _tp3, rr, _pct, _) = levels(dir, entry, c);
+        let prob = probability(*sc, rr);
+        let prob_pct = prob * 100.0;
+        if (*sc as f64) < min_sc || prob_pct < min_pr_pct {
+            continue;
+        }
+        lines.push(format!(
+            "{}. {} {} | skor {:.1} olasılık {:.0}% | {}",
+            lines.len() + 1,
+            c.token_symbol,
+            dir,
+            sc,
+            prob_pct,
+            c.chain
+        ));
+        if lines.len() >= max_items {
+            break;
+        }
+    }
+    if lines.is_empty() {
+        return;
+    }
+    let title = format!("Nansen setup — run {run_id}");
+    let body = format!(
+        "Eşik: skor ≥ {min_sc:.1}, olasılık ≥ {min_pr_pct:.0}%.\n{}",
+        lines.join("\n")
+    );
+    let d = NotificationDispatcher::from_env();
+    let n = Notification::new(title, body);
+    for r in d.send_all(&chans, &n).await {
+        if r.ok {
+            info!(channel = ?r.channel, "nansen_setup bildirimi");
+        } else {
+            warn!(channel = ?r.channel, detail = ?r.detail, "nansen_setup bildirimi başarısız");
+        }
     }
 }
 
@@ -814,6 +906,8 @@ async fn run_one_scan(
             .await
             .map_err(|e| e.to_string())?;
     }
+
+    maybe_notify_nansen_setup_run(run_id, &ranked).await;
 
     info!(rows = ranked.len(), %run_id, "nansen_setup_scan tamamlandı");
     Ok(())

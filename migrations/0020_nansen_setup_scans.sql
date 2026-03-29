@@ -1,14 +1,16 @@
--- Nansen token screener + dahili skorlama ile üretilen top-N setup satırları (worker).
+-- Setup taraması: `setup_scan_engine` → `insert_nansen_setup_run` / `insert_nansen_setup_row`.
 
 CREATE TABLE nansen_setup_runs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     computed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     request_json JSONB NOT NULL,
-    source TEXT NOT NULL DEFAULT 'token_screener',
-    candidate_count INT NOT NULL DEFAULT 0,
+    source TEXT NOT NULL,
+    candidate_count INT NOT NULL,
     meta_json JSONB,
     error TEXT
 );
+
+CREATE INDEX idx_nansen_setup_runs_computed ON nansen_setup_runs (computed_at DESC);
 
 CREATE TABLE nansen_setup_rows (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -34,4 +36,3 @@ CREATE TABLE nansen_setup_rows (
 );
 
 CREATE INDEX idx_nansen_setup_rows_run ON nansen_setup_rows (run_id, rank);
-CREATE INDEX idx_nansen_setup_runs_computed ON nansen_setup_runs (computed_at DESC);

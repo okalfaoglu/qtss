@@ -474,6 +474,119 @@ export async function fetchEngineSnapshots(accessToken: string): Promise<EngineS
   return JSON.parse(t) as EngineSnapshotJoinedApiRow[];
 }
 
+export async function fetchConfluenceSnapshotsLatest(
+  accessToken: string,
+): Promise<EngineSnapshotJoinedApiRow[]> {
+  const r = await fetch(`${API_BASE}/api/v1/analysis/engine/confluence/latest`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`engine/confluence/latest ${r.status}: ${t.slice(0, 300)}`);
+  return JSON.parse(t) as EngineSnapshotJoinedApiRow[];
+}
+
+/** Birleşik ham kayıt satırları (`data_snapshots`) — Nansen + external_fetch vb. */
+export type DataSnapshotApiRow = {
+  source_key: string;
+  request_json: unknown;
+  response_json: unknown | null;
+  meta_json: unknown | null;
+  computed_at: string;
+  error: string | null;
+};
+
+export async function fetchDataSnapshots(accessToken: string): Promise<DataSnapshotApiRow[]> {
+  const r = await fetch(`${API_BASE}/api/v1/analysis/data-snapshots`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`analysis/data-snapshots ${r.status}: ${t.slice(0, 300)}`);
+  return JSON.parse(t) as DataSnapshotApiRow[];
+}
+
+/** PLAN F7 Phase C — tek hedef için TA + confluence + ilgili `data_snapshots`. */
+export type MarketContextLatestApiResponse = {
+  engine_symbol_id: string;
+  exchange: string;
+  segment: string;
+  symbol: string;
+  interval: string;
+  technical: {
+    signal_dashboard: unknown | null;
+    trading_range: unknown | null;
+  };
+  confluence: unknown | null;
+  context_data_snapshots: DataSnapshotApiRow[];
+};
+
+export async function fetchMarketContextLatest(
+  accessToken: string,
+  q: { symbol: string; interval?: string; exchange?: string; segment?: string },
+): Promise<MarketContextLatestApiResponse | null> {
+  const params = new URLSearchParams();
+  params.set("symbol", q.symbol.trim().toUpperCase());
+  if (q.interval?.trim()) params.set("interval", q.interval.trim());
+  if (q.exchange?.trim()) params.set("exchange", q.exchange.trim().toLowerCase());
+  if (q.segment?.trim()) params.set("segment", q.segment.trim().toLowerCase());
+  const r = await fetch(`${API_BASE}/api/v1/analysis/market-context/latest?${params}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`market-context/latest ${r.status}: ${t.slice(0, 300)}`);
+  return JSON.parse(t) as MarketContextLatestApiResponse;
+}
+
+/** F7 — filtreli motor listesi + TA / confluence kısa alanlar (`GET .../market-context/summary`). */
+export type MarketContextSummaryConfluenceApi = {
+  regime?: string;
+  composite_score?: number;
+  confidence_0_100?: number;
+  lot_scale_hint?: number;
+  conflicts_count?: number;
+  conflict_codes_preview?: string[];
+  computed_at?: string;
+  error?: string | null;
+};
+
+export type MarketContextSummaryItemApi = {
+  engine_symbol_id: string;
+  exchange: string;
+  segment: string;
+  symbol: string;
+  interval: string;
+  enabled: boolean;
+  ta_durum?: string;
+  ta_piyasa_modu?: string;
+  confluence?: MarketContextSummaryConfluenceApi | null;
+};
+
+export async function fetchMarketContextSummary(
+  accessToken: string,
+  q: {
+    enabled_only?: boolean;
+    limit?: number;
+    exchange?: string;
+    segment?: string;
+    symbol?: string;
+  } = {},
+): Promise<MarketContextSummaryItemApi[]> {
+  const params = new URLSearchParams();
+  if (q.enabled_only === false) params.set("enabled_only", "false");
+  if (q.limit != null && Number.isFinite(q.limit)) params.set("limit", String(Math.min(200, Math.max(1, q.limit))));
+  if (q.exchange?.trim()) params.set("exchange", q.exchange.trim().toLowerCase());
+  if (q.segment?.trim()) params.set("segment", q.segment.trim().toLowerCase());
+  if (q.symbol?.trim()) params.set("symbol", q.symbol.trim().toUpperCase());
+  const qs = params.toString();
+  const r = await fetch(
+    `${API_BASE}/api/v1/analysis/market-context/summary${qs ? `?${qs}` : ""}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  const t = await r.text();
+  if (!r.ok) throw new Error(`market-context/summary ${r.status}: ${t.slice(0, 300)}`);
+  return JSON.parse(t) as MarketContextSummaryItemApi[];
+}
+
 /** Worker’ın `nansen_snapshots` tablosuna yazdığı son token screener sonucu; henüz yoksa `null`. */
 export type NansenSnapshotApiRow = {
   snapshot_kind: string;
@@ -675,4 +788,51 @@ export async function fetchPaperFills(accessToken: string, limit = 20): Promise<
   const t = await r.text();
   if (!r.ok) throw new Error(`orders/dry/fills ${r.status}: ${t.slice(0, 300)}`);
   return JSON.parse(t) as PaperFillRow[];
+}
+
+/** SPEC §7.2 / F5 — `exchangeInfo` ipucu veya tier0 fallback (hesap anahtarı gerekmez). */
+export type BinanceCommissionDefaultsApi = {
+  segment: string;
+  query_symbol: string | null;
+  defaults_bps: { maker_bps: number; taker_bps: number };
+  source: string;
+};
+
+export async function fetchBinanceCommissionDefaults(
+  accessToken: string,
+  q: { segment?: string; symbol?: string },
+): Promise<BinanceCommissionDefaultsApi> {
+  const params = new URLSearchParams();
+  params.set("segment", (q.segment ?? "spot").toLowerCase());
+  if (q.symbol?.trim()) params.set("symbol", q.symbol.trim().toUpperCase());
+  const r = await fetch(`${API_BASE}/api/v1/market/binance/commission-defaults?${params}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`commission-defaults ${r.status}: ${t.slice(0, 300)}`);
+  return JSON.parse(t) as BinanceCommissionDefaultsApi;
+}
+
+/** F5 — hesaba özel kesir oranları (`exchange_accounts`). */
+export type BinanceCommissionAccountApi = {
+  symbol: string;
+  segment: string;
+  maker_rate: string;
+  taker_rate: string;
+  source: string;
+};
+
+export async function fetchBinanceCommissionAccount(
+  accessToken: string,
+  q: { symbol: string; segment?: string },
+): Promise<BinanceCommissionAccountApi> {
+  const params = new URLSearchParams();
+  params.set("symbol", q.symbol.trim().toUpperCase());
+  params.set("segment", (q.segment ?? "spot").toLowerCase());
+  const r = await fetch(`${API_BASE}/api/v1/market/binance/commission-account?${params}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`commission-account ${r.status}: ${t.slice(0, 300)}`);
+  return JSON.parse(t) as BinanceCommissionAccountApi;
 }

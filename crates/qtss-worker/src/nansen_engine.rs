@@ -6,12 +6,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use qtss_common::log_critical;
 use qtss_nansen::post_token_screener;
-use qtss_storage::upsert_nansen_snapshot;
+use qtss_storage::{upsert_data_snapshot, upsert_nansen_snapshot};
 use reqwest::Client;
 use serde_json::json;
 use sqlx::PgPool;
 use tracing::{info, warn};
 
+use crate::data_sources::registry::NANSEN_TOKEN_SCREENER_DATA_KEY;
 use crate::nansen_query::{nansen_api_base, token_screener_body};
 
 static LOGGED_MISSING_NANSEN_KEY: AtomicBool = AtomicBool::new(false);
@@ -93,6 +94,18 @@ pub async fn nansen_token_screener_loop(pool: PgPool) {
                 } else {
                     info!("nansen token_screener snapshot güncellendi");
                 }
+                if let Err(e) = upsert_data_snapshot(
+                    &pool,
+                    NANSEN_TOKEN_SCREENER_DATA_KEY,
+                    &body,
+                    Some(&json),
+                    Some(&meta_json),
+                    None,
+                )
+                .await
+                {
+                    warn!(%e, "data_snapshots nansen upsert");
+                }
             }
             Err(e) => {
                 if e.is_insufficient_credits() {
@@ -120,6 +133,18 @@ pub async fn nansen_token_screener_loop(pool: PgPool) {
                 .await
                 {
                     warn!(%e2, "nansen_snapshots hata satırı yazılamadı");
+                }
+                if let Err(e3) = upsert_data_snapshot(
+                    &pool,
+                    NANSEN_TOKEN_SCREENER_DATA_KEY,
+                    &body,
+                    None,
+                    None,
+                    Some(err_str.as_str()),
+                )
+                .await
+                {
+                    warn!(%e3, "data_snapshots nansen error upsert");
                 }
             }
         }

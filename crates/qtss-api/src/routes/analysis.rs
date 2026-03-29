@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -17,11 +18,13 @@ use qtss_chart_patterns::{
     ChannelSixWindowFilter, OhlcBar, PatternDrawingBatch, SizeFilters, SixPivotScanParams,
 };
 use qtss_storage::{
-    fetch_latest_nansen_setup_with_rows, fetch_nansen_snapshot, insert_engine_symbol,
-    list_analysis_snapshots_with_symbols, list_engine_symbols_all,
-    list_range_signal_events_joined, update_engine_symbol_patch, AnalysisSnapshotJoinedRow,
-    EngineSymbolInsert, EngineSymbolRow, NansenSetupRowDetail, NansenSetupRunRow,
-    NansenSnapshotRow, RangeSignalEventJoinedRow,
+    fetch_analysis_snapshot_payload, fetch_data_snapshot, fetch_latest_nansen_setup_with_rows,
+    fetch_nansen_snapshot, insert_engine_symbol, list_analysis_snapshots_with_symbols,
+    list_data_snapshots, list_engine_symbols_all, list_engine_symbols_matching,
+    list_market_context_summaries, list_range_signal_events_joined, update_engine_symbol_patch,
+    AnalysisSnapshotJoinedRow, DataSnapshotRow, EngineSymbolInsert, EngineSymbolRow,
+    MarketContextSummaryRow, NansenSetupRowDetail, NansenSetupRunRow, NansenSnapshotRow,
+    RangeSignalEventJoinedRow,
 };
 
 use crate::oauth::AccessClaims;
@@ -42,6 +45,13 @@ pub fn analysis_read_router() -> Router<SharedState> {
         .route("/analysis/patterns/channel-six", post(channel_six_scan))
         .route("/analysis/engine/symbols", get(list_engine_symbols_api))
         .route("/analysis/engine/snapshots", get(list_engine_snapshots_api))
+        .route(
+            "/analysis/engine/confluence/latest",
+            get(list_confluence_snapshots_api),
+        )
+        .route("/analysis/data-snapshots", get(list_data_snapshots_api))
+        .route("/analysis/market-context/latest", get(get_market_context_latest_api))
+        .route("/analysis/market-context/summary", get(list_market_context_summary_api))
         .route("/analysis/engine/range-signals", get(list_range_signals_api))
         .route("/analysis/nansen/snapshot", get(get_nansen_snapshot_api))
         .route("/analysis/nansen/setups/latest", get(get_nansen_setups_latest_api))
@@ -121,6 +131,284 @@ async fn list_engine_snapshots_api(
         .await
         .map(Json)
         .map_err(|e| e.to_string())
+}
+
+async fn list_confluence_snapshots_api(
+    State(st): State<SharedState>,
+) -> Result<Json<Vec<AnalysisSnapshotJoinedRow>>, String> {
+    let rows = list_analysis_snapshots_with_symbols(&st.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Json(
+        rows.into_iter()
+            .filter(|r| r.engine_kind == "confluence")
+            .collect(),
+    ))
+}
+
+async fn list_data_snapshots_api(
+    State(st): State<SharedState>,
+) -> Result<Json<Vec<DataSnapshotRow>>, String> {
+    list_data_snapshots(&st.pool)
+        .await
+        .map(Json)
+        .map_err(|e| e.to_string())
+}
+
+/// `binance_taker_{base}usdt` — worker `confluence` ile aynı anahtar kuralı.
+fn binance_taker_data_snapshot_key(symbol_upper: &str) -> String {
+    let sym = symbol_upper.trim().to_uppercase();
+    let base = sym
+        .strip_suffix("USDT")
+        .unwrap_or(sym.as_str())
+        .to_lowercase();
+    format!("binance_taker_{base}usdt")
+}
+
+#[derive(Deserialize)]
+struct MarketContextQuery {
+    pub symbol: String,
+    #[serde(default)]
+    pub interval: Option<String>,
+    #[serde(default)]
+    pub exchange: Option<String>,
+    #[serde(default)]
+    pub segment: Option<String>,
+}
+
+#[derive(Serialize)]
+struct MarketContextTechnical {
+    pub signal_dashboard: Option<serde_json::Value>,
+    pub trading_range: Option<serde_json::Value>,
+}
+
+/// Birleşik tek-hedef görünüm: TA snapshot’ları + `confluence` + ilgili `data_snapshots` (F7 / PLAN Phase C).
+#[derive(Serialize)]
+struct MarketContextLatestResponse {
+    pub engine_symbol_id: Uuid,
+    pub exchange: String,
+    pub segment: String,
+    pub symbol: String,
+    pub interval: String,
+    pub technical: MarketContextTechnical,
+    pub confluence: Option<serde_json::Value>,
+    pub context_data_snapshots: Vec<DataSnapshotRow>,
+}
+
+async fn get_market_context_latest_api(
+    State(st): State<SharedState>,
+    Query(q): Query<MarketContextQuery>,
+) -> Result<Json<MarketContextLatestResponse>, (StatusCode, String)> {
+    let sym_in = q.symbol.trim();
+    if sym_in.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "query symbol is required".into()));
+    }
+    let interval = q.interval.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let exchange = q.exchange.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let segment = q.segment.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let matches = list_engine_symbols_matching(
+        &st.pool,
+        sym_in,
+        interval,
+        exchange,
+        segment,
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = matches.into_iter().next().ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            format!(
+                "no engine_symbols row for symbol={} (optional interval/exchange/segment filters)",
+                sym_in.to_uppercase()
+            ),
+        )
+    })?;
+    let id = row.id;
+    let signal_dashboard = fetch_analysis_snapshot_payload(&st.pool, id, "signal_dashboard")
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let trading_range = fetch_analysis_snapshot_payload(&st.pool, id, "trading_range")
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let confluence = fetch_analysis_snapshot_payload(&st.pool, id, "confluence")
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let nansen_key = "nansen_token_screener";
+    let taker_key = binance_taker_data_snapshot_key(&row.symbol);
+    let mut context_data_snapshots: Vec<DataSnapshotRow> = Vec::new();
+    if let Ok(Some(r)) = fetch_data_snapshot(&st.pool, nansen_key).await {
+        context_data_snapshots.push(r);
+    }
+    if taker_key != nansen_key {
+        if let Ok(Some(r)) = fetch_data_snapshot(&st.pool, &taker_key).await {
+            context_data_snapshots.push(r);
+        }
+    }
+    Ok(Json(MarketContextLatestResponse {
+        engine_symbol_id: id,
+        exchange: row.exchange,
+        segment: row.segment,
+        symbol: row.symbol,
+        interval: row.interval,
+        technical: MarketContextTechnical {
+            signal_dashboard,
+            trading_range,
+        },
+        confluence,
+        context_data_snapshots,
+    }))
+}
+
+#[derive(Deserialize)]
+struct MarketContextSummaryQuery {
+    #[serde(default = "default_summary_enabled_only")]
+    enabled_only: bool,
+    #[serde(default = "default_summary_limit")]
+    limit: i64,
+    #[serde(default)]
+    exchange: Option<String>,
+    #[serde(default)]
+    segment: Option<String>,
+    #[serde(default)]
+    symbol: Option<String>,
+}
+
+fn default_summary_enabled_only() -> bool {
+    true
+}
+
+fn default_summary_limit() -> i64 {
+    100
+}
+
+#[derive(Serialize)]
+struct MarketContextConfluenceBrief {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    regime: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    composite_score: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confidence_0_100: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lot_scale_hint: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conflicts_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    conflict_codes_preview: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    computed_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct MarketContextSummaryItem {
+    engine_symbol_id: Uuid,
+    exchange: String,
+    segment: String,
+    symbol: String,
+    interval: String,
+    enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ta_durum: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ta_piyasa_modu: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confluence: Option<MarketContextConfluenceBrief>,
+}
+
+fn json_f64(v: &serde_json::Value) -> Option<f64> {
+    v.as_f64()
+        .or_else(|| v.as_i64().map(|i| i as f64))
+        .or_else(|| v.as_u64().map(|u| u as f64))
+}
+
+fn confluence_brief_from_row(row: &MarketContextSummaryRow) -> Option<MarketContextConfluenceBrief> {
+    if row.confluence_payload.is_none()
+        && row.confluence_computed_at.is_none()
+        && row.confluence_error.is_none()
+    {
+        return None;
+    }
+    let p = row.confluence_payload.as_ref();
+    let regime = p
+        .and_then(|x| x.get("regime"))
+        .and_then(|x| x.as_str())
+        .map(String::from);
+    let composite_score = p.and_then(|x| x.get("composite_score")).and_then(json_f64);
+    let confidence_0_100 = p.and_then(|x| x.get("confidence_0_100")).and_then(json_f64);
+    let lot_scale_hint = p.and_then(|x| x.get("lot_scale_hint")).and_then(json_f64);
+    let (conflicts_count, preview) = p
+        .and_then(|x| x.get("conflicts"))
+        .and_then(|c| c.as_array())
+        .map(|arr| {
+            let codes: Vec<String> = arr
+                .iter()
+                .filter_map(|o| o.get("code").and_then(|c| c.as_str()).map(String::from))
+                .take(3)
+                .collect();
+            (Some(arr.len()), codes)
+        })
+        .unwrap_or((None, vec![]));
+    Some(MarketContextConfluenceBrief {
+        regime,
+        composite_score,
+        confidence_0_100,
+        lot_scale_hint,
+        conflicts_count,
+        conflict_codes_preview: preview,
+        computed_at: row.confluence_computed_at,
+        error: row.confluence_error.clone(),
+    })
+}
+
+fn map_summary_row(row: MarketContextSummaryRow) -> MarketContextSummaryItem {
+    let (ta_durum, ta_piyasa_modu) = row
+        .signal_dashboard_payload
+        .as_ref()
+        .map(|d| {
+            let durum = d.get("durum").and_then(|x| x.as_str()).map(String::from);
+            let pm = d
+                .get("piyasa_modu")
+                .and_then(|x| x.as_str())
+                .map(String::from);
+            (durum, pm)
+        })
+        .unwrap_or((None, None));
+    let confluence = confluence_brief_from_row(&row);
+    MarketContextSummaryItem {
+        engine_symbol_id: row.engine_symbol_id,
+        exchange: row.exchange,
+        segment: row.segment,
+        symbol: row.symbol,
+        interval: row.interval,
+        enabled: row.enabled,
+        ta_durum,
+        ta_piyasa_modu,
+        confluence,
+    }
+}
+
+/// F7 — filtreli motor hedefleri + TA / confluence özeti (`SPEC_EXECUTION_RANGE_SIGNALS_UI` §9).
+async fn list_market_context_summary_api(
+    State(st): State<SharedState>,
+    Query(q): Query<MarketContextSummaryQuery>,
+) -> Result<Json<Vec<MarketContextSummaryItem>>, String> {
+    let ex = q.exchange.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let seg = q.segment.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let sym = q.symbol.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let rows = list_market_context_summaries(
+        &st.pool,
+        ex,
+        seg,
+        sym,
+        q.enabled_only,
+        q.limit,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(Json(rows.into_iter().map(map_summary_row).collect()))
 }
 
 /// Son Nansen token screener snapshot’ı (`qtss-worker` + `NANSEN_API_KEY`). Satır yoksa `null`.

@@ -126,12 +126,13 @@ Payload şeması (ör. JSON Schema veya Rust `serde` tipleri) sürümlenmeli (`s
 
 ### 7.1 Mevcut
 
-- Motor çekmecesinde: **Snapshot özeti**, **Sinyal paneli** (`signal_dashboard` alanları: durum, trend, range metrikleri, ATR vb.).
+- Motor çekmecesinde: **Snapshot özeti**, **Sinyal paneli** — satır etiketleri Türkçe; değerler mümkünse iç içe **`signal_dashboard_v2`** (`schema_version` 3), aksi halde v1 (`durum`, trend, range metrikleri, ATR vb.). v2 varsa tablonun altında **Wire (EN)** adlı açılır blokta ham İngilizce alanlar (`<details>`; ayarlar araması: `wire`).
 - **F4:** **Range / Paper özeti** kartı — üst çubuk sembol-TF, motor olay zincirinden türetilen açık yön, son 5 grafik-eşlemeli range olayı, `paper_balances` + son paper dolumlar (`GET /api/v1/orders/dry/balance`, `.../fills`). Ayarlar araması: `paper`, `dry`, `f4`, `ozet`, `islem` vb.
+- **F5 (GUI):** aynı kart içinde **komisyon özeti** — motor yenilemede `GET …/market/binance/commission-defaults` (maker/taker bps, kaynak); düğmeyle `…/commission-account` (hesap kesir oranları, `exchange_accounts` gerekir). Arama: `komisyon`, `commission`, `f5`, `maker`, `taker` vb.
 
 ### 7.2 Hedef
 
-- Genişletilmiş filtreleme: tenant, strateji, tarih aralığı (backtest run seçimi); komisyon özeti widget’ı (F5 ile).
+- Genişletilmiş filtreleme: tenant, strateji, tarih aralığı (backtest run seçimi).
 
 ---
 
@@ -154,8 +155,9 @@ Payload şeması (ör. JSON Schema veya Rust `serde` tipleri) sürümlenmeli (`s
 | **F4** | Web: Motor sekmesinde Range / Paper birleşik özet + dry API okuma | **Uygulandı** (F3 paper uçları + `App.tsx` kartı) |
 | **F5** | Binance hesap komisyonu: imzalı REST + ayrıştırma + API uç | **Uygulandı** (`commission-account`, `qtss-binance` `sapi`/`fapi`) |
 | **F6** | USDT-M kaldıraç API + `OrderIntent.futures` (`position_side`, `reduce_only`) + `BinanceLiveGateway` FAPI bağlama | **Uygulandı** (`POST .../futures/leverage`, `FuturesExecutionExtras`) |
+| **F7** | Piyasa bağlamı + confluence: `data_snapshots`, worker `confluence`; API `market-context/latest`, **`market-context/summary`**; **Bağlam** + Motor; Nansen setup (`QTSS_NOTIFY_SETUP_*`); **dry `paper_fills` bildirimi** (`QTSS_NOTIFY_PAPER_POSITION_*`); borsa pozisyonu; **`signal_dashboard_v2`** (worker + Motor tablo değerleri) — [`PLAN_CONFLUENCE_AND_MARKET_DATA.md`](./PLAN_CONFLUENCE_AND_MARKET_DATA.md) | **Kısmen** (dry dolum MVP; borsa pozisyonu; tablo etiketleri TR, wire v2) |
 
-**F0–F6 özeti:** F0–F5 daha önce kapsanan domain, range olayları, grafik, paper defter, dashboard özeti ve komisyon uçları ile tutarlı; **F6** futures yürütme parametrelerini ve kaldıraç ayarını tamamlar. Telegram/worker otomatik bildirimleri ayrı iş kalemidir (şartname F fazlarına dahil değil).
+**F0–F7 özeti:** F0–F6 domain, range, grafik, paper, komisyon ve futures yürütme ile tutarlı. **F7** kısmen uygulanmıştır (confluence, `data_snapshots`, `market-context/latest` + **`market-context/summary`**, **Bağlam** + Motor panelleri, isteğe bağlı **Nansen setup** özeti). **Pozisyon bildirimi (MVP):** worker `paper_fills` taraması — `QTSS_NOTIFY_PAPER_POSITION_*` / `QTSS_NOTIFY_POSITION_*` + `QTSS_NOTIFY_POSITION_TICK_SECS` (`crates/qtss-worker/src/paper_fill_notify.rs`). **Gerçek borsa açık pozisyon** bildirimi (`exchange_orders` / reconcile) açık faz. **`signal_dashboard_v2`:** worker çift yazım + Motor sinyal tablosunda değer önceliği (`signalDashboardPayload.ts`) + isteğe bağlı **Wire (EN)** açılır panel; tam İngilizce satır etiketleri ayrı opsiyon.
 
 ---
 
@@ -172,10 +174,14 @@ Payload şeması (ör. JSON Schema veya Rust `serde` tipleri) sürümlenmeli (`s
 - `crates/qtss-api/src/routes/orders_dry.rs` — dry REST uçları  
 - `migrations/0017_paper_ledger.sql` — `paper_balances`, `paper_fills`  
 - `crates/qtss-worker/src/engine_analysis.rs` — range snapshot üretimi  
+- `crates/qtss-worker/src/paper_fill_notify.rs` — dry `paper_fills` bildirim döngüsü (F7 MVP)  
 - `migrations/0015_engine_analysis.sql` — `engine_symbols`, `analysis_snapshots`  
 - `migrations/0018_engine_signal_direction_mode.sql` — `engine_symbols.signal_direction_mode`  
-- `crates/qtss-chart-patterns/src/dashboard_v1.rs` — `SignalDirectionPolicy`, `durum_model_raw`  
-- `web/src/App.tsx`, `web/src/api/client.ts` (`fetchPaperBalance`, `fetchPaperFills`), `web/src/components/TvChartPane.tsx`, `web/src/lib/tradingRangeDbOverlay.ts`, `web/src/lib/rangeSignalMarkers.ts`, `web/src/lib/rangeOpenPositionLayer.ts`, `web/src/lib/patternDrawingBatchOverlay.ts`, `web/src/lib/signalDashboardPayload.ts`  
+- `crates/qtss-chart-patterns/src/dashboard_v1.rs` — `SignalDirectionPolicy`, `durum_model_raw` (v1 Türkçe alanlar)  
+- `crates/qtss-chart-patterns/src/dashboard_v2_envelope.rs` — `signal_dashboard_v2` İngilizce çift yazım (`schema_version` 3)  
+- `docs/PLAN_CONFLUENCE_AND_MARKET_DATA.md` — F7: market data, confluence, naming, Telegram  
+- `docs/NANSEN_TOKEN_SCREENER.md` — Nansen `POST …/token-screener`, `nansen_snapshots` / setup, API ve env rehberi  
+- `web/src/App.tsx`, `web/src/api/client.ts` (`fetchPaperBalance`, `fetchPaperFills`, `fetchBinanceCommissionDefaults`, `fetchBinanceCommissionAccount`, `fetchMarketContextSummary`, `fetchMarketContextLatest`, `fetchNansenSnapshot`, `fetchNansenSetupsLatest`), `web/src/components/TvChartPane.tsx`, `web/src/lib/tradingRangeDbOverlay.ts`, `web/src/lib/rangeSignalMarkers.ts`, `web/src/lib/rangeOpenPositionLayer.ts`, `web/src/lib/patternDrawingBatchOverlay.ts`, `web/src/lib/signalDashboardPayload.ts`  
 
 ---
 

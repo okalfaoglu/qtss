@@ -1,10 +1,13 @@
 //! Arka plan işleri: rollup, mutabakat; isteğe bağlı kline WebSocket → `market_bars`;
 //! `engine_symbols` → analiz snapshot (Trading Range, …).
 
+mod data_sources;
 mod engine_analysis;
 mod external_fetch_engine;
+mod confluence;
 mod nansen_engine;
 mod nansen_query;
+mod paper_fill_notify;
 mod setup_scan_engine;
 
 use std::str::FromStr;
@@ -63,8 +66,10 @@ async fn main() -> anyhow::Result<()> {
             tokio::spawn(nansen_engine::nansen_token_screener_loop(nansen_pool));
             let setup_pool = pool.clone();
             tokio::spawn(setup_scan_engine::nansen_setup_scan_loop(setup_pool));
-            let ext_pool = pool.clone();
-            tokio::spawn(external_fetch_engine::external_fetch_loop(ext_pool));
+            let external_pool = pool.clone();
+            tokio::spawn(external_fetch_engine::external_fetch_loop(external_pool));
+            let paper_notify_pool = pool.clone();
+            tokio::spawn(paper_fill_notify::paper_position_notify_loop(paper_notify_pool));
             Some(pool)
         }
         _ => {

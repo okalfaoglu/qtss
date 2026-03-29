@@ -13,21 +13,32 @@ import {
   type ChannelSixRejectJson,
   type ChannelSixResponse,
   fetchAuthMe,
+  type DataSnapshotApiRow,
   fetchEngineSnapshots,
+  fetchDataSnapshots,
+  fetchMarketContextLatest,
+  fetchMarketContextSummary,
+  fetchConfluenceSnapshotsLatest,
   fetchEngineRangeSignals,
   fetchEngineSymbols,
   fetchNansenSnapshot,
   fetchNansenSetupsLatest,
   fetchPaperBalance,
   fetchPaperFills,
+  fetchBinanceCommissionDefaults,
+  fetchBinanceCommissionAccount,
   postEngineSymbol,
   patchEngineSymbol,
   type EngineSnapshotJoinedApiRow,
   type EngineSymbolApiRow,
+  type MarketContextLatestApiResponse,
+  type MarketContextSummaryItemApi,
   type NansenSetupsLatestApiResponse,
   type NansenSnapshotApiRow,
   type PaperBalanceRow,
   type PaperFillRow,
+  type BinanceCommissionDefaultsApi,
+  type BinanceCommissionAccountApi,
   type RangeSignalEventApiRow,
 } from "./api/client";
 import { channelDrawingToOverlay } from "./lib/channelOverlayFromDrawing";
@@ -91,7 +102,14 @@ import {
 } from "./lib/rangeOpenPositionLayer";
 import { rangeSignalMarkersFromEvents } from "./lib/rangeSignalMarkers";
 import { patternLayerFromDbTradingRange, sweepMarkersFromDbTradingRange } from "./lib/tradingRangeDbOverlay";
-import { formatDashboardNumber, type SignalDashboardPayload } from "./lib/signalDashboardPayload";
+import {
+  formatDashboardNumber,
+  parseSignalDashboardV2,
+  pickDashboardBool,
+  pickDashboardNum,
+  pickDashboardStr,
+  type SignalDashboardPayload,
+} from "./lib/signalDashboardPayload";
 import { canAdmin, canOps, type AuthSession } from "./lib/rbac";
 import type { SeriesMarker, UTCTimestamp } from "lightweight-charts";
 
@@ -103,6 +121,7 @@ type SettingsTab =
   | "elliott_corrective"
   | "acp"
   | "engine"
+  | "market_context"
   | "nansen"
   | "setting";
 
@@ -192,6 +211,32 @@ function readLivePollMs(): number {
   if (raw === "0" || raw === "false") return 0;
   const n = parseInt(String(raw ?? "5000"), 10);
   return Number.isFinite(n) && n >= 0 ? n : 5000;
+}
+
+/** PLAN §4.2: confluence `lot_scale_hint`, `conflicts[].code` (wire English keys). */
+function formatConfluenceExtras(p: Record<string, unknown>): string {
+  const parts: string[] = [];
+  if (typeof p.lot_scale_hint === "number" && Number.isFinite(p.lot_scale_hint)) {
+    parts.push(`lot_scale ${p.lot_scale_hint.toFixed(2)}`);
+  }
+  const raw = p.conflicts;
+  if (Array.isArray(raw)) {
+    const codes = raw
+      .map((x) =>
+        x && typeof x === "object" && typeof (x as Record<string, unknown>).code === "string"
+          ? String((x as Record<string, unknown>).code)
+          : null,
+      )
+      .filter((c): c is string => Boolean(c));
+    const n = codes.length;
+    if (n === 0) {
+      parts.push("conflicts 0");
+    } else {
+      const preview = codes.slice(0, 3).join(", ");
+      parts.push(n > 3 ? `conflicts ${n}: ${preview}…` : `conflicts ${n}: ${preview}`);
+    }
+  }
+  return parts.length ? ` · ${parts.join(" · ")}` : "";
 }
 
 function channelSixRejectTr(reject: ChannelSixRejectJson | undefined): string {
@@ -340,6 +385,14 @@ export default function App() {
   const [elliottSaveBusy, setElliottSaveBusy] = useState(false);
   const [elliottRefreshBusy, setElliottRefreshBusy] = useState(false);
   const [engineSnapshots, setEngineSnapshots] = useState<EngineSnapshotJoinedApiRow[]>([]);
+  const [dataSnapshots, setDataSnapshots] = useState<DataSnapshotApiRow[]>([]);
+  const [marketContext, setMarketContext] = useState<MarketContextLatestApiResponse | null>(null);
+  const [contextTabSingle, setContextTabSingle] = useState<MarketContextLatestApiResponse | null>(null);
+  const [contextTabSummaries, setContextTabSummaries] = useState<MarketContextSummaryItemApi[]>([]);
+  const [contextTabConfluence, setContextTabConfluence] = useState<EngineSnapshotJoinedApiRow[]>([]);
+  const [contextTabDataSnaps, setContextTabDataSnaps] = useState<DataSnapshotApiRow[]>([]);
+  const [contextTabErr, setContextTabErr] = useState("");
+  const [contextTabBusy, setContextTabBusy] = useState(false);
   const [engineRangeSignals, setEngineRangeSignals] = useState<RangeSignalEventApiRow[]>([]);
   const [engineSymbols, setEngineSymbols] = useState<EngineSymbolApiRow[]>([]);
   const [enginePanelErr, setEnginePanelErr] = useState("");
@@ -357,6 +410,10 @@ export default function App() {
   const [nansenRefreshing, setNansenRefreshing] = useState(false);
   const [paperBalance, setPaperBalance] = useState<PaperBalanceRow | null>(null);
   const [paperFills, setPaperFills] = useState<PaperFillRow[]>([]);
+  const [commissionDefaults, setCommissionDefaults] = useState<BinanceCommissionDefaultsApi | null>(null);
+  const [commissionAccount, setCommissionAccount] = useState<BinanceCommissionAccountApi | null>(null);
+  const [commissionAccountErr, setCommissionAccountErr] = useState("");
+  const [commissionAccountBusy, setCommissionAccountBusy] = useState(false);
   const [showDbTradingRangeLayer, setShowDbTradingRangeLayer] = useState(true);
   const [showDbSweepMarkers, setShowDbSweepMarkers] = useState(true);
   const [showDbRangeSignalMarkers, setShowDbRangeSignalMarkers] = useState(true);
@@ -957,23 +1014,118 @@ export default function App() {
   const refreshEnginePanel = useCallback(async () => {
     if (!token) return;
     try {
-      const [snaps, syms, sigs, pbal, pfills] = await Promise.all([
+      const symQ = barSymbol.trim().toUpperCase();
+      const mcPromise =
+        symQ.length > 0
+          ? fetchMarketContextLatest(token, {
+              symbol: symQ,
+              interval: barInterval.trim(),
+              exchange: barExchange.trim().toLowerCase(),
+              segment: (barSegment.trim() || "spot").toLowerCase(),
+            }).catch(() => null)
+          : Promise.resolve(null);
+      const segLower = (barSegment.trim() || "spot").toLowerCase();
+      const commDefPromise = fetchBinanceCommissionDefaults(token, {
+        segment: segLower,
+        symbol: symQ.length > 0 ? symQ : undefined,
+      }).catch(() => null);
+      const [snaps, syms, sigs, pbal, pfills, ds, mc, commDef] = await Promise.all([
         fetchEngineSnapshots(token),
         fetchEngineSymbols(token),
         fetchEngineRangeSignals(token, { limit: 80 }),
         fetchPaperBalance(token).catch(() => null),
         fetchPaperFills(token, 15).catch(() => []),
+        fetchDataSnapshots(token).catch(() => []),
+        mcPromise,
+        commDefPromise,
       ]);
       setEngineSnapshots(snaps);
+      setDataSnapshots(ds);
+      setMarketContext(mc);
       setEngineSymbols(syms);
       setEngineRangeSignals(sigs);
       setPaperBalance(pbal);
       setPaperFills(pfills);
+      setCommissionDefaults(commDef);
+      setCommissionAccount(null);
+      setCommissionAccountErr("");
       setEnginePanelErr("");
     } catch (e) {
       setEnginePanelErr(String(e));
     }
-  }, [token]);
+  }, [token, barSymbol, barInterval, barExchange, barSegment]);
+
+  const loadCommissionAccount = useCallback(async () => {
+    if (!token) return;
+    const sym = barSymbol.trim().toUpperCase();
+    if (!sym) {
+      setCommissionAccountErr("Üst çubukta sembol gerekli.");
+      return;
+    }
+    setCommissionAccountBusy(true);
+    setCommissionAccountErr("");
+    try {
+      const r = await fetchBinanceCommissionAccount(token, {
+        symbol: sym,
+        segment: (barSegment.trim() || "spot").toLowerCase(),
+      });
+      setCommissionAccount(r);
+    } catch (e) {
+      setCommissionAccount(null);
+      setCommissionAccountErr(String(e));
+    } finally {
+      setCommissionAccountBusy(false);
+    }
+  }, [token, barSymbol, barSegment]);
+
+  const refreshMarketContextPanel = useCallback(async () => {
+    if (!token) return;
+    setContextTabBusy(true);
+    setContextTabErr("");
+    try {
+      const symQ = barSymbol.trim().toUpperCase();
+      const sumQ: {
+        enabled_only: boolean;
+        limit: number;
+        exchange?: string;
+        segment?: string;
+        symbol?: string;
+      } = { enabled_only: true, limit: symQ ? 80 : 200 };
+      if (symQ) {
+        sumQ.symbol = symQ;
+        const ex = barExchange.trim().toLowerCase();
+        if (ex) sumQ.exchange = ex;
+        sumQ.segment = (barSegment.trim() || "spot").toLowerCase();
+      }
+      const [cf, ds, summaries] = await Promise.all([
+        fetchConfluenceSnapshotsLatest(token),
+        fetchDataSnapshots(token).catch(() => []),
+        fetchMarketContextSummary(token, sumQ).catch(() => []),
+      ]);
+      setContextTabConfluence(cf);
+      setContextTabDataSnaps(ds);
+      setContextTabSummaries(summaries);
+      if (symQ.length > 0) {
+        const one = await fetchMarketContextLatest(token, {
+          symbol: symQ,
+          interval: barInterval.trim(),
+          exchange: barExchange.trim().toLowerCase(),
+          segment: (barSegment.trim() || "spot").toLowerCase(),
+        }).catch(() => null);
+        setContextTabSingle(one);
+      } else {
+        setContextTabSingle(null);
+      }
+    } catch (e) {
+      setContextTabErr(String(e));
+      setContextTabConfluence([]);
+      setContextTabDataSnaps([]);
+      setContextTabSummaries([]);
+      setContextTabSingle(null);
+    } finally {
+      setContextTabBusy(false);
+    }
+  }, [token, barSymbol, barInterval, barExchange, barSegment]);
 
   const refreshNansenPanel = useCallback(async () => {
     if (!token) return;
@@ -1014,10 +1166,20 @@ export default function App() {
   useEffect(() => {
     if (!token) {
       setEngineSnapshots([]);
+      setDataSnapshots([]);
+      setMarketContext(null);
+      setContextTabSingle(null);
+      setContextTabSummaries([]);
+      setContextTabConfluence([]);
+      setContextTabDataSnaps([]);
+      setContextTabErr("");
       setEngineRangeSignals([]);
       setEngineSymbols([]);
       setPaperBalance(null);
       setPaperFills([]);
+      setCommissionDefaults(null);
+      setCommissionAccount(null);
+      setCommissionAccountErr("");
       setEnginePanelErr("");
       return;
     }
@@ -1036,6 +1198,15 @@ export default function App() {
     }, 90_000);
     return () => window.clearInterval(id);
   }, [drawerOpen, drawerTab, token, refreshNansenPanel]);
+
+  useEffect(() => {
+    if (!drawerOpen || drawerTab !== "market_context" || !token) return;
+    void refreshMarketContextPanel();
+    const id = window.setInterval(() => {
+      void refreshMarketContextPanel();
+    }, 90_000);
+    return () => window.clearInterval(id);
+  }, [drawerOpen, drawerTab, token, refreshMarketContextPanel]);
 
   /**
    * OHLC kaynağı: `ohlcFromBinance` ise Binance spot REST (güncel mum); aksi halde JWT + `market_bars`.
@@ -1519,7 +1690,7 @@ export default function App() {
                   className="tv-topstrip__input"
                   value={drawerSearch}
                   onChange={(e) => setDrawerSearch(e.target.value)}
-                  placeholder="Ayar ara (örn. zigzag, projection, repaint)"
+                  placeholder="Ayar ara (örn. zigzag, bağlam, confluence, paper, komisyon)"
                   aria-label="Ayar arama"
                 />
               </div>
@@ -1559,6 +1730,15 @@ export default function App() {
                   onClick={() => setDrawerTab("engine")}
                 >
                   Motor
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={drawerTab === "market_context"}
+                  className={`tv-settings__tab ${drawerTab === "market_context" ? "is-active" : ""}`}
+                  onClick={() => setDrawerTab("market_context")}
+                >
+                  Bağlam
                 </button>
                 <button
                   type="button"
@@ -2242,6 +2422,11 @@ export default function App() {
                           <strong>Paper (F4):</strong> Dry emir (<code>orders/dry/place</code>) yoksa bakiye/dolum satırı
                           görünmez — motor verisiyle karıştırma.
                         </li>
+                        <li>
+                          <strong>Confluence (F7):</strong> Worker <code>signal_dashboard</code> sonrası{" "}
+                          <code>engine_kind = confluence</code> yazar; ham HTTP/Nansen birleşimi{" "}
+                          <code>data_snapshots</code> içinde. <code>QTSS_CONFLUENCE_ENGINE</code> ile kapatılabilir.
+                        </li>
                       </ul>
                       <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
                         <input
@@ -2415,11 +2600,26 @@ export default function App() {
                               </li>
                             ))}
                           </ul>
-                          {matchesSetting("sinyal", "dashboard", "durum", "trend", "kopu", "range") &&
+                          {matchesSetting(
+                            "sinyal",
+                            "dashboard",
+                            "durum",
+                            "trend",
+                            "kopu",
+                            "range",
+                            "v2",
+                            "ingilizce",
+                            "signal_dashboard",
+                            "wire",
+                          ) &&
                           dbSignalDashboardSnapshot ? (
                             <div className="card" style={{ marginTop: "0.65rem", padding: "0.55rem" }}>
                               <p className="tv-drawer__section-head" style={{ marginBottom: "0.35rem" }}>
                                 Sinyal paneli (DB — aktif grafik)
+                              </p>
+                              <p className="muted" style={{ fontSize: "0.66rem", marginBottom: "0.35rem" }}>
+                                Öncelik: <code>signal_dashboard_v2</code> (İngilizce wire, <code>schema_version</code> 3); yoksa
+                                Türkçe v1 alanları.
                               </p>
                               {dbSignalDashboardSnapshot.error ? (
                                 <p className="err" style={{ fontSize: "0.75rem" }}>
@@ -2440,6 +2640,7 @@ export default function App() {
                                   );
                                 }
                                 const p = raw as SignalDashboardPayload;
+                                const v2 = parseSignalDashboardV2(ins.signal_dashboard_v2);
                                 const row = (label: string, v: string) => (
                                   <tr key={label}>
                                     <td className="muted" style={{ padding: "0.12rem 0.35rem 0.12rem 0", verticalAlign: "top" }}>
@@ -2451,30 +2652,69 @@ export default function App() {
                                   </tr>
                                 );
                                 const yn = (b: boolean | undefined) => (b ? "TESPİT EDİLDİ" : "YOK");
+                                const posStr =
+                                  v2?.position_strength_10 != null
+                                    ? `${v2.position_strength_10} / 10`
+                                    : p.pozisyon_gucu_10 != null
+                                      ? `${p.pozisyon_gucu_10} / 10`
+                                      : "—";
+                                const sysStr =
+                                  pickDashboardBool(v2?.system_active, p.sistem_aktif) === true ? "AKTİF" : "—";
+                                const wireRow = (key: string, val: unknown) => {
+                                  if (val === undefined || val === null) return null;
+                                  const s = typeof val === "boolean" ? (val ? "true" : "false") : String(val);
+                                  return (
+                                    <tr key={key}>
+                                      <td
+                                        className="muted mono"
+                                        style={{ padding: "0.08rem 0.35rem 0.08rem 0", verticalAlign: "top", width: "42%" }}
+                                      >
+                                        {key}
+                                      </td>
+                                      <td className="mono" style={{ padding: "0.08rem 0", wordBreak: "break-all" }}>
+                                        {s}
+                                      </td>
+                                    </tr>
+                                  );
+                                };
                                 return (
+                                  <>
                                   <table style={{ width: "100%", fontSize: "0.74rem", borderCollapse: "collapse" }}>
                                     <tbody>
-                                      {row("Durum", p.durum ?? "—")}
-                                      {row("Durum (ham model)", p.durum_model_raw ?? "—")}
+                                      {row("Durum", pickDashboardStr(v2?.status, p.durum))}
+                                      {row("Durum (ham model)", pickDashboardStr(v2?.status_model_raw, p.durum_model_raw))}
                                       {row("Yön politikası (DB)", p.signal_direction_mode ?? "—")}
                                       {row("Yön (etkin)", p.signal_direction_effective ?? "—")}
-                                      {row("Yerel trend", p.yerel_trend ?? "—")}
-                                      {row("Global trend", p.global_trend ?? "—")}
-                                      {row("Piyasa modu", p.piyasa_modu ?? "—")}
-                                      {row("Giriş modu", p.giris_modu ?? "—")}
-                                      {row("Oynaklık %", p.oynaklik_pct != null ? p.oynaklik_pct.toFixed(2) : "—")}
-                                      {row("Momentum 1", p.momentum_1 ?? "—")}
-                                      {row("Momentum 2", p.momentum_2 ?? "—")}
-                                      {row("Giriş (gerçek)", formatDashboardNumber(p.giris_gercek ?? undefined))}
-                                      {row("Stop (ilk)", formatDashboardNumber(p.stop_ilk ?? undefined))}
-                                      {row("Kar al (ilk)", formatDashboardNumber(p.kar_al_ilk ?? undefined))}
-                                      {row("Stop/Trail (aktif)", formatDashboardNumber(p.stop_trail_aktif ?? undefined))}
-                                      {row("Kar al (dyn)", formatDashboardNumber(p.kar_al_dinamik ?? undefined))}
-                                      {row("Sinyal kaynağı", p.sinyal_kaynagi ?? "—")}
-                                      {row("Trend tükenmesi", yn(p.trend_tukenmesi))}
-                                      {row("Yapı kayması", yn(p.yapi_kaymasi))}
-                                      {row("Pozisyon gücü", p.pozisyon_gucu_10 != null ? `${p.pozisyon_gucu_10} / 10` : "—")}
-                                      {row("Sistem", p.sistem_aktif ? "AKTİF" : "—")}
+                                      {row("Yerel trend", pickDashboardStr(v2?.local_trend, p.yerel_trend))}
+                                      {row("Global trend", pickDashboardStr(v2?.global_trend, p.global_trend))}
+                                      {row("Piyasa modu", pickDashboardStr(v2?.market_mode, p.piyasa_modu))}
+                                      {row("Giriş modu", pickDashboardStr(v2?.entry_mode, p.giris_modu))}
+                                      {row(
+                                        "Oynaklık %",
+                                        v2?.volatility_pct != null && Number.isFinite(v2.volatility_pct)
+                                          ? v2.volatility_pct.toFixed(2)
+                                          : p.oynaklik_pct != null
+                                            ? p.oynaklik_pct.toFixed(2)
+                                            : "—",
+                                      )}
+                                      {row("Momentum 1", pickDashboardStr(v2?.momentum_rsi, p.momentum_1))}
+                                      {row("Momentum 2", pickDashboardStr(v2?.momentum_roc, p.momentum_2))}
+                                      {row("Giriş (gerçek)", pickDashboardNum(v2?.entry_price ?? undefined, p.giris_gercek ?? undefined))}
+                                      {row("Stop (ilk)", pickDashboardNum(v2?.stop_initial ?? undefined, p.stop_ilk ?? undefined))}
+                                      {row("Kar al (ilk)", pickDashboardNum(v2?.take_profit_initial ?? undefined, p.kar_al_ilk ?? undefined))}
+                                      {row(
+                                        "Stop/Trail (aktif)",
+                                        pickDashboardNum(v2?.stop_trail ?? undefined, p.stop_trail_aktif ?? undefined),
+                                      )}
+                                      {row(
+                                        "Kar al (dyn)",
+                                        pickDashboardNum(v2?.take_profit_dynamic ?? undefined, p.kar_al_dinamik ?? undefined),
+                                      )}
+                                      {row("Sinyal kaynağı", pickDashboardStr(v2?.signal_source, p.sinyal_kaynagi))}
+                                      {row("Trend tükenmesi", yn(pickDashboardBool(v2?.trend_exhaustion, p.trend_tukenmesi)))}
+                                      {row("Yapı kayması", yn(pickDashboardBool(v2?.structure_shift, p.yapi_kaymasi)))}
+                                      {row("Pozisyon gücü", posStr)}
+                                      {row("Sistem", sysStr)}
                                       {row("Range üst", formatDashboardNumber(p.range_high ?? undefined))}
                                       {row("Range alt", formatDashboardNumber(p.range_low ?? undefined))}
                                       {row("Range orta", formatDashboardNumber(p.range_mid ?? undefined))}
@@ -2482,11 +2722,62 @@ export default function App() {
                                       {row("Son bar", p.last_bar_open_time ?? "—")}
                                     </tbody>
                                   </table>
+                                  {v2 ? (
+                                    <details style={{ marginTop: "0.45rem" }}>
+                                      <summary className="muted" style={{ fontSize: "0.7rem", cursor: "pointer" }}>
+                                        Wire (EN) — <code>signal_dashboard_v2</code>
+                                      </summary>
+                                      <table
+                                        style={{ width: "100%", fontSize: "0.68rem", borderCollapse: "collapse", marginTop: "0.28rem" }}
+                                        className="mono muted"
+                                      >
+                                        <tbody>
+                                          {wireRow("schema_version", v2.schema_version)}
+                                          {wireRow("status", v2.status)}
+                                          {wireRow("status_model_raw", v2.status_model_raw)}
+                                          {wireRow("local_trend", v2.local_trend)}
+                                          {wireRow("global_trend", v2.global_trend)}
+                                          {wireRow("market_mode", v2.market_mode)}
+                                          {wireRow("entry_mode", v2.entry_mode)}
+                                          {wireRow("volatility_pct", v2.volatility_pct)}
+                                          {wireRow("momentum_rsi", v2.momentum_rsi)}
+                                          {wireRow("momentum_roc", v2.momentum_roc)}
+                                          {wireRow("entry_price", v2.entry_price)}
+                                          {wireRow("stop_initial", v2.stop_initial)}
+                                          {wireRow("take_profit_initial", v2.take_profit_initial)}
+                                          {wireRow("stop_trail", v2.stop_trail)}
+                                          {wireRow("take_profit_dynamic", v2.take_profit_dynamic)}
+                                          {wireRow("signal_source", v2.signal_source)}
+                                          {wireRow("trend_exhaustion", v2.trend_exhaustion)}
+                                          {wireRow("structure_shift", v2.structure_shift)}
+                                          {wireRow("position_strength_10", v2.position_strength_10)}
+                                          {wireRow("system_active", v2.system_active)}
+                                        </tbody>
+                                      </table>
+                                    </details>
+                                  ) : null}
+                                  </>
                                 );
                               })()}
                             </div>
                           ) : null}
-                          {matchesSetting("paper", "dry", "f4", "ozet", "islem", "işlem", "portfolio", "birleşik") ? (
+                          {matchesSetting(
+                            "paper",
+                            "dry",
+                            "f4",
+                            "ozet",
+                            "islem",
+                            "işlem",
+                            "portfolio",
+                            "birleşik",
+                            "komisyon",
+                            "commission",
+                            "fee",
+                            "ücret",
+                            "maker",
+                            "taker",
+                            "f5",
+                          ) ? (
                             <div className="card" style={{ marginTop: "0.65rem", padding: "0.55rem" }}>
                               <p className="tv-drawer__section-head" style={{ marginBottom: "0.35rem" }}>
                                 Range / Paper özeti (F4)
@@ -2499,6 +2790,69 @@ export default function App() {
                                 . Canlı emirler: <code>POST /api/v1/orders/binance/place</code> — Dry:{" "}
                                 <code>POST /api/v1/orders/dry/place</code>.
                               </p>
+                              <p className="tv-drawer__section-head" style={{ marginBottom: "0.3rem", marginTop: "0.45rem" }}>
+                                Komisyon özeti (F5 / SPEC §7.2)
+                              </p>
+                              <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.35rem" }}>
+                                Varsayılan: <code>GET …/market/binance/commission-defaults</code> (motor yenilemede). Hesap:{" "}
+                                <code>…/commission-account</code> — Binance API anahtarı <code>exchange_accounts</code>.
+                              </p>
+                              <table
+                                style={{ width: "100%", fontSize: "0.72rem", borderCollapse: "collapse", marginBottom: "0.35rem" }}
+                              >
+                                <tbody>
+                                  <tr>
+                                    <td className="muted" style={{ padding: "0.1rem 0.35rem 0.1rem 0", verticalAlign: "top" }}>
+                                      Varsayılan (bps)
+                                    </td>
+                                    <td className="mono" style={{ padding: "0.1rem 0", wordBreak: "break-all" }}>
+                                      {commissionDefaults ? (
+                                        <>
+                                          maker {commissionDefaults.defaults_bps.maker_bps.toFixed(2)} · taker{" "}
+                                          {commissionDefaults.defaults_bps.taker_bps.toFixed(2)}
+                                          <br />
+                                          <span style={{ opacity: 0.88 }}>
+                                            {commissionDefaults.segment}
+                                            {commissionDefaults.query_symbol ? ` · ${commissionDefaults.query_symbol}` : ""} ·{" "}
+                                            {commissionDefaults.source}
+                                          </span>
+                                        </>
+                                      ) : (
+                                        "—"
+                                      )}
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <td className="muted" style={{ padding: "0.1rem 0.35rem 0.1rem 0", verticalAlign: "top" }}>
+                                      Hesap (kesir)
+                                    </td>
+                                    <td className="mono" style={{ padding: "0.1rem 0", wordBreak: "break-all" }}>
+                                      {commissionAccount ? (
+                                        <>
+                                          maker {commissionAccount.maker_rate} · taker {commissionAccount.taker_rate}
+                                          <br />
+                                          <span style={{ opacity: 0.88 }}>
+                                            {commissionAccount.segment} · {commissionAccount.source}
+                                          </span>
+                                        </>
+                                      ) : commissionAccountErr ? (
+                                        <span className="err">{commissionAccountErr}</span>
+                                      ) : (
+                                        <span className="muted">—</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                              <button
+                                type="button"
+                                className="theme-toggle"
+                                style={{ fontSize: "0.74rem", marginBottom: "0.45rem" }}
+                                disabled={commissionAccountBusy}
+                                onClick={() => void loadCommissionAccount()}
+                              >
+                                {commissionAccountBusy ? "Hesap komisyonu…" : "Hesap komisyonunu çek"}
+                              </button>
                               <table style={{ width: "100%", fontSize: "0.72rem", borderCollapse: "collapse", marginBottom: "0.45rem" }}>
                                 <tbody>
                                   <tr>
@@ -2596,6 +2950,166 @@ export default function App() {
                               ))
                             )}
                           </div>
+                          <p className="tv-drawer__section-head" style={{ marginTop: "0.65rem" }}>
+                            Confluence özeti
+                          </p>
+                          <div
+                            style={{ maxHeight: "6rem", overflow: "auto", fontSize: "0.72rem" }}
+                            className="mono muted"
+                          >
+                            {engineSnapshots.filter((s) => s.engine_kind === "confluence").length === 0 ? (
+                              <span>
+                                Henüz <code>confluence</code> satırı yok — worker veya{" "}
+                                <code>QTSS_CONFLUENCE_ENGINE=off</code> / yetersiz bar kontrol edin.
+                              </span>
+                            ) : (
+                              engineSnapshots
+                                .filter((s) => s.engine_kind === "confluence")
+                                .map((s) => {
+                                  const p =
+                                    s.payload && typeof s.payload === "object"
+                                      ? (s.payload as Record<string, unknown>)
+                                      : null;
+                                  const comp =
+                                    typeof p?.composite_score === "number"
+                                      ? p.composite_score.toFixed(3)
+                                      : "—";
+                                  const reg = typeof p?.regime === "string" ? p.regime : "—";
+                                  const conf =
+                                    typeof p?.confidence_0_100 === "number" ? String(p.confidence_0_100) : "—";
+                                  const extras = p ? formatConfluenceExtras(p) : "";
+                                  return (
+                                    <div key={`cf-${s.engine_symbol_id}`} style={{ marginBottom: "0.3rem" }}>
+                                      {s.symbol} {s.interval} · regime {reg} · composite {comp} · conf {conf}
+                                      {extras}
+                                      <br />
+                                      {s.computed_at}
+                                      {s.error ? (
+                                        <>
+                                          <br />
+                                          <span className="err">{s.error}</span>
+                                        </>
+                                      ) : null}
+                                    </div>
+                                  );
+                                })
+                            )}
+                          </div>
+                          <p className="tv-drawer__section-head" style={{ marginTop: "0.55rem" }}>
+                            Birleşik <code>data_snapshots</code>
+                          </p>
+                          <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.25rem" }}>
+                            Nansen + harici çekimler tek satır/kaynak; confluence buradan okur (ör.{" "}
+                            <code>binance_taker_btcusdt</code>).
+                          </p>
+                          <div
+                            style={{ maxHeight: "7rem", overflow: "auto", fontSize: "0.7rem" }}
+                            className="mono muted"
+                          >
+                            {dataSnapshots.length === 0 ? (
+                              <span>Henüz satır yok — worker yazımı veya migration 0022 kontrol edin.</span>
+                            ) : (
+                              dataSnapshots.map((d) => (
+                                <div key={d.source_key} style={{ marginBottom: "0.28rem" }}>
+                                  <strong>{d.source_key}</strong>
+                                  {d.error ? <span className="err"> {d.error}</span> : null}
+                                  <br />
+                                  {d.computed_at}
+                                </div>
+                              ))
+                            )}
+                          </div>
+                          <p className="tv-drawer__section-head" style={{ marginTop: "0.55rem" }}>
+                            Piyasa bağlamı (üst çubuk)
+                          </p>
+                          <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.25rem" }}>
+                            <code>GET …/analysis/market-context/latest</code> — tek <code>engine_symbols</code> hedefi
+                            için <code>signal_dashboard</code>, <code>trading_range</code>, <code>confluence</code> ve
+                            Nansen + taker <code>data_snapshots</code>.
+                          </p>
+                          <div
+                            style={{ maxHeight: "9rem", overflow: "auto", fontSize: "0.7rem" }}
+                            className="mono muted"
+                          >
+                            {!barSymbol.trim() ? (
+                              <span>Üst çubukta sembol seçin.</span>
+                            ) : !marketContext ? (
+                              <span>
+                                Bu exchange/segment/symbol/interval için <code>engine_symbols</code> yok veya API 404 —
+                                motor hedefini ekleyin.
+                              </span>
+                            ) : (
+                              <>
+                                <div style={{ marginBottom: "0.35rem" }}>
+                                  <strong>
+                                    {marketContext.exchange}/{marketContext.segment} {marketContext.symbol}{" "}
+                                    {marketContext.interval}
+                                  </strong>
+                                </div>
+                                {(() => {
+                                  const dash = marketContext.technical.signal_dashboard;
+                                  const d =
+                                    dash && typeof dash === "object"
+                                      ? (dash as Record<string, unknown>)
+                                      : null;
+                                  const durum = typeof d?.durum === "string" ? d.durum : "—";
+                                  const piyasa =
+                                    typeof d?.piyasa_modu === "string" ? d.piyasa_modu : "—";
+                                  return (
+                                    <div style={{ marginBottom: "0.3rem" }}>
+                                      TA: durum <strong>{durum}</strong> · piyasa_modu <strong>{piyasa}</strong>
+                                    </div>
+                                  );
+                                })()}
+                                {(() => {
+                                  const cf = marketContext.confluence;
+                                  const p =
+                                    cf && typeof cf === "object" ? (cf as Record<string, unknown>) : null;
+                                  if (!p) {
+                                    return (
+                                      <div style={{ marginBottom: "0.3rem" }}>
+                                        Confluence: <span className="muted">—</span>
+                                      </div>
+                                    );
+                                  }
+                                  const comp =
+                                    typeof p.composite_score === "number"
+                                      ? p.composite_score.toFixed(3)
+                                      : "—";
+                                  const reg = typeof p.regime === "string" ? p.regime : "—";
+                                  const conf =
+                                    typeof p.confidence_0_100 === "number"
+                                      ? String(p.confidence_0_100)
+                                      : "—";
+                                  const extras = formatConfluenceExtras(p);
+                                  return (
+                                    <div style={{ marginBottom: "0.3rem" }}>
+                                      Confluence: regime <strong>{reg}</strong> · composite <strong>{comp}</strong> ·
+                                      conf <strong>{conf}</strong>
+                                      {extras ? (
+                                        <>
+                                          <br />
+                                          <span style={{ opacity: 0.92 }}>{extras.replace(/^ · /, "")}</span>
+                                        </>
+                                      ) : null}
+                                    </div>
+                                  );
+                                })()}
+                                {marketContext.context_data_snapshots.length === 0 ? (
+                                  <div className="muted">context data_snapshots: yok</div>
+                                ) : (
+                                  marketContext.context_data_snapshots.map((row) => (
+                                    <div key={row.source_key} style={{ marginBottom: "0.25rem" }}>
+                                      ctx <strong>{row.source_key}</strong>
+                                      {row.error ? <span className="err"> {row.error}</span> : null}
+                                      <br />
+                                      {row.computed_at}
+                                    </div>
+                                  ))
+                                )}
+                              </>
+                            )}
+                          </div>
                           <div style={{ marginTop: "0.65rem" }}>
                             <p className="tv-drawer__section-head" style={{ marginBottom: "0.25rem" }}>
                               Range sinyal olayları (DB)
@@ -2637,6 +3151,243 @@ export default function App() {
                       )}
                     </div>
                   ) : null}
+                </>
+              ) : null}
+
+              {drawerTab === "market_context" ? (
+                <>
+                  {token ? (
+                    <div className="card">
+                      <p className="tv-drawer__section-head">Piyasa bağlamı (F7 / PLAN Phase E)</p>
+                      <p className="muted" style={{ fontSize: "0.76rem", marginBottom: "0.45rem" }}>
+                        Üst çubuk:{" "}
+                        <span className="mono">
+                          {barExchange.trim() || "—"}/{normalizeMarketSegment(barSegment)}/
+                          {barSymbol.trim().toUpperCase() || "—"}/{barInterval.trim() || "—"}
+                        </span>
+                        . API: <code>market-context/latest</code>, <code>market-context/summary</code>,{" "}
+                        <code>engine/confluence/latest</code>, <code>data-snapshots</code>. Ayrıntı:{" "}
+                        <code>docs/PLAN_CONFLUENCE_AND_MARKET_DATA.md</code>,{" "}
+                        <code>docs/SPEC_EXECUTION_RANGE_SIGNALS_UI.md</code> (F7).
+                      </p>
+                      <button
+                        type="button"
+                        className="theme-toggle"
+                        style={{ marginBottom: "0.5rem", fontSize: "0.78rem" }}
+                        disabled={contextTabBusy}
+                        onClick={() => void refreshMarketContextPanel()}
+                      >
+                        {contextTabBusy ? "Yenileniyor…" : "Şimdi yenile"}
+                      </button>
+                      {contextTabErr ? <p className="err">{contextTabErr}</p> : null}
+
+                      <p className="tv-drawer__section-head" style={{ marginTop: "0.35rem" }}>
+                        Motor hedefleri (filtreli özet)
+                      </p>
+                      <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.25rem" }}>
+                        <code>GET …/market-context/summary</code> — Üst çubukta sembol varken aynı{" "}
+                        <code>exchange</code> / <code>segment</code> / <code>symbol</code> ile süzülür; sembol boşken
+                        tüm <strong>aktif</strong> hedefler (limit).
+                      </p>
+                      <div
+                        className="mono muted"
+                        style={{
+                          maxHeight: "10rem",
+                          overflow: "auto",
+                          fontSize: "0.68rem",
+                          marginBottom: "0.5rem",
+                        }}
+                      >
+                        {contextTabSummaries.length === 0 ? (
+                          <span className="muted">Özet satırı yok — motor hedefi ekleyin veya süzgeci gevşetin.</span>
+                        ) : (
+                          contextTabSummaries.map((r) => {
+                            const cf = r.confluence;
+                            let cLine = "—";
+                            if (cf) {
+                              const parts: string[] = [];
+                              if (typeof cf.regime === "string" && cf.regime.length > 0) parts.push(cf.regime);
+                              if (typeof cf.composite_score === "number") {
+                                parts.push(`comp ${cf.composite_score.toFixed(3)}`);
+                              }
+                              if (typeof cf.confidence_0_100 === "number") {
+                                parts.push(`conf ${Math.round(cf.confidence_0_100)}`);
+                              }
+                              if (parts.length > 0) {
+                                cLine = parts.join(" · ");
+                              } else if (cf.error) {
+                                cLine = `err ${cf.error}`;
+                              }
+                            }
+                            const previewLen = cf?.conflict_codes_preview?.length ?? 0;
+                            const moreConf =
+                              cf &&
+                              typeof cf.conflicts_count === "number" &&
+                              cf.conflicts_count > previewLen;
+                            return (
+                              <div key={r.engine_symbol_id} style={{ marginBottom: "0.28rem" }}>
+                                <strong>
+                                  {r.exchange}/{r.segment} {r.symbol} {r.interval}
+                                </strong>
+                                {!r.enabled ? <span className="muted"> (kapalı)</span> : null}
+                                <br />
+                                TA: {r.ta_durum ?? "—"} · piyasa_modu {r.ta_piyasa_modu ?? "—"}
+                                <br />
+                                Confluence: {cLine}
+                                {cf && typeof cf.lot_scale_hint === "number"
+                                  ? ` · lot_scale ${cf.lot_scale_hint.toFixed(2)}`
+                                  : ""}
+                                {cf && typeof cf.conflicts_count === "number" && cf.conflicts_count > 0 ? (
+                                  <>
+                                    {" "}
+                                    · conflicts {cf.conflicts_count}
+                                    {previewLen > 0
+                                      ? ` (${cf.conflict_codes_preview!.join(", ")}${moreConf ? "…" : ""})`
+                                      : ""}
+                                  </>
+                                ) : null}
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      <p className="tv-drawer__section-head" style={{ marginTop: "0.5rem" }}>
+                        Tek hedef özeti
+                      </p>
+                      <div
+                        className="mono muted"
+                        style={{ maxHeight: "11rem", overflow: "auto", fontSize: "0.72rem", marginBottom: "0.55rem" }}
+                      >
+                        {!barSymbol.trim() ? (
+                          <span>Sembol seçin — üst çubuktan.</span>
+                        ) : !contextTabSingle ? (
+                          <span>
+                            Bu hedef için <code>engine_symbols</code> yok veya 404 — Motor sekmesinden hedef ekleyin.
+                          </span>
+                        ) : (
+                          <>
+                            <div style={{ marginBottom: "0.35rem" }}>
+                              <strong>
+                                {contextTabSingle.exchange}/{contextTabSingle.segment} {contextTabSingle.symbol}{" "}
+                                {contextTabSingle.interval}
+                              </strong>
+                            </div>
+                            {(() => {
+                              const dash = contextTabSingle.technical.signal_dashboard;
+                              const d =
+                                dash && typeof dash === "object" ? (dash as Record<string, unknown>) : null;
+                              const durum = typeof d?.durum === "string" ? d.durum : "—";
+                              const piyasa = typeof d?.piyasa_modu === "string" ? d.piyasa_modu : "—";
+                              return (
+                                <div style={{ marginBottom: "0.3rem" }}>
+                                  TA: <strong>durum</strong> {durum} · <strong>piyasa_modu</strong> {piyasa}
+                                </div>
+                              );
+                            })()}
+                            {(() => {
+                              const cf = contextTabSingle.confluence;
+                              const p = cf && typeof cf === "object" ? (cf as Record<string, unknown>) : null;
+                              if (!p) {
+                                return <div className="muted">Confluence: —</div>;
+                              }
+                              const pillars = p.pillar_scores;
+                              const pt =
+                                pillars && typeof pillars === "object"
+                                  ? (pillars as Record<string, unknown>)
+                                  : null;
+                              const comp =
+                                typeof p.composite_score === "number" ? p.composite_score.toFixed(3) : "—";
+                              const reg = typeof p.regime === "string" ? p.regime : "—";
+                              const conf =
+                                typeof p.confidence_0_100 === "number" ? String(p.confidence_0_100) : "—";
+                              const extras = formatConfluenceExtras(p);
+                              return (
+                                <div style={{ marginBottom: "0.3rem" }}>
+                                  <strong>Confluence</strong>: regime {reg} · composite {comp} · confidence {conf}
+                                  {extras ? (
+                                    <>
+                                      <br />
+                                      <span style={{ opacity: 0.92 }}>{extras.replace(/^ · /, "")}</span>
+                                    </>
+                                  ) : null}
+                                  {pt ? (
+                                    <>
+                                      <br />
+                                      pillars: technical{" "}
+                                      {typeof pt.technical === "number" ? pt.technical.toFixed(2) : "—"} · onchain{" "}
+                                      {typeof pt.onchain === "number" ? pt.onchain.toFixed(2) : "—"} · smart_money{" "}
+                                      {typeof pt.smart_money === "number" ? pt.smart_money.toFixed(2) : "—"}
+                                    </>
+                                  ) : null}
+                                </div>
+                              );
+                            })()}
+                            {contextTabSingle.context_data_snapshots.length === 0 ? (
+                              <div className="muted">İlgili data_snapshots: yok</div>
+                            ) : (
+                              contextTabSingle.context_data_snapshots.map((row) => (
+                                <div key={row.source_key} style={{ marginBottom: "0.22rem" }}>
+                                  <strong>{row.source_key}</strong>
+                                  {row.error ? <span className="err"> {row.error}</span> : null} · {row.computed_at}
+                                </div>
+                              ))
+                            )}
+                          </>
+                        )}
+                      </div>
+
+                      <p className="tv-drawer__section-head">Tüm confluence satırları (motor)</p>
+                      <div
+                        className="mono muted"
+                        style={{ maxHeight: "8rem", overflow: "auto", fontSize: "0.7rem", marginBottom: "0.55rem" }}
+                      >
+                        {contextTabConfluence.length === 0 ? (
+                          <span className="muted">Henüz confluence snapshot yok.</span>
+                        ) : (
+                          contextTabConfluence.map((s) => {
+                            const p =
+                              s.payload && typeof s.payload === "object"
+                                ? (s.payload as Record<string, unknown>)
+                                : null;
+                            const comp =
+                              typeof p?.composite_score === "number" ? p.composite_score.toFixed(3) : "—";
+                            const reg = typeof p?.regime === "string" ? p.regime : "—";
+                            const extras = p ? formatConfluenceExtras(p) : "";
+                            return (
+                              <div key={`ctx-cf-${s.engine_symbol_id}`} style={{ marginBottom: "0.28rem" }}>
+                                {s.symbol} {s.interval} · {reg} · {comp}
+                                {extras}
+                                <br />
+                                <span style={{ opacity: 0.85 }}>{s.computed_at}</span>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      <p className="tv-drawer__section-head">Birleşik data_snapshots (tam liste)</p>
+                      <div
+                        className="mono muted"
+                        style={{ maxHeight: "9rem", overflow: "auto", fontSize: "0.68rem" }}
+                      >
+                        {contextTabDataSnaps.length === 0 ? (
+                          <span>Henüz satır yok.</span>
+                        ) : (
+                          contextTabDataSnaps.map((d) => (
+                            <div key={d.source_key} style={{ marginBottom: "0.25rem" }}>
+                              <strong>{d.source_key}</strong>
+                              {d.error ? <span className="err"> {d.error}</span> : null}
+                              <br />
+                              {d.computed_at}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="muted">Piyasa bağlamı için giriş yap.</p>
+                  )}
                 </>
               ) : null}
 

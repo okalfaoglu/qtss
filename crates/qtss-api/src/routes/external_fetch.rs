@@ -1,4 +1,4 @@
-//! DB tanımlı HTTP kaynakları — son snapshot okuma (`external_data_snapshots`).
+//! DB tanımlı HTTP kaynakları — son yanıt `data_snapshots` (yalnızca `external_data_sources` anahtarları).
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use qtss_storage::{
-    delete_external_source, fetch_external_snapshot, list_external_snapshots, list_external_sources,
-    upsert_external_source, ExternalDataSnapshotRow, ExternalDataSourceRow,
+    delete_external_source, fetch_data_snapshot_for_external_http_source,
+    list_external_sources, list_snapshots_for_external_http_sources, upsert_external_source,
+    DataSnapshotRow, ExternalDataSourceRow,
 };
 
 use crate::state::SharedState;
@@ -25,6 +26,13 @@ fn valid_source_key(key: &str) -> bool {
     }
     key.chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn status_code_from_meta(meta: &Option<Value>) -> Option<i16> {
+    meta.as_ref()
+        .and_then(|m| m.get("http_status"))
+        .and_then(|x| x.as_i64())
+        .map(|x| x as i16)
 }
 
 pub fn external_fetch_read_router() -> Router<SharedState> {
@@ -68,7 +76,7 @@ struct SnapshotListItem {
 async fn list_snapshots_api(
     State(st): State<SharedState>,
 ) -> Result<Json<Vec<SnapshotListItem>>, String> {
-    let rows = list_external_snapshots(&st.pool)
+    let rows = list_snapshots_for_external_http_sources(&st.pool)
         .await
         .map_err(|e| e.to_string())?;
     let out: Vec<SnapshotListItem> = rows
@@ -76,7 +84,7 @@ async fn list_snapshots_api(
         .map(|r| SnapshotListItem {
             source_key: r.source_key,
             computed_at: r.computed_at,
-            status_code: r.status_code,
+            status_code: status_code_from_meta(&r.meta_json),
             error: r.error,
             has_response: r.response_json.is_some(),
         })
@@ -84,10 +92,37 @@ async fn list_snapshots_api(
     Ok(Json(out))
 }
 
+/// Eski `external_data_snapshots` alanları + `meta_json` (HTTP meta birleşik tabloda).
+#[derive(Serialize)]
+struct ExternalHttpSnapshotResponse {
+    pub source_key: String,
+    pub request_json: Value,
+    pub response_json: Option<Value>,
+    pub status_code: Option<i16>,
+    pub meta_json: Option<Value>,
+    pub computed_at: DateTime<Utc>,
+    pub error: Option<String>,
+}
+
+impl From<DataSnapshotRow> for ExternalHttpSnapshotResponse {
+    fn from(r: DataSnapshotRow) -> Self {
+        let status_code = status_code_from_meta(&r.meta_json);
+        ExternalHttpSnapshotResponse {
+            source_key: r.source_key,
+            request_json: r.request_json,
+            response_json: r.response_json,
+            status_code,
+            meta_json: r.meta_json,
+            computed_at: r.computed_at,
+            error: r.error,
+        }
+    }
+}
+
 async fn get_snapshot_api(
     State(st): State<SharedState>,
     Path(key): Path<String>,
-) -> Result<Json<ExternalDataSnapshotRow>, (StatusCode, String)> {
+) -> Result<Json<ExternalHttpSnapshotResponse>, (StatusCode, String)> {
     let key = key.trim();
     if !valid_source_key(key) {
         return Err((
@@ -95,7 +130,7 @@ async fn get_snapshot_api(
             "geçersiz source key".to_string(),
         ));
     }
-    let row = fetch_external_snapshot(&st.pool, key)
+    let row = fetch_data_snapshot_for_external_http_source(&st.pool, key)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let Some(row) = row else {
@@ -104,7 +139,7 @@ async fn get_snapshot_api(
             "snapshot yok — kaynak tanımlı mı ve worker çekti mi kontrol edin".to_string(),
         ));
     };
-    Ok(Json(row))
+    Ok(Json(ExternalHttpSnapshotResponse::from(row)))
 }
 
 #[derive(Deserialize)]

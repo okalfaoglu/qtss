@@ -194,4 +194,27 @@ impl PaperLedgerRepository {
         .await?;
         Ok(rows)
     }
+
+    /// Worker bildirim döngüsü: `created_at > after` sıralı dolumlar (dry / paper).
+    pub async fn list_fills_created_after(
+        &self,
+        after: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<PaperFillRow>, StorageError> {
+        let lim = limit.clamp(1, 100);
+        let rows = sqlx::query_as::<_, PaperFillRow>(
+            r#"SELECT id, org_id, user_id, exchange, segment, symbol,
+                      client_order_id, side, quantity, avg_price, fee,
+                      quote_balance_after, base_positions_after, intent, created_at
+               FROM paper_fills
+               WHERE created_at > $1
+               ORDER BY created_at ASC, id ASC
+               LIMIT $2"#,
+        )
+        .bind(after)
+        .bind(lim)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
 }

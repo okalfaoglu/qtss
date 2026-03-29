@@ -2,6 +2,7 @@ pub mod audit_log;
 pub mod catalog;
 pub mod config;
 pub mod copy_trade;
+pub mod data_snapshots;
 pub mod engine_analysis;
 pub mod error;
 pub mod external_fetch;
@@ -18,19 +19,23 @@ pub use audit_log::{insert_http_audit, list_recent as audit_list_recent, AuditHt
 pub use catalog::{CatalogRepository, ExchangeRow, InstrumentRow, MarketRow};
 pub use config::{AppConfigEntry, AppConfigRepository};
 pub use copy_trade::{CopySubscriptionRepository, CopySubscriptionRow};
+pub use data_snapshots::{
+    data_snapshot_age_secs, fetch_data_snapshot, fetch_data_snapshot_for_external_http_source,
+    list_data_snapshots, list_snapshots_for_external_http_sources, upsert_data_snapshot,
+    DataSnapshotRow,
+};
 pub use engine_analysis::{
     fetch_analysis_snapshot_payload, insert_engine_symbol, insert_range_signal_event,
     list_analysis_snapshots_with_symbols, list_enabled_engine_symbols, list_engine_symbols_all,
-    list_range_signal_events_joined, update_engine_symbol_enabled, update_engine_symbol_patch,
-    upsert_analysis_snapshot, AnalysisSnapshotJoinedRow, EngineSymbolInsert, EngineSymbolRow,
+    list_engine_symbols_matching, list_market_context_summaries, list_range_signal_events_joined,
+    update_engine_symbol_enabled, update_engine_symbol_patch, upsert_analysis_snapshot,
+    AnalysisSnapshotJoinedRow, EngineSymbolInsert, EngineSymbolRow, MarketContextSummaryRow,
     RangeSignalEventInsert, RangeSignalEventJoinedRow,
 };
 pub use error::StorageError;
 pub use external_fetch::{
-    delete_external_source, external_snapshot_age_secs, fetch_external_snapshot,
-    list_enabled_external_sources, list_external_sources, list_external_snapshots,
-    upsert_external_snapshot, upsert_external_source, ExternalDataSnapshotRow,
-    ExternalDataSourceRow,
+    delete_external_source, external_snapshot_age_secs, list_enabled_external_sources,
+    list_external_sources, upsert_external_source, ExternalDataSourceRow,
 };
 pub use exchange_accounts::{ExchangeAccountRepository, ExchangeCredentials};
 pub use exchange_orders::{ExchangeOrderRepository, ExchangeOrderRow};

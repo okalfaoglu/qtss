@@ -13,6 +13,7 @@
 //! `check_overflow` / `get_trend_series` ayrı fonksiyon olarak yok; `trend_line_inspect` ve zigzag akışı ile örtüşür.
 
 mod dashboard_v1;
+mod dashboard_v2_envelope;
 mod find;
 mod ohlc;
 mod pattern_catalog;
@@ -41,6 +42,7 @@ pub use dashboard_v1::{
     compute_signal_dashboard_v1, compute_signal_dashboard_v1_with_policy, SignalDashboardV1,
     SignalDirectionPolicy,
 };
+pub use dashboard_v2_envelope::{signal_dashboard_v2_envelope_from_v1, SignalDashboardV2Envelope};
 pub use trading_range::{analyze_trading_range, TradingRangeParams, TradingRangeResult};
 pub use theme::{rgb_to_hex, THEME_DARK_RGB, THEME_LIGHT_RGB};
 pub use zigzag::{

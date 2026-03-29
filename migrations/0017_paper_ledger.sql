@@ -1,17 +1,14 @@
--- Paper / dry-run sanal defter — borsaya gitmeyen simüle işlemler (F3).
--- Sürüm 0017: 0014 = acp_auto_scan_timeframe; 0015 = engine_analysis; 0016 = range_signal_events.
+-- Dry / paper defter (`PaperLedgerRepository`).
 
-CREATE TABLE IF NOT EXISTS paper_balances (
-    user_id UUID PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+CREATE TABLE paper_balances (
+    user_id UUID NOT NULL PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
     org_id UUID NOT NULL REFERENCES organizations (id) ON DELETE CASCADE,
     quote_balance NUMERIC NOT NULL,
     base_positions JSONB NOT NULL DEFAULT '{}'::jsonb,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_paper_balances_org ON paper_balances (org_id);
-
-CREATE TABLE IF NOT EXISTS paper_fills (
+CREATE TABLE paper_fills (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id UUID NOT NULL REFERENCES organizations (id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -29,4 +26,5 @@ CREATE TABLE IF NOT EXISTS paper_fills (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_paper_fills_user_created ON paper_fills (user_id, created_at DESC);
+CREATE INDEX idx_paper_fills_user_created ON paper_fills (user_id, created_at DESC);
+CREATE INDEX idx_paper_fills_created ON paper_fills (created_at);

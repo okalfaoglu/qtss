@@ -72,6 +72,101 @@ pub async fn list_engine_symbols_all(pool: &PgPool) -> Result<Vec<EngineSymbolRo
     Ok(rows)
 }
 
+/// `market-context` API: filter `engine_symbols` by `symbol` (required, uppercased) and optional disambiguators.
+pub async fn list_engine_symbols_matching(
+    pool: &PgPool,
+    symbol: &str,
+    interval: Option<&str>,
+    exchange: Option<&str>,
+    segment: Option<&str>,
+) -> Result<Vec<EngineSymbolRow>, StorageError> {
+    let sym = symbol.trim().to_uppercase();
+    if sym.is_empty() {
+        return Ok(vec![]);
+    }
+    let iv = interval.map(str::trim).filter(|s| !s.is_empty());
+    let ex = exchange.map(str::trim).filter(|s| !s.is_empty());
+    let seg = segment.map(str::trim).filter(|s| !s.is_empty());
+    let rows = sqlx::query_as::<_, EngineSymbolRow>(
+        r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode, created_at, updated_at
+           FROM engine_symbols
+           WHERE symbol = $1
+             AND ($2::text IS NULL OR BTRIM(interval) = BTRIM($2))
+             AND ($3::text IS NULL OR LOWER(BTRIM(exchange)) = LOWER(BTRIM($3)))
+             AND ($4::text IS NULL OR LOWER(BTRIM(segment)) = LOWER(BTRIM($4)))
+           ORDER BY sort_order ASC, interval ASC"#,
+    )
+    .bind(&sym)
+    .bind(iv)
+    .bind(ex)
+    .bind(seg)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// F7 — filtreli market-context listesi: `engine_symbols` + son `confluence` ve `signal_dashboard` payload’ları (tek satır / hedef).
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct MarketContextSummaryRow {
+    pub engine_symbol_id: Uuid,
+    pub exchange: String,
+    pub segment: String,
+    pub symbol: String,
+    pub interval: String,
+    pub enabled: bool,
+    pub confluence_payload: Option<JsonValue>,
+    pub confluence_computed_at: Option<DateTime<Utc>>,
+    pub confluence_error: Option<String>,
+    pub signal_dashboard_payload: Option<JsonValue>,
+}
+
+/// Opsiyonel `exchange` / `segment` / `symbol` (tam eşleşme, büyük harf) filtreleri; `enabled_only` varsayılan API’de true.
+pub async fn list_market_context_summaries(
+    pool: &PgPool,
+    exchange: Option<&str>,
+    segment: Option<&str>,
+    symbol: Option<&str>,
+    enabled_only: bool,
+    limit: i64,
+) -> Result<Vec<MarketContextSummaryRow>, StorageError> {
+    let lim = limit.clamp(1, 200);
+    let ex = exchange.map(str::trim).filter(|s| !s.is_empty());
+    let seg = segment.map(str::trim).filter(|s| !s.is_empty());
+    let sym = symbol.map(str::trim).filter(|s| !s.is_empty()).map(|s| s.to_uppercase());
+    let rows = sqlx::query_as::<_, MarketContextSummaryRow>(
+        r#"SELECT
+             e.id AS engine_symbol_id,
+             e.exchange,
+             e.segment,
+             e.symbol,
+             e.interval,
+             e.enabled,
+             s.payload AS confluence_payload,
+             s.computed_at AS confluence_computed_at,
+             s.error AS confluence_error,
+             d.payload AS signal_dashboard_payload
+           FROM engine_symbols e
+           LEFT JOIN analysis_snapshots s
+             ON s.engine_symbol_id = e.id AND s.engine_kind = 'confluence'
+           LEFT JOIN analysis_snapshots d
+             ON d.engine_symbol_id = e.id AND d.engine_kind = 'signal_dashboard'
+           WHERE ($1::bool IS FALSE OR e.enabled = true)
+             AND ($2::text IS NULL OR LOWER(BTRIM(e.exchange)) = LOWER(BTRIM($2)))
+             AND ($3::text IS NULL OR LOWER(BTRIM(e.segment)) = LOWER(BTRIM($3)))
+             AND ($4::text IS NULL OR e.symbol = UPPER(BTRIM($4)))
+           ORDER BY e.sort_order ASC, e.symbol ASC, e.interval ASC
+           LIMIT $5"#,
+    )
+    .bind(enabled_only)
+    .bind(ex)
+    .bind(seg)
+    .bind(sym.as_deref())
+    .bind(lim)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn insert_engine_symbol(pool: &PgPool, row: &EngineSymbolInsert) -> Result<EngineSymbolRow, StorageError> {
     let rec = sqlx::query_as::<_, EngineSymbolRow>(
         r#"INSERT INTO engine_symbols (exchange, segment, symbol, interval, label, signal_direction_mode)
