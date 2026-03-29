@@ -30,7 +30,20 @@ fn default_migrations_dir() -> std::path::PathBuf {
 async fn main() -> anyhow::Result<()> {
     load_dotenv();
     let database_url = std::env::var("DATABASE_URL")
-        .context("DATABASE_URL gerekli (.env veya ortam; qtss-api ile aynı)")?;
+        .ok()
+        .and_then(|s| {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        })
+        .context(
+            "DATABASE_URL gerekli ve boş olamaz (.env veya export). \
+             Dokümandaki `export DATABASE_URL='...'` örneğindeki `...` yerine gerçek postgres://... adresini yazın; \
+             boş `DATABASE_URL=` satırını silin veya doldurun.",
+        )?;
 
     let migrations_dir = std::env::args()
         .nth(1)

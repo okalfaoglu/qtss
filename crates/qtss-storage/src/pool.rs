@@ -1,9 +1,19 @@
-use sqlx::postgres::PgPoolOptions;
+use std::str::FromStr;
+
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 
 use crate::error::StorageError;
 
 pub async fn create_pool(database_url: &str, max_connections: u32) -> Result<PgPool, StorageError> {
+    PgConnectOptions::from_str(database_url).map_err(|e| {
+        StorageError::Other(format!(
+            "DATABASE_URL ayrıştırılamadı: {e}. \
+             Örnek: postgres://KULLANICI:SIFRE@127.0.0.1:5432/VERITABANI. \
+             .env içinde `DATABASE_URL=` boş bırakmayın (satırı silin veya tam URL yazın); \
+             dokümandaki `export DATABASE_URL='...'` ifadesindeki üç nokta yer tutucudur, shell’e aynen yapıştırmayın."
+        ))
+    })?;
     let pool = PgPoolOptions::new()
         .max_connections(max_connections)
         .connect(database_url)

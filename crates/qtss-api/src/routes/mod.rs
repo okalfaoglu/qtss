@@ -1,5 +1,6 @@
 mod ai_approval;
 mod analysis;
+mod audit_admin;
 mod catalog_admin;
 mod catalog_sync;
 mod config_admin;
@@ -27,7 +28,9 @@ pub use health::health_router;
 
 use crate::audit_http::audit_http_middleware;
 use crate::oauth::middleware::require_jwt;
-use crate::oauth::rbac::{require_admin, require_dashboard_roles, require_ops_roles};
+use crate::oauth::rbac::{
+    require_admin, require_audit_read, require_dashboard_roles, require_ops_roles,
+};
 use crate::state::SharedState;
 
 use catalog_admin::{catalog_read_router, catalog_write_router};
@@ -44,6 +47,9 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(
             user_permissions_admin::user_permissions_admin_router()
                 .layer(from_fn(require_admin)),
+        )
+        .merge(
+            audit_admin::audit_admin_router().layer(from_fn(require_audit_read)),
         )
         .merge(
             config_router()

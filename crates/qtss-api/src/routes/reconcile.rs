@@ -15,6 +15,7 @@ use qtss_reconcile::{
     BinanceOpenOrdersPatchConfig,
 };
 
+use crate::metrics::{record_reconcile_futures, record_reconcile_spot};
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
 
@@ -28,6 +29,23 @@ async fn reconcile_binance_spot(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
 ) -> Result<Json<ReconcileReport>, String> {
+    match reconcile_binance_spot_inner(claims, st).await {
+        Ok(report) => {
+            let rows = report.status_updates_applied.unwrap_or(0);
+            record_reconcile_spot(true, rows);
+            Ok(Json(report))
+        }
+        Err(e) => {
+            record_reconcile_spot(false, 0);
+            Err(e)
+        }
+    }
+}
+
+async fn reconcile_binance_spot_inner(
+    claims: AccessClaims,
+    st: SharedState,
+) -> Result<ReconcileReport, String> {
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| "geçersiz token sub".to_string())?;
     let creds = st
         .exchange_accounts
@@ -77,13 +95,30 @@ async fn reconcile_binance_spot(
     if n > 0 {
         report.status_updates_applied = Some(n);
     }
-    Ok(Json(report))
+    Ok(report)
 }
 
 async fn reconcile_binance_futures(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
 ) -> Result<Json<ReconcileReport>, String> {
+    match reconcile_binance_futures_inner(claims, st).await {
+        Ok(report) => {
+            let rows = report.status_updates_applied.unwrap_or(0);
+            record_reconcile_futures(true, rows);
+            Ok(Json(report))
+        }
+        Err(e) => {
+            record_reconcile_futures(false, 0);
+            Err(e)
+        }
+    }
+}
+
+async fn reconcile_binance_futures_inner(
+    claims: AccessClaims,
+    st: SharedState,
+) -> Result<ReconcileReport, String> {
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| "geçersiz token sub".to_string())?;
     let creds = st
         .exchange_accounts
@@ -133,5 +168,5 @@ async fn reconcile_binance_futures(
     if n > 0 {
         report.status_updates_applied = Some(n);
     }
-    Ok(Json(report))
+    Ok(report)
 }

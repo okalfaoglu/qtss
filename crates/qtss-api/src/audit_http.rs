@@ -13,8 +13,15 @@ use qtss_storage::{insert_http_audit, AuditHttpRow};
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
 
-fn http_audit_enabled() -> bool {
+pub fn http_audit_enabled() -> bool {
     matches!(std::env::var("QTSS_AUDIT_HTTP").ok().as_deref(), Some("1"))
+}
+
+/// `PUT .../users/{id}/permissions` için ayrıntılı satır handler yazar; çift kayıt önlenir.
+fn skip_generic_http_audit(method: &Method, path: &str) -> bool {
+    method == Method::PUT
+        && path.starts_with("/api/v1/users/")
+        && path.ends_with("/permissions")
 }
 
 pub async fn audit_http_middleware(
@@ -47,6 +54,9 @@ pub async fn audit_http_middleware(
     if !path.starts_with("/api/v1/") {
         return resp;
     }
+    if skip_generic_http_audit(&method, &path) {
+        return resp;
+    }
 
     if let Some(c) = claims {
         let user_id = Uuid::parse_str(&c.sub).ok();
@@ -61,6 +71,7 @@ pub async fn audit_http_middleware(
             path,
             status_code: status,
             roles,
+            details: None,
         };
         tokio::spawn(async move {
             if let Err(e) = insert_http_audit(&pool, row).await {

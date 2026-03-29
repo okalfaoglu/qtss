@@ -15,6 +15,8 @@ pub const QTSS_PERM_READ: &str = "qtss:read";
 pub const QTSS_PERM_OPS: &str = "qtss:ops";
 /// Yapılandırma, mutabakat tetikleme ve diğer yönetim uçları.
 pub const QTSS_PERM_ADMIN: &str = "qtss:admin";
+/// Salt okunur denetim günlüğü (`GET /api/v1/audit/recent`); `user_permissions` veya JWT claim ile verilebilir.
+pub const QTSS_PERM_AUDIT_READ: &str = "qtss:audit:read";
 
 /// Maps DB role keys to coarse JWT `permissions`. Unknown roles yield no permissions (same as before for custom keys).
 pub fn permissions_for_roles(roles: &[String]) -> Vec<String> {
@@ -25,6 +27,7 @@ pub fn permissions_for_roles(roles: &[String]) -> Vec<String> {
                 set.insert(QTSS_PERM_READ.to_string());
                 set.insert(QTSS_PERM_OPS.to_string());
                 set.insert(QTSS_PERM_ADMIN.to_string());
+                set.insert(QTSS_PERM_AUDIT_READ.to_string());
             }
             "trader" => {
                 set.insert(QTSS_PERM_READ.to_string());
@@ -54,7 +57,7 @@ pub fn normalize_claims(mut claims: AccessClaims) -> AccessClaims {
 pub fn is_known_qtss_permission(p: &str) -> bool {
     matches!(
         p,
-        QTSS_PERM_READ | QTSS_PERM_OPS | QTSS_PERM_ADMIN
+        QTSS_PERM_READ | QTSS_PERM_OPS | QTSS_PERM_ADMIN | QTSS_PERM_AUDIT_READ
     )
 }
 
@@ -82,6 +85,24 @@ fn allows_ops(claims: &AccessClaims) -> bool {
 
 fn allows_admin(claims: &AccessClaims) -> bool {
     has_permission(claims, QTSS_PERM_ADMIN)
+}
+
+fn allows_audit_read(claims: &AccessClaims) -> bool {
+    has_permission(claims, QTSS_PERM_ADMIN) || has_permission(claims, QTSS_PERM_AUDIT_READ)
+}
+
+/// `qtss:admin` veya `qtss:audit:read` (salt okunur audit listesi).
+pub async fn require_audit_read(
+    Extension(claims): Extension<AccessClaims>,
+    req: Request,
+    next: Next,
+) -> Result<Response, Forbidden> {
+    if !allows_audit_read(&claims) {
+        return Err(Forbidden::new(
+            "denetim günlüğü için qtss:admin veya qtss:audit:read gerekli",
+        ));
+    }
+    Ok(next.run(req).await)
 }
 
 /// Yalnızca `qtss:admin` (veya eşdeğer rol kaynaklı üretilmiş izinler).
@@ -134,6 +155,7 @@ mod tests {
         assert!(p.contains(&QTSS_PERM_READ.to_string()));
         assert!(p.contains(&QTSS_PERM_OPS.to_string()));
         assert!(p.contains(&QTSS_PERM_ADMIN.to_string()));
+        assert!(p.contains(&QTSS_PERM_AUDIT_READ.to_string()));
     }
 
     #[test]
@@ -172,5 +194,10 @@ mod tests {
         assert!(merged.permissions.contains(&QTSS_PERM_READ.to_string()));
         assert!(merged.permissions.contains(&QTSS_PERM_OPS.to_string()));
         assert_eq!(merged.permissions.len(), 2);
+    }
+
+    #[test]
+    fn known_permission_includes_audit_read() {
+        assert!(is_known_qtss_permission(QTSS_PERM_AUDIT_READ));
     }
 }

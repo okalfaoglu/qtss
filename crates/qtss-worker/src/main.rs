@@ -33,7 +33,7 @@ use qtss_binance::{
     connect_url, parse_closed_kline_json, public_spot_combined_kline_url, public_spot_kline_url,
     public_usdm_combined_kline_url, public_usdm_kline_url,
 };
-use qtss_common::{init_logging, load_dotenv};
+use qtss_common::{ensure_postgres_scheme, init_logging, load_dotenv};
 use anyhow::Context;
 use qtss_storage::{
     create_pool, run_migrations, upsert_market_bar, MarketBarUpsert, PnlRollupRepository,
@@ -83,6 +83,10 @@ async fn main() -> anyhow::Result<()> {
 
     let pool_opt: Option<PgPool> = match std::env::var("DATABASE_URL") {
         Ok(db_url) if !db_url.trim().is_empty() => {
+            let db_url = db_url.trim().to_string();
+            ensure_postgres_scheme(&db_url).context(
+                "qtss-worker: DATABASE_URL postgres:// veya postgresql:// ile başlamalı (boş şema sqlx hatası verir)",
+            )?;
             let pool = create_pool(&db_url, 3)
                 .await
                 .context("qtss-worker: PostgreSQL pool failed (check DATABASE_URL, host, port, credentials)")?;

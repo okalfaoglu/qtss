@@ -8,7 +8,9 @@ use axum::http::HeaderName;
 use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
-use qtss_common::{init_logging, load_dotenv};
+use qtss_common::{
+    ensure_postgres_scheme, init_logging, load_dotenv, postgres_url_from_env_or_default,
+};
 use qtss_storage::{create_pool, run_migrations};
 use tower_governor::governor::GovernorConfigBuilder;
 use tower_governor::GovernorLayer;
@@ -17,6 +19,7 @@ use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetReques
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
+mod audit_event;
 mod audit_http;
 mod metrics;
 mod oauth;
@@ -34,8 +37,8 @@ async fn main() -> anyhow::Result<()> {
     // Worker ile aynı: `_sqlx_migrations` CREATE IF NOT EXISTS NOTICE’larını INFO’da göstermez.
     init_logging("info,qtss_api=debug,qtss_storage=debug,tower_http=info,sqlx::postgres::notice=warn");
 
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://qtss:qtss@127.0.0.1:5432/qtss".into());
+    let database_url = postgres_url_from_env_or_default("postgres://qtss:qtss@127.0.0.1:5432/qtss");
+    ensure_postgres_scheme(&database_url).map_err(anyhow::Error::msg)?;
     let pool = create_pool(&database_url, 10).await?;
     run_migrations(&pool).await.context(
         "qtss-api: SQL migrations failed — süreç stdout/stderr. \

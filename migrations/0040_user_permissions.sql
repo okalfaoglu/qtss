@@ -1,4 +1,5 @@
 -- Kullanıcı başına ek qtss:* yetenekleri (JWT rol türevi ile birleştirilir; bkz. require_jwt).
+-- 0013 öneki `0013_worker_analytics_schema.sql` için ayrılmıştır; çift 0013 kullanmayın (§6).
 
 CREATE TABLE user_permissions (
     user_id UUID NOT NULL REFERENCES users (id) ON DELETE CASCADE,

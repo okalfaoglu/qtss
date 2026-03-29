@@ -168,7 +168,7 @@ Ayrıntılı güvenlik hedefleri: [SECURITY.md](SECURITY.md).
 
 - `POST /oauth/token` — OAuth 2.0 benzeri: `grant_type` = `password` \| `client_credentials` \| `refresh_token` (gövde JSON veya `application/x-www-form-urlencoded`). Yanıtta `access_token` + `refresh_token`.
 
-`/api/v1/*` uçları **`Authorization: Bearer <access_token>`** ister. JWT içinde `roles` (`roles.key` değerleri) ve ilk aşama `permissions` (`qtss:read` \| `qtss:ops` \| `qtss:admin`, rol haritasından) taşınır; `permissions` boş eski belirteçlerde API isteği sırasında `roles` ile tamamlanır. `user_permissions` tablosundaki satırlar aynı istekte birleştirilir (`QTSS_JWT_MERGE_DB_PERMISSIONS=0` ile kapatılabilir). Erişim middleware’leri bu etkin izinlere göre çalışır.
+`/api/v1/*` uçları **`Authorization: Bearer <access_token>`** ister. JWT içinde `roles` (`roles.key` değerleri) ve ilk aşama `permissions` (`qtss:read` \| `qtss:ops` \| `qtss:admin` \| `qtss:audit:read`, rol haritasından) taşınır; `permissions` boş eski belirteçlerde API isteği sırasında `roles` ile tamamlanır. `user_permissions` tablosundaki satırlar aynı istekte birleştirilir (`QTSS_JWT_MERGE_DB_PERMISSIONS=0` ile kapatılabilir). Erişim middleware’leri bu etkin izinlere göre çalışır.
 
 Tüm yanıtlarda **`x-request-id`** (UUID) üretilir veya istemci gönderdiyse yankılanır. **`GET /metrics`** basit Prometheus metni (`qtss_http_requests_total`). **`tower-governor`**: eş IP için jeton kovası (varsayılan ~50 sürdürülebilir RPS; ayar §11).
 
@@ -177,6 +177,8 @@ Tüm yanıtlarda **`x-request-id`** (UUID) üretilir veya istemci gönderdiyse y
 | Uç | Gerekli roller |
 |----|----------------|
 | `GET/POST /api/v1/config`, `DELETE /api/v1/config/{key}` | `admin` |
+| `GET/PUT /api/v1/users/{user_id}/permissions` | `admin` (hedef kullanıcı aynı `org_id`) |
+| `GET /api/v1/audit/recent` | `qtss:admin` veya `qtss:audit:read` (JWT / `user_permissions`) |
 | `POST /api/v1/reconcile/binance`, `POST /api/v1/reconcile/binance/futures` | `admin` |
 | `POST /api/v1/catalog/sync/binance` | `admin`, `trader` |
 | `POST /api/v1/market/binance/bars/backfill` | `admin`, `trader` |
@@ -195,7 +197,8 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 - `GET /health` — servis durumu (JWT gerekmez)
 - `GET /api/v1/me` — JWT özeti: `sub`, `org_id`, `roles`, `permissions` (JWT + `user_permissions` birleşik), `azp`
 - `GET /api/v1/users/{user_id}/permissions` — yalnızca DB’deki ek izinler (`qtss:*` listesi)
-- `PUT /api/v1/users/{user_id}/permissions` — gövde `{ "permissions": ["qtss:read", ...] }`; tabloyu değiştirir (aynı kurum)
+- `PUT /api/v1/users/{user_id}/permissions` — gövde `{ "permissions": ["qtss:read", ...] }`; tabloyu değiştirir (aynı kurum); `QTSS_AUDIT_HTTP=1` iken `audit_log.details` içinde önce/sonra izin listesi
+- `GET /api/v1/audit/recent?limit=` — son `audit_log` satırları (`details` dahil); `qtss:admin` veya `qtss:audit:read`; `limit` varsayılan 100, üst sınır 500
 - `GET /metrics` — Prometheus uyumlu sayaç (JWT gerekmez; üretimde ağ politikası ile koruyun)
 - `GET /api/v1/config` — config listesi
 - `POST /api/v1/config` — upsert (`key`, `value`, isteğe bağlı `description`, `actor_user_id`)
@@ -246,7 +249,7 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 **Teknik şartname (işlem modları, range sinyalleri, grafik işaretleri, dashboard):** [SPEC_EXECUTION_RANGE_SIGNALS_UI.md](./SPEC_EXECUTION_RANGE_SIGNALS_UI.md)  
 **F7 — Çok kaynaklı piyasa verisi, confluence, bildirimler, İngilizce alan adları:** [PLAN_CONFLUENCE_AND_MARKET_DATA.md](./PLAN_CONFLUENCE_AND_MARKET_DATA.md)
 
-1. **Kimlik ve RBAC** — OAuth + JWT + uç middleware + JWT `permissions` + `GET /api/v1/me` + `user_permissions` tablosu ve admin `GET`/`PUT /api/v1/users/{id}/permissions` (**kısmen**; daha ince yetki stringleri, kurumlar arası admin, geniş audit sonra)  
+1. **Kimlik ve RBAC** — OAuth + JWT + `qtss:audit:read` + `user_permissions` + admin izin CRUD; `GET /api/v1/audit/recent` (admin veya salt okunur denetim izni); `PUT .../permissions` + `audit_log.details` (`QTSS_AUDIT_HTTP=1`) (**kısmen**; kurumlar arası admin, tam olay şeması sonra)  
 2. **Binance spot + futures** — REST + katalog + kline + stream URL + komisyon fallback + kline WS → DB; hesap bazlı fee: `commission-account` (**v1 tamam**)  
 3. **Emir ve mutabakat** — `BinanceLiveGateway` + HTTP place/Cancel; `qtss-reconcile` + worker/API reconcile; `*_PATCH_STATUS`, isteğe bağlı `*_REFINE_ORDER_STATUS` / `*_REFINE_MAX` (`GET .../order` → `filled` / `canceled` / `partially_filled`); kalan `submitted` → `reconciled_not_open` (**kısmen**; fill WebSocket / ek kolonlar sonra)  
 4. **Copy trade** — CRUD API + `copy_trade_follower` + `copy_trade_queue` / `copy_trade_execution_jobs` (**kısmen**); Binance user-stream fill + canlı follower emir sonraki iterasyon  
