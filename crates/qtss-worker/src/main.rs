@@ -217,6 +217,8 @@ async fn kline_ws_loop(symbol: String, interval: String, segment: String, pool: 
                                         volume,
                                         quote_volume,
                                         trade_count,
+                                        instrument_id: None,
+                                        bar_interval_id: None,
                                     };
                                     if let Err(e) = upsert_market_bar(pool, &row).await {
                                         warn!(%e, symbol = %row.symbol, "market_bars upsert");

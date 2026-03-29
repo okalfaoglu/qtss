@@ -18,7 +18,10 @@ pub mod paper;
 pub mod pnl;
 
 pub use audit_log::{insert_http_audit, list_recent as audit_list_recent, AuditHttpListRow, AuditHttpRow};
-pub use catalog::{CatalogRepository, ExchangeRow, InstrumentRow, MarketRow};
+pub use catalog::{
+    resolve_series_catalog_ids, BarIntervalRow, CatalogRepository, ExchangeRow, InstrumentRow,
+    MarketRow, SeriesCatalogIds,
+};
 pub use config::{AppConfigEntry, AppConfigRepository};
 pub use copy_trade::{CopySubscriptionRepository, CopySubscriptionRow};
 pub use data_snapshots::{

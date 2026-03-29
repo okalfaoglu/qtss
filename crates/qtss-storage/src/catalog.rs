@@ -1,13 +1,14 @@
 //! Borsa / piyasa / sembol kataloğu (DB). Connector senkronu `upsert_*` ile doldurur.
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::StorageError;
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct ExchangeRow {
     pub id: Uuid,
     pub code: String,
@@ -18,7 +19,7 @@ pub struct ExchangeRow {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct MarketRow {
     pub id: Uuid,
     pub exchange_id: Uuid,
@@ -31,7 +32,20 @@ pub struct MarketRow {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct BarIntervalRow {
+    pub id: Uuid,
+    pub code: String,
+    pub label: Option<String>,
+    pub duration_seconds: Option<i32>,
+    pub sort_order: i32,
+    pub is_active: bool,
+    pub metadata: JsonValue,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct InstrumentRow {
     pub id: Uuid,
     pub market_id: Uuid,
@@ -253,4 +267,297 @@ impl CatalogRepository {
         .await?;
         Ok(row)
     }
+
+    pub async fn list_bar_intervals(&self) -> Result<Vec<BarIntervalRow>, StorageError> {
+        sqlx::query_as::<_, BarIntervalRow>(
+            r#"SELECT id, code, label, duration_seconds, sort_order, is_active, metadata, created_at, updated_at
+               FROM bar_intervals ORDER BY sort_order ASC, code ASC"#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Into::into)
+    }
+
+    pub async fn upsert_bar_interval(
+        &self,
+        code: &str,
+        label: Option<&str>,
+        duration_seconds: Option<i32>,
+        sort_order: i32,
+        is_active: bool,
+        metadata: JsonValue,
+    ) -> Result<BarIntervalRow, StorageError> {
+        let row = sqlx::query_as::<_, BarIntervalRow>(
+            r#"INSERT INTO bar_intervals (code, label, duration_seconds, sort_order, is_active, metadata)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT (code) DO UPDATE SET
+                 label = EXCLUDED.label,
+                 duration_seconds = EXCLUDED.duration_seconds,
+                 sort_order = EXCLUDED.sort_order,
+                 is_active = EXCLUDED.is_active,
+                 metadata = EXCLUDED.metadata,
+                 updated_at = now()
+               RETURNING id, code, label, duration_seconds, sort_order, is_active, metadata, created_at, updated_at"#,
+        )
+        .bind(code)
+        .bind(label)
+        .bind(duration_seconds)
+        .bind(sort_order)
+        .bind(is_active)
+        .bind(metadata)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn delete_bar_interval(&self, id: Uuid) -> Result<u64, StorageError> {
+        let r = sqlx::query("DELETE FROM bar_intervals WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected())
+    }
+
+    pub async fn update_exchange(
+        &self,
+        id: Uuid,
+        display_name: Option<&str>,
+        is_active: Option<bool>,
+        metadata: Option<JsonValue>,
+    ) -> Result<Option<ExchangeRow>, StorageError> {
+        let row = sqlx::query_as::<_, ExchangeRow>(
+            r#"UPDATE exchanges SET
+                 display_name = COALESCE($2, display_name),
+                 is_active = COALESCE($3, is_active),
+                 metadata = COALESCE($4, metadata),
+                 updated_at = now()
+               WHERE id = $1
+               RETURNING id, code, display_name, is_active, metadata, created_at, updated_at"#,
+        )
+        .bind(id)
+        .bind(display_name)
+        .bind(is_active)
+        .bind(metadata)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn delete_exchange(&self, id: Uuid) -> Result<u64, StorageError> {
+        let r = sqlx::query("DELETE FROM exchanges WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected())
+    }
+
+    pub async fn list_markets_all(&self, limit: i64) -> Result<Vec<MarketRow>, StorageError> {
+        let lim = limit.clamp(1, 2000);
+        sqlx::query_as::<_, MarketRow>(
+            r#"SELECT id, exchange_id, segment, contract_kind, display_name, is_active, metadata, created_at, updated_at
+               FROM markets ORDER BY exchange_id, segment, contract_kind LIMIT $1"#,
+        )
+        .bind(lim)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Into::into)
+    }
+
+    pub async fn update_market(
+        &self,
+        id: Uuid,
+        display_name: Option<&str>,
+        is_active: Option<bool>,
+        metadata: Option<JsonValue>,
+    ) -> Result<Option<MarketRow>, StorageError> {
+        let row = sqlx::query_as::<_, MarketRow>(
+            r#"UPDATE markets SET
+                 display_name = COALESCE($2, display_name),
+                 is_active = COALESCE($3, is_active),
+                 metadata = COALESCE($4, metadata),
+                 updated_at = now()
+               WHERE id = $1
+               RETURNING id, exchange_id, segment, contract_kind, display_name, is_active, metadata, created_at, updated_at"#,
+        )
+        .bind(id)
+        .bind(display_name)
+        .bind(is_active)
+        .bind(metadata)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn delete_market(&self, id: Uuid) -> Result<u64, StorageError> {
+        let r = sqlx::query("DELETE FROM markets WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected())
+    }
+
+    pub async fn update_instrument(
+        &self,
+        id: Uuid,
+        base_asset: Option<&str>,
+        quote_asset: Option<&str>,
+        status: Option<&str>,
+        is_trading: Option<bool>,
+        metadata: Option<JsonValue>,
+    ) -> Result<Option<InstrumentRow>, StorageError> {
+        let row = sqlx::query_as::<_, InstrumentRow>(
+            r#"UPDATE instruments SET
+                 base_asset = COALESCE($2, base_asset),
+                 quote_asset = COALESCE($3, quote_asset),
+                 status = COALESCE($4, status),
+                 is_trading = COALESCE($5, is_trading),
+                 metadata = COALESCE($6, metadata),
+                 updated_at = now()
+               WHERE id = $1
+               RETURNING id, market_id, native_symbol, base_asset, quote_asset, status,
+                         is_trading, price_filter, lot_filter, metadata, created_at, updated_at"#,
+        )
+        .bind(id)
+        .bind(base_asset)
+        .bind(quote_asset)
+        .bind(status)
+        .bind(is_trading)
+        .bind(metadata)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn delete_instrument(&self, id: Uuid) -> Result<u64, StorageError> {
+        let r = sqlx::query("DELETE FROM instruments WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected())
+    }
+
+    pub async fn get_exchange_by_id(&self, id: Uuid) -> Result<Option<ExchangeRow>, StorageError> {
+        let row = sqlx::query_as::<_, ExchangeRow>(
+            r#"SELECT id, code, display_name, is_active, metadata, created_at, updated_at
+               FROM exchanges WHERE id = $1"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_market_by_id(&self, id: Uuid) -> Result<Option<MarketRow>, StorageError> {
+        let row = sqlx::query_as::<_, MarketRow>(
+            r#"SELECT id, exchange_id, segment, contract_kind, display_name, is_active, metadata, created_at, updated_at
+               FROM markets WHERE id = $1"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_instrument_by_id(&self, id: Uuid) -> Result<Option<InstrumentRow>, StorageError> {
+        let row = sqlx::query_as::<_, InstrumentRow>(
+            r#"SELECT id, market_id, native_symbol, base_asset, quote_asset, status,
+                      is_trading, price_filter, lot_filter, metadata, created_at, updated_at
+               FROM instruments WHERE id = $1"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+}
+
+/// `engine_symbols` / `market_bars` metin alanlarından katalog FK çözümü (yoksa None).
+#[derive(Debug, Clone, Default)]
+pub struct SeriesCatalogIds {
+    pub exchange_id: Option<Uuid>,
+    pub market_id: Option<Uuid>,
+    pub instrument_id: Option<Uuid>,
+    pub bar_interval_id: Option<Uuid>,
+}
+
+fn catalog_segment_parts(segment: &str) -> (&'static str, &'static str) {
+    let s = segment.trim().to_lowercase();
+    match s.as_str() {
+        "futures" | "usdt_futures" | "fapi" => ("futures", "usdt_m"),
+        _ => ("spot", ""),
+    }
+}
+
+pub async fn resolve_series_catalog_ids(
+    pool: &PgPool,
+    exchange: &str,
+    segment: &str,
+    symbol: &str,
+    interval: &str,
+) -> Result<SeriesCatalogIds, StorageError> {
+    let ex_code = exchange.trim().to_lowercase();
+    if ex_code.is_empty() {
+        return Ok(SeriesCatalogIds::default());
+    }
+    let (m_seg, m_ck) = catalog_segment_parts(segment);
+    let sym = symbol.trim().to_uppercase();
+    let iv_code = interval.trim();
+    if sym.is_empty() || iv_code.is_empty() {
+        return Ok(SeriesCatalogIds::default());
+    }
+
+    let exchange_id: Option<Uuid> = sqlx::query_scalar(
+        r#"SELECT id FROM exchanges WHERE LOWER(TRIM(code)) = LOWER(TRIM($1)) LIMIT 1"#,
+    )
+    .bind(&ex_code)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(eid) = exchange_id else {
+        return Ok(SeriesCatalogIds::default());
+    };
+
+    let market_id: Option<Uuid> = sqlx::query_scalar(
+        r#"SELECT id FROM markets
+           WHERE exchange_id = $1 AND segment = $2 AND contract_kind = $3
+           LIMIT 1"#,
+    )
+    .bind(eid)
+    .bind(m_seg)
+    .bind(m_ck)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(mid) = market_id else {
+        return Ok(SeriesCatalogIds {
+            exchange_id: Some(eid),
+            ..Default::default()
+        });
+    };
+
+    let instrument_id: Option<Uuid> = sqlx::query_scalar(
+        r#"SELECT id FROM instruments
+           WHERE market_id = $1 AND UPPER(TRIM(native_symbol)) = UPPER(TRIM($2))
+           LIMIT 1"#,
+    )
+    .bind(mid)
+    .bind(&sym)
+    .fetch_optional(pool)
+    .await?;
+
+    let bar_interval_id: Option<Uuid> = sqlx::query_scalar(
+        r#"SELECT id FROM bar_intervals
+           WHERE LOWER(TRIM(code)) = LOWER(TRIM($1))
+           LIMIT 1"#,
+    )
+    .bind(iv_code)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(SeriesCatalogIds {
+        exchange_id: Some(eid),
+        market_id: Some(mid),
+        instrument_id,
+        bar_interval_id,
+    })
 }

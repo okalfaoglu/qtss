@@ -41,7 +41,7 @@ Tüm aktif kaynaklar maksimum 5 saniye gecikmeyle çalışır (Nansen hariç). G
 
 QTSS zaten iki veri toplama mekanizmasına sahip:
 
-**`external_fetch_engine`** (`qtss-worker/src/external_fetch_engine.rs`): `external_data_sources` tablosundaki her satırı `tick_secs` aralığıyla HTTP GET/POST ile çeker, ham JSON yanıtını `external_data_snapshots` tablosuna yazar. Worker restart gerektirmez — yeni satır eklendiğinde bir sonraki tick'te otomatik çekilir.
+**Harici çekim motorları** (`qtss-worker/src/engines/*`, ortak `external_common.rs`): `external_data_sources` satırlarını `tick_secs` ile çeker, ham JSON’u **`data_snapshots`** tablosuna yazar (migration 0021–0024 ile `external_data_snapshots` kaldırıldı). Worker restart gerektirmez.
 
 **`nansen_engine`** (`qtss-worker/src/nansen_engine.rs`): Nansen Token Screener API'sine özel HTTP istemcisi. Kredi takibi (`x-nansen-credits-used`, `x-nansen-credits-remaining`), yetersiz kredi durumunda uzun uyku (`NANSEN_INSUFFICIENT_CREDITS_SLEEP_SECS`), `nansen_snapshots` tablosuna yazım.
 
@@ -75,7 +75,7 @@ Dış API'ler
          │
          ▼
 qtss-worker
-    ├── external_fetch_engine ──→ external_data_snapshots
+    ├── engines (binance / coinglass / hyperliquid / …) ──→ data_snapshots
     └── nansen_engine ──────────→ nansen_snapshots
          │
          ▼
@@ -96,9 +96,9 @@ SignalScorer (yeni modül)
 
 ## 3. Veritabanı şeması
 
-### 3.1 Migration: 0021_onchain_signal_sources.sql
+### 3.1 Migration: kaynak seed’leri (`0021` … `0023`)
 
-`external_data_sources` tablosuna yeni kaynak satırları. Worker restart gerektirmez.
+`external_data_sources` tablosuna kaynak satırları (projede `0021_external_data_fetch.sql`, ilgili seed migration’ları). Worker restart gerektirmez.
 
 ```sql
 INSERT INTO external_data_sources (key, method, url, body_json, tick_secs, description) VALUES
@@ -161,7 +161,9 @@ SET headers_json = '{"coinglassSecret":"YOUR_KEY"}'::jsonb
 WHERE key LIKE 'coinglass_%';
 ```
 
-### 3.2 Migration: 0022_onchain_signal_scores.sql
+### 3.2 Migration: `0030_onchain_signal_scores.sql`
+
+Skor tablosu (depoda **`migrations/0030_onchain_signal_scores.sql`**). Özet şema:
 
 ```sql
 CREATE TABLE onchain_signal_scores (
@@ -319,7 +321,7 @@ Teknik sinyaller çelişiyor ama on-chain veriler net yön gösteriyorsa (smart 
 }
 ```
 
-Admin: `POST /api/v1/config` ile güncellenir (`key = "onchain_signal_weights"`).
+Admin: `POST /api/v1/config` ile güncellenir (`key = "onchain_signal_weights"`). Varsayılan seed: **`0031_onchain_signal_weights_app_config.sql`** — JSON alanları **bileşen** ağırlıklarıdır (`taker`, `funding`, `oi`, `ls_ratio`, …); §5.1–5.4’teki sütun/onchain-oran tablosu **confluence** için `confluence_weights_by_regime` anahtarına bakın (`0025_confluence_weights_app_config.sql`).
 
 ---
 
@@ -455,15 +457,15 @@ tokio::spawn(onchain_signal_scorer::onchain_signal_loop(onchain_pool));
 
 ## 9. Uygulama adımları
 
-### Faz 1 — Veri toplama (kod değişikliği yok)
+### Faz 1 — Veri toplama
 
-1. Migration `0021_onchain_signal_sources.sql` — `external_data_sources` tablosuna kaynak satırları INSERT
+1. Migration’lar `0021`+ — `external_data_sources` seed + `data_snapshots` yazımı
 2. Worker restart veya bir sonraki tick'i bekle
 3. `GET /api/v1/analysis/external-fetch/snapshots` ile veri geldiğini doğrula
 
 ### Faz 2 — Skorlama motoru
 
-4. Migration `0022_onchain_signal_scores.sql` — yeni tablo
+4. Migration **`0030_onchain_signal_scores.sql`** — tablo; **`0031_onchain_signal_weights_app_config.sql`** — `app_config.onchain_signal_weights` (isteğe bağlı seed)
 5. `crates/qtss-worker/src/onchain_signal_scorer.rs` — scorer loop
 6. `main.rs`'e `tokio::spawn` ekle
 7. `crates/qtss-storage/src/` — yeni CRUD fonksiyonları (`upsert_onchain_signal_score`, `fetch_latest_signal_score`)
@@ -477,8 +479,8 @@ tokio::spawn(onchain_signal_scorer::onchain_signal_loop(onchain_pool));
 ### Faz 4 — Bildirim ve dashboard
 
 11. Scorer loop'una `NotificationDispatcher` entegrasyonu
-12. Web dashboard'a confluence panel bileşeni
-13. Grafik üzerinde on-chain sinyal göstergeleri
+12. Web dashboard: Piyasa bağlamı sekmesinde on-chain özet (`GET …/onchain-signals/breakdown`)
+13. Grafik üzerinde on-chain göstergeleri (isteğe bağlı sonraki adım)
 
 ---
 

@@ -6,6 +6,7 @@ use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::catalog::resolve_series_catalog_ids;
 use crate::error::StorageError;
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -20,6 +21,10 @@ pub struct EngineSymbolRow {
     pub label: Option<String>,
     /// `both` | `long_only` | `short_only` | `auto_segment`
     pub signal_direction_mode: String,
+    pub exchange_id: Option<Uuid>,
+    pub market_id: Option<Uuid>,
+    pub instrument_id: Option<Uuid>,
+    pub bar_interval_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -51,7 +56,8 @@ pub struct AnalysisSnapshotJoinedRow {
 
 pub async fn list_enabled_engine_symbols(pool: &PgPool) -> Result<Vec<EngineSymbolRow>, StorageError> {
     let rows = sqlx::query_as::<_, EngineSymbolRow>(
-        r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode, created_at, updated_at
+        r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode,
+                  exchange_id, market_id, instrument_id, bar_interval_id, created_at, updated_at
            FROM engine_symbols
            WHERE enabled = true
            ORDER BY sort_order ASC, symbol ASC, interval ASC"#,
@@ -63,7 +69,8 @@ pub async fn list_enabled_engine_symbols(pool: &PgPool) -> Result<Vec<EngineSymb
 
 pub async fn list_engine_symbols_all(pool: &PgPool) -> Result<Vec<EngineSymbolRow>, StorageError> {
     let rows = sqlx::query_as::<_, EngineSymbolRow>(
-        r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode, created_at, updated_at
+        r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode,
+                  exchange_id, market_id, instrument_id, bar_interval_id, created_at, updated_at
            FROM engine_symbols
            ORDER BY sort_order ASC, symbol ASC, interval ASC"#,
     )
@@ -88,7 +95,8 @@ pub async fn list_engine_symbols_matching(
     let ex = exchange.map(str::trim).filter(|s| !s.is_empty());
     let seg = segment.map(str::trim).filter(|s| !s.is_empty());
     let rows = sqlx::query_as::<_, EngineSymbolRow>(
-        r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode, created_at, updated_at
+        r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode,
+                  exchange_id, market_id, instrument_id, bar_interval_id, created_at, updated_at
            FROM engine_symbols
            WHERE symbol = $1
              AND ($2::text IS NULL OR BTRIM(interval) = BTRIM($2))
@@ -167,6 +175,48 @@ pub async fn list_market_context_summaries(
     Ok(rows)
 }
 
+pub async fn sync_engine_symbol_catalog_fks(pool: &PgPool, engine_symbol_id: Uuid) -> Result<(), StorageError> {
+    let row = sqlx::query_as::<_, (String, String, String, String)>(
+        r#"SELECT exchange, segment, symbol, interval FROM engine_symbols WHERE id = $1"#,
+    )
+    .bind(engine_symbol_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((ref ex, ref seg, ref sym, ref iv)) = row else {
+        return Ok(());
+    };
+    let ids = resolve_series_catalog_ids(pool, ex, seg, sym, iv).await?;
+    sqlx::query(
+        r#"UPDATE engine_symbols SET
+             exchange_id = $2,
+             market_id = $3,
+             instrument_id = $4,
+             bar_interval_id = $5,
+             updated_at = now()
+           WHERE id = $1"#,
+    )
+    .bind(engine_symbol_id)
+    .bind(ids.exchange_id)
+    .bind(ids.market_id)
+    .bind(ids.instrument_id)
+    .bind(ids.bar_interval_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn fetch_engine_symbol_by_id(pool: &PgPool, id: Uuid) -> Result<Option<EngineSymbolRow>, StorageError> {
+    let row = sqlx::query_as::<_, EngineSymbolRow>(
+        r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode,
+                  exchange_id, market_id, instrument_id, bar_interval_id, created_at, updated_at
+           FROM engine_symbols WHERE id = $1"#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 pub async fn insert_engine_symbol(pool: &PgPool, row: &EngineSymbolInsert) -> Result<EngineSymbolRow, StorageError> {
     let rec = sqlx::query_as::<_, EngineSymbolRow>(
         r#"INSERT INTO engine_symbols (exchange, segment, symbol, interval, label, signal_direction_mode)
@@ -175,7 +225,8 @@ pub async fn insert_engine_symbol(pool: &PgPool, row: &EngineSymbolInsert) -> Re
              updated_at = now(),
              label = COALESCE(EXCLUDED.label, engine_symbols.label),
              signal_direction_mode = COALESCE(EXCLUDED.signal_direction_mode, engine_symbols.signal_direction_mode)
-           RETURNING id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode, created_at, updated_at"#,
+           RETURNING id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode,
+                     exchange_id, market_id, instrument_id, bar_interval_id, created_at, updated_at"#,
     )
     .bind(&row.exchange)
     .bind(&row.segment)
@@ -185,6 +236,10 @@ pub async fn insert_engine_symbol(pool: &PgPool, row: &EngineSymbolInsert) -> Re
     .bind(&row.signal_direction_mode)
     .fetch_one(pool)
     .await?;
+    sync_engine_symbol_catalog_fks(pool, rec.id).await?;
+    let rec = fetch_engine_symbol_by_id(pool, rec.id)
+        .await?
+        .ok_or_else(|| StorageError::Other("engine_symbol okunamadı".into()))?;
     Ok(rec)
 }
 

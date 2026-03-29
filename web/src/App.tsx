@@ -3420,6 +3420,83 @@ export default function App() {
                         )}
                       </div>
 
+                      <p className="tv-drawer__section-head" style={{ marginTop: "0.45rem" }}>
+                        On-chain skor (<code>onchain_signal_scores</code>)
+                      </p>
+                      <div
+                        className="mono muted"
+                        style={{ maxHeight: "10rem", overflow: "auto", fontSize: "0.7rem", marginBottom: "0.5rem" }}
+                      >
+                        {!barSymbol.trim() ? (
+                          <span>Sembol seçin — üst çubuktan.</span>
+                        ) : contextTabOnchainEndpointMissing ? (
+                          <span className="muted">
+                            <code>GET …/analysis/onchain-signals/breakdown</code> 404 — güncel{" "}
+                            <code>qtss-api</code> ve migration <code>0030_onchain_signal_scores</code>.
+                          </span>
+                        ) : !contextTabOnchainBreakdown?.latest_score_row ? (
+                          <span className="muted">
+                            Henüz skor satırı yok — worker&apos;da{" "}
+                            <code>QTSS_ONCHAIN_SIGNAL_ENGINE</code> ve tablo; bkz.{" "}
+                            <code>docs/SPEC_ONCHAIN_SIGNALS.md</code>.
+                          </span>
+                        ) : (
+                          (() => {
+                            const row = contextTabOnchainBreakdown.latest_score_row;
+                            const bd = contextTabOnchainBreakdown.onchain_breakdown;
+                            const parts =
+                              bd &&
+                              typeof bd === "object" &&
+                              bd !== null &&
+                              "source_breakdown" in bd &&
+                              Array.isArray((bd as { source_breakdown: unknown }).source_breakdown)
+                                ? ((bd as { source_breakdown: unknown[] }).source_breakdown as unknown[])
+                                : [];
+                            return (
+                              <>
+                                <div style={{ marginBottom: "0.35rem" }}>
+                                  <strong>{row.symbol}</strong> · <strong>{row.direction}</strong> · aggregate{" "}
+                                  <strong>{row.aggregate_score.toFixed(3)}</strong> · confidence{" "}
+                                  <strong>{(row.confidence * 100).toFixed(0)}%</strong>
+                                  {row.conflict_detected ? <span className="err"> · conflict</span> : null}
+                                  <br />
+                                  <span style={{ opacity: 0.9 }}>
+                                    {row.market_regime ? `regime ${row.market_regime} · ` : ""}
+                                    {row.computed_at}
+                                  </span>
+                                </div>
+                                {parts.length === 0 ? (
+                                  <div className="muted">
+                                    Bileşen dökümü yok (eski <code>meta_json</code>) — worker ile yeni tick.
+                                  </div>
+                                ) : (
+                                  parts.map((p, i) => {
+                                    if (!p || typeof p !== "object") return null;
+                                    const o = p as Record<string, unknown>;
+                                    const comp = typeof o.component === "string" ? o.component : "—";
+                                    const sc = typeof o.score === "number" ? o.score.toFixed(2) : "—";
+                                    const cf = typeof o.confidence === "number" ? o.confidence.toFixed(2) : "—";
+                                    const wt = typeof o.weight === "number" ? o.weight.toFixed(2) : "—";
+                                    const sk = typeof o.source_key === "string" ? o.source_key : "";
+                                    return (
+                                      <div key={`ocb-${i}-${comp}`} style={{ marginBottom: "0.22rem" }}>
+                                        {comp}: score {sc} · conf {cf} · weight {wt}
+                                        {sk ? (
+                                          <>
+                                            <br />
+                                            <span style={{ opacity: 0.85 }}>{sk}</span>
+                                          </>
+                                        ) : null}
+                                      </div>
+                                    );
+                                  })
+                                )}
+                              </>
+                            );
+                          })()
+                        )}
+                      </div>
+
                       <p className="tv-drawer__section-head">Tüm confluence satırları (motor)</p>
                       <div
                         className="mono muted"

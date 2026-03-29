@@ -1,4 +1,5 @@
 mod analysis;
+mod catalog_admin;
 mod catalog_sync;
 mod config_admin;
 mod copy_trade;
@@ -27,6 +28,8 @@ use crate::oauth::middleware::require_jwt;
 use crate::oauth::rbac::{require_admin, require_dashboard_roles, require_ops_roles};
 use crate::state::SharedState;
 
+use catalog_admin::{catalog_read_router, catalog_write_router};
+
 /// `/api/v1` altında: korumalı uçlar (Bearer + rol).
 pub fn api_router(state: SharedState) -> Router<SharedState> {
     let jwt_layer = from_fn_with_state(state.clone(), require_jwt);
@@ -50,6 +53,14 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         )
         .merge(
             catalog_sync_router()
+                .layer(from_fn(require_ops_roles)),
+        )
+        .merge(
+            catalog_read_router()
+                .layer(from_fn(require_dashboard_roles)),
+        )
+        .merge(
+            catalog_write_router()
                 .layer(from_fn(require_ops_roles)),
         )
         .merge(

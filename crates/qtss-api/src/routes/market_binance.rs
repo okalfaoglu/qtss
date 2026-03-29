@@ -353,6 +353,8 @@ async fn backfill_market_bars_from_rest(
                 volume: Decimal::from_str(b.volume.trim()).map_err(|e| e.to_string())?,
                 quote_volume,
                 trade_count: Some(b.number_of_trades as i64),
+                instrument_id: None,
+                bar_interval_id: None,
             };
             upsert_market_bar(&st.pool, &row)
                 .await
