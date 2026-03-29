@@ -5,7 +5,7 @@
 /// Nansen token screener dual-write (`nansen_engine`); confluence smart-money pillar.
 pub const NANSEN_TOKEN_SCREENER_DATA_KEY: &str = "nansen_token_screener";
 
-/// Optional `data_snapshots` keys when worker persists smart-money / TGM endpoints (dev guide ADIM 3–5).
+/// Optional `data_snapshots` keys for Nansen extended HTTP (`docs/QTSS_CURSOR_DEV_GUIDE.md` §4 ADIM 2–3).
 pub const NANSEN_NETFLOWS_DATA_KEY: &str = "nansen_netflows";
 pub const NANSEN_PERP_TRADES_DATA_KEY: &str = "nansen_perp_trades";
 pub const NANSEN_FLOW_INTELLIGENCE_DATA_KEY: &str = "nansen_flow_intelligence";
@@ -15,9 +15,11 @@ pub const NANSEN_WHO_BOUGHT_SOLD_DATA_KEY: &str = "nansen_who_bought_sold";
 /// Alias for dev-guide naming (`NANSEN_WHO_BOUGHT_DATA_KEY`).
 pub const NANSEN_WHO_BOUGHT_DATA_KEY: &str = NANSEN_WHO_BOUGHT_SOLD_DATA_KEY;
 pub const NANSEN_HOLDINGS_DATA_KEY: &str = "nansen_holdings";
+/// TGM perp PnL leaderboard snapshot (`nansen_extended`); feeds `nansen_whale_watchlist`.
+pub const NANSEN_PERP_LEADERBOARD_DATA_KEY: &str = "nansen_perp_leaderboard";
 /// Merged profiler perp-positions across whale watchlist → on-chain `hl_whale_score`.
 pub const NANSEN_WHALE_PERP_AGGREGATE_DATA_KEY: &str = "nansen_whale_perp_aggregate";
-/// `app_config` satırı (`nansen_whale_watchlist`); perp-leaderboard → watchlist JSON.
+/// `app_config` row (`nansen_whale_watchlist`); JSON from perp leaderboard loop.
 pub const NANSEN_WHALE_WATCHLIST_KEY: &str = "nansen_whale_watchlist";
 
 pub const REGISTERED_NANSEN_HTTP_KEYS: &[&str] = &[
@@ -27,6 +29,7 @@ pub const REGISTERED_NANSEN_HTTP_KEYS: &[&str] = &[
     NANSEN_PERP_TRADES_DATA_KEY,
     NANSEN_FLOW_INTELLIGENCE_DATA_KEY,
     NANSEN_WHO_BOUGHT_SOLD_DATA_KEY,
+    NANSEN_PERP_LEADERBOARD_DATA_KEY,
     NANSEN_WHALE_PERP_AGGREGATE_DATA_KEY,
 ];
 
@@ -68,6 +71,11 @@ pub const REGISTERED_DATA_SOURCES: &[RegisteredDataSource] = &[
         source_key: NANSEN_WHO_BOUGHT_SOLD_DATA_KEY,
         provider_kind: "NansenHttpLoop",
         description: "`nansen_extended` → `data_snapshots` tgm/who-bought-sold",
+    },
+    RegisteredDataSource {
+        source_key: NANSEN_PERP_LEADERBOARD_DATA_KEY,
+        provider_kind: "NansenHttpLoop",
+        description: "`nansen_extended` → `data_snapshots` tgm/perp-pnl-leaderboard + `app_config` whale watchlist",
     },
     RegisteredDataSource {
         source_key: NANSEN_WHALE_PERP_AGGREGATE_DATA_KEY,

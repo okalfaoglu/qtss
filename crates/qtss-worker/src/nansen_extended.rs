@@ -11,12 +11,12 @@ use qtss_storage::{
 use reqwest::Client;
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::data_sources::registry::{
     NANSEN_FLOW_INTEL_DATA_KEY, NANSEN_HOLDINGS_DATA_KEY, NANSEN_NETFLOWS_DATA_KEY,
-    NANSEN_PERP_TRADES_DATA_KEY, NANSEN_WHALE_PERP_AGGREGATE_DATA_KEY,
-    NANSEN_WHALE_WATCHLIST_KEY, NANSEN_WHO_BOUGHT_DATA_KEY,
+    NANSEN_PERP_LEADERBOARD_DATA_KEY, NANSEN_PERP_TRADES_DATA_KEY,
+    NANSEN_WHALE_PERP_AGGREGATE_DATA_KEY, NANSEN_WHALE_WATCHLIST_KEY, NANSEN_WHO_BOUGHT_DATA_KEY,
 };
 
 fn nansen_api_base() -> String {
@@ -99,6 +99,42 @@ fn leaderboard_body() -> Value {
     json!({ "pagination": { "page": 1, "per_page": 20 } })
 }
 
+/// `POST /api/v1/tgm/perp-pnl-leaderboard` — Nansen şeması `token_symbol` + `date` zorunlu.
+/// Tüm gövde: `NANSEN_PERP_LEADERBOARD_BODY_JSON` (JSON object).
+fn perp_pnl_leaderboard_request_body() -> Value {
+    if let Ok(raw) = std::env::var("NANSEN_PERP_LEADERBOARD_BODY_JSON") {
+        if let Ok(v) = serde_json::from_str::<Value>(raw.trim()) {
+            if v.is_object() {
+                return v;
+            }
+        }
+    }
+    let token = std::env::var("NANSEN_PERP_LEADERBOARD_TOKEN_SYMBOL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_uppercase())
+        .unwrap_or_else(|| "BTC".into());
+    let lookback: i64 = std::env::var("NANSEN_PERP_LEADERBOARD_LOOKBACK_DAYS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(7)
+        .clamp(1, 90);
+    let to = chrono::Utc::now().date_naive();
+    let day_span = (lookback - 1).max(0);
+    let from = to
+        .checked_sub_signed(chrono::Duration::days(day_span))
+        .unwrap_or(to);
+    let mut body = json!({
+        "token_symbol": token,
+        "date": {
+            "from": from.format("%Y-%m-%d").to_string(),
+            "to": to.format("%Y-%m-%d").to_string(),
+        },
+    });
+    json_merge(&mut body, leaderboard_body());
+    body
+}
+
 fn meta_json(
     meta: &qtss_nansen::NansenResponseMeta,
     insufficient: bool,
@@ -162,6 +198,12 @@ async fn persist_nansen_result(
                 qtss_common::log_critical(
                     "qtss_worker_nansen_extended",
                     "Nansen extended endpoint: insufficient credits (403).",
+                );
+            } else if e.http_status() == Some(404) {
+                debug!(
+                    %source_key,
+                    %err_s,
+                    "nansen_extended request failed (HTTP 404; path/plan — NANSEN_PERP_LEADERBOARD_PATH / Nansen docs)"
                 );
             } else {
                 warn!(%source_key, %err_s, "nansen_extended request failed");
@@ -302,9 +344,9 @@ pub async fn nansen_who_bought_loop(pool: PgPool) {
     loop {
         let Some(body) = resolve_who_bought_request_body() else {
             if !WHO_BOUGHT_MISSING_CONFIG_LOGGED.swap(true, Ordering::SeqCst) {
-                warn!(
+                debug!(
                     "NANSEN_WHO_BOUGHT_BODY_JSON veya NANSEN_WHO_BOUGHT_TOKEN_ADDRESS tanımsız — \
-                     tgm/who-bought-sold çağrılmıyor (422 önlemi)"
+                     tgm/who-bought-sold çağrılmıyor (422 önlemi); qtss_worker=debug ile görünür"
                 );
             }
             tokio::time::sleep(Duration::from_secs(tick)).await;
@@ -394,7 +436,13 @@ fn extract_wallet_addresses(v: &Value) -> Vec<String> {
         .map(|a| a.as_slice())
         .unwrap_or(&[]);
     for row in rows {
-        for key in ["address", "wallet", "wallet_address", "user_address"] {
+        for key in [
+            "trader_address",
+            "address",
+            "wallet",
+            "wallet_address",
+            "user_address",
+        ] {
             if let Some(s) = row.get(key).and_then(|x| x.as_str()) {
                 let t = s.trim();
                 if !t.is_empty() {
@@ -432,12 +480,12 @@ pub async fn nansen_perp_leaderboard_loop(pool: PgPool) {
         return;
     };
     let base = nansen_api_base();
-    let body = leaderboard_body();
+    let body = perp_pnl_leaderboard_request_body();
     let leaderboard_path = std::env::var("NANSEN_PERP_LEADERBOARD_PATH")
         .ok()
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "api/v1/profiler/perp-leaderboard".to_string());
+        .unwrap_or_else(|| "api/v1/tgm/perp-pnl-leaderboard".to_string());
     let repo = AppConfigRepository::new(pool.clone());
     loop {
         let Some(api_key) = std::env::var("NANSEN_API_KEY").ok().filter(|s| !s.trim().is_empty()) else {
@@ -473,7 +521,7 @@ pub async fn nansen_perp_leaderboard_loop(pool: PgPool) {
         }
         persist_nansen_result(
             &pool,
-            "nansen_perp_leaderboard",
+            NANSEN_PERP_LEADERBOARD_DATA_KEY,
             &body,
             res,
             started,

@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use anyhow::Context;
 use axum::http::HeaderName;
 use axum::middleware;
 use axum::routing::{get, post};
@@ -30,12 +31,18 @@ use state::AppState;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     load_dotenv();
-    init_logging("info,qtss_api=debug,qtss_storage=debug,tower_http=info");
+    // Worker ile aynı: `_sqlx_migrations` CREATE IF NOT EXISTS NOTICE’larını INFO’da göstermez.
+    init_logging("info,qtss_api=debug,qtss_storage=debug,tower_http=info,sqlx::postgres::notice=warn");
 
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://qtss:qtss@127.0.0.1:5432/qtss".into());
     let pool = create_pool(&database_url, 10).await?;
-    run_migrations(&pool).await?;
+    run_migrations(&pool).await.context(
+        "qtss-api: SQL migrations failed — süreç stdout/stderr. \
+         Yaygın: checksum uyuşmazlığı → `cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums` (DATABASE_URL); \
+         `to_regclass('public.bar_intervals')` NULL → `0036_bar_intervals_repair_if_missing.sql` (API/worker migrate); \
+         çift aynı `NNNN_*.sql` öneki. Ayrıntı: docs/QTSS_CURSOR_DEV_GUIDE.md §6.",
+    )?;
 
     let state = Arc::new(AppState::new(pool)?);
 

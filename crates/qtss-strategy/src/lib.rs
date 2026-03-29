@@ -1,6 +1,6 @@
 //! Strategy layer: reads `onchain_signal_scores` + optional bars, produces [`qtss_domain::orders::OrderIntent`] via [`qtss_execution::ExecutionGateway`].
 //!
-//! Skeleton per `docs/QTSS_CURSOR_DEV_GUIDE.md` §4 ADIM 7 — implement each strategy module incrementally.
+//! Worker dry runner: `strategy_runner::spawn_if_enabled` — `docs/QTSS_CURSOR_DEV_GUIDE.md` §4 ADIM 7.
 
 pub mod arb_funding;
 pub mod conflict_policy;

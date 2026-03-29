@@ -56,7 +56,8 @@ async fn pnl_rollup_loop(pool: PgPool) {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     load_dotenv();
-    init_logging("info,qtss_worker=debug");
+    // `sqlx::postgres::notice`: CREATE IF NOT EXISTS uyarıları (örn. _sqlx_migrations) INFO gürültüsünü keser.
+    init_logging("info,qtss_worker=debug,sqlx::postgres::notice=warn");
 
     for r in crate::data_sources::registry::REGISTERED_DATA_SOURCES {
         tracing::debug!(
@@ -82,8 +83,8 @@ async fn main() -> anyhow::Result<()> {
             run_migrations(&pool).await.context(
                 "qtss-worker: SQL migrations failed — journalctl -u qtss-worker -n 100 --no-pager. \
                  Yaygın: checksum uyuşmazlığı → `cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums` (DATABASE_URL); \
-                 eksik `bar_intervals` / `engine_symbols` → 0013+ zinciri; çift aynı `NNNN_*.sql` öneki. \
-                 Ayrıntı: docs/QTSS_CURSOR_DEV_GUIDE.md §6.",
+                 `to_regclass('public.bar_intervals')` NULL → `0036_bar_intervals_repair_if_missing.sql` (API/worker migrate); \
+                 çift aynı `NNNN_*.sql` öneki. Ayrıntı: docs/QTSS_CURSOR_DEV_GUIDE.md §6.",
             )?;
             let pnl_pool = pool.clone();
             tokio::spawn(pnl_rollup_loop(pnl_pool));

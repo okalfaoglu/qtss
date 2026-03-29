@@ -1,18 +1,27 @@
 //! Pozisyon özeti + SL/TP kontrolü (dev guide ADIM 9, §3.5).
 //!
-//! `exchange_orders` dolumlarından net pozisyon tahmini; `market_bars` son kapanış ile eşik.
-//! `QTSS_POSITION_MANAGER_DRY_CLOSE_ENABLED=1` iken [`DryRunGateway`] ile simüle kapatma dener.
+//! `exchange_orders` dolumlarından net long tahmini; `market_bars` son kapanış ile eşik.
+//! - `QTSS_POSITION_MANAGER_DRY_CLOSE_ENABLED=1` → [`DryRunGateway`] ile simüle kapatma.
+//! - `QTSS_POSITION_MANAGER_LIVE_CLOSE_ENABLED=1` → Binance **reduce-only** market satışı
+//!   (`exchange_accounts` + `BinanceLiveGateway`); `is_trading_halted()` iken atlanır.
+//!   Dry kapatma açıksa yalnız dry yolu kullanılır (çakışma yok).
 
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use qtss_binance::{
+    venue_order_id_from_binance_order_response, BinanceClient, BinanceClientConfig,
+};
+use qtss_common::is_trading_halted;
 use qtss_domain::exchange::{ExchangeId, MarketSegment};
 use qtss_domain::orders::{FuturesExecutionExtras, OrderIntent, OrderSide, OrderType, TimeInForce};
 use qtss_domain::symbol::InstrumentId;
-use qtss_execution::{DryRunGateway, ExecutionGateway};
-use qtss_storage::{list_recent_bars, ExchangeOrderRepository, ExchangeOrderRow};
+use qtss_execution::{BinanceLiveGateway, DryRunGateway, ExecutionGateway};
+use qtss_storage::{
+    list_recent_bars, ExchangeAccountRepository, ExchangeOrderRepository, ExchangeOrderRow,
+};
 use rust_decimal::Decimal;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
@@ -27,6 +36,12 @@ fn enabled() -> bool {
 
 fn dry_close_enabled() -> bool {
     std::env::var("QTSS_POSITION_MANAGER_DRY_CLOSE_ENABLED")
+        .ok()
+        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
+}
+
+fn live_close_enabled() -> bool {
+    std::env::var("QTSS_POSITION_MANAGER_LIVE_CLOSE_ENABLED")
         .ok()
         .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
 }
@@ -69,6 +84,41 @@ struct PosKey {
 struct LongBook {
     qty: Decimal,
     cost: Decimal,
+}
+
+#[derive(Default)]
+struct BookWithOrg {
+    book: LongBook,
+    org_id: Option<Uuid>,
+}
+
+fn market_reduce_long_intent(key: &PosKey, qty: Decimal) -> OrderIntent {
+    let instrument = InstrumentId {
+        exchange: ExchangeId::Binance,
+        segment: if key.segment.eq_ignore_ascii_case("futures") {
+            MarketSegment::Futures
+        } else {
+            MarketSegment::Spot
+        },
+        symbol: key.symbol.clone(),
+    };
+    let futures = if key.segment.eq_ignore_ascii_case("futures") {
+        Some(FuturesExecutionExtras {
+            position_side: None,
+            reduce_only: Some(true),
+        })
+    } else {
+        None
+    };
+    OrderIntent {
+        instrument,
+        side: OrderSide::Sell,
+        quantity: qty,
+        order_type: OrderType::Market,
+        time_in_force: TimeInForce::Gtc,
+        requires_human_approval: false,
+        futures,
+    }
 }
 
 fn parse_decimal_field(v: &JsonValue, k: &str) -> Option<Decimal> {
@@ -122,10 +172,10 @@ fn update_long_book(book: &mut LongBook, side: OrderSide, qty: Decimal, price: D
     }
 }
 
-fn aggregate_long_books(rows: &[ExchangeOrderRow]) -> HashMap<PosKey, LongBook> {
+fn aggregate_long_books(rows: &[ExchangeOrderRow]) -> HashMap<PosKey, BookWithOrg> {
     let mut sorted: Vec<_> = rows.iter().collect();
     sorted.sort_by_key(|r| r.created_at);
-    let mut m: HashMap<PosKey, LongBook> = HashMap::new();
+    let mut m: HashMap<PosKey, BookWithOrg> = HashMap::new();
     for row in sorted {
         let Some(venue) = row.venue_response.as_ref() else {
             continue;
@@ -148,8 +198,11 @@ fn aggregate_long_books(rows: &[ExchangeOrderRow]) -> HashMap<PosKey, LongBook> 
             segment: row.segment.trim().to_string(),
             symbol: row.symbol.trim().to_uppercase(),
         };
-        let b = m.entry(key).or_default();
-        update_long_book(b, side, qty, price);
+        let e = m.entry(key).or_default();
+        if e.org_id.is_none() {
+            e.org_id = Some(row.org_id);
+        }
+        update_long_book(&mut e.book, side, qty, price);
     }
     m
 }
@@ -174,20 +227,23 @@ pub async fn position_manager_loop(pool: PgPool) {
     }
     let tick = Duration::from_secs(tick_secs());
     let repo = ExchangeOrderRepository::new(pool.clone());
-    let gateway: Option<Arc<DryRunGateway>> = if dry_close_enabled() {
+    let dry_gateway: Option<Arc<DryRunGateway>> = if dry_close_enabled() {
         Some(crate::strategy_runner::dry_gateway_from_env())
     } else {
         None
     };
+    let live_on = live_close_enabled() && dry_gateway.is_none();
     let bar_interval = std::env::var("QTSS_POSITION_MANAGER_BAR_INTERVAL").unwrap_or_else(|_| "1m".into());
     info!(
         poll_secs = tick.as_secs(),
-        dry_close = gateway.is_some(),
+        dry_close = dry_gateway.is_some(),
+        live_close = live_on,
         "position_manager_loop: SL/TP izleme"
     );
     let sl = sl_pct() / Decimal::from(100u32);
     let tp = tp_pct() / Decimal::from(100u32);
     let min_q = min_qty_filter();
+    let acct_repo = ExchangeAccountRepository::new(pool.clone());
     loop {
         tokio::time::sleep(tick).await;
         let rows = match repo.list_recent_filled_orders_global(1500).await {
@@ -198,7 +254,8 @@ pub async fn position_manager_loop(pool: PgPool) {
             }
         };
         let books = aggregate_long_books(&rows);
-        for (key, book) in books {
+        for (key, agg) in books {
+            let book = agg.book;
             if book.qty < min_q {
                 continue;
             }
@@ -235,43 +292,90 @@ pub async fn position_manager_loop(pool: PgPool) {
                 mark = %mark,
                 hit_sl,
                 hit_tp,
-                "position_manager: SL/TP eşiği (kapatma dry modda opsiyonel)"
+                "position_manager: SL/TP eşiği"
             );
-            if let Some(ref gw) = gateway {
-                let inst = InstrumentId {
-                    exchange: ExchangeId::Binance,
-                    segment: if key.segment.eq_ignore_ascii_case("futures") {
-                        MarketSegment::Futures
-                    } else {
-                        MarketSegment::Spot
-                    },
-                    symbol: key.symbol.clone(),
-                };
-                if let Err(e) = gw.set_mark(&inst, mark) {
+            let intent = market_reduce_long_intent(&key, book.qty);
+            if let Some(ref gw) = dry_gateway {
+                if let Err(e) = gw.set_mark(&intent.instrument, mark) {
                     warn!(%e, "position_manager dry set_mark");
                     continue;
                 }
-                let close_side = OrderSide::Sell;
-                let futures = if key.segment.eq_ignore_ascii_case("futures") {
-                    Some(FuturesExecutionExtras {
-                        position_side: None,
-                        reduce_only: Some(true),
-                    })
-                } else {
-                    None
-                };
-                let intent = OrderIntent {
-                    instrument: inst,
-                    side: close_side,
-                    quantity: book.qty,
-                    order_type: OrderType::Market,
-                    time_in_force: TimeInForce::Gtc,
-                    requires_human_approval: false,
-                    futures,
-                };
                 match gw.place(intent).await {
                     Ok(cid) => info!(%cid, symbol = %key.symbol, "position_manager: dry kapatma emri"),
                     Err(e) => warn!(%e, symbol = %key.symbol, "position_manager: dry place başarısız"),
+                }
+            } else if live_on {
+                if is_trading_halted() {
+                    warn!(
+                        user_id = %key.user_id,
+                        symbol = %key.symbol,
+                        "position_manager: live close atlandı — trading halted"
+                    );
+                    continue;
+                }
+                let Some(org_id) = agg.org_id else {
+                    warn!(
+                        user_id = %key.user_id,
+                        symbol = %key.symbol,
+                        "position_manager: org_id yok — live close atlandı"
+                    );
+                    continue;
+                };
+                let creds = match acct_repo
+                    .binance_for_user(key.user_id, key.segment.trim())
+                    .await
+                {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!(%e, "position_manager: exchange_accounts okunamadı");
+                        continue;
+                    }
+                };
+                let Some(creds) = creds else {
+                    warn!(
+                        user_id = %key.user_id,
+                        symbol = %key.symbol,
+                        segment = %key.segment,
+                        "position_manager: exchange_accounts yok — live close atlandı"
+                    );
+                    continue;
+                };
+                let cfg = BinanceClientConfig::mainnet_with_keys(creds.api_key, creds.api_secret);
+                let client = match BinanceClient::new(cfg) {
+                    Ok(c) => Arc::new(c),
+                    Err(e) => {
+                        warn!(%e, "position_manager: BinanceClient oluşturulamadı");
+                        continue;
+                    }
+                };
+                let gw = BinanceLiveGateway::new(client);
+                let intent_record = intent.clone();
+                match gw.place_with_venue_response(intent).await {
+                    Ok((cid, venue_json)) => {
+                        let venue_oid = venue_order_id_from_binance_order_response(&venue_json);
+                        match repo
+                            .insert_submitted(
+                                org_id,
+                                key.user_id,
+                                "binance",
+                                key.segment.trim(),
+                                &key.symbol,
+                                cid,
+                                &intent_record,
+                                venue_oid,
+                                Some(venue_json),
+                            )
+                            .await
+                        {
+                            Ok(_) => info!(
+                                %cid,
+                                symbol = %key.symbol,
+                                "position_manager: live reduce-only kapatma kaydedildi"
+                            ),
+                            Err(e) => warn!(%e, %cid, "position_manager: live emir DB yazımı başarısız"),
+                        }
+                    }
+                    Err(e) => warn!(%e, symbol = %key.symbol, "position_manager: live place başarısız"),
                 }
             }
         }

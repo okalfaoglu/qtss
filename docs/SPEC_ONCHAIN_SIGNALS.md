@@ -163,7 +163,7 @@ WHERE key LIKE 'coinglass_%';
 
 ### 3.2 Migration: `0030_onchain_signal_scores.sql`
 
-Skor tablosu (depoda **`migrations/0030_onchain_signal_scores.sql`**). Sonraki migrasyonlar ek kolonlar ve `app_config` anahtarları ekler (tipik zincir: `0029`–`0033` confluence / on-chain / Nansen genişletme; tam dosya adları dalda farklı olabilir — **`docs/QTSS_CURSOR_DEV_GUIDE.md` §6** ve `ls migrations`). Worker’ın `list_enabled_engine_symbols` sorgusu için **`0034_engine_symbols_fk_columns.sql`** ve gerekirse **`0035_engine_symbols_bar_interval_fk_if_ready.sql`** (`bar_intervals` gecikmeli oluşursa). **Tek önek kuralı** aynı §6’da.
+Skor tablosu (depoda **`migrations/0030_onchain_signal_scores.sql`**). Sonraki migrasyonlar ek kolonlar ve `app_config` anahtarları ekler (tipik zincir: `0029`–`0033` confluence / on-chain / Nansen genişletme; tam dosya adları dalda farklı olabilir — **`docs/QTSS_CURSOR_DEV_GUIDE.md` §6** ve `ls migrations`). Worker’ın `list_enabled_engine_symbols` sorgusu için **`0034`**, gerekirse **`0035`**; `to_regclass('public.bar_intervals')` NULL ise **`0036_bar_intervals_repair_if_missing.sql`**. **Tek önek kuralı** aynı §6’da.
 
 Özet şema (0030 çekirdek; tüm kolonlar için depodaki güncel `CREATE`/`ALTER` zincirine bakın):
 
@@ -467,7 +467,7 @@ tokio::spawn(onchain_signal_scorer::onchain_signal_loop(onchain_pool));
 
 ### Faz 2 — Skorlama motoru
 
-4. Migration **`0030_onchain_signal_scores.sql`** — tablo; ardından **`0031`+** `app_config` seed ve **`0029`–`0033`** aralığındaki on-chain / confluence / Nansen migrasyonları (dosya adları için §6); **`0034` / `0035`** — `engine_symbols` katalog FK (`exchange_id`, …; `bar_interval_id` için §6). §6 tek önek kuralı.
+4. Migration **`0030_onchain_signal_scores.sql`** — tablo; ardından **`0031`+** `app_config` seed ve **`0029`–`0033`** aralığındaki on-chain / confluence / Nansen migrasyonları (dosya adları için §6); **`0034` / `0035` / `0036`** — `engine_symbols` FK + eksik `bar_intervals` telafisi (§6). §6 tek önek kuralı.
 5. `crates/qtss-worker/src/onchain_signal_scorer.rs` — scorer loop
 6. `main.rs`'e `tokio::spawn` ekle
 7. `crates/qtss-storage/src/` — yeni CRUD fonksiyonları (`upsert_onchain_signal_score`, `fetch_latest_signal_score`)

@@ -31,6 +31,15 @@ impl NansenError {
             _ => false,
         }
     }
+
+    /// REST hata kodu (`Api` varyantı); ulaşım/JSON hatalarında `None`.
+    #[must_use]
+    pub fn http_status(&self) -> Option<u16> {
+        match self {
+            NansenError::Api { status, .. } if *status > 0 => Some(*status),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -199,8 +208,8 @@ pub async fn post_tgm_who_bought_sold(
     .await
 }
 
-/// Perp PnL / leaderboard — Nansen dokümantasyonunda çoğunlukla Hyperliquid altında (`/api/v1/hyperliquid/...`).
-/// Eski `profiler/perp-leaderboard` birçok anahtarda 404; yol `relative_api_path` ile değiştirilebilir.
+/// TGM perp PnL leaderboard — varsayılan yol `api/v1/tgm/perp-pnl-leaderboard` (gövde: `token_symbol` + `date`).
+/// Eski `profiler/perp-leaderboard` 404; yol `relative_api_path` ile özelleştirilebilir (`NANSEN_PERP_LEADERBOARD_PATH`).
 pub async fn post_profiler_perp_leaderboard(
     client: &reqwest::Client,
     base_url: &str,

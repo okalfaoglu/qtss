@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
         let msg = format!("{e:#}");
         if msg.contains("has been modified") {
             anyhow::anyhow!(
-                "{msg}\n\nİpucu — geliştirme veritabanı: uygulanmış bir migrations/*.sql dosyası diskte değişti. Repo kökünden (/app/qtss) checksum’ları güncelleyin, sonra seed’i tekrarlayın:\n  cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums\nKalıcı kalıp: eski migrasyonu ellemeden yeni numaralı .sql eklemek (docs/PROJECT.md)."
+                "{msg}\n\nİpucu — geliştirme veritabanı: uygulanmış bir migrations/*.sql dosyası diskte değişti. Repo kökünden checksum’ları güncelleyin, sonra seed’i tekrarlayın:\n  cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums\nKalıcı kalıp: eski migrasyonu ellemeden yeni numaralı .sql eklemek — docs/QTSS_CURSOR_DEV_GUIDE.md §6, docs/PROJECT.md."
             )
         } else {
             anyhow::Error::from(e)

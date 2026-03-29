@@ -31,4 +31,8 @@
 
 - Düzenli `cargo audit` / benzeri; imaj taraması (container).
 
+## Worker — otomatik emir
+
+- **`QTSS_POSITION_MANAGER_LIVE_CLOSE_ENABLED`**: `qtss-worker` içinde SL/TP eşiğinde Binance’a **gerçek** reduce-only / satış emri gönderebilir; `exchange_accounts` düz metin anahtar okur. Üretimde varsayılan **kapalı** tutulmalı; açmadan önce dry yol (`QTSS_POSITION_MANAGER_DRY_CLOSE_ENABLED`) ve risk onayı önerilir. Ayrıntı: `docs/QTSS_CURSOR_DEV_GUIDE.md` §3.5, ADIM 9, §10 SSS.
+
 Bu belge mimari hedefleri tanımlar; güvenlik onayı için kurum içi süreçlere tabidir.
