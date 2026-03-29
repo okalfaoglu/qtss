@@ -10,3 +10,6 @@ web/dist/
 /package-lock.json
 .env
 .env.local
+
+# Windows artifact: a mis-typed redirect under web/ can create a file named `nul`
+web/nul
