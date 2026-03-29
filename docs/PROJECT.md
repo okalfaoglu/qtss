@@ -248,7 +248,7 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 
 1. **Kimlik ve RBAC** — OAuth + JWT + uç middleware + JWT `permissions` + `GET /api/v1/me` + `user_permissions` tablosu ve admin `GET`/`PUT /api/v1/users/{id}/permissions` (**kısmen**; daha ince yetki stringleri, kurumlar arası admin, geniş audit sonra)  
 2. **Binance spot + futures** — REST + katalog + kline + stream URL + komisyon fallback + kline WS → DB; hesap bazlı fee: `commission-account` (**v1 tamam**)  
-3. **Emir ve mutabakat** — `BinanceLiveGateway` + HTTP place/Cancel; worker’da periyodik spot + futures açık emir reconcile (`QTSS_RECONCILE_BINANCE_SPOT_*`, `QTSS_RECONCILE_BINANCE_FUTURES_*`, `*_PATCH_STATUS`); `submitted` + açık listede yok → `reconciled_not_open` (**kısmen**; kesin FILLED/CANCELED için order query sonra)  
+3. **Emir ve mutabakat** — `BinanceLiveGateway` + HTTP place/Cancel; `qtss-reconcile` + worker/API reconcile; `*_PATCH_STATUS`, isteğe bağlı `*_REFINE_ORDER_STATUS` / `*_REFINE_MAX` (`GET .../order` → `filled` / `canceled` / `partially_filled`); kalan `submitted` → `reconciled_not_open` (**kısmen**; fill WebSocket / ek kolonlar sonra)  
 4. **Copy trade** — CRUD API + `copy_trade_follower` + `copy_trade_queue` / `copy_trade_execution_jobs` (**kısmen**); Binance user-stream fill + canlı follower emir sonraki iterasyon  
 5. **Analiz motoru** — `qtss-analysis` crate + worker entegrasyonu (**kısmen**; genişletilmiş motor / tam API yüzeyi sonra)  
 6. **AI katmanı** — onay kuyruğu DB + HTTP (**kısmen**; worker/LLM/policy sonraki)  

@@ -13,6 +13,7 @@ qtss-notify.workspace = true
 qtss-nansen.workspace = true
 qtss-domain.workspace = true
 qtss-execution.workspace = true
+qtss-reconcile.workspace = true
 qtss-strategy.workspace = true
 qtss-analysis.workspace = true
 sqlx.workspace = true

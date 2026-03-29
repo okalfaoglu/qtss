@@ -6,9 +6,9 @@
 use std::time::Duration;
 
 use qtss_binance::{BinanceClient, BinanceClientConfig};
-use qtss_execution::{
-    reconcile_binance_spot_open_orders, venue_order_ids_submitted_not_on_open_list,
-    ExchangeOrderVenueSnapshot, ReconcileReport,
+use qtss_execution::{reconcile_binance_spot_open_orders, ExchangeOrderVenueSnapshot, ReconcileReport};
+use qtss_reconcile::{
+    apply_binance_spot_open_orders_patch, BinanceOpenOrdersPatchConfig,
 };
 use qtss_storage::{ExchangeAccountRepository, ExchangeOrderRepository, ExchangeOrderRow};
 use sqlx::PgPool;
@@ -143,39 +143,32 @@ pub async fn binance_spot_reconcile_loop(pool: PgPool) {
                     continue;
                 }
             };
-            if patch_exchange_order_status_enabled() {
-                match venue_order_ids_submitted_not_on_open_list(&remote, &local) {
-                    Ok(ids) if !ids.is_empty() => {
-                        match orders
-                            .mark_submitted_reconciled_not_open_by_venue_ids(
-                                user_id,
-                                "binance",
-                                "spot",
-                                &ids,
-                            )
-                            .await
-                        {
-                            Ok(n) if n > 0 => {
-                                report.status_updates_applied = Some(n);
-                                info!(
-                                    %user_id,
-                                    updated = n,
-                                    "binance_spot_reconcile: exchange_orders reconciled_not_open"
-                                );
-                            }
-                            Ok(_) => {}
-                            Err(e) => warn!(
-                                %e,
-                                %user_id,
-                                "binance_spot_reconcile: mark_submitted_reconciled_not_open_by_venue_ids"
-                            ),
-                        }
+            let patch_cfg =
+                BinanceOpenOrdersPatchConfig::worker_spot(patch_exchange_order_status_enabled());
+            if patch_cfg.refine_via_order_query || patch_cfg.patch_submitted_to_reconciled_not_open {
+                match apply_binance_spot_open_orders_patch(
+                    &orders,
+                    &client,
+                    user_id,
+                    &remote,
+                    &local,
+                    &patch_cfg,
+                )
+                .await
+                {
+                    Ok(n) if n > 0 => {
+                        report.status_updates_applied = Some(n);
+                        info!(
+                            %user_id,
+                            updated = n,
+                            "binance_spot_reconcile: exchange_orders status patch"
+                        );
                     }
                     Ok(_) => {}
                     Err(e) => warn!(
                         %e,
                         %user_id,
-                        "binance_spot_reconcile: venue_order_ids_submitted_not_on_open_list"
+                        "binance_spot_reconcile: apply_binance_spot_open_orders_patch"
                     ),
                 }
             }

@@ -10,12 +10,14 @@
 //! [`qtss_domain::commission::CommissionResolver`] (borsa API); API yoksa manuel bps.
 
 mod binance_live;
+mod binance_order_status;
 mod dry;
 mod gateway;
 mod live;
 mod reconcile;
 
 pub use binance_live::BinanceLiveGateway;
+pub use binance_order_status::exchange_order_status_from_binance_json;
 pub use dry::{
     apply_place, instrument_position_key, DryLedgerState, DryPlaceOutcome, DryRunGateway,
 };

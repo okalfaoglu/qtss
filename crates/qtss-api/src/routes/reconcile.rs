@@ -8,7 +8,11 @@ use uuid::Uuid;
 use qtss_binance::{BinanceClient, BinanceClientConfig};
 use qtss_execution::{
     reconcile_binance_futures_open_orders, reconcile_binance_spot_open_orders,
-    venue_order_ids_submitted_not_on_open_list, ExchangeOrderVenueSnapshot, ReconcileReport,
+    ExchangeOrderVenueSnapshot, ReconcileReport,
+};
+use qtss_reconcile::{
+    apply_binance_futures_open_orders_patch, apply_binance_spot_open_orders_patch,
+    BinanceOpenOrdersPatchConfig,
 };
 
 use crate::oauth::AccessClaims;
@@ -57,7 +61,22 @@ async fn reconcile_binance_spot(
         })
         .collect();
 
-    let report = reconcile_binance_spot_open_orders(&remote, &local).map_err(|e| e.to_string())?;
+    let mut report =
+        reconcile_binance_spot_open_orders(&remote, &local).map_err(|e| e.to_string())?;
+    let patch_cfg = BinanceOpenOrdersPatchConfig::http_spot();
+    let n = apply_binance_spot_open_orders_patch(
+        &st.exchange_orders,
+        &client,
+        user_id,
+        &remote,
+        &local,
+        &patch_cfg,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    if n > 0 {
+        report.status_updates_applied = Some(n);
+    }
     Ok(Json(report))
 }
 
@@ -100,16 +119,19 @@ async fn reconcile_binance_futures(
 
     let mut report =
         reconcile_binance_futures_open_orders(&remote, &local).map_err(|e| e.to_string())?;
-    let ids = venue_order_ids_submitted_not_on_open_list(&remote, &local).map_err(|e| e.to_string())?;
-    if !ids.is_empty() {
-        let n = st
-            .exchange_orders
-            .mark_submitted_reconciled_not_open_by_venue_ids(user_id, "binance", "futures", &ids)
-            .await
-            .map_err(|e| e.to_string())?;
-        if n > 0 {
-            report.status_updates_applied = Some(n);
-        }
+    let patch_cfg = BinanceOpenOrdersPatchConfig::http_futures();
+    let n = apply_binance_futures_open_orders_patch(
+        &st.exchange_orders,
+        &client,
+        user_id,
+        &remote,
+        &local,
+        &patch_cfg,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    if n > 0 {
+        report.status_updates_applied = Some(n);
     }
     Ok(Json(report))
 }

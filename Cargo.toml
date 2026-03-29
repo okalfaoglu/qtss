@@ -15,6 +15,7 @@ members = [
     "crates/qtss-nansen",
     "crates/qtss-strategy",
     "crates/qtss-analysis",
+    "crates/qtss-reconcile",
 ]
 
 [workspace.package]
@@ -55,6 +56,7 @@ qtss-chart-patterns = { path = "crates/qtss-chart-patterns" }
 qtss-nansen = { path = "crates/qtss-nansen" }
 qtss-strategy = { path = "crates/qtss-strategy" }
 qtss-analysis = { path = "crates/qtss-analysis" }
+qtss-reconcile = { path = "crates/qtss-reconcile" }
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 hmac = "0.12"

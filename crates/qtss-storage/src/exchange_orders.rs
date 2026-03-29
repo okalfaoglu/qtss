@@ -117,6 +117,60 @@ impl ExchangeOrderRepository {
         Ok(res.rows_affected())
     }
 
+    /// Mutabakat iyileştirme: `submitted` + `venue_order_id` için sembol (Binance order query).
+    pub async fn list_submitted_venue_symbol_pairs(
+        &self,
+        user_id: Uuid,
+        exchange: &str,
+        segment: &str,
+        venue_order_ids: &[i64],
+    ) -> Result<Vec<(i64, String)>, StorageError> {
+        if venue_order_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let rows: Vec<(i64, String)> = sqlx::query_as(
+            r#"SELECT venue_order_id, symbol FROM exchange_orders
+               WHERE user_id = $1 AND exchange = $2 AND segment = $3
+                 AND status = 'submitted'
+                 AND venue_order_id = ANY($4)"#,
+        )
+        .bind(user_id)
+        .bind(exchange)
+        .bind(segment)
+        .bind(venue_order_ids)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// `GET .../order` sonrası kesin durum + güncel borsa gövdesi.
+    pub async fn update_submitted_status_and_venue_response(
+        &self,
+        user_id: Uuid,
+        exchange: &str,
+        segment: &str,
+        venue_order_id: i64,
+        status: &str,
+        venue_response: &serde_json::Value,
+    ) -> Result<u64, StorageError> {
+        let res = sqlx::query(
+            r#"UPDATE exchange_orders
+               SET status = $5, venue_response = $6, updated_at = now()
+               WHERE user_id = $1 AND exchange = $2 AND segment = $3
+                 AND venue_order_id = $4
+                 AND status = 'submitted'"#,
+        )
+        .bind(user_id)
+        .bind(exchange)
+        .bind(segment)
+        .bind(venue_order_id)
+        .bind(status)
+        .bind(venue_response)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     pub async fn list_for_user(
         &self,
         user_id: Uuid,

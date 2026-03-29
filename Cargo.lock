@@ -1723,6 +1723,7 @@ dependencies = [
  "qtss-domain",
  "qtss-execution",
  "qtss-notify",
+ "qtss-reconcile",
  "qtss-reporting",
  "qtss-storage",
  "rand 0.8.5",
@@ -1849,6 +1850,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "qtss-reconcile"
+version = "0.1.0"
+dependencies = [
+ "qtss-binance",
+ "qtss-execution",
+ "qtss-storage",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "qtss-reporting"
 version = "0.1.0"
 dependencies = [
@@ -1913,6 +1926,7 @@ dependencies = [
  "qtss-execution",
  "qtss-nansen",
  "qtss-notify",
+ "qtss-reconcile",
  "qtss-storage",
  "qtss-strategy",
  "reqwest",
