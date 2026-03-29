@@ -1,5 +1,7 @@
 //! Config-driven GET/POST (`external_data_sources` row) — PLAN §3 `HttpGenericProvider`.
 
+use std::time::Instant;
+
 use async_trait::async_trait;
 use qtss_storage::ExternalDataSourceRow;
 use reqwest::header::{HeaderName, HeaderValue};
@@ -128,13 +130,16 @@ impl DataSourceProvider for HttpGenericProvider {
     }
 
     async fn fetch(&self) -> DataSourceFetchOk {
+        let t0 = Instant::now();
         let (request_json, response_json, status_code, error) = self.execute_http().await;
+        let ms = t0.elapsed().as_millis().min(9_999_999_999) as u64;
         let meta_json = status_code.map(|c| json!({ "http_status": c }));
         DataSourceFetchOk {
             request_json,
             response_json,
             meta_json,
             error,
+            fetch_duration_ms: Some(ms),
         }
     }
 }

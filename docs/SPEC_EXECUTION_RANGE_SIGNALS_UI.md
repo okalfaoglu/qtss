@@ -129,6 +129,7 @@ Payload şeması (ör. JSON Schema veya Rust `serde` tipleri) sürümlenmeli (`s
 - Motor çekmecesinde: **Snapshot özeti**, **Sinyal paneli** — satır etiketleri Türkçe; değerler mümkünse iç içe **`signal_dashboard_v2`** (`schema_version` 3), aksi halde v1 (`durum`, trend, range metrikleri, ATR vb.). v2 varsa tablonun altında **Wire (EN)** adlı açılır blokta ham İngilizce alanlar (`<details>`; ayarlar araması: `wire`).
 - **F4:** **Range / Paper özeti** kartı — üst çubuk sembol-TF, motor olay zincirinden türetilen açık yön, son 5 grafik-eşlemeli range olayı, `paper_balances` + son paper dolumlar (`GET /api/v1/orders/dry/balance`, `.../fills`). Ayarlar araması: `paper`, `dry`, `f4`, `ozet`, `islem` vb.
 - **F5 (GUI):** aynı kart içinde **komisyon özeti** — motor yenilemede `GET …/market/binance/commission-defaults` (maker/taker bps, kaynak); düğmeyle `…/commission-account` (hesap kesir oranları, `exchange_accounts` gerekir). Arama: `komisyon`, `commission`, `f5`, `maker`, `taker` vb.
+- **Bağlam (F7):** çekmece sekmesi — `market-context/latest` / `summary` TA satırları ve özet tabloda `ta_durum` / `ta_piyasa_modu`, mümkünse **`signal_dashboard_v2`** (`status`, `market_mode`); `engine/confluence/latest` yoksa (404) diğer istekler yine çalışır (`client.ts`). Harici worker tanımları: `GET …/external-fetch/sources` (salt okuma; yazma ops). Confluence özet metninde `data_sources_considered` → `sources …` (`formatConfluenceExtras`).
 
 ### 7.2 Hedef
 
@@ -180,8 +181,10 @@ Payload şeması (ör. JSON Schema veya Rust `serde` tipleri) sürümlenmeli (`s
 - `crates/qtss-chart-patterns/src/dashboard_v1.rs` — `SignalDirectionPolicy`, `durum_model_raw` (v1 Türkçe alanlar)  
 - `crates/qtss-chart-patterns/src/dashboard_v2_envelope.rs` — `signal_dashboard_v2` İngilizce çift yazım (`schema_version` 3)  
 - `docs/PLAN_CONFLUENCE_AND_MARKET_DATA.md` — F7: market data, confluence, naming, Telegram  
+- `docs/DATA_SOURCES_AND_SOURCE_KEYS.md` — `data_snapshots` / `external_data_sources` `source_key` adlandırma (Phase A)  
+- `crates/qtss-worker/src/confluence.rs` — confluence snapshot; `signal_dashboard_v2` ile rejim ve teknik sütun (`QTSS_CONFLUENCE_ENGINE`)  
 - `docs/NANSEN_TOKEN_SCREENER.md` — Nansen `POST …/token-screener`, `nansen_snapshots` / setup, API ve env rehberi  
-- `web/src/App.tsx`, `web/src/api/client.ts` (`fetchPaperBalance`, `fetchPaperFills`, `fetchBinanceCommissionDefaults`, `fetchBinanceCommissionAccount`, `fetchMarketContextSummary`, `fetchMarketContextLatest`, `fetchNansenSnapshot`, `fetchNansenSetupsLatest`), `web/src/components/TvChartPane.tsx`, `web/src/lib/tradingRangeDbOverlay.ts`, `web/src/lib/rangeSignalMarkers.ts`, `web/src/lib/rangeOpenPositionLayer.ts`, `web/src/lib/patternDrawingBatchOverlay.ts`, `web/src/lib/signalDashboardPayload.ts`  
+- `web/src/App.tsx`, `web/src/api/client.ts` (`fetchPaperBalance`, `fetchPaperFills`, `fetchBinanceCommissionDefaults`, `fetchBinanceCommissionAccount`, `fetchMarketContextSummary`, `fetchMarketContextLatest`, `fetchConfluenceSnapshotsLatest`, `fetchDataSnapshots`, `fetchExternalFetchSources`, `fetchNansenSnapshot`, `fetchNansenSetupsLatest`), `web/src/components/TvChartPane.tsx`, `web/src/lib/tradingRangeDbOverlay.ts`, `web/src/lib/rangeSignalMarkers.ts`, `web/src/lib/rangeOpenPositionLayer.ts`, `web/src/lib/patternDrawingBatchOverlay.ts`, `web/src/lib/signalDashboardPayload.ts`  
 
 ---
 

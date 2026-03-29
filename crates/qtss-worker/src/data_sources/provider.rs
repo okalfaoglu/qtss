@@ -9,6 +9,8 @@ pub struct DataSourceFetchOk {
     pub response_json: Option<Value>,
     pub meta_json: Option<Value>,
     pub error: Option<String>,
+    /// Wall time for `fetch` (ms) — merged into `meta_json` on persist as `qtss_fetch_duration_ms`.
+    pub fetch_duration_ms: Option<u64>,
 }
 
 /// Pluggable collectors (`external_fetch`, future Nansen adapter, …).

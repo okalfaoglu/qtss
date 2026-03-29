@@ -9,6 +9,8 @@ pub mod external_fetch;
 pub mod exchange_accounts;
 pub mod exchange_orders;
 pub mod market_bars;
+pub mod market_confluence_snapshots;
+pub mod onchain_signal_scores;
 pub mod nansen;
 pub mod nansen_setup_scan;
 pub mod pool;
@@ -41,6 +43,15 @@ pub use exchange_accounts::{ExchangeAccountRepository, ExchangeCredentials};
 pub use exchange_orders::{ExchangeOrderRepository, ExchangeOrderRow};
 pub use market_bars::{
     list_recent_bars, upsert_market_bar, MarketBarRow, MarketBarUpsert,
+};
+pub use market_confluence_snapshots::{
+    insert_market_confluence_snapshot, list_market_confluence_snapshots_for_symbol,
+    MarketConfluenceSnapshotInsert, MarketConfluenceSnapshotRow,
+};
+pub use onchain_signal_scores::{
+    delete_onchain_signal_scores_older_than, fetch_latest_onchain_signal_score,
+    insert_onchain_signal_score, list_onchain_signal_scores_history, OnchainSignalScoreInsert,
+    OnchainSignalScoreRow,
 };
 pub use nansen::{fetch_nansen_snapshot, upsert_nansen_snapshot, NansenSnapshotRow};
 pub use nansen_setup_scan::{

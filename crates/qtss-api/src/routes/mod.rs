@@ -7,6 +7,7 @@ mod external_fetch;
 mod health;
 mod market_binance;
 mod notify;
+mod onchain_signals;
 mod orders_binance;
 mod orders_dry;
 mod reconcile;
@@ -91,6 +92,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
             analysis::analysis_read_router()
                 .merge(notify::notify_router())
                 .merge(external_fetch::external_fetch_read_router())
+                .merge(onchain_signals::onchain_signals_router())
                 .layer(from_fn(require_dashboard_roles)),
         )
         .merge(

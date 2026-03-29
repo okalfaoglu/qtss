@@ -21,8 +21,9 @@ use qtss_storage::{
     fetch_analysis_snapshot_payload, fetch_data_snapshot, fetch_latest_nansen_setup_with_rows,
     fetch_nansen_snapshot, insert_engine_symbol, list_analysis_snapshots_with_symbols,
     list_data_snapshots, list_engine_symbols_all, list_engine_symbols_matching,
-    list_market_context_summaries, list_range_signal_events_joined, update_engine_symbol_patch,
-    AnalysisSnapshotJoinedRow, DataSnapshotRow, EngineSymbolInsert, EngineSymbolRow,
+    list_market_confluence_snapshots_for_symbol, list_market_context_summaries,
+    list_range_signal_events_joined, update_engine_symbol_patch, AnalysisSnapshotJoinedRow,
+    DataSnapshotRow, EngineSymbolInsert, EngineSymbolRow, MarketConfluenceSnapshotRow,
     MarketContextSummaryRow, NansenSetupRowDetail, NansenSetupRunRow, NansenSnapshotRow,
     RangeSignalEventJoinedRow,
 };
@@ -49,9 +50,14 @@ pub fn analysis_read_router() -> Router<SharedState> {
             "/analysis/engine/confluence/latest",
             get(list_confluence_snapshots_api),
         )
+        .route("/analysis/confluence/latest", get(get_confluence_latest_by_symbol_api))
         .route("/analysis/data-snapshots", get(list_data_snapshots_api))
         .route("/analysis/market-context/latest", get(get_market_context_latest_api))
         .route("/analysis/market-context/summary", get(list_market_context_summary_api))
+        .route(
+            "/analysis/market-confluence/history",
+            get(list_market_confluence_history_api),
+        )
         .route("/analysis/engine/range-signals", get(list_range_signals_api))
         .route("/analysis/nansen/snapshot", get(get_nansen_snapshot_api))
         .route("/analysis/nansen/setups/latest", get(get_nansen_setups_latest_api))
@@ -133,6 +139,48 @@ async fn list_engine_snapshots_api(
         .map_err(|e| e.to_string())
 }
 
+/// SPEC §7.1 — tek sembol için son `confluence` JSON (`market-context/latest` ile aynı eşleştirme).
+#[derive(Deserialize)]
+struct ConfluenceLatestQuery {
+    pub symbol: String,
+    #[serde(default)]
+    pub interval: Option<String>,
+    #[serde(default)]
+    pub exchange: Option<String>,
+    #[serde(default)]
+    pub segment: Option<String>,
+}
+
+async fn get_confluence_latest_by_symbol_api(
+    Extension(_claims): Extension<AccessClaims>,
+    State(st): State<SharedState>,
+    Query(q): Query<ConfluenceLatestQuery>,
+) -> Result<Json<Option<serde_json::Value>>, (StatusCode, String)> {
+    let sym_in = q.symbol.trim();
+    if sym_in.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "query symbol is required".into()));
+    }
+    let interval = q.interval.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let exchange = q.exchange.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let segment = q.segment.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let matches = list_engine_symbols_matching(&st.pool, sym_in, interval, exchange, segment)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = matches.into_iter().next().ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            format!(
+                "no engine_symbols row for symbol={}",
+                sym_in.to_uppercase()
+            ),
+        )
+    })?;
+    let conf = fetch_analysis_snapshot_payload(&st.pool, row.id, "confluence")
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(conf))
+}
+
 async fn list_confluence_snapshots_api(
     State(st): State<SharedState>,
 ) -> Result<Json<Vec<AnalysisSnapshotJoinedRow>>, String> {
@@ -155,14 +203,25 @@ async fn list_data_snapshots_api(
         .map_err(|e| e.to_string())
 }
 
-/// `binance_taker_{base}usdt` — worker `confluence` ile aynı anahtar kuralı.
-fn binance_taker_data_snapshot_key(symbol_upper: &str) -> String {
+/// Confluence ile aynı bağlam anahtarları (Nansen DEX + Binance funding/OI + HL + BTC Coinglass).
+fn context_data_snapshot_keys_for_symbol(symbol_upper: &str) -> Vec<String> {
     let sym = symbol_upper.trim().to_uppercase();
     let base = sym
         .strip_suffix("USDT")
         .unwrap_or(sym.as_str())
         .to_lowercase();
-    format!("binance_taker_{base}usdt")
+    let mut keys = vec![
+        "nansen_token_screener".to_string(),
+        format!("binance_taker_{base}usdt"),
+        format!("binance_premium_{base}usdt"),
+        format!("binance_open_interest_{base}usdt"),
+        "hl_meta_asset_ctxs".to_string(),
+    ];
+    if base == "btc" {
+        keys.push("coinglass_netflow_btc".to_string());
+        keys.push("coinglass_liquidations_btc".to_string());
+    }
+    keys
 }
 
 #[derive(Deserialize)]
@@ -234,14 +293,9 @@ async fn get_market_context_latest_api(
     let confluence = fetch_analysis_snapshot_payload(&st.pool, id, "confluence")
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let nansen_key = "nansen_token_screener";
-    let taker_key = binance_taker_data_snapshot_key(&row.symbol);
     let mut context_data_snapshots: Vec<DataSnapshotRow> = Vec::new();
-    if let Ok(Some(r)) = fetch_data_snapshot(&st.pool, nansen_key).await {
-        context_data_snapshots.push(r);
-    }
-    if taker_key != nansen_key {
-        if let Ok(Some(r)) = fetch_data_snapshot(&st.pool, &taker_key).await {
+    for key in context_data_snapshot_keys_for_symbol(&row.symbol) {
+        if let Ok(Some(r)) = fetch_data_snapshot(&st.pool, &key).await {
             context_data_snapshots.push(r);
         }
     }
@@ -363,18 +417,48 @@ fn confluence_brief_from_row(row: &MarketContextSummaryRow) -> Option<MarketCont
     })
 }
 
+/// `signal_dashboard` payload: nested `signal_dashboard_v2` with `schema_version` 3 wins for TA labels exposed as `ta_durum` / `ta_piyasa_modu` (`status`, `market_mode`); else v1 `durum` / `piyasa_modu`.
+fn signal_dashboard_ta_brief(d: &serde_json::Value) -> (Option<String>, Option<String>) {
+    let mut ta_durum = d
+        .get("durum")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let mut ta_piyasa = d
+        .get("piyasa_modu")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    if let Some(v2) = d.get("signal_dashboard_v2") {
+        if v2.get("schema_version").and_then(|x| x.as_u64()) == Some(3) {
+            if let Some(s) = v2
+                .get("status")
+                .and_then(|x| x.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                ta_durum = Some(s.to_string());
+            }
+            if let Some(s) = v2
+                .get("market_mode")
+                .and_then(|x| x.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                ta_piyasa = Some(s.to_string());
+            }
+        }
+    }
+    (ta_durum, ta_piyasa)
+}
+
 fn map_summary_row(row: MarketContextSummaryRow) -> MarketContextSummaryItem {
     let (ta_durum, ta_piyasa_modu) = row
         .signal_dashboard_payload
         .as_ref()
-        .map(|d| {
-            let durum = d.get("durum").and_then(|x| x.as_str()).map(String::from);
-            let pm = d
-                .get("piyasa_modu")
-                .and_then(|x| x.as_str())
-                .map(String::from);
-            (durum, pm)
-        })
+        .map(signal_dashboard_ta_brief)
         .unwrap_or((None, None));
     let confluence = confluence_brief_from_row(&row);
     MarketContextSummaryItem {
@@ -388,6 +472,64 @@ fn map_summary_row(row: MarketContextSummaryRow) -> MarketContextSummaryItem {
         ta_piyasa_modu,
         confluence,
     }
+}
+
+#[derive(Deserialize)]
+struct MarketConfluenceHistoryQuery {
+    /// Doğrudan hedef satırı (tercih edilen).
+    #[serde(default)]
+    pub engine_symbol_id: Option<Uuid>,
+    /// `engine_symbol_id` yoksa: `market-context/latest` ile aynı eşleştirme kuralları.
+    #[serde(default)]
+    pub symbol: Option<String>,
+    #[serde(default)]
+    pub interval: Option<String>,
+    #[serde(default)]
+    pub exchange: Option<String>,
+    #[serde(default)]
+    pub segment: Option<String>,
+    #[serde(default = "default_confluence_history_limit")]
+    pub limit: i64,
+}
+
+fn default_confluence_history_limit() -> i64 {
+    50
+}
+
+/// PLAN Phase B — append-only `market_confluence_snapshots` (newest first).
+async fn list_market_confluence_history_api(
+    State(st): State<SharedState>,
+    Query(q): Query<MarketConfluenceHistoryQuery>,
+) -> Result<Json<Vec<MarketConfluenceSnapshotRow>>, (StatusCode, String)> {
+    let lim = q.limit.clamp(1, 200);
+    let id = if let Some(id) = q.engine_symbol_id {
+        id
+    } else {
+        let sym_in = q.symbol.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or((
+            StatusCode::BAD_REQUEST,
+            "query engine_symbol_id or symbol is required".into(),
+        ))?;
+        let interval = q.interval.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let exchange = q.exchange.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let segment = q.segment.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let matches = list_engine_symbols_matching(&st.pool, sym_in, interval, exchange, segment)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let row = matches.into_iter().next().ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                format!(
+                    "no engine_symbols row for symbol={} (optional interval/exchange/segment)",
+                    sym_in.to_uppercase()
+                ),
+            )
+        })?;
+        row.id
+    };
+    let rows = list_market_confluence_snapshots_for_symbol(&st.pool, id, lim)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(rows))
 }
 
 /// F7 — filtreli motor hedefleri + TA / confluence özeti (`SPEC_EXECUTION_RANGE_SIGNALS_UI` §9).

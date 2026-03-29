@@ -474,15 +474,88 @@ export async function fetchEngineSnapshots(accessToken: string): Promise<EngineS
   return JSON.parse(t) as EngineSnapshotJoinedApiRow[];
 }
 
+/** Eski `qtss-api` bu rotayı sunmuyorsa 404 — Bağlam sekmesi diğer uçları yine yükleyebilsin. */
+export type ConfluenceSnapshotsLatestResult = {
+  rows: EngineSnapshotJoinedApiRow[];
+  /** Sunucu `GET …/engine/confluence/latest` için 404 döndürdü (rota yok / eski binary). */
+  endpoint_missing?: boolean;
+};
+
+/** SPEC_ONCHAIN_SIGNALS §7 — `onchain_signal_scores` + breakdown meta. */
+export type OnchainSignalScoreApiRow = {
+  id: string;
+  symbol: string;
+  computed_at: string;
+  funding_score: number | null;
+  oi_score: number | null;
+  ls_ratio_score: number | null;
+  taker_vol_score: number | null;
+  exchange_netflow_score: number | null;
+  exchange_balance_score: number | null;
+  hl_bias_score: number | null;
+  hl_whale_score: number | null;
+  liquidation_score: number | null;
+  nansen_sm_score: number | null;
+  tvl_trend_score: number | null;
+  aggregate_score: number;
+  confidence: number;
+  direction: string;
+  market_regime: string | null;
+  conflict_detected: boolean;
+  conflict_detail: string | null;
+  snapshot_keys: string[];
+  meta_json: unknown | null;
+};
+
+export type OnchainSignalsBreakdownApi = {
+  symbol: string;
+  latest_score_row: OnchainSignalScoreApiRow | null;
+  onchain_breakdown: unknown | null;
+  data_snapshots: DataSnapshotApiRow[];
+};
+
+export type OnchainSignalsBreakdownResult = {
+  data: OnchainSignalsBreakdownApi | null;
+  endpoint_missing: boolean;
+};
+
+/** `GET …/analysis/onchain-signals/breakdown` — skor + `meta_json.source_breakdown` + ham snapshot’lar. */
+export async function fetchOnchainSignalsBreakdown(
+  accessToken: string,
+  symbol: string,
+): Promise<OnchainSignalsBreakdownResult> {
+  const params = new URLSearchParams({ symbol: symbol.trim().toUpperCase() });
+  const r = await fetch(`${API_BASE}/api/v1/analysis/onchain-signals/breakdown?${params}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (r.status === 404) {
+    return { data: null, endpoint_missing: true };
+  }
+  if (!r.ok) {
+    throw new Error(`onchain-signals/breakdown ${r.status}: ${t.slice(0, 300)}`);
+  }
+  return {
+    data: JSON.parse(t) as OnchainSignalsBreakdownApi,
+    endpoint_missing: false,
+  };
+}
+
 export async function fetchConfluenceSnapshotsLatest(
   accessToken: string,
-): Promise<EngineSnapshotJoinedApiRow[]> {
+): Promise<ConfluenceSnapshotsLatestResult> {
   const r = await fetch(`${API_BASE}/api/v1/analysis/engine/confluence/latest`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   const t = await r.text();
+  if (r.status === 404) {
+    return { rows: [], endpoint_missing: true };
+  }
   if (!r.ok) throw new Error(`engine/confluence/latest ${r.status}: ${t.slice(0, 300)}`);
-  return JSON.parse(t) as EngineSnapshotJoinedApiRow[];
+  return {
+    rows: JSON.parse(t) as EngineSnapshotJoinedApiRow[],
+    endpoint_missing: false,
+  };
 }
 
 /** Birleşik ham kayıt satırları (`data_snapshots`) — Nansen + external_fetch vb. */
@@ -500,8 +573,31 @@ export async function fetchDataSnapshots(accessToken: string): Promise<DataSnaps
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   const t = await r.text();
+  if (r.status === 404) return [];
   if (!r.ok) throw new Error(`analysis/data-snapshots ${r.status}: ${t.slice(0, 300)}`);
   return JSON.parse(t) as DataSnapshotApiRow[];
+}
+
+/** `external_data_sources` satırları — worker `external_fetch` tanımları (PLAN Phase A). */
+export type ExternalDataSourceApiRow = {
+  key: string;
+  enabled: boolean;
+  method: string;
+  url: string;
+  headers_json: unknown;
+  body_json: unknown | null;
+  tick_secs: number;
+  description: string | null;
+};
+
+export async function fetchExternalFetchSources(accessToken: string): Promise<ExternalDataSourceApiRow[]> {
+  const r = await fetch(`${API_BASE}/api/v1/analysis/external-fetch/sources`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const t = await r.text();
+  if (r.status === 404) return [];
+  if (!r.ok) throw new Error(`external-fetch/sources ${r.status}: ${t.slice(0, 300)}`);
+  return JSON.parse(t) as ExternalDataSourceApiRow[];
 }
 
 /** PLAN F7 Phase C — tek hedef için TA + confluence + ilgili `data_snapshots`. */
@@ -583,6 +679,7 @@ export async function fetchMarketContextSummary(
     { headers: { Authorization: `Bearer ${accessToken}` } },
   );
   const t = await r.text();
+  if (r.status === 404) return [];
   if (!r.ok) throw new Error(`market-context/summary ${r.status}: ${t.slice(0, 300)}`);
   return JSON.parse(t) as MarketContextSummaryItemApi[];
 }

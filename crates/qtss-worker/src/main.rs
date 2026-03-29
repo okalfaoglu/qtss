@@ -3,12 +3,15 @@
 
 mod data_sources;
 mod engine_analysis;
-mod external_fetch_engine;
+mod engines;
 mod confluence;
 mod nansen_engine;
+mod signal_scorer;
 mod nansen_query;
 mod paper_fill_notify;
+mod live_position_notify;
 mod setup_scan_engine;
+mod onchain_signal_scorer;
 
 use std::str::FromStr;
 use std::time::Duration;
@@ -49,6 +52,19 @@ async fn main() -> anyhow::Result<()> {
     load_dotenv();
     init_logging("info,qtss_worker=debug");
 
+    for r in crate::data_sources::registry::REGISTERED_DATA_SOURCES {
+        tracing::debug!(
+            source_key = r.source_key,
+            provider_kind = r.provider_kind,
+            description = r.description,
+            "built-in data source registry entry"
+        );
+    }
+    info!(
+        count = crate::data_sources::registry::REGISTERED_DATA_SOURCES.len(),
+        "worker: built-in data source registry (Phase G) — ayrıntı için qtss_worker=debug"
+    );
+
     let pool_opt: Option<PgPool> = match std::env::var("DATABASE_URL") {
         Ok(db_url) if !db_url.trim().is_empty() => {
             let pool = create_pool(&db_url, 3)
@@ -66,10 +82,20 @@ async fn main() -> anyhow::Result<()> {
             tokio::spawn(nansen_engine::nansen_token_screener_loop(nansen_pool));
             let setup_pool = pool.clone();
             tokio::spawn(setup_scan_engine::nansen_setup_scan_loop(setup_pool));
-            let external_pool = pool.clone();
-            tokio::spawn(external_fetch_engine::external_fetch_loop(external_pool));
+            let b_pool = pool.clone();
+            tokio::spawn(engines::external_binance_loop(b_pool));
+            let cg_pool = pool.clone();
+            tokio::spawn(engines::external_coinglass_loop(cg_pool));
+            let hl_pool = pool.clone();
+            tokio::spawn(engines::external_hyperliquid_loop(hl_pool));
+            let misc_pool = pool.clone();
+            tokio::spawn(engines::external_misc_loop(misc_pool));
+            let onchain_pool = pool.clone();
+            tokio::spawn(onchain_signal_scorer::onchain_signal_loop(onchain_pool));
             let paper_notify_pool = pool.clone();
             tokio::spawn(paper_fill_notify::paper_position_notify_loop(paper_notify_pool));
+            let live_notify_pool = pool.clone();
+            tokio::spawn(live_position_notify::live_position_notify_loop(live_notify_pool));
             Some(pool)
         }
         _ => {

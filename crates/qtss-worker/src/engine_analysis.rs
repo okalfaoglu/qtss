@@ -13,8 +13,9 @@ use qtss_chart_patterns::{
 };
 use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
 use qtss_storage::{
-    fetch_analysis_snapshot_payload, insert_range_signal_event, list_enabled_engine_symbols, list_recent_bars,
-    upsert_analysis_snapshot, EngineSymbolRow, RangeSignalEventInsert,
+    fetch_analysis_snapshot_payload, fetch_latest_onchain_signal_score, insert_range_signal_event,
+    list_enabled_engine_symbols, list_recent_bars, upsert_analysis_snapshot, EngineSymbolRow,
+    RangeSignalEventInsert,
 };
 use rust_decimal::prelude::ToPrimitive;
 use serde_json::json;
@@ -120,6 +121,101 @@ fn signal_direction_policy_for_row(t: &EngineSymbolRow) -> SignalDirectionPolicy
             } else {
                 SignalDirectionPolicy::LongOnly
             }
+        }
+    }
+}
+
+/// TA yönü: +1 LONG, -1 SHORT, 0 NOTR / bilinmiyor.
+fn ta_side_from_dashboard_json(dash: &serde_json::Value) -> i8 {
+    if let Some(v2) = dash.get("signal_dashboard_v2") {
+        if v2.get("schema_version").and_then(|x| x.as_u64()) == Some(3) {
+            if let Some(s) = v2.get("status").and_then(|x| x.as_str()) {
+                match s.trim().to_uppercase().replace('İ', "I").as_str() {
+                    "LONG" => return 1,
+                    "SHORT" => return -1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    match dash.get("durum").and_then(|x| x.as_str()) {
+        Some("LONG") => 1,
+        Some("SHORT") => -1,
+        _ => 0,
+    }
+}
+
+/// SPEC §6.2 — on-chain tablo + confluence snapshot; `pozisyon_gucu_10` hizalanmış yönle güçlendirilir, 0–12 → 0–10 normalize.
+async fn merge_confluence_and_onchain_into_dashboard_json(
+    pool: &PgPool,
+    t: &EngineSymbolRow,
+    dash: &mut serde_json::Value,
+) {
+    let conf = fetch_analysis_snapshot_payload(pool, t.id, "confluence")
+        .await
+        .unwrap_or(None);
+    let onchain = fetch_latest_onchain_signal_score(pool, &t.symbol)
+        .await
+        .unwrap_or(None);
+
+    let ta_side = ta_side_from_dashboard_json(dash);
+
+    let mut delta: i32 = 0;
+    if let Some(ref o) = onchain {
+        if o.conflict_detected {
+            delta -= 2;
+        } else {
+            let bullish = matches!(o.direction.as_str(), "strong_buy" | "buy");
+            let bearish = matches!(o.direction.as_str(), "strong_sell" | "sell");
+            let aligns = (ta_side == 1 && bullish) || (ta_side == -1 && bearish);
+            if aligns {
+                delta += match o.direction.as_str() {
+                    "strong_buy" | "strong_sell" => 2,
+                    "buy" | "sell" => 1,
+                    _ => 0,
+                };
+            }
+        }
+    }
+
+    let v1_strength = dash
+        .get("pozisyon_gucu_10")
+        .and_then(|x| x.as_u64().or_else(|| x.as_i64().map(|i| i as u64)))
+        .unwrap_or(5) as i32;
+    let raw = (v1_strength + delta).clamp(0, 12);
+    let norm = ((raw as f64 / 12.0) * 10.0).round() as u64;
+    let norm_u8 = norm.min(10) as u8;
+
+    if let Some(obj) = dash.as_object_mut() {
+        obj.insert("pozisyon_gucu_10".into(), json!(norm_u8));
+    }
+
+    if let Some(v2) = dash.get_mut("signal_dashboard_v2").and_then(|x| x.as_object_mut()) {
+        v2.insert("position_strength_10".into(), json!(norm_u8));
+        if let Some(ref c) = conf {
+            v2.insert(
+                "confluence_brief".into(),
+                json!({
+                    "regime": c.get("regime"),
+                    "composite_score": c.get("composite_score"),
+                    "confidence_0_100": c.get("confidence_0_100"),
+                    "lot_scale_hint": c.get("lot_scale_hint"),
+                    "direction": c.get("direction"),
+                    "conflicts_len": c.get("conflicts").and_then(|x| x.as_array()).map(|a| a.len()),
+                }),
+            );
+        }
+        if let Some(ref o) = onchain {
+            v2.insert(
+                "onchain_signal_brief".into(),
+                json!({
+                    "aggregate_score": o.aggregate_score,
+                    "confidence": o.confidence,
+                    "direction": o.direction,
+                    "conflict_detected": o.conflict_detected,
+                    "computed_at": o.computed_at,
+                }),
+            );
         }
     }
 }
@@ -481,7 +577,7 @@ async fn run_engines_for_symbol(pool: &PgPool, bar_limit: i64, params: &TradingR
 
         let direction_policy = signal_direction_policy_for_row(&t);
         let dash = compute_signal_dashboard_v1_with_policy(&bars, &tr, direction_policy);
-        let dash_payload = enrich_dashboard_payload(
+        let mut dash_payload = enrich_dashboard_payload(
             &dash,
             &tr,
             rows_chrono.last().map(|r| r.open_time).unwrap_or_else(Utc::now),
@@ -493,6 +589,20 @@ async fn run_engines_for_symbol(pool: &PgPool, bar_limit: i64, params: &TradingR
             .last()
             .and_then(|r| r.close.to_f64())
             .unwrap_or(f64::NAN);
+
+        if let Err(e) = crate::confluence::compute_and_persist(
+            pool,
+            &t,
+            &dash_payload,
+            last_bar_ot,
+            n as i32,
+        )
+        .await
+        {
+            warn!(%e, symbol = %t.symbol, "confluence snapshot");
+        }
+
+        merge_confluence_and_onchain_into_dashboard_json(pool, &t, &mut dash_payload).await;
 
         if let Err(e) = upsert_analysis_snapshot(
             pool,
@@ -517,17 +627,6 @@ async fn run_engines_for_symbol(pool: &PgPool, bar_limit: i64, params: &TradingR
                 last_close,
             )
             .await;
-            if let Err(e) = crate::confluence::compute_and_persist(
-                pool,
-                &t,
-                &dash_payload,
-                last_bar_ot,
-                n as i32,
-            )
-            .await
-            {
-                warn!(%e, symbol = %t.symbol, "confluence snapshot");
-            }
         }
     }
 }

@@ -3,13 +3,20 @@
 
 use chrono::{DateTime, Utc};
 use qtss_storage::{
-    fetch_data_snapshot, upsert_analysis_snapshot, AppConfigRepository, EngineSymbolRow,
+    fetch_data_snapshot, insert_market_confluence_snapshot, upsert_analysis_snapshot,
+    AppConfigRepository, EngineSymbolRow, MarketConfluenceSnapshotInsert,
 };
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use tracing::{info, warn};
 
 use crate::data_sources::registry::NANSEN_TOKEN_SCREENER_DATA_KEY;
+use crate::signal_scorer::{
+    score_binance_open_interest_heat, score_binance_premium_funding,
+    score_coinglass_liquidations_like, score_coinglass_netflow_like, score_for_source_key,
+    score_hl_meta_asset_ctxs_for_coin, score_nansen_dex_buy_sell_pressure,
+    score_nansen_smart_money_depth,
+};
 
 const CONF_CONFIG_KEY: &str = "confluence_weights_by_regime";
 
@@ -39,14 +46,66 @@ fn lot_scale_hint_from_conflict_count(n: usize) -> f64 {
     raw.clamp(0.5, 1.0)
 }
 
-fn map_market_mode_to_regime(piyasa_modu: &str) -> &'static str {
-    match piyasa_modu.trim().to_uppercase().as_str() {
-        "RANGE" => "range",
-        "KOPUS" => "breakout",
-        "TREND" => "trend",
-        "BELIRSIZ" | "BELİRSİZ" => "uncertain",
-        _ => "uncertain",
+/// SPEC §4.3 — bileşik skordan yön etiketi (`signal_dashboard_v2` / API).
+fn direction_from_composite_score(agg: f64) -> &'static str {
+    if agg >= 0.6 {
+        "strong_buy"
+    } else if agg >= 0.2 {
+        "buy"
+    } else if agg > -0.2 {
+        "neutral"
+    } else if agg > -0.6 {
+        "sell"
+    } else {
+        "strong_sell"
     }
+}
+
+/// PLAN §4.1 — `SignalDashboardV2Envelope.market_mode` is English (`range`, `breakout`, `trend`, `uncertain`); v1 stays Turkish (`RANGE`, `KOPUS`, …).
+fn map_market_mode_to_regime(raw: &str) -> &'static str {
+    let t = raw.trim();
+    match t.to_ascii_lowercase().as_str() {
+        "range" => "range",
+        "breakout" => "breakout",
+        "trend" => "trend",
+        "uncertain" => "uncertain",
+        _ => match t.to_uppercase().replace('İ', "I").as_str() {
+            "RANGE" => "range",
+            "KOPUS" => "breakout",
+            "TREND" => "trend",
+            "BELIRSIZ" => "uncertain",
+            _ => "uncertain",
+        },
+    }
+}
+
+/// Prefer nested `signal_dashboard_v2.market_mode` when `schema_version` is 3; else v1 `piyasa_modu`.
+fn effective_market_mode_label(dash: &Value) -> String {
+    if let Some(v2) = dash.get("signal_dashboard_v2") {
+        if v2.get("schema_version").and_then(|x| x.as_u64()) == Some(3) {
+            if let Some(m) = v2.get("market_mode").and_then(|x| x.as_str()) {
+                let s = m.trim();
+                if !s.is_empty() {
+                    return s.to_string();
+                }
+            }
+        }
+    }
+    dash.get("piyasa_modu")
+        .and_then(|x| x.as_str())
+        .unwrap_or("uncertain")
+        .to_string()
+}
+
+fn pillar_from_durum_and_strength(durum: &str, strength_0_10: f64) -> f64 {
+    let st = (strength_0_10 / 10.0).clamp(0.0, 1.0);
+    let d = durum.trim().to_uppercase().replace('İ', "I");
+    let base = match d.as_str() {
+        "LONG" => 0.65,
+        "SHORT" => -0.65,
+        _ => 0.0,
+    };
+    (base * st).clamp(-1.0, 1.0)
 }
 
 async fn load_regime_weights(pool: &PgPool, regime: &str) -> (f64, f64, f64) {
@@ -93,80 +152,154 @@ async fn load_regime_weights(pool: &PgPool, regime: &str) -> (f64, f64, f64) {
 }
 
 fn technical_pillar_score(dash: &Value) -> f64 {
+    if let Some(v2) = dash.get("signal_dashboard_v2") {
+        if v2.get("schema_version").and_then(|x| x.as_u64()) == Some(3) {
+            let st = v2.get("status").and_then(|x| x.as_str()).unwrap_or("");
+            let str_u = v2
+                .get("position_strength_10")
+                .and_then(|x| x.as_u64().or_else(|| x.as_i64().map(|i| i as u64)))
+                .unwrap_or(5) as f64;
+            if !st.trim().is_empty() {
+                return pillar_from_durum_and_strength(st, str_u);
+            }
+        }
+    }
     let durum = dash.get("durum").and_then(|x| x.as_str()).unwrap_or("NOTR");
     let strength = dash
         .get("pozisyon_gucu_10")
         .and_then(|x| x.as_u64().or_else(|| x.as_i64().map(|i| i as u64)))
-        .unwrap_or(5) as f64
-        / 10.0;
-    let base = match durum {
-        "LONG" => 0.65,
-        "SHORT" => -0.65,
-        _ => 0.0,
-    };
-    (base * strength).clamp(-1.0, 1.0)
+        .unwrap_or(5) as f64;
+    pillar_from_durum_and_strength(durum, strength)
 }
 
-fn parse_binance_taker_bias(resp: &Value) -> Option<f64> {
-    let arr = resp.as_array()?;
-    let last = arr.last()?;
-    let r: f64 = last
-        .get("buySellRatio")
-        .and_then(|x| x.as_str())
-        .and_then(|s| s.parse().ok())
-        .or_else(|| last.get("buySellRatio").and_then(|x| x.as_f64()))?;
-    if r > 1.06 {
-        Some(0.45_f64.min((r - 1.0) * 1.5).clamp(0.0, 1.0))
-    } else if r < 0.94 {
-        Some(-0.45_f64.min((1.0 - r) * 1.5).clamp(-1.0, 0.0))
-    } else {
-        Some(0.0)
+async fn data_snapshot_json(pool: &PgPool, key: &str) -> Option<Value> {
+    let row = fetch_data_snapshot(pool, key).await.ok()??;
+    if row.error.is_some() {
+        return None;
     }
+    row.response_json
 }
 
-async fn onchain_pillar_score(pool: &PgPool, symbol: &str) -> f64 {
-    let sym = symbol.to_uppercase();
-    let base = sym
-        .strip_suffix("USDT")
+fn symbol_base_lower(symbol: &str) -> String {
+    let sym = symbol.trim().to_uppercase();
+    sym.strip_suffix("USDT")
         .unwrap_or(sym.as_str())
-        .to_lowercase();
-    let key = format!("binance_taker_{}usdt", base);
-    let Ok(Some(row)) = fetch_data_snapshot(pool, &key).await else {
-        return 0.0;
-    };
-    if row.error.is_some() {
-        return 0.0;
-    }
-    let Some(rj) = row.response_json else {
-        return 0.0;
-    };
-    parse_binance_taker_bias(&rj).unwrap_or(0.0)
+        .to_lowercase()
 }
 
-async fn smart_money_pillar_score(pool: &PgPool) -> f64 {
-    let Ok(Some(row)) = fetch_data_snapshot(pool, NANSEN_TOKEN_SCREENER_DATA_KEY).await else {
-        return 0.0;
-    };
-    if row.error.is_some() {
+fn hl_perp_coin(symbol: &str) -> String {
+    let sym = symbol.trim().to_uppercase();
+    sym.strip_suffix("USDT")
+        .unwrap_or(sym.as_str())
+        .to_uppercase()
+}
+
+/// Taker + funding + OI + HL + (BTC ise) Coinglass netflow/likidasyon — ağırlıklı ortalama (mevcut sinyaller).
+async fn onchain_pillar_score(pool: &PgPool, symbol: &str) -> f64 {
+    let base = symbol_base_lower(symbol);
+    let coin = hl_perp_coin(symbol);
+    let mut parts: Vec<(f64, f64)> = Vec::new();
+
+    let taker_key = format!("binance_taker_{base}usdt");
+    if let Some(j) = data_snapshot_json(pool, &taker_key).await {
+        parts.push((score_for_source_key(&taker_key, &j), 0.26));
+    }
+
+    let prem_key = format!("binance_premium_{base}usdt");
+    if let Some(j) = data_snapshot_json(pool, &prem_key).await {
+        parts.push((score_for_source_key(&prem_key, &j), 0.28));
+    }
+
+    let oi_key = format!("binance_open_interest_{base}usdt");
+    if let Some(j) = data_snapshot_json(pool, &oi_key).await {
+        parts.push((score_for_source_key(&oi_key, &j), 0.10));
+    }
+
+    if let Some(j) = data_snapshot_json(pool, "hl_meta_asset_ctxs").await {
+        let s = score_hl_meta_asset_ctxs_for_coin(&j, &coin);
+        parts.push((s, 0.22));
+    }
+
+    if base == "btc" {
+        if let Some(j) = data_snapshot_json(pool, "coinglass_netflow_btc").await {
+            parts.push((score_coinglass_netflow_like(&j), 0.18));
+        }
+        if let Some(j) = data_snapshot_json(pool, "coinglass_liquidations_btc").await {
+            parts.push((score_coinglass_liquidations_like(&j), 0.16));
+        }
+    }
+
+    let wsum: f64 = parts.iter().map(|(_, w)| w).sum();
+    if wsum <= 1e-12 {
         return 0.0;
     }
-    let Some(rj) = row.response_json else {
+    parts.iter().map(|(s, w)| s * w).sum::<f64>() / wsum
+}
+
+/// Confluence JSON traceability — okunan `data_snapshots` anahtarları (PLAN §4.2 / §8).
+fn build_data_sources_considered(symbol: &str) -> Vec<String> {
+    let base = symbol_base_lower(symbol);
+    let mut v = vec![
+        NANSEN_TOKEN_SCREENER_DATA_KEY.to_string(),
+        format!("binance_taker_{base}usdt"),
+        format!("binance_premium_{base}usdt"),
+        format!("binance_open_interest_{base}usdt"),
+        "hl_meta_asset_ctxs".to_string(),
+    ];
+    if base == "btc" {
+        v.push("coinglass_netflow_btc".to_string());
+        v.push("coinglass_liquidations_btc".to_string());
+    }
+    v
+}
+
+fn smart_money_pillar_from_nansen(nansen_json: Option<&Value>) -> f64 {
+    let Some(j) = nansen_json else {
         return 0.0;
     };
-    let n = rj
-        .get("data")
-        .and_then(|d| d.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
-    if n >= 80 {
-        0.55
-    } else if n >= 20 {
-        0.35
-    } else if n > 0 {
-        0.15
+    let depth = score_nansen_smart_money_depth(j);
+    let dex = score_nansen_dex_buy_sell_pressure(j);
+    if dex.abs() < 1e-12 {
+        depth
     } else {
-        0.0
+        (0.55 * depth + 0.45 * dex).clamp(-1.0, 1.0)
     }
+}
+
+fn category_funding_oi(premium_json: Option<&Value>, oi_json: Option<&Value>) -> f64 {
+    let mut parts: Vec<(f64, f64)> = Vec::new();
+    if let Some(j) = premium_json {
+        parts.push((score_binance_premium_funding(j), 0.65));
+    }
+    if let Some(j) = oi_json {
+        parts.push((score_binance_open_interest_heat(j), 0.35));
+    }
+    let w: f64 = parts.iter().map(|(_, w)| w).sum();
+    if w <= 1e-12 {
+        return 0.0;
+    }
+    parts.iter().map(|(s, w)| s * w).sum::<f64>() / w
+}
+
+/// PLAN Phase B / pazar matrisi — ham kategori skorları (payload + `market_confluence_snapshots.scores_json`).
+fn build_category_scores_json(
+    smart_money_depth: f64,
+    cex_flow: f64,
+    dex_pressure: f64,
+    hyperliquid: f64,
+    funding_oi: f64,
+    liquidations: f64,
+    composite: f64,
+) -> Value {
+    json!({
+        "smart_money": smart_money_depth,
+        "cex_flow": cex_flow,
+        "dex_pressure": dex_pressure,
+        "hyperliquid": hyperliquid,
+        "funding_oi": funding_oi,
+        "liquidations": liquidations,
+        "composite": composite
+    })
 }
 
 pub async fn compute_and_persist(
@@ -187,16 +320,50 @@ pub async fn compute_and_persist(
         return Ok(());
     }
 
-    let piyasa = dash_payload
-        .get("piyasa_modu")
-        .and_then(|x| x.as_str())
-        .unwrap_or("BELIRSIZ");
-    let regime = map_market_mode_to_regime(piyasa);
+    let market_mode_raw = effective_market_mode_label(dash_payload);
+    let regime = map_market_mode_to_regime(&market_mode_raw);
     let (wt, wo, ws) = load_regime_weights(pool, regime).await;
 
     let technical = technical_pillar_score(dash_payload);
     let onchain = onchain_pillar_score(pool, &t.symbol).await;
-    let smart_money = smart_money_pillar_score(pool).await;
+    let base = symbol_base_lower(&t.symbol);
+    let coin = hl_perp_coin(&t.symbol);
+
+    let nansen_json = data_snapshot_json(pool, NANSEN_TOKEN_SCREENER_DATA_KEY).await;
+    let nansen_ref = nansen_json.as_ref();
+    let smart_money = smart_money_pillar_from_nansen(nansen_ref);
+    let dex_pressure_cat = nansen_ref
+        .map(score_nansen_dex_buy_sell_pressure)
+        .unwrap_or(0.0);
+    let smart_money_depth_cat = nansen_ref
+        .map(score_nansen_smart_money_depth)
+        .unwrap_or(0.0);
+
+    let prem_json = data_snapshot_json(pool, &format!("binance_premium_{base}usdt")).await;
+    let oi_json = data_snapshot_json(pool, &format!("binance_open_interest_{base}usdt")).await;
+    let funding_oi_cat = category_funding_oi(prem_json.as_ref(), oi_json.as_ref());
+
+    let hyperliquid_cat = if let Some(j) = data_snapshot_json(pool, "hl_meta_asset_ctxs").await {
+        score_hl_meta_asset_ctxs_for_coin(&j, &coin)
+    } else {
+        0.0
+    };
+
+    let (cex_flow_cat, liquidations_cat) = if base == "btc" {
+        let cf = data_snapshot_json(pool, "coinglass_netflow_btc")
+            .await
+            .map(|j| score_coinglass_netflow_like(&j))
+            .unwrap_or(0.0);
+        let lq = data_snapshot_json(pool, "coinglass_liquidations_btc")
+            .await
+            .map(|j| score_coinglass_liquidations_like(&j))
+            .unwrap_or(0.0);
+        (cf, lq)
+    } else {
+        (0.0, 0.0)
+    };
+
+    let data_sources_considered = build_data_sources_considered(&t.symbol);
 
     let composite_score =
         (wt * technical + wo * onchain + ws * smart_money).clamp(-1.0, 1.0);
@@ -243,6 +410,8 @@ pub async fn compute_and_persist(
 
     let lot_scale_hint = lot_scale_hint_from_conflict_count(conflicts.len());
 
+    let direction = direction_from_composite_score(composite_score);
+
     let weights_used = json!({
         "technical": wt,
         "onchain": wo,
@@ -252,7 +421,8 @@ pub async fn compute_and_persist(
     let payload = json!({
         "schema_version": 2,
         "regime": regime,
-        "market_mode_raw": piyasa,
+        "market_mode_raw": market_mode_raw,
+        "direction": direction,
         "pillar_scores": {
             "technical": technical,
             "onchain": onchain,
@@ -267,7 +437,15 @@ pub async fn compute_and_persist(
         "exchange": t.exchange,
         "segment": t.segment,
         "interval": t.interval,
-        "data_sources_considered": [NANSEN_TOKEN_SCREENER_DATA_KEY, "binance_taker_*"]
+        "data_sources_considered": data_sources_considered,
+        "category_scores": {
+            "smart_money_depth": smart_money_depth_cat,
+            "dex_pressure": dex_pressure_cat,
+            "cex_flow": cex_flow_cat,
+            "hyperliquid": hyperliquid_cat,
+            "funding_oi": funding_oi_cat,
+            "liquidations": liquidations_cat
+        }
     });
 
     upsert_analysis_snapshot(
@@ -281,6 +459,35 @@ pub async fn compute_and_persist(
     )
     .await
     .map_err(|e| e.to_string())?;
+
+    let scores_json = build_category_scores_json(
+        smart_money_depth_cat,
+        cex_flow_cat,
+        dex_pressure_cat,
+        hyperliquid_cat,
+        funding_oi_cat,
+        liquidations_cat,
+        composite_score,
+    );
+    let conflicts_json = Value::Array(conflicts.clone());
+    let hist = MarketConfluenceSnapshotInsert {
+        engine_symbol_id: t.id,
+        schema_version: 1,
+        regime: Some(regime.to_string()),
+        composite_score,
+        confidence_0_100: confidence,
+        scores_json,
+        conflicts_json,
+        confluence_payload_json: Some(payload.clone()),
+    };
+    if let Err(e) = insert_market_confluence_snapshot(pool, &hist).await {
+        warn!(
+            %e,
+            symbol = %t.symbol,
+            "market_confluence_snapshots insert failed (analysis_snapshots confluence still updated)"
+        );
+    }
+
     info!(
         symbol = %t.symbol,
         interval = %t.interval,
@@ -292,4 +499,66 @@ pub async fn compute_and_persist(
         "confluence snapshot persisted"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn regime_maps_english_v2_market_modes() {
+        assert_eq!(map_market_mode_to_regime("range"), "range");
+        assert_eq!(map_market_mode_to_regime("BREAKOUT"), "breakout");
+        assert_eq!(map_market_mode_to_regime("Trend"), "trend");
+        assert_eq!(map_market_mode_to_regime("uncertain"), "uncertain");
+    }
+
+    #[test]
+    fn regime_maps_turkish_legacy_modes() {
+        assert_eq!(map_market_mode_to_regime("RANGE"), "range");
+        assert_eq!(map_market_mode_to_regime("KOPUS"), "breakout");
+        assert_eq!(map_market_mode_to_regime("BELIRSIZ"), "uncertain");
+    }
+
+    #[test]
+    fn effective_market_mode_prefers_v2() {
+        let dash = json!({
+            "piyasa_modu": "RANGE",
+            "signal_dashboard_v2": { "schema_version": 3, "market_mode": "trend" }
+        });
+        assert_eq!(effective_market_mode_label(&dash), "trend");
+    }
+
+    #[test]
+    fn data_sources_considered_lists_concrete_taker_key() {
+        let v = build_data_sources_considered("BTCUSDT");
+        assert!(v.contains(&"nansen_token_screener".to_string()));
+        assert!(v.contains(&"binance_taker_btcusdt".to_string()));
+        assert!(v.contains(&"binance_premium_btcusdt".to_string()));
+        assert!(v.contains(&"coinglass_netflow_btc".to_string()));
+    }
+
+    #[test]
+    fn composite_maps_direction_labels() {
+        assert_eq!(direction_from_composite_score(0.7), "strong_buy");
+        assert_eq!(direction_from_composite_score(0.3), "buy");
+        assert_eq!(direction_from_composite_score(0.0), "neutral");
+        assert_eq!(direction_from_composite_score(-0.4), "sell");
+        assert_eq!(direction_from_composite_score(-0.8), "strong_sell");
+    }
+
+    #[test]
+    fn technical_pillar_prefers_v2_status() {
+        let dash = json!({
+            "durum": "NOTR",
+            "signal_dashboard_v2": {
+                "schema_version": 3,
+                "status": "LONG",
+                "position_strength_10": 10
+            }
+        });
+        let s = technical_pillar_score(&dash);
+        assert!(s > 0.5);
+    }
 }

@@ -14,10 +14,13 @@ import {
   type ChannelSixResponse,
   fetchAuthMe,
   type DataSnapshotApiRow,
+  type ExternalDataSourceApiRow,
   fetchEngineSnapshots,
   fetchDataSnapshots,
+  fetchExternalFetchSources,
   fetchMarketContextLatest,
   fetchMarketContextSummary,
+  fetchOnchainSignalsBreakdown,
   fetchConfluenceSnapshotsLatest,
   fetchEngineRangeSignals,
   fetchEngineSymbols,
@@ -40,6 +43,7 @@ import {
   type BinanceCommissionDefaultsApi,
   type BinanceCommissionAccountApi,
   type RangeSignalEventApiRow,
+  type OnchainSignalsBreakdownApi,
 } from "./api/client";
 import { channelDrawingToOverlay } from "./lib/channelOverlayFromDrawing";
 import { buildChannelScanPivotMarkers } from "./lib/channelScanMarkers";
@@ -213,11 +217,15 @@ function readLivePollMs(): number {
   return Number.isFinite(n) && n >= 0 ? n : 5000;
 }
 
-/** PLAN §4.2: confluence `lot_scale_hint`, `conflicts[].code` (wire English keys). */
+/** PLAN §4.2: confluence `lot_scale_hint`, `data_sources_considered`, `conflicts[].code` (wire English keys). */
 function formatConfluenceExtras(p: Record<string, unknown>): string {
   const parts: string[] = [];
   if (typeof p.lot_scale_hint === "number" && Number.isFinite(p.lot_scale_hint)) {
     parts.push(`lot_scale ${p.lot_scale_hint.toFixed(2)}`);
+  }
+  const dsc = p.data_sources_considered;
+  if (Array.isArray(dsc) && dsc.length > 0 && dsc.every((x) => typeof x === "string")) {
+    parts.push(`sources ${(dsc as string[]).join(", ")}`);
   }
   const raw = p.conflicts;
   if (Array.isArray(raw)) {
@@ -390,7 +398,13 @@ export default function App() {
   const [contextTabSingle, setContextTabSingle] = useState<MarketContextLatestApiResponse | null>(null);
   const [contextTabSummaries, setContextTabSummaries] = useState<MarketContextSummaryItemApi[]>([]);
   const [contextTabConfluence, setContextTabConfluence] = useState<EngineSnapshotJoinedApiRow[]>([]);
+  const [contextTabConfluenceEndpointMissing, setContextTabConfluenceEndpointMissing] = useState(false);
   const [contextTabDataSnaps, setContextTabDataSnaps] = useState<DataSnapshotApiRow[]>([]);
+  const [contextTabExternalSources, setContextTabExternalSources] = useState<ExternalDataSourceApiRow[]>([]);
+  const [contextTabOnchainBreakdown, setContextTabOnchainBreakdown] = useState<OnchainSignalsBreakdownApi | null>(
+    null,
+  );
+  const [contextTabOnchainEndpointMissing, setContextTabOnchainEndpointMissing] = useState(false);
   const [contextTabErr, setContextTabErr] = useState("");
   const [contextTabBusy, setContextTabBusy] = useState(false);
   const [engineRangeSignals, setEngineRangeSignals] = useState<RangeSignalEventApiRow[]>([]);
@@ -1097,15 +1111,26 @@ export default function App() {
         if (ex) sumQ.exchange = ex;
         sumQ.segment = (barSegment.trim() || "spot").toLowerCase();
       }
-      const [cf, ds, summaries] = await Promise.all([
+      const [cfOut, ds, summaries, extSrc, onchainPart] = await Promise.all([
         fetchConfluenceSnapshotsLatest(token),
         fetchDataSnapshots(token).catch(() => []),
         fetchMarketContextSummary(token, sumQ).catch(() => []),
+        fetchExternalFetchSources(token).catch(() => []),
+        symQ.length > 0
+          ? fetchOnchainSignalsBreakdown(token, symQ).catch(() => ({
+              data: null,
+              endpoint_missing: false,
+            }))
+          : Promise.resolve({ data: null, endpoint_missing: false }),
       ]);
-      setContextTabConfluence(cf);
+      setContextTabConfluence(cfOut.rows);
+      setContextTabConfluenceEndpointMissing(Boolean(cfOut.endpoint_missing));
       setContextTabDataSnaps(ds);
+      setContextTabExternalSources(extSrc);
       setContextTabSummaries(summaries);
       if (symQ.length > 0) {
+        setContextTabOnchainBreakdown(onchainPart.data);
+        setContextTabOnchainEndpointMissing(onchainPart.endpoint_missing);
         const one = await fetchMarketContextLatest(token, {
           symbol: symQ,
           interval: barInterval.trim(),
@@ -1114,13 +1139,19 @@ export default function App() {
         }).catch(() => null);
         setContextTabSingle(one);
       } else {
+        setContextTabOnchainBreakdown(null);
+        setContextTabOnchainEndpointMissing(false);
         setContextTabSingle(null);
       }
     } catch (e) {
       setContextTabErr(String(e));
       setContextTabConfluence([]);
+      setContextTabConfluenceEndpointMissing(false);
       setContextTabDataSnaps([]);
+      setContextTabExternalSources([]);
       setContextTabSummaries([]);
+      setContextTabOnchainBreakdown(null);
+      setContextTabOnchainEndpointMissing(false);
       setContextTabSingle(null);
     } finally {
       setContextTabBusy(false);
@@ -1171,7 +1202,11 @@ export default function App() {
       setContextTabSingle(null);
       setContextTabSummaries([]);
       setContextTabConfluence([]);
+      setContextTabConfluenceEndpointMissing(false);
       setContextTabDataSnaps([]);
+      setContextTabExternalSources([]);
+      setContextTabOnchainBreakdown(null);
+      setContextTabOnchainEndpointMissing(false);
       setContextTabErr("");
       setEngineRangeSignals([]);
       setEngineSymbols([]);
@@ -3157,6 +3192,35 @@ export default function App() {
               {drawerTab === "market_context" ? (
                 <>
                   {token ? (
+                    matchesSetting(
+                      "bağlam",
+                      "baglam",
+                      "context",
+                      "market",
+                      "confluence",
+                      "f7",
+                      "summary",
+                      "snapshot",
+                      "özet",
+                      "piyasa",
+                      "latest",
+                      "external",
+                      "data",
+                      "plan",
+                      "weights",
+                      "hl_meta",
+                      "token_screener",
+                      "source_key",
+                      "external-fetch",
+                      "kaynaklar",
+                      "sources",
+                      "tanım",
+                      "sources",
+                      "onchain",
+                      "on-chain",
+                      "türev",
+                      "funding",
+                    ) ? (
                     <div className="card">
                       <p className="tv-drawer__section-head">Piyasa bağlamı (F7 / PLAN Phase E)</p>
                       <p className="muted" style={{ fontSize: "0.76rem", marginBottom: "0.45rem" }}>
@@ -3166,9 +3230,14 @@ export default function App() {
                           {barSymbol.trim().toUpperCase() || "—"}/{barInterval.trim() || "—"}
                         </span>
                         . API: <code>market-context/latest</code>, <code>market-context/summary</code>,{" "}
-                        <code>engine/confluence/latest</code>, <code>data-snapshots</code>. Ayrıntı:{" "}
+                        <code>engine/confluence/latest</code>, <code>onchain-signals/breakdown</code>,{" "}
+                        <code>data-snapshots</code>. Worker ortamı (confluence,
+                        Nansen, harici çekim): repo kökü <code>.env.example</code>.{" "}
+                        <code>source_key</code> adları: <code>docs/DATA_SOURCES_AND_SOURCE_KEYS.md</code>. Ayrıntı:{" "}
                         <code>docs/PLAN_CONFLUENCE_AND_MARKET_DATA.md</code>,{" "}
-                        <code>docs/SPEC_EXECUTION_RANGE_SIGNALS_UI.md</code> (F7).
+                        <code>docs/SPEC_EXECUTION_RANGE_SIGNALS_UI.md</code> (F7),{" "}
+                        <code>docs/SPEC_ONCHAIN_SIGNALS.md</code>. Confluence:{" "}
+                        <code>QTSS_CONFLUENCE_ENGINE</code> (0/kapalı ile kapatılır).
                       </p>
                       <button
                         type="button"
@@ -3277,11 +3346,25 @@ export default function App() {
                               const dash = contextTabSingle.technical.signal_dashboard;
                               const d =
                                 dash && typeof dash === "object" ? (dash as Record<string, unknown>) : null;
-                              const durum = typeof d?.durum === "string" ? d.durum : "—";
-                              const piyasa = typeof d?.piyasa_modu === "string" ? d.piyasa_modu : "—";
+                              const p = d as SignalDashboardPayload | null;
+                              const v2 = d ? parseSignalDashboardV2(d.signal_dashboard_v2) : null;
+                              const durum = pickDashboardStr(
+                                v2?.status,
+                                typeof d?.durum === "string" ? d.durum : undefined,
+                              );
+                              const piyasa = pickDashboardStr(
+                                v2?.market_mode,
+                                typeof d?.piyasa_modu === "string" ? d.piyasa_modu : undefined,
+                              );
+                              const yerel = pickDashboardStr(v2?.local_trend, p?.yerel_trend);
+                              const gbl = pickDashboardStr(v2?.global_trend, p?.global_trend);
                               return (
                                 <div style={{ marginBottom: "0.3rem" }}>
                                   TA: <strong>durum</strong> {durum} · <strong>piyasa_modu</strong> {piyasa}
+                                  <br />
+                                  <span className="muted" style={{ fontSize: "0.68rem" }}>
+                                    yerel_trend {yerel} · global_trend {gbl}
+                                  </span>
                                 </div>
                               );
                             })()}
@@ -3342,7 +3425,14 @@ export default function App() {
                         className="mono muted"
                         style={{ maxHeight: "8rem", overflow: "auto", fontSize: "0.7rem", marginBottom: "0.55rem" }}
                       >
-                        {contextTabConfluence.length === 0 ? (
+                        {contextTabConfluenceEndpointMissing ? (
+                          <span className="muted">
+                            <code>GET /api/v1/analysis/engine/confluence/latest</code> sunucuda yok (404) —{" "}
+                            <code>qtss-api</code> güncel kodla derleyip yeniden başlatın. Özet ve{" "}
+                            <code>data-snapshots</code> yine yüklendi. <code>VITE_API_BASE</code> sonuna{" "}
+                            <code>/api/v1</code> eklemeyin.
+                          </span>
+                        ) : contextTabConfluence.length === 0 ? (
                           <span className="muted">Henüz confluence snapshot yok.</span>
                         ) : (
                           contextTabConfluence.map((s) => {
@@ -3360,6 +3450,37 @@ export default function App() {
                                 {extras}
                                 <br />
                                 <span style={{ opacity: 0.85 }}>{s.computed_at}</span>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      <p className="tv-drawer__section-head">Harici HTTP kaynakları (`external-fetch/sources`)</p>
+                      <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.3rem" }}>
+                        Worker <code>QTSS_EXTERNAL_FETCH</code> bu tanımları okur; son yanıtlar{" "}
+                        <code>data_snapshots</code> içinde. Yazma: ops rolü{" "}
+                        <code>POST /api/v1/analysis/external-fetch/sources</code>.
+                      </p>
+                      <div
+                        className="mono muted"
+                        style={{ maxHeight: "7rem", overflow: "auto", fontSize: "0.66rem", marginBottom: "0.55rem" }}
+                      >
+                        {contextTabExternalSources.length === 0 ? (
+                          <span>
+                            Tanım yok veya tablo/migration eksik — <code>0021_external_data_fetch</code> sonrası seed / SQL.
+                          </span>
+                        ) : (
+                          contextTabExternalSources.map((s) => {
+                            const u = s.url.length > 72 ? `${s.url.slice(0, 70)}…` : s.url;
+                            return (
+                              <div key={s.key} style={{ marginBottom: "0.28rem" }}>
+                                <strong>{s.key}</strong>
+                                {s.enabled ? null : <span className="muted"> (kapalı)</span>}
+                                <br />
+                                {s.method} · tick {s.tick_secs}s
+                                <br />
+                                {u}
                               </div>
                             );
                           })
@@ -3385,6 +3506,7 @@ export default function App() {
                         )}
                       </div>
                     </div>
+                    ) : null
                   ) : (
                     <p className="muted">Piyasa bağlamı için giriş yap.</p>
                   )}
