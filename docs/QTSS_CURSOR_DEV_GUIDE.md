@@ -484,8 +484,9 @@ Bu rehberdeki ADIM 1–10 bittikten sonraki **ürün** işleri `docs/PROJECT.md`
 7. Bildirim kuyruğu (`qtss-notify` ötesi) — **kısmen:** `notify_outbox` (`0039_notify_outbox.sql`); API `GET/POST /api/v1/notify/outbox`; worker `notify_outbox.rs` (`QTSS_NOTIFY_OUTBOX_*`, `qtss-notify`). Çoklu worker / retry politikası / DLQ sonraki iterasyon.  
 8. Web dashboard genişlemesi — **kısmen:** çekmece sekmesi **Kuyruklar** (`web/src/components/OperationsQueuesPanel.tsx`): salt okunur `notify_outbox` ve `ai_approval_requests` tabloları; ops için outbox enqueue + test AI isteği; admin için `pending` onay/red. `fetchAuthMe` + Genel oturumda JWT `permissions` özeti. PnL grafikleri, emir defteri, ayrıntılı audit UI sonraki iterasyon.  
 9. HA / observability — **kısmen:** `GET /live` (liveness), `GET /ready` (PostgreSQL `SELECT 1`, 503 yoksa trafik dışı); `/metrics` içinde `qtss_build_info` + `qtss_http_requests_total` (mevcut `QTSS_METRICS_TOKEN` koruması). Dağıtılmış HA, trace örnekleme, alarm kuralları, worker probe’ları sonraki iterasyon.  
+10. Depo CI — **kısmen:** `.github/workflows/rust-ci.yml` — push/PR: `cargo check --workspace --all-targets`, ayrı job `cargo audit` (`taiki-e/install-action`), ayrı job `web/` için `npm ci` + `npm run build` (Node 20). Sonraki iterasyon: `cargo test` (gerekirse Postgres hizmeti), çalışma dizini matrisi.  
 
-**Önerilen bir sonraki teknik adım (küçük kapsam):** depoda **CI** ile `cargo check --workspace` (ve zaman içinde `cargo audit`) — `docs/SECURITY.md` §Bağımlılık. Büyük özellik seçimi: §9.1 satır 9 derinleştirmesi (worker health, dağıtılmış HA) veya §10 ürün önceliğine göre reconcile / copy trade.
+**Önerilen bir sonraki teknik adım (küçük kapsam):** CI’da `cargo test --workspace` (mümkünse hafif birim testleri; entegrasyon için servis konteyneri) veya §9.1 satır 1–8’deki ürün önceliğine göre kısmi madde derinleştirmesi. Büyük özellik: satır 9 (worker probe, dağıtılmış HA) veya reconcile / copy trade.
 
 **§4 ile bu tablo:** Aynı ADIM numaraları; §4’te her adımın **uygulandı** özeti ve dosya/env referansları var.
 

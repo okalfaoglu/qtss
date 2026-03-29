@@ -1,11 +1,9 @@
-# Minimal CI: workspace derlemesi (docs/SECURITY.md — cargo audit hedefi ayrıca yerelde/ileride eklenebilir).
+# Push ve PR: workspace derlemesi, bağımlılık taraması, web üretim derlemesi (§9.1 madde 10, SECURITY §Bağımlılık).
 name: Rust CI
 
 on:
   push:
-    branches: [main, master]
   pull_request:
-    branches: [main, master]
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,11 +14,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-check
 
-      - name: cargo check (workspace)
-        run: cargo check --workspace
+      - name: cargo check --workspace
+        run: cargo check --workspace --all-targets
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ≥0.22: RustSec advisory-db bazı kayıtlarda CVSS 4.0 kullanır; 0.21.x "unsupported CVSS version: 4.0" ile düşer.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@0.22.1
+
+      # `Cargo.lock` üzerinden; workspace derlemesi gerekmez.
+      - name: cargo audit
+        run: cargo audit
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: npm run build
+        run: npm run build

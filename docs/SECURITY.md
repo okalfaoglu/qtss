@@ -30,8 +30,8 @@
 
 ## Bağımlılık ve tedarik
 
-- Düzenli `cargo audit` / benzeri; imaj taraması (container).
-- **CI:** `.github/workflows/rust-ci.yml` — push/PR’de `cargo check --workspace`. İleride aynı iş akışına veya ayrı job’a `cargo audit` eklenebilir.
+- Düzenli `cargo audit` / benzeri; imaj taraması (container). Yerelde **cargo-audit ≥ 0.22** kullanın: RustSec veritabanındaki `CVSS:4.0` vektörlerini 0.21.x okuyamaz (`unsupported CVSS version: 4.0`). Güncelleme: `cargo install cargo-audit --version 0.22.1 --locked` (veya daha yeni patch).
+- **CI:** `.github/workflows/rust-ci.yml` — push/PR’de `cargo check --workspace --all-targets`, `cargo audit` (sabitlenmiş `cargo-audit@0.22.1`), `web` için `npm ci` + `npm run build`.
 
 ## Worker — otomatik emir
 

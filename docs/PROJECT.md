@@ -253,6 +253,7 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 7. **Bildirim** — `qtss-notify` + `notify_outbox` worker (**kısmen**; retry/DLQ/çoklu tüketici sonra)  
 8. **Web UI** — grafik/Elliott temel akış + çekmece **Kuyruklar** (notify outbox + AI onay listesi/aksiyonları, `permissions` özeti) (**kısmen**; PnL grafikleri / emir defteri / audit UI sonra)  
 9. **Kurumsal** — API `/live` + `/ready` + `/metrics` genişletmesi (**kısmen**); çok örnek HA, worker probe, uyumluluk raporları sonra  
+10. **CI** — `.github/workflows/rust-ci.yml`: `cargo check --workspace --all-targets`, `cargo audit`, `web` için `npm ci` + `npm run build` (**kısmen**); `cargo test` / servis konteyneri sonraki iterasyon  
 
 ---
 
