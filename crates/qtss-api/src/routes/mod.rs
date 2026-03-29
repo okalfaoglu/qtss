@@ -14,6 +14,7 @@ mod orders_binance;
 mod orders_dry;
 mod reconcile;
 mod session;
+mod user_permissions_admin;
 
 use axum::middleware::from_fn;
 use axum::middleware::from_fn_with_state;
@@ -39,6 +40,10 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
     Router::new()
         .merge(
             session::session_router().layer(from_fn(require_dashboard_roles)),
+        )
+        .merge(
+            user_permissions_admin::user_permissions_admin_router()
+                .layer(from_fn(require_admin)),
         )
         .merge(
             config_router()

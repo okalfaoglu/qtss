@@ -168,7 +168,7 @@ Ayrıntılı güvenlik hedefleri: [SECURITY.md](SECURITY.md).
 
 - `POST /oauth/token` — OAuth 2.0 benzeri: `grant_type` = `password` \| `client_credentials` \| `refresh_token` (gövde JSON veya `application/x-www-form-urlencoded`). Yanıtta `access_token` + `refresh_token`.
 
-`/api/v1/*` uçları **`Authorization: Bearer <access_token>`** ister. JWT içinde `roles` (`roles.key` değerleri) ve ilk aşama `permissions` (`qtss:read` \| `qtss:ops` \| `qtss:admin`, rol haritasından) taşınır; `permissions` boş eski belirteçlerde API isteği sırasında `roles` ile tamamlanır. Erişim middleware’leri bu izinlere göre çalışır.
+`/api/v1/*` uçları **`Authorization: Bearer <access_token>`** ister. JWT içinde `roles` (`roles.key` değerleri) ve ilk aşama `permissions` (`qtss:read` \| `qtss:ops` \| `qtss:admin`, rol haritasından) taşınır; `permissions` boş eski belirteçlerde API isteği sırasında `roles` ile tamamlanır. `user_permissions` tablosundaki satırlar aynı istekte birleştirilir (`QTSS_JWT_MERGE_DB_PERMISSIONS=0` ile kapatılabilir). Erişim middleware’leri bu etkin izinlere göre çalışır.
 
 Tüm yanıtlarda **`x-request-id`** (UUID) üretilir veya istemci gönderdiyse yankılanır. **`GET /metrics`** basit Prometheus metni (`qtss_http_requests_total`). **`tower-governor`**: eş IP için jeton kovası (varsayılan ~50 sürdürülebilir RPS; ayar §11).
 
@@ -193,7 +193,9 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 ### Yollar
 
 - `GET /health` — servis durumu (JWT gerekmez)
-- `GET /api/v1/me` — JWT özeti: `sub`, `org_id`, `roles`, `permissions`, `azp`
+- `GET /api/v1/me` — JWT özeti: `sub`, `org_id`, `roles`, `permissions` (JWT + `user_permissions` birleşik), `azp`
+- `GET /api/v1/users/{user_id}/permissions` — yalnızca DB’deki ek izinler (`qtss:*` listesi)
+- `PUT /api/v1/users/{user_id}/permissions` — gövde `{ "permissions": ["qtss:read", ...] }`; tabloyu değiştirir (aynı kurum)
 - `GET /metrics` — Prometheus uyumlu sayaç (JWT gerekmez; üretimde ağ politikası ile koruyun)
 - `GET /api/v1/config` — config listesi
 - `POST /api/v1/config` — upsert (`key`, `value`, isteğe bağlı `description`, `actor_user_id`)
@@ -205,8 +207,8 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 - `GET /api/v1/market/binance/stream-urls?symbol=&interval=` — spot ve USDT-M kline WebSocket URL’leri (istemci doğrudan bağlanır)
 - `GET /api/v1/market/bars/recent?exchange=&segment=&symbol=&interval=&limit=` — `market_bars` (varsayılan `limit=500`, üst sınır 5000)
 - `POST /api/v1/market/binance/bars/backfill` — gövde: `{ "symbol", "interval", "segment?": "spot"|"futures", "limit?": 1..1000 }`; Binance REST klines → `market_bars` upsert (worker olmadan geçmiş dolum)
-- `POST /api/v1/reconcile/binance` — Binance **spot** `openOrders` ile yerel `exchange_orders` (`venue_order_id`); spot API anahtarı gerekir
-- `POST /api/v1/reconcile/binance/futures` — USDT-M **futures** `fapi/v1/openOrders` ile yerel `exchange_orders`; futures API anahtarı gerekir
+- `POST /api/v1/reconcile/binance` — Binance **spot** `openOrders` ile yerel `exchange_orders` (`venue_order_id`); spot API anahtarı gerekir; uygun satırlar `reconciled_not_open` güncellenir (`status_updates_applied` alanında sayı)
+- `POST /api/v1/reconcile/binance/futures` — USDT-M **futures** `fapi/v1/openOrders` ile yerel `exchange_orders`; futures API anahtarı gerekir; aynı durum güncellemesi
 - `GET /api/v1/market/binance/commission-account` — hesaba özel maker/taker (`symbol`, `segment`)
 - `GET /api/v1/orders/binance` — son emirler (kullanıcıya göre, `exchange_orders`)
 - `POST /api/v1/orders/binance/place` — gövde: `{ "intent": OrderIntent }`; `exchange_accounts` + `exchange_orders` (`venue_order_id` / `venue_response` Binance yanıtından)
@@ -232,7 +234,7 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 - **Rate limit**: `tower-governor`; anahtar = TCP peer veya güvenilen vekil + `X-Forwarded-For` ilk adresi (`QTSS_TRUSTED_PROXIES`). Üretimde ek katman (nginx, cloud WAF) önerilir.
 - **Denetim**: `audit_log` tablosu — `/api/v1/*` mutasyonları yalnızca `QTSS_AUDIT_HTTP=1` iken yazılır.
 - **Metrikler**: `QTSS_METRICS_TOKEN` doluysa `/metrics` Bearer veya `?token=` ister; metriklerde `qtss_build_info` + HTTP sayacı.
-- **Probe**: `GET /live` (liveness), `GET /ready` (DB readiness, 503 = kube trafiği kesilir); `GET /health` özet JSON.
+- **Probe**: API — `GET /live`, `GET /ready`, `GET /health`. Worker — `QTSS_WORKER_HTTP_BIND` ile aynı `/live` ve `/ready` (DB yoksa `ready` içinde `database: none`).
 - **Gizli anahtarlar**: `exchange_accounts.api_secret` düz metin — üretimde KMS / Vault ile şifreleme veya harici secret store hedefi.
 - Ayrıntılı audit log ve oturum yönetimi sonraki adımlar.
 - Çok kiracı: JWT’de `org_id`; şema veya satır düzeyi `org_id` ile genişletme.
@@ -244,16 +246,16 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 **Teknik şartname (işlem modları, range sinyalleri, grafik işaretleri, dashboard):** [SPEC_EXECUTION_RANGE_SIGNALS_UI.md](./SPEC_EXECUTION_RANGE_SIGNALS_UI.md)  
 **F7 — Çok kaynaklı piyasa verisi, confluence, bildirimler, İngilizce alan adları:** [PLAN_CONFLUENCE_AND_MARKET_DATA.md](./PLAN_CONFLUENCE_AND_MARKET_DATA.md)
 
-1. **Kimlik ve RBAC** — OAuth + JWT + uç middleware + JWT `permissions` + `GET /api/v1/me` (**kısmen**; DB’de kullanıcı başına izin, daha ince yetkiler, geniş audit sonra)  
+1. **Kimlik ve RBAC** — OAuth + JWT + uç middleware + JWT `permissions` + `GET /api/v1/me` + `user_permissions` tablosu ve admin `GET`/`PUT /api/v1/users/{id}/permissions` (**kısmen**; daha ince yetki stringleri, kurumlar arası admin, geniş audit sonra)  
 2. **Binance spot + futures** — REST + katalog + kline + stream URL + komisyon fallback + kline WS → DB; hesap bazlı fee: `commission-account` (**v1 tamam**)  
-3. **Emir ve mutabakat** — `BinanceLiveGateway` + HTTP place/Cancel; worker’da periyodik spot + futures açık emir reconcile (`QTSS_RECONCILE_BINANCE_SPOT_*`, `QTSS_RECONCILE_BINANCE_FUTURES_*`); otomatik durum güncelleme sonra  
+3. **Emir ve mutabakat** — `BinanceLiveGateway` + HTTP place/Cancel; worker’da periyodik spot + futures açık emir reconcile (`QTSS_RECONCILE_BINANCE_SPOT_*`, `QTSS_RECONCILE_BINANCE_FUTURES_*`, `*_PATCH_STATUS`); `submitted` + açık listede yok → `reconciled_not_open` (**kısmen**; kesin FILLED/CANCELED için order query sonra)  
 4. **Copy trade** — CRUD API + `copy_trade_follower` + `copy_trade_queue` / `copy_trade_execution_jobs` (**kısmen**); Binance user-stream fill + canlı follower emir sonraki iterasyon  
 5. **Analiz motoru** — `qtss-analysis` crate + worker entegrasyonu (**kısmen**; genişletilmiş motor / tam API yüzeyi sonra)  
 6. **AI katmanı** — onay kuyruğu DB + HTTP (**kısmen**; worker/LLM/policy sonraki)  
 7. **Bildirim** — `qtss-notify` + `notify_outbox` worker (**kısmen**; retry/DLQ/çoklu tüketici sonra)  
 8. **Web UI** — grafik/Elliott temel akış + çekmece **Kuyruklar** (notify outbox + AI onay listesi/aksiyonları, `permissions` özeti) (**kısmen**; PnL grafikleri / emir defteri / audit UI sonra)  
-9. **Kurumsal** — API `/live` + `/ready` + `/metrics` genişletmesi (**kısmen**); çok örnek HA, worker probe, uyumluluk raporları sonra  
-10. **CI** — `.github/workflows/rust-ci.yml`: `cargo check --workspace --all-targets`, `cargo audit`, `web` için `npm ci` + `npm run build` (**kısmen**); `cargo test` / servis konteyneri sonraki iterasyon  
+9. **Kurumsal** — API `/live` + `/ready` + `/metrics` + worker `QTSS_WORKER_HTTP_BIND` probe (**kısmen**); çok örnek HA, uyumluluk raporları sonra  
+10. **CI** — `.github/workflows/rust-ci.yml`: `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo audit` (`cargo-audit@0.22.1`), `web` için `npm ci` + `npm run build` (**kısmen**); Postgres’li entegrasyon job’u sonraki iterasyon  
 
 ---
 
@@ -274,6 +276,7 @@ Rust ikilileri (`qtss-api`, `qtss-seed`, `qtss-worker`) proje kökündeki `.env`
 | `QTSS_KLINE_SYMBOL` | (`qtss-worker`) Doluysa kline WebSocket dinleyicisi açılır |
 | `QTSS_KLINE_INTERVAL` | (`qtss-worker`) Mum aralığı (varsayılan `1m`) |
 | `QTSS_KLINE_SEGMENT` | (`qtss-worker`) `spot` (varsayılan) veya `futures` / `fapi` / `usdt_futures` |
+| `QTSS_WORKER_HTTP_BIND` | (`qtss-worker`) Doluysa `host:port` üzerinde `/live` ve `/ready` (kube probe); tanımsız = kapalı |
 | `QTSS_RATE_LIMIT_REPLENISH_MS` | Kova yenileme aralığı ms (varsayılan `20` → ~50 sürdürülebilir RPS / IP) |
 | `QTSS_RATE_LIMIT_BURST` | Jeton tavanı (varsayılan `120`) |
 | `QTSS_TRUSTED_PROXIES` | Güvenilen vekil IP/CIDR listesi; boş = vekil güveni yok; tanımsız = yalnızca loopback vekil |

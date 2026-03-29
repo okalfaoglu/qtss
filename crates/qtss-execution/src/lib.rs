@@ -23,7 +23,7 @@ pub use gateway::{ExecutionError, ExecutionGateway, FillEvent};
 pub use live::LiveGateway;
 pub use reconcile::{
     reconcile_binance_futures_open_orders, reconcile_binance_spot_open_orders,
-    ExchangeOrderVenueSnapshot, ReconcileReport,
+    venue_order_ids_submitted_not_on_open_list, ExchangeOrderVenueSnapshot, ReconcileReport,
 };
 
 pub use qtss_domain::execution::{ExecutionMode, VirtualLedgerParams};

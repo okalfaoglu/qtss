@@ -21,6 +21,7 @@ mod copy_trade_queue;
 mod binance_futures_reconcile;
 mod binance_spot_reconcile;
 mod strategy_runner;
+mod worker_probe_http;
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -209,6 +210,23 @@ async fn main() -> anyhow::Result<()> {
             "QTSS_KLINE_SYMBOLS / QTSS_KLINE_SYMBOL tanımsız — kline WebSocket kapalı. \
              Örnek: QTSS_KLINE_SYMBOLS=BTCUSDT,ETHUSDT veya QTSS_KLINE_SYMBOL=BTCUSDT"
         );
+    }
+
+    if let Ok(raw) = std::env::var("QTSS_WORKER_HTTP_BIND") {
+        let t = raw.trim();
+        if !t.is_empty() {
+            match t.parse::<std::net::SocketAddr>() {
+                Ok(addr) => {
+                    let probe_pool = pool_opt.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = worker_probe_http::serve(addr, probe_pool).await {
+                            warn!(%e, "worker probe HTTP görevi sonlandı");
+                        }
+                    });
+                }
+                Err(e) => warn!(%e, bind = %t, "QTSS_WORKER_HTTP_BIND geçersiz, probe kapalı"),
+            }
+        }
     }
 
     loop {

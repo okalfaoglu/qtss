@@ -13,7 +13,7 @@ pub struct MeResponse {
     pub sub: String,
     pub org_id: String,
     pub roles: Vec<String>,
-    /// Coarse capability strings (`qtss:read` | `qtss:ops` | `qtss:admin`); mirrors JWT after normalization.
+    /// Etkin yetenekler: JWT (rol / claim) + `user_permissions` birleşimi (`require_jwt`).
     pub permissions: Vec<String>,
     pub azp: String,
 }

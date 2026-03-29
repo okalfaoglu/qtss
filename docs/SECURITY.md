@@ -8,7 +8,7 @@
 - **Rate limit**: Uygulama içi `tower-governor` eşler IP; CDN / WAF / nginx ile ek sınır ve bağlantı sınırları önerilir.
 - **Ters vekil**: `QTSS_TRUSTED_PROXIES` yalnızca güvenilen vekil ağlarını listelemeli. Aksi halde `X-Forwarded-For` sahteciliği rate limit atlamasına yol açar.
 - **Metrikler**: `QTSS_METRICS_TOKEN` üretimde doldurulmalı; `/metrics` iç ağ veya Bearer ile korunmalı.
-- **Probe uçları**: `GET /live` ve `GET /ready` kimlik doğrulaması istemez (kube / LB için); yalnızca iç ağ veya Ingress kısıtlaması ile kullanın; `/ready` DB erişimini doğrular.
+- **Probe uçları**: `GET /live` ve `GET /ready` kimlik doğrulaması istemez (kube / LB için); yalnızca iç ağ veya Ingress kısıtlaması ile kullanın; `/ready` DB erişimini doğrular. Worker’da aynı yollar `QTSS_WORKER_HTTP_BIND` ile açılır (ayrı port).
 
 ## Kimlik bilgileri
 
@@ -30,8 +30,9 @@
 
 ## Bağımlılık ve tedarik
 
+- **sqlx**: Kök `Cargo.toml` içinde `default-features = false` ve yalnızca `postgres` (+ `runtime-tokio-rustls`, …) — MySQL/SQLite sürücüleri kapalı; aksi halde kilit dosyası `rsa` çeker ve **RUSTSEC-2023-0071** (Marvin / sqlx-mysql) `cargo audit`’te görünür. `Cargo.lock`, `Cargo.toml` ile uyumlu olmalı (`cargo generate-lockfile` veya `cargo build --workspace`).
 - Düzenli `cargo audit` / benzeri; imaj taraması (container). Yerelde **cargo-audit ≥ 0.22** kullanın: RustSec veritabanındaki `CVSS:4.0` vektörlerini 0.21.x okuyamaz (`unsupported CVSS version: 4.0`). Güncelleme: `cargo install cargo-audit --version 0.22.1 --locked` (veya daha yeni patch).
-- **CI:** `.github/workflows/rust-ci.yml` — push/PR’de `cargo check --workspace --all-targets`, `cargo audit` (sabitlenmiş `cargo-audit@0.22.1`), `web` için `npm ci` + `npm run build`.
+- **CI:** `.github/workflows/rust-ci.yml` — push/PR’de `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo audit` (sabitlenmiş `cargo-audit@0.22.1`), `web` için `npm ci` + `npm run build`.
 
 ## Worker — otomatik emir
 

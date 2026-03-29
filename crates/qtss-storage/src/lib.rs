@@ -19,6 +19,7 @@ pub mod notify_outbox;
 pub mod pool;
 pub mod paper;
 pub mod pnl;
+pub mod user_permissions;
 
 pub use ai_approval::{AiApprovalRepository, AiApprovalRequestRow};
 pub use audit_log::{insert_http_audit, list_recent as audit_list_recent, AuditHttpListRow, AuditHttpRow};
@@ -72,3 +73,4 @@ pub use pnl::{
     sum_today_daily_realized_pnl, PnlBucket, PnlRebuildStats, PnlRollupRepository, PnlRollupRow,
 };
 pub use pool::{create_pool, run_migrations};
+pub use user_permissions::UserPermissionRepository;

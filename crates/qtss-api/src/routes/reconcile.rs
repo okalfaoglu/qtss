@@ -8,7 +8,7 @@ use uuid::Uuid;
 use qtss_binance::{BinanceClient, BinanceClientConfig};
 use qtss_execution::{
     reconcile_binance_futures_open_orders, reconcile_binance_spot_open_orders,
-    ExchangeOrderVenueSnapshot, ReconcileReport,
+    venue_order_ids_submitted_not_on_open_list, ExchangeOrderVenueSnapshot, ReconcileReport,
 };
 
 use crate::oauth::AccessClaims;
@@ -98,7 +98,18 @@ async fn reconcile_binance_futures(
         })
         .collect();
 
-    let report =
+    let mut report =
         reconcile_binance_futures_open_orders(&remote, &local).map_err(|e| e.to_string())?;
+    let ids = venue_order_ids_submitted_not_on_open_list(&remote, &local).map_err(|e| e.to_string())?;
+    if !ids.is_empty() {
+        let n = st
+            .exchange_orders
+            .mark_submitted_reconciled_not_open_by_venue_ids(user_id, "binance", "futures", &ids)
+            .await
+            .map_err(|e| e.to_string())?;
+        if n > 0 {
+            report.status_updates_applied = Some(n);
+        }
+    }
     Ok(Json(report))
 }

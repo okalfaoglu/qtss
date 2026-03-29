@@ -51,6 +51,25 @@ pub fn normalize_claims(mut claims: AccessClaims) -> AccessClaims {
     claims
 }
 
+pub fn is_known_qtss_permission(p: &str) -> bool {
+    matches!(
+        p,
+        QTSS_PERM_READ | QTSS_PERM_OPS | QTSS_PERM_ADMIN
+    )
+}
+
+/// JWT’deki (rol/claim) izinlere `user_permissions` satırlarını ekler (bilinmeyen dizgiler yok sayılır).
+pub fn merge_jwt_with_db_permissions(mut claims: AccessClaims, db_perms: &[String]) -> AccessClaims {
+    let mut set: BTreeSet<String> = claims.permissions.iter().cloned().collect();
+    for p in db_perms {
+        if is_known_qtss_permission(p) {
+            set.insert(p.clone());
+        }
+    }
+    claims.permissions = set.into_iter().collect();
+    claims
+}
+
 fn allows_dashboard(claims: &AccessClaims) -> bool {
     has_permission(claims, QTSS_PERM_READ)
         || has_permission(claims, QTSS_PERM_OPS)
@@ -106,6 +125,7 @@ pub async fn require_ops_roles(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::oauth::AccessClaims;
 
     #[test]
     fn permissions_admin_includes_all() {
@@ -130,5 +150,27 @@ mod tests {
         let roles = vec!["viewer".to_string()];
         let p = permissions_for_roles(&roles);
         assert_eq!(p, vec![QTSS_PERM_READ.to_string()]);
+    }
+
+    #[test]
+    fn merge_db_adds_ops_to_viewer() {
+        let claims = normalize_claims(AccessClaims {
+            sub: "00000000-0000-0000-0000-000000000001".into(),
+            org_id: "00000000-0000-0000-0000-000000000002".into(),
+            roles: vec!["viewer".into()],
+            permissions: vec![],
+            azp: "x".into(),
+            exp: 0,
+            iat: 0,
+            aud: "a".into(),
+            iss: "i".into(),
+        });
+        let merged = merge_jwt_with_db_permissions(
+            claims,
+            &[QTSS_PERM_OPS.to_string(), "unknown:bad".into()],
+        );
+        assert!(merged.permissions.contains(&QTSS_PERM_READ.to_string()));
+        assert!(merged.permissions.contains(&QTSS_PERM_OPS.to_string()));
+        assert_eq!(merged.permissions.len(), 2);
     }
 }

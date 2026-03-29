@@ -18,10 +18,24 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-check
+          shared-key: workspace-rust
 
       - name: cargo check --workspace
         run: cargo check --workspace --all-targets
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-rust
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
 
   audit:
     runs-on: ubuntu-latest

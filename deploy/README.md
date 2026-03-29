@@ -95,3 +95,12 @@ readinessProbe:
     path: /ready
     port: 8080
 ```
+
+### 7. `qtss-worker` sağlık uçları
+
+`QTSS_WORKER_HTTP_BIND` doluysa (ör. `127.0.0.1:9090`) ayrı bir HTTP dinleyicisi açılır:
+
+- **`GET /live`** — liveness (`qtss-worker` süreç cevabı).
+- **`GET /ready`** — `DATABASE_URL` varsa PostgreSQL `SELECT 1` (başarısızsa 503); yoksa 200 ve `database: none`.
+
+API ile aynı pod’da değilseniz probe `port` değerini bu bind ile eşleştirin.

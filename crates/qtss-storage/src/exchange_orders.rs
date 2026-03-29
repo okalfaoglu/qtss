@@ -90,6 +90,33 @@ impl ExchangeOrderRepository {
         Ok(res.rows_affected())
     }
 
+    /// Mutabakat: `submitted` + `venue_order_id` borsanın açık listesinde yok → `reconciled_not_open`.
+    pub async fn mark_submitted_reconciled_not_open_by_venue_ids(
+        &self,
+        user_id: Uuid,
+        exchange: &str,
+        segment: &str,
+        venue_order_ids: &[i64],
+    ) -> Result<u64, StorageError> {
+        if venue_order_ids.is_empty() {
+            return Ok(0);
+        }
+        let res = sqlx::query(
+            r#"UPDATE exchange_orders
+               SET status = 'reconciled_not_open', updated_at = now()
+               WHERE user_id = $1 AND exchange = $2 AND segment = $3
+                 AND status = 'submitted'
+                 AND venue_order_id = ANY($4)"#,
+        )
+        .bind(user_id)
+        .bind(exchange)
+        .bind(segment)
+        .bind(venue_order_ids)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     pub async fn list_for_user(
         &self,
         user_id: Uuid,

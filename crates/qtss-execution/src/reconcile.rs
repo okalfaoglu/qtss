@@ -28,6 +28,9 @@ pub struct ReconcileReport {
     /// Binance’ta açık görünen ama bizim `venue_order_id` setimizde olmayan emirler (manuel emir, başka uygulama vb.).
     pub remote_open_unknown_locally: u64,
     pub notes: String,
+    /// `exchange_orders` satırı `reconciled_not_open` yapıldıysa (API/worker).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_updates_applied: Option<u64>,
 }
 
 /// Spot ve USDT-M `openOrders` dizi yanıtı (`orderId`).
@@ -88,6 +91,7 @@ pub fn reconcile_binance_spot_open_orders(
         local_submitted_not_open_on_venue: local_submitted_not_open,
         remote_open_unknown_locally: remote_unknown,
         notes,
+        status_updates_applied: None,
     })
 }
 
@@ -132,7 +136,24 @@ pub fn reconcile_binance_futures_open_orders(
         local_submitted_not_open_on_venue: local_submitted_not_open,
         remote_open_unknown_locally: remote_unknown,
         notes,
+        status_updates_applied: None,
     })
+}
+
+/// `submitted` + `venue_order_id` borsanın açık listesinde yok — DB `reconciled_not_open` adayı.
+pub fn venue_order_ids_submitted_not_on_open_list(
+    remote_open: &Value,
+    local: &[ExchangeOrderVenueSnapshot],
+) -> Result<Vec<i64>, ExecutionError> {
+    let remote_ids = parse_binance_open_order_ids(remote_open)?;
+    let remote_set: HashSet<i64> = remote_ids.iter().copied().collect();
+    let mut out = Vec::new();
+    for s in local {
+        if s.status == "submitted" && !remote_set.contains(&s.venue_order_id) {
+            out.push(s.venue_order_id);
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -165,5 +186,22 @@ mod tests {
         let r = reconcile_binance_futures_open_orders(&json!([]), &[]).unwrap();
         assert_eq!(r.venue, "binance_futures");
         assert_eq!(r.mismatches, 0);
+    }
+
+    #[test]
+    fn ids_submitted_not_open_collected() {
+        let remote = json!([{"orderId": 100}]);
+        let local = vec![
+            ExchangeOrderVenueSnapshot {
+                venue_order_id: 200,
+                status: "submitted".into(),
+            },
+            ExchangeOrderVenueSnapshot {
+                venue_order_id: 100,
+                status: "submitted".into(),
+            },
+        ];
+        let ids = venue_order_ids_submitted_not_on_open_list(&remote, &local).unwrap();
+        assert_eq!(ids, vec![200]);
     }
 }

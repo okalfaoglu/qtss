@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use qtss_binance::{BinanceClient, BinanceClientConfig};
 use qtss_execution::{
-    reconcile_binance_futures_open_orders, ExchangeOrderVenueSnapshot, ReconcileReport,
+    reconcile_binance_futures_open_orders, venue_order_ids_submitted_not_on_open_list,
+    ExchangeOrderVenueSnapshot, ReconcileReport,
 };
 use qtss_storage::{ExchangeAccountRepository, ExchangeOrderRepository, ExchangeOrderRow};
 use sqlx::PgPool;
@@ -25,6 +26,19 @@ fn tick_secs() -> u64 {
         .and_then(|s| s.parse().ok())
         .unwrap_or(3600)
         .max(120)
+}
+
+fn patch_exchange_order_status_enabled() -> bool {
+    std::env::var("QTSS_RECONCILE_BINANCE_FUTURES_PATCH_STATUS")
+        .ok()
+        .map(|s| {
+            let t = s.trim();
+            !(t == "0"
+                || t.eq_ignore_ascii_case("false")
+                || t.eq_ignore_ascii_case("no")
+                || t.eq_ignore_ascii_case("off"))
+        })
+        .unwrap_or(true)
 }
 
 fn local_snapshots_futures(rows: Vec<ExchangeOrderRow>) -> Vec<ExchangeOrderVenueSnapshot> {
@@ -120,13 +134,49 @@ pub async fn binance_futures_reconcile_loop(pool: PgPool) {
                 }
             };
             let local = local_snapshots_futures(rows);
-            let report = match reconcile_binance_futures_open_orders(&remote, &local) {
+            let mut report = match reconcile_binance_futures_open_orders(&remote, &local) {
                 Ok(r) => r,
                 Err(e) => {
                     warn!(%e, %user_id, "binance_futures_reconcile: reconcile_binance_futures_open_orders");
                     continue;
                 }
             };
+            if patch_exchange_order_status_enabled() {
+                match venue_order_ids_submitted_not_on_open_list(&remote, &local) {
+                    Ok(ids) if !ids.is_empty() => {
+                        match orders
+                            .mark_submitted_reconciled_not_open_by_venue_ids(
+                                user_id,
+                                "binance",
+                                "futures",
+                                &ids,
+                            )
+                            .await
+                        {
+                            Ok(n) if n > 0 => {
+                                report.status_updates_applied = Some(n);
+                                info!(
+                                    %user_id,
+                                    updated = n,
+                                    "binance_futures_reconcile: exchange_orders reconciled_not_open"
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(e) => warn!(
+                                %e,
+                                %user_id,
+                                "binance_futures_reconcile: mark_submitted_reconciled_not_open_by_venue_ids"
+                            ),
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => warn!(
+                        %e,
+                        %user_id,
+                        "binance_futures_reconcile: venue_order_ids_submitted_not_on_open_list"
+                    ),
+                }
+            }
             log_report(user_id, &report);
         }
     }
