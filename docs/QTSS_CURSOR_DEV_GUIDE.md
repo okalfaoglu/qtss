@@ -88,6 +88,7 @@ Tüm `tokio::spawn` çağrılarının başladığı yer. Yeni bir loop eklendiğ
 ```rust
 // Mevcut spawn sırası (`main.rs`, DATABASE_URL varken). Gerçek kodda her görev `pool.clone()` ile ayrı değişkene alınır (`pnl_pool`, `engine_pool`, …); sıra aşağıdaki ile aynıdır.
 tokio::spawn(pnl_rollup_loop(pool.clone()));
+tokio::spawn(binance_spot_reconcile::binance_spot_reconcile_loop(pool.clone())); // QTSS_RECONCILE_BINANCE_SPOT_ENABLED
 tokio::spawn(engine_analysis::engine_analysis_loop(pool.clone())); // içinde confluence::compute_and_persist
 tokio::spawn(nansen_engine::nansen_token_screener_loop(pool.clone()));
 tokio::spawn(nansen_engine::nansen_netflows_loop(pool.clone()));
@@ -465,6 +466,22 @@ Mevcut kodda uygulanan kurallar — yeni dosyalarda da uygulanmalı:
 | 10 | kill_switch.rs | Tamam (env ile kapalı) |
 
 **Sonraki işler:** yeni özellik = yeni migration numarası (§6); üretimde `DATABASE_URL` + Nansen/plan limitleri; strateji canlı gateway için ayrı onay ve risk kontrolleri.
+
+### 9.1 Sonraki faz — `docs/PROJECT.md` §10
+
+Bu rehberdeki ADIM 1–10 bittikten sonraki **ürün** işleri `docs/PROJECT.md` **§10 Yol haritası** üzerinden takip edilir. Özet sıra (oradaki numaralarla):
+
+1. Kimlik / RBAC ince taneli izinler ve denetim derinliği — **kısmen:** JWT `permissions` (`qtss:read` \| `qtss:ops` \| `qtss:admin`), yeni tokenlarda claim; eski tokenlarda `require_jwt` sonrası `roles` ile doldurulur; `GET /api/v1/me` `permissions` döner; `require_admin` / `require_ops_roles` / `require_dashboard_roles` bu izinlere göre karar verir. Kullanıcı başına DB izinleri, daha ince stringler ve denetim derinliği sonraki iterasyon.  
+2. Binance hesap bazlı gerçek ücret / trade fee API  
+3. Emir + mutabakat (`reconcile`) sıklığı ve worker entegrasyonu — **kısmen:** periyodik **Binance spot** mutabakat döngüsü `binance_spot_reconcile.rs` (`QTSS_RECONCILE_BINANCE_SPOT_ENABLED`, `QTSS_RECONCILE_BINANCE_SPOT_TICK_SECS`); API `POST /api/v1/reconcile/binance` ile aynı `reconcile_binance_spot_open_orders`. Futures / otomatik durum güncelleme sonraki iterasyon.  
+4. Copy trade — lider dolum dinleme + takipçi yürütme kuyruğu  
+5. Analiz motoru ayrı crate  
+6. AI onay kuyruğu  
+7. Bildirim kuyruğu (`qtss-notify` ötesi)  
+8. Web dashboard genişlemesi  
+9. HA / observability  
+
+**Önerilen bir sonraki teknik adım (küçük kapsam):** depoda **CI** ile `cargo check --workspace` (ve zaman içinde `cargo audit`) — `docs/SECURITY.md` §Bağımlılık. Büyük özellik seçimi: §10 satır 4 (copy trade kuyruk) veya satır 3 (reconcile) ürün önceliğine göre.
 
 **§4 ile bu tablo:** Aynı ADIM numaraları; §4’te her adımın **uygulandı** özeti ve dosya/env referansları var.
 

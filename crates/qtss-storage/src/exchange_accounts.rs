@@ -42,4 +42,20 @@ impl ExchangeAccountRepository {
             api_secret,
         }))
     }
+
+    /// `segment`: `spot`, `futures` vb. — Binance hesabı olan tüm `user_id` (worker periyodik reconcile).
+    pub async fn list_user_ids_binance_segment(
+        &self,
+        segment: &str,
+    ) -> Result<Vec<Uuid>, StorageError> {
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            r#"SELECT DISTINCT user_id FROM exchange_accounts
+               WHERE lower(exchange) = 'binance'
+                 AND lower(segment) = lower($1)"#,
+        )
+        .bind(segment)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(u,)| u).collect())
+    }
 }

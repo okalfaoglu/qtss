@@ -4,6 +4,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 
 use crate::oauth::error::UnauthorizedBearer;
+use crate::oauth::rbac::normalize_claims;
 use crate::state::SharedState;
 
 pub async fn require_jwt(
@@ -25,6 +26,7 @@ pub async fn require_jwt(
         return Err(UnauthorizedBearer);
     }
     let claims = jwt.verify(token).map_err(|_| UnauthorizedBearer)?;
+    let claims = normalize_claims(claims);
     // `Extension<AccessClaims>` çıkarıcısı `extensions` içinde doğrudan `AccessClaims` arar.
     req.extensions_mut().insert(claims);
     Ok(next.run(req).await)

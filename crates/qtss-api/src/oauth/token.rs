@@ -13,6 +13,7 @@ use crate::oauth::error::{
     invalid_client, invalid_grant, invalid_request, server_error, unsupported_grant_type, OAuthErr,
 };
 use crate::oauth::jwt::JwtIssuer;
+use crate::oauth::rbac::permissions_for_roles;
 use crate::state::SharedState;
 
 #[derive(Debug, Deserialize)]
@@ -312,8 +313,9 @@ async fn finish_token_issue(
     client_id: &str,
     scope: Option<String>,
 ) -> Result<Json<TokenResponse>, OAuthErr> {
+    let permissions = permissions_for_roles(&roles);
     let access = jwt
-        .issue_access_token(user_id, org_id, roles, client_id)
+        .issue_access_token(user_id, org_id, roles, permissions, client_id)
         .map_err(|e| server_error(e.to_string()))?;
 
     let refresh_ttl = st.refresh_ttl_secs;

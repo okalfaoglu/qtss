@@ -16,6 +16,7 @@ mod onchain_signal_scorer;
 mod kill_switch;
 mod position_manager;
 mod copy_trade_follower;
+mod binance_spot_reconcile;
 mod strategy_runner;
 
 use std::str::FromStr;
@@ -88,6 +89,10 @@ async fn main() -> anyhow::Result<()> {
             )?;
             let pnl_pool = pool.clone();
             tokio::spawn(pnl_rollup_loop(pnl_pool));
+            let reconcile_pool = pool.clone();
+            tokio::spawn(binance_spot_reconcile::binance_spot_reconcile_loop(
+                reconcile_pool,
+            ));
             let engine_pool = pool.clone();
             tokio::spawn(engine_analysis::engine_analysis_loop(engine_pool));
             let nansen_pool = pool.clone();

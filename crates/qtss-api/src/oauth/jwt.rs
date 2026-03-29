@@ -11,6 +11,9 @@ pub struct AccessClaims {
     pub sub: String,
     pub org_id: String,
     pub roles: Vec<String>,
+    /// Coarse capability strings derived from roles at issue time; empty in legacy tokens is backfilled in `require_jwt`.
+    #[serde(default)]
+    pub permissions: Vec<String>,
     /// Yetkili OAuth istemcisi (client_id).
     pub azp: String,
     pub exp: i64,
@@ -52,6 +55,7 @@ impl JwtIssuer {
         user_id: Uuid,
         org_id: Uuid,
         roles: Vec<String>,
+        permissions: Vec<String>,
         client_id: &str,
     ) -> Result<String, jsonwebtoken::errors::Error> {
         let now = Utc::now().timestamp();
@@ -60,6 +64,7 @@ impl JwtIssuer {
             sub: user_id.to_string(),
             org_id: org_id.to_string(),
             roles,
+            permissions,
             azp: client_id.to_string(),
             exp,
             iat: now,

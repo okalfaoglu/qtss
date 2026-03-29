@@ -1,0 +1,26 @@
+# Minimal CI: workspace derlemesi (docs/SECURITY.md — cargo audit hedefi ayrıca yerelde/ileride eklenebilir).
+name: Rust CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo check (workspace)
+        run: cargo check --workspace

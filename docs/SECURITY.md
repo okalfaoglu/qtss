@@ -30,6 +30,7 @@
 ## Bağımlılık ve tedarik
 
 - Düzenli `cargo audit` / benzeri; imaj taraması (container).
+- **CI:** `.github/workflows/rust-ci.yml` — push/PR’de `cargo check --workspace`. İleride aynı iş akışına veya ayrı job’a `cargo audit` eklenebilir.
 
 ## Worker — otomatik emir
 
