@@ -4,8 +4,10 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
-use qtss_storage::{PaperFillRow, PaperLedgerRepository};
+use qtss_notify::{resolve_bilingual, Notification, NotificationChannel, NotificationDispatcher};
+use qtss_storage::{
+    resolve_notify_default_locale, resolve_worker_tick_secs, PaperFillRow, PaperLedgerRepository,
+};
 use sqlx::PgPool;
 use tracing::{info, warn};
 
@@ -25,17 +27,23 @@ fn position_notify_channels_from_env() -> Vec<NotificationChannel> {
         .collect()
 }
 
-fn position_notify_tick_secs() -> u64 {
-    std::env::var("QTSS_NOTIFY_POSITION_TICK_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(30)
-        .max(10)
-}
-
-fn fill_line(f: &PaperFillRow) -> String {
+fn fill_line_tr(f: &PaperFillRow) -> String {
     format!(
         "· {} {} {} | {} qty {} @ {} (ücret {}) | quote {}",
+        f.exchange,
+        f.segment,
+        f.symbol,
+        f.side.to_uppercase(),
+        f.quantity,
+        f.avg_price,
+        f.fee,
+        f.quote_balance_after
+    )
+}
+
+fn fill_line_en(f: &PaperFillRow) -> String {
+    format!(
+        "· {} {} {} | {} qty {} @ {} (fee {}) | quote {}",
         f.exchange,
         f.segment,
         f.symbol,
@@ -57,14 +65,24 @@ pub async fn paper_position_notify_loop(pool: PgPool) {
         warn!("Paper pozisyon bildirimi açık fakat kanal listesi boş (QTSS_NOTIFY_PAPER_POSITION_CHANNELS / QTSS_NOTIFY_POSITION_CHANNELS)");
         return;
     }
-    let tick = Duration::from_secs(position_notify_tick_secs());
+    let pool_tick = pool.clone();
+    let pool_locale = pool.clone();
     let repo = PaperLedgerRepository::new(pool);
     let mut cursor: Option<DateTime<Utc>> = None;
 
-    info!(poll_secs = tick.as_secs(), "paper dolum bildirim döngüsü");
+    info!("paper dolum bildirim döngüsü (poll from system_config / env)");
 
     loop {
-        tokio::time::sleep(tick).await;
+        let poll_secs = resolve_worker_tick_secs(
+            &pool_tick,
+            "worker",
+            "paper_position_notify_tick_secs",
+            "QTSS_NOTIFY_POSITION_TICK_SECS",
+            30,
+            10,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(poll_secs)).await;
         if cursor.is_none() {
             cursor = Some(Utc::now());
             continue;
@@ -87,16 +105,33 @@ pub async fn paper_position_notify_loop(pool: PgPool) {
             .unwrap_or(after);
         cursor = Some(last_t);
 
-        let title = if fills.len() == 1 {
+        let loc = resolve_notify_default_locale(&pool_locale).await;
+        let title_tr = if fills.len() == 1 {
             let f = &fills[0];
             format!(
                 "Dry dolum — {} {} {}",
-                f.exchange, f.symbol, f.side.to_uppercase()
+                f.exchange,
+                f.symbol,
+                f.side.to_uppercase()
             )
         } else {
             format!("Dry dolum — {} işlem", fills.len())
         };
-        let body = fills.iter().map(|f| fill_line(f)).collect::<Vec<_>>().join("\n");
+        let title_en = if fills.len() == 1 {
+            let f = &fills[0];
+            format!(
+                "Dry fill — {} {} {}",
+                f.exchange,
+                f.symbol,
+                f.side.to_uppercase()
+            )
+        } else {
+            format!("Dry fill — {} trades", fills.len())
+        };
+        let title = resolve_bilingual(&loc, &title_en, &title_tr);
+        let body_tr = fills.iter().map(fill_line_tr).collect::<Vec<_>>().join("\n");
+        let body_en = fills.iter().map(fill_line_en).collect::<Vec<_>>().join("\n");
+        let body = resolve_bilingual(&loc, &body_en, &body_tr);
         let n = Notification::new(title, body);
         let d = NotificationDispatcher::from_env();
         for r in d.send_all(&chans, &n).await {

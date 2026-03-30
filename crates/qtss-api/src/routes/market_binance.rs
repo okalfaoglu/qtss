@@ -19,6 +19,7 @@ use qtss_binance::{
 use qtss_storage::{list_recent_bars, upsert_market_bar, MarketBarUpsert};
 use rust_decimal::Decimal;
 
+use crate::error::ApiError;
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
 
@@ -102,9 +103,9 @@ async fn binance_klines(
     Extension(_claims): Extension<AccessClaims>,
     State(_st): State<SharedState>,
     Query(q): Query<KlinesQuery>,
-) -> Result<Json<Vec<KlineBar>>, String> {
+) -> Result<Json<Vec<KlineBar>>, ApiError> {
     let cfg = BinanceClientConfig::public_mainnet();
-    let client = BinanceClient::new(cfg).map_err(|e| e.to_string())?;
+    let client = BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?;
     let seg = q.segment.as_deref().unwrap_or("spot");
     let raw = match seg {
         "futures" | "usdt_futures" | "fapi" => {
@@ -117,7 +118,7 @@ async fn binance_klines(
                     q.limit,
                 )
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(|e| ApiError::internal(e.to_string()))?
         }
         _ => {
             client
@@ -129,17 +130,17 @@ async fn binance_klines(
                     q.limit,
                 )
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(|e| ApiError::internal(e.to_string()))?
         }
     };
-    let bars = parse_klines_json(&raw).map_err(|e| e.to_string())?;
+    let bars = parse_klines_json(&raw).map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(bars))
 }
 
 async fn binance_commission_defaults(
     Extension(_claims): Extension<AccessClaims>,
     Query(q): Query<CommissionQuery>,
-) -> Result<Json<serde_json::Value>, String> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let seg = q.segment.as_deref().unwrap_or("spot");
     let sym_upper = q
         .symbol
@@ -153,16 +154,16 @@ async fn binance_commission_defaults(
 
     if let Some(ref sym) = sym_upper {
         let cfg = BinanceClientConfig::public_mainnet();
-        let client = BinanceClient::new(cfg).map_err(|e| e.to_string())?;
+        let client = BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?;
         let raw = match seg {
             "futures" | "usdt_futures" | "fapi" => client
                 .fapi_exchange_info(Some(sym))
                 .await
-                .map_err(|e| e.to_string())?,
+                .map_err(|e| ApiError::internal(e.to_string()))?,
             _ => client
                 .spot_exchange_info(Some(sym))
                 .await
-                .map_err(|e| e.to_string())?,
+                .map_err(|e| ApiError::internal(e.to_string()))?,
         };
         from_info = match seg {
             "futures" | "usdt_futures" | "fapi" => {
@@ -187,11 +188,11 @@ async fn binance_commission_defaults(
     })))
 }
 
-fn commission_account_segment_db(seg: &str) -> Result<&'static str, String> {
+fn commission_account_segment_db(seg: &str) -> Result<&'static str, ApiError> {
     match seg {
         "futures" | "usdt_futures" | "fapi" => Ok("futures"),
         "spot" => Ok("spot"),
-        _ => Err("segment: spot veya futures".into()),
+        _ => Err(ApiError::bad_request("segment: spot veya futures")),
     }
 }
 
@@ -200,11 +201,12 @@ async fn binance_commission_account(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Query(q): Query<CommissionAccountQuery>,
-) -> Result<Json<serde_json::Value>, String> {
-    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| "geçersiz token sub".to_string())?;
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id =
+        Uuid::parse_str(&claims.sub).map_err(|_| ApiError::bad_request("geçersiz token sub"))?;
     let sym = q.symbol.trim().to_uppercase();
     if sym.is_empty() {
-        return Err("symbol gerekli".into());
+        return Err(ApiError::bad_request("symbol gerekli"));
     }
     let seg = q.segment.as_deref().unwrap_or("spot");
     let seg_db = commission_account_segment_db(seg)?;
@@ -212,32 +214,35 @@ async fn binance_commission_account(
     let creds = st
         .exchange_accounts
         .binance_for_user(user_id, seg_db)
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
         .ok_or_else(|| {
-            format!(
+            ApiError::bad_request(format!(
                 "Binance {seg_db} API anahtarı yok — exchange_accounts veya yanlış segment (spot vs futures)"
-            )
+            ))
         })?;
 
     let cfg = BinanceClientConfig::mainnet_with_keys(creds.api_key, creds.api_secret);
-    let client = BinanceClient::new(cfg).map_err(|e| e.to_string())?;
+    let client = BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?;
 
     let (maker, taker, source) = if seg_db == "futures" {
         let raw = client
             .fapi_commission_rate(&sym)
             .await
-            .map_err(|e| e.to_string())?;
-        let (m, t) = commission_rate_from_fapi_response(&raw)
-            .ok_or_else(|| format!("fapi commissionRate ayrıştırılamadı: {raw}"))?;
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let (m, t) = commission_rate_from_fapi_response(&raw).ok_or_else(|| {
+            ApiError::internal(format!("fapi commissionRate ayrıştırılamadı: {raw}"))
+        })?;
         (m, t, "fapi_v1_commissionRate")
     } else {
         let raw = client
             .sapi_asset_trade_fee(Some(&sym))
             .await
-            .map_err(|e| e.to_string())?;
-        let (m, t) = trade_fee_from_sapi_response(&raw, &sym)
-            .ok_or_else(|| format!("sapi asset/tradeFee yanıtında sembol yok veya format: {raw}"))?;
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let (m, t) = trade_fee_from_sapi_response(&raw, &sym).ok_or_else(|| {
+            ApiError::internal(format!(
+                "sapi asset/tradeFee yanıtında sembol yok veya format: {raw}"
+            ))
+        })?;
         (m, t, "sapi_v1_asset_tradeFee")
     };
 
@@ -255,29 +260,31 @@ async fn binance_futures_leverage(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Json(body): Json<FuturesLeverageBody>,
-) -> Result<Json<serde_json::Value>, String> {
-    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| "geçersiz token sub".to_string())?;
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id =
+        Uuid::parse_str(&claims.sub).map_err(|_| ApiError::bad_request("geçersiz token sub"))?;
     let sym = body.symbol.trim().to_uppercase();
     if sym.is_empty() {
-        return Err("symbol gerekli".into());
+        return Err(ApiError::bad_request("symbol gerekli"));
     }
     let leverage = body.leverage.clamp(1, 125);
 
     let creds = st
         .exchange_accounts
         .binance_for_user(user_id, "futures")
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
         .ok_or_else(|| {
-            "Binance futures API anahtarı yok — exchange_accounts (segment futures)".to_string()
+            ApiError::bad_request(
+                "Binance futures API anahtarı yok — exchange_accounts (segment futures)",
+            )
         })?;
 
     let cfg = BinanceClientConfig::mainnet_with_keys(creds.api_key, creds.api_secret);
-    let client = BinanceClient::new(cfg).map_err(|e| e.to_string())?;
+    let client = BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?;
     let raw = client
         .fapi_change_leverage(&sym, leverage)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(raw))
 }
 
@@ -285,14 +292,14 @@ async fn backfill_market_bars_from_rest(
     Extension(_claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Json(body): Json<BackfillBody>,
-) -> Result<Json<serde_json::Value>, String> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let sym = body.symbol.trim().to_uppercase();
     if sym.is_empty() {
-        return Err("symbol gerekli".into());
+        return Err(ApiError::bad_request("symbol gerekli"));
     }
     let interval = body.interval.trim().to_string();
     if interval.is_empty() {
-        return Err("interval gerekli".into());
+        return Err(ApiError::bad_request("interval gerekli"));
     }
     let seg = body.segment.as_deref().unwrap_or("spot");
     let seg_db = match seg {
@@ -303,7 +310,7 @@ async fn backfill_market_bars_from_rest(
     const PAGE: u32 = 1000;
 
     let cfg = BinanceClientConfig::public_mainnet();
-    let client = BinanceClient::new(cfg).map_err(|e| e.to_string())?;
+    let client = BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut upserted = 0_i64;
     let mut end_time: Option<u64> = None;
@@ -313,17 +320,17 @@ async fn backfill_market_bars_from_rest(
         pages += 1;
         let need = (target - upserted) as u32;
         let batch_lim = need.min(PAGE);
-        let raw = match seg {
+            let raw = match seg {
             "futures" | "usdt_futures" | "fapi" => client
                 .fapi_klines(&sym, &interval, None, end_time, Some(batch_lim))
                 .await
-                .map_err(|e| e.to_string())?,
+                .map_err(|e| ApiError::internal(e.to_string()))?,
             _ => client
                 .spot_klines(&sym, &interval, None, end_time, Some(batch_lim))
                 .await
-                .map_err(|e| e.to_string())?,
+                .map_err(|e| ApiError::internal(e.to_string()))?,
         };
-        let klines = parse_klines_json(&raw).map_err(|e| e.to_string())?;
+        let klines = parse_klines_json(&raw).map_err(|e| ApiError::internal(e.to_string()))?;
         if klines.is_empty() {
             break;
         }
@@ -332,12 +339,13 @@ async fn backfill_market_bars_from_rest(
             let open_time = Utc
                 .timestamp_millis_opt(b.open_time as i64)
                 .single()
-                .ok_or_else(|| format!("open_time geçersiz: {}", b.open_time))?;
+                .ok_or_else(|| ApiError::bad_request(format!("open_time geçersiz: {}", b.open_time)))?;
             let quote_volume = if b.quote_asset_volume.trim().is_empty() {
                 None
             } else {
                 Some(
-                    Decimal::from_str(b.quote_asset_volume.trim()).map_err(|e| e.to_string())?,
+                    Decimal::from_str(b.quote_asset_volume.trim())
+                        .map_err(|e| ApiError::bad_request(e.to_string()))?,
                 )
             };
             let row = MarketBarUpsert {
@@ -346,19 +354,17 @@ async fn backfill_market_bars_from_rest(
                 symbol: sym.clone(),
                 interval: interval.clone(),
                 open_time,
-                open: Decimal::from_str(b.open.trim()).map_err(|e| e.to_string())?,
-                high: Decimal::from_str(b.high.trim()).map_err(|e| e.to_string())?,
-                low: Decimal::from_str(b.low.trim()).map_err(|e| e.to_string())?,
-                close: Decimal::from_str(b.close.trim()).map_err(|e| e.to_string())?,
-                volume: Decimal::from_str(b.volume.trim()).map_err(|e| e.to_string())?,
+                open: Decimal::from_str(b.open.trim()).map_err(|e| ApiError::bad_request(e.to_string()))?,
+                high: Decimal::from_str(b.high.trim()).map_err(|e| ApiError::bad_request(e.to_string()))?,
+                low: Decimal::from_str(b.low.trim()).map_err(|e| ApiError::bad_request(e.to_string()))?,
+                close: Decimal::from_str(b.close.trim()).map_err(|e| ApiError::bad_request(e.to_string()))?,
+                volume: Decimal::from_str(b.volume.trim()).map_err(|e| ApiError::bad_request(e.to_string()))?,
                 quote_volume,
                 trade_count: Some(b.number_of_trades as i64),
                 instrument_id: None,
                 bar_interval_id: None,
             };
-            upsert_market_bar(&st.pool, &row)
-                .await
-                .map_err(|e| e.to_string())?;
+            upsert_market_bar(&st.pool, &row).await?;
             upserted += 1;
             if upserted >= target {
                 break;
@@ -384,7 +390,7 @@ async fn market_bars_recent(
     Extension(_claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Query(q): Query<RecentBarsQuery>,
-) -> Result<Json<Vec<qtss_storage::MarketBarRow>>, String> {
+) -> Result<Json<Vec<qtss_storage::MarketBarRow>>, ApiError> {
     let limit = q.limit.unwrap_or(500).clamp(1, 50_000);
     let bars = list_recent_bars(
         &st.pool,
@@ -394,8 +400,7 @@ async fn market_bars_recent(
         q.interval.trim(),
         limit,
     )
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
     Ok(Json(bars))
 }
 

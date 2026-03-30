@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::error::ApiError;
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
 
@@ -45,7 +46,7 @@ pub struct EnqueueOutboxBody {
 async fn notify_test(
     Extension(_claims): Extension<AccessClaims>,
     Json(body): Json<NotifyTestBody>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let ch = body
         .channel
         .as_deref()
@@ -61,30 +62,25 @@ async fn notify_test(
             "status": "sent",
             "receipt": rec,
         }))),
-        Err(NotifyError::ChannelNotConfigured(msg)) => Err((
-            StatusCode::BAD_REQUEST,
-            format!("kanal yapılandırılmadı: {msg}"),
-        )),
-        Err(e) => Err((StatusCode::BAD_GATEWAY, e.to_string())),
+        Err(NotifyError::ChannelNotConfigured(msg)) => Err(ApiError::bad_request(format!(
+            "kanal yapılandırılmadı: {msg}"
+        ))),
+        Err(e) => Err(ApiError::new(StatusCode::BAD_GATEWAY, e.to_string())),
     }
 }
 
-fn parse_org(claims: &AccessClaims) -> Result<Uuid, String> {
-    Uuid::parse_str(claims.org_id.trim()).map_err(|_| "geçersiz token org_id".to_string())
+fn parse_org(claims: &AccessClaims) -> Result<Uuid, ApiError> {
+    Uuid::parse_str(claims.org_id.trim()).map_err(|_| ApiError::bad_request("geçersiz token org_id"))
 }
 
 async fn list_notify_outbox(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Query(q): Query<ListOutboxQuery>,
-) -> Result<Json<Vec<NotifyOutboxRow>>, String> {
+) -> Result<Json<Vec<NotifyOutboxRow>>, ApiError> {
     let org_id = parse_org(&claims)?;
     let limit = q.limit.unwrap_or(50);
-    let rows = st
-        .notify_outbox
-        .list_recent_for_org(org_id, limit)
-        .await
-        .map_err(|e| e.to_string())?;
+    let rows = st.notify_outbox.list_recent_for_org(org_id, limit).await?;
     Ok(Json(rows))
 }
 
@@ -92,12 +88,12 @@ async fn enqueue_notify_outbox(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Json(body): Json<EnqueueOutboxBody>,
-) -> Result<Json<NotifyOutboxRow>, String> {
+) -> Result<Json<NotifyOutboxRow>, ApiError> {
     let org_id = parse_org(&claims)?;
     let title = body.title.trim().to_string();
     let body_text = body.body.trim().to_string();
     if title.is_empty() || body_text.is_empty() {
-        return Err("title ve body dolu olmalı".into());
+        return Err(ApiError::bad_request("title ve body dolu olmalı"));
     }
     let mut channels = body.channels.unwrap_or_default();
     channels.retain(|s| !s.trim().is_empty());
@@ -107,7 +103,6 @@ async fn enqueue_notify_outbox(
     let row = st
         .notify_outbox
         .enqueue(Some(org_id), &title, &body_text, channels)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     Ok(Json(row))
 }

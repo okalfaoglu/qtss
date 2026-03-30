@@ -15,6 +15,7 @@ use qtss_reconcile::{
     BinanceOpenOrdersPatchConfig,
 };
 
+use crate::error::ApiError;
 use crate::metrics::{record_reconcile_futures, record_reconcile_spot};
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
@@ -28,7 +29,7 @@ pub fn reconcile_router() -> Router<SharedState> {
 async fn reconcile_binance_spot(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
-) -> Result<Json<ReconcileReport>, String> {
+) -> Result<Json<ReconcileReport>, ApiError> {
     match reconcile_binance_spot_inner(claims, st).await {
         Ok(report) => {
             let rows = report.status_updates_applied.unwrap_or(0);
@@ -45,28 +46,26 @@ async fn reconcile_binance_spot(
 async fn reconcile_binance_spot_inner(
     claims: AccessClaims,
     st: SharedState,
-) -> Result<ReconcileReport, String> {
-    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| "geçersiz token sub".to_string())?;
+) -> Result<ReconcileReport, ApiError> {
+    let user_id =
+        Uuid::parse_str(&claims.sub).map_err(|_| ApiError::bad_request("geçersiz token sub"))?;
     let creds = st
         .exchange_accounts
         .binance_for_user(user_id, "spot")
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
         .ok_or_else(|| {
-            "Binance spot API anahtarı yok — exchange_accounts tablosuna ekleyin".to_string()
+            ApiError::bad_request(
+                "Binance spot API anahtarı yok — exchange_accounts tablosuna ekleyin",
+            )
         })?;
     let cfg = BinanceClientConfig::mainnet_with_keys(creds.api_key, creds.api_secret);
-    let client = BinanceClient::new(cfg).map_err(|e| e.to_string())?;
+    let client = BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?;
     let remote = client
         .spot_open_orders(None)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let rows = st
-        .exchange_orders
-        .list_for_user(user_id, 500)
-        .await
-        .map_err(|e| e.to_string())?;
+    let rows = st.exchange_orders.list_for_user(user_id, 500).await?;
 
     let local: Vec<ExchangeOrderVenueSnapshot> = rows
         .into_iter()
@@ -79,8 +78,8 @@ async fn reconcile_binance_spot_inner(
         })
         .collect();
 
-    let mut report =
-        reconcile_binance_spot_open_orders(&remote, &local).map_err(|e| e.to_string())?;
+    let mut report = reconcile_binance_spot_open_orders(&remote, &local)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     let patch_cfg = BinanceOpenOrdersPatchConfig::http_spot();
     let n = apply_binance_spot_open_orders_patch(
         &st.exchange_orders,
@@ -91,7 +90,7 @@ async fn reconcile_binance_spot_inner(
         &patch_cfg,
     )
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| ApiError::internal(e.to_string()))?;
     if n > 0 {
         report.status_updates_applied = Some(n);
     }
@@ -101,7 +100,7 @@ async fn reconcile_binance_spot_inner(
 async fn reconcile_binance_futures(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
-) -> Result<Json<ReconcileReport>, String> {
+) -> Result<Json<ReconcileReport>, ApiError> {
     match reconcile_binance_futures_inner(claims, st).await {
         Ok(report) => {
             let rows = report.status_updates_applied.unwrap_or(0);
@@ -118,28 +117,26 @@ async fn reconcile_binance_futures(
 async fn reconcile_binance_futures_inner(
     claims: AccessClaims,
     st: SharedState,
-) -> Result<ReconcileReport, String> {
-    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| "geçersiz token sub".to_string())?;
+) -> Result<ReconcileReport, ApiError> {
+    let user_id =
+        Uuid::parse_str(&claims.sub).map_err(|_| ApiError::bad_request("geçersiz token sub"))?;
     let creds = st
         .exchange_accounts
         .binance_for_user(user_id, "futures")
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
         .ok_or_else(|| {
-            "Binance futures API anahtarı yok — exchange_accounts tablosuna ekleyin".to_string()
+            ApiError::bad_request(
+                "Binance futures API anahtarı yok — exchange_accounts tablosuna ekleyin",
+            )
         })?;
     let cfg = BinanceClientConfig::mainnet_with_keys(creds.api_key, creds.api_secret);
-    let client = BinanceClient::new(cfg).map_err(|e| e.to_string())?;
+    let client = BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?;
     let remote = client
         .fapi_open_orders(None)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let rows = st
-        .exchange_orders
-        .list_for_user(user_id, 500)
-        .await
-        .map_err(|e| e.to_string())?;
+    let rows = st.exchange_orders.list_for_user(user_id, 500).await?;
 
     let local: Vec<ExchangeOrderVenueSnapshot> = rows
         .into_iter()
@@ -152,8 +149,8 @@ async fn reconcile_binance_futures_inner(
         })
         .collect();
 
-    let mut report =
-        reconcile_binance_futures_open_orders(&remote, &local).map_err(|e| e.to_string())?;
+    let mut report = reconcile_binance_futures_open_orders(&remote, &local)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     let patch_cfg = BinanceOpenOrdersPatchConfig::http_futures();
     let n = apply_binance_futures_open_orders_patch(
         &st.exchange_orders,
@@ -164,7 +161,7 @@ async fn reconcile_binance_futures_inner(
         &patch_cfg,
     )
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| ApiError::internal(e.to_string()))?;
     if n > 0 {
         report.status_updates_applied = Some(n);
     }

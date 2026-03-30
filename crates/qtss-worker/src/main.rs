@@ -22,6 +22,7 @@ mod binance_futures_reconcile;
 mod binance_spot_reconcile;
 mod strategy_runner;
 mod worker_probe_http;
+mod ai_engine;
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -36,7 +37,8 @@ use qtss_binance::{
 use qtss_common::{init_logging, load_dotenv, postgres_url_from_env_or_default};
 use anyhow::Context;
 use qtss_storage::{
-    create_pool, run_migrations, upsert_market_bar, MarketBarUpsert, PnlRollupRepository,
+    create_pool, resolve_worker_tick_secs, run_migrations, upsert_market_bar, MarketBarUpsert,
+    PnlRollupRepository,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -44,7 +46,7 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 use tracing::{info, warn};
 
 async fn pnl_rollup_loop(pool: PgPool) {
-    let pnl = PnlRollupRepository::new(pool);
+    let pnl = PnlRollupRepository::new(pool.clone());
     loop {
         match pnl.rebuild_live_rollups_from_exchange_orders().await {
             Ok(s) => info!(
@@ -55,7 +57,16 @@ async fn pnl_rollup_loop(pool: PgPool) {
             ),
             Err(e) => warn!(%e, "pnl_rollups rebuild"),
         }
-        tokio::time::sleep(Duration::from_secs(3600)).await;
+        let sleep_secs = resolve_worker_tick_secs(
+            &pool,
+            "worker",
+            "pnl_rollup_tick_secs",
+            "QTSS_PNL_ROLLUP_TICK_SECS",
+            300,
+            60,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
     }
 }
 
@@ -92,6 +103,9 @@ async fn main() -> anyhow::Result<()> {
              `to_regclass('public.bar_intervals')` NULL → `0036_bar_intervals_repair_if_missing.sql` (API/worker migrate); \
              çift aynı `NNNN_*.sql` öneki. Ayrıntı: docs/QTSS_CURSOR_DEV_GUIDE.md §6.",
         )?;
+        kill_switch::apply_initial_halt_from_db(&pool).await;
+        let sync_pool = pool.clone();
+        tokio::spawn(kill_switch::kill_switch_db_sync_loop(sync_pool));
         let pnl_pool = pool.clone();
         tokio::spawn(pnl_rollup_loop(pnl_pool));
         let reconcile_pool = pool.clone();
@@ -151,6 +165,7 @@ async fn main() -> anyhow::Result<()> {
         let ctq_pool = pool.clone();
         tokio::spawn(copy_trade_queue::copy_trade_queue_loop(ctq_pool));
         strategy_runner::spawn_if_enabled(&pool);
+        ai_engine::spawn_ai_background_tasks(&pool);
         Some(pool)
     } else {
         warn!("DATABASE_URL yok — pnl_rollups / market_bars DB yazımı kapalı");

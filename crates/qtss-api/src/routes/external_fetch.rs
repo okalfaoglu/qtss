@@ -14,6 +14,7 @@ use qtss_storage::{
     DataSnapshotRow, ExternalDataSourceRow,
 };
 
+use crate::error::ApiError;
 use crate::state::SharedState;
 
 fn valid_source_key(key: &str) -> bool {
@@ -57,11 +58,9 @@ pub fn external_fetch_write_router() -> Router<SharedState> {
 
 async fn list_sources_api(
     State(st): State<SharedState>,
-) -> Result<Json<Vec<ExternalDataSourceRow>>, String> {
-    list_external_sources(&st.pool)
-        .await
-        .map(Json)
-        .map_err(|e| e.to_string())
+) -> Result<Json<Vec<ExternalDataSourceRow>>, ApiError> {
+    let rows = list_external_sources(&st.pool).await?;
+    Ok(Json(rows))
 }
 
 #[derive(Serialize)]
@@ -75,10 +74,8 @@ struct SnapshotListItem {
 
 async fn list_snapshots_api(
     State(st): State<SharedState>,
-) -> Result<Json<Vec<SnapshotListItem>>, String> {
-    let rows = list_snapshots_for_external_http_sources(&st.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+) -> Result<Json<Vec<SnapshotListItem>>, ApiError> {
+    let rows = list_snapshots_for_external_http_sources(&st.pool).await?;
     let out: Vec<SnapshotListItem> = rows
         .into_iter()
         .map(|r| SnapshotListItem {
@@ -122,21 +119,15 @@ impl From<DataSnapshotRow> for ExternalHttpSnapshotResponse {
 async fn get_snapshot_api(
     State(st): State<SharedState>,
     Path(key): Path<String>,
-) -> Result<Json<ExternalHttpSnapshotResponse>, (StatusCode, String)> {
+) -> Result<Json<ExternalHttpSnapshotResponse>, ApiError> {
     let key = key.trim();
     if !valid_source_key(key) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "geçersiz source key".to_string(),
-        ));
+        return Err(ApiError::bad_request("geçersiz source key"));
     }
-    let row = fetch_data_snapshot_for_external_http_source(&st.pool, key)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = fetch_data_snapshot_for_external_http_source(&st.pool, key).await?;
     let Some(row) = row else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            "snapshot yok — kaynak tanımlı mı ve worker çekti mi kontrol edin".to_string(),
+        return Err(ApiError::not_found(
+            "snapshot yok — kaynak tanımlı mı ve worker çekti mi kontrol edin",
         ));
     };
     Ok(Json(ExternalHttpSnapshotResponse::from(row)))
@@ -164,37 +155,37 @@ fn default_true() -> bool {
     true
 }
 
-fn normalize_http_method(m: &str) -> Result<&'static str, String> {
+fn normalize_http_method(m: &str) -> Result<&'static str, ApiError> {
     match m.trim().to_ascii_uppercase().as_str() {
         "GET" => Ok("GET"),
         "POST" => Ok("POST"),
-        _ => Err("method yalnızca GET veya POST olabilir".into()),
+        _ => Err(ApiError::bad_request(
+            "method yalnızca GET veya POST olabilir",
+        )),
     }
 }
 
 async fn upsert_source_api(
     State(st): State<SharedState>,
     Json(body): Json<UpsertExternalSourceBody>,
-) -> Result<Json<ExternalDataSourceRow>, (StatusCode, String)> {
+) -> Result<Json<ExternalDataSourceRow>, ApiError> {
     let key = body.key.trim();
     if !valid_source_key(key) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "geçersiz key (1–64 karakter, [a-zA-Z0-9_-], rakam/harf ile başlar)".into(),
+        return Err(ApiError::bad_request(
+            "geçersiz key (1–64 karakter, [a-zA-Z0-9_-], rakam/harf ile başlar)",
         ));
     }
     let url = body.url.trim();
     if url.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "url boş olamaz".into()));
+        return Err(ApiError::bad_request("url boş olamaz"));
     }
     let method_raw = body.method.as_deref().unwrap_or("GET");
-    let method = normalize_http_method(method_raw).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let method = normalize_http_method(method_raw)?;
     let tick = body.tick_secs.unwrap_or(300).max(30);
     let headers = body.headers_json.unwrap_or_else(|| json!({}));
     if !headers.is_object() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "headers_json bir JSON nesnesi olmalı".into(),
+        return Err(ApiError::bad_request(
+            "headers_json bir JSON nesnesi olmalı",
         ));
     }
     let desc = body.description.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
@@ -209,27 +200,21 @@ async fn upsert_source_api(
         tick,
         desc,
     )
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .await?;
     Ok(Json(row))
 }
 
 async fn delete_source_api(
     State(st): State<SharedState>,
     Path(key): Path<String>,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<StatusCode, ApiError> {
     let key = key.trim();
     if !valid_source_key(key) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "geçersiz source key".to_string(),
-        ));
+        return Err(ApiError::bad_request("geçersiz source key"));
     }
-    let n = delete_external_source(&st.pool, key)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let n = delete_external_source(&st.pool, key).await?;
     if n == 0 {
-        return Err((StatusCode::NOT_FOUND, "kayıt yok".into()));
+        return Err(ApiError::not_found("kayıt yok"));
     }
     Ok(StatusCode::NO_CONTENT)
 }

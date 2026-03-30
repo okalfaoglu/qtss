@@ -115,3 +115,63 @@ pub async fn list_recent_bars(
     .await?;
     Ok(rows)
 }
+
+/// Summary stats over the last `limit` bars (newest first), for AI context / dashboards (FAZ 3.4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecentBarsStats {
+    pub bar_count: usize,
+    pub last_close: Option<Decimal>,
+    pub oldest_close_in_window: Option<Decimal>,
+    pub approx_change_over_window_pct: f64,
+    pub high_low_range_pct_of_mean_close: f64,
+    pub last_open_time: Option<DateTime<Utc>>,
+}
+
+pub async fn fetch_recent_bars_stats(
+    pool: &PgPool,
+    exchange: &str,
+    segment: &str,
+    symbol: &str,
+    interval: &str,
+    limit: i64,
+) -> Result<Option<RecentBarsStats>, StorageError> {
+    use rust_decimal::prelude::ToPrimitive;
+
+    let bars = list_recent_bars(pool, exchange, segment, symbol, interval, limit).await?;
+    if bars.is_empty() {
+        return Ok(None);
+    }
+    let mut highs = Vec::new();
+    let mut lows = Vec::new();
+    let mut closes = Vec::new();
+    for b in &bars {
+        highs.push(b.high.to_f64().unwrap_or(0.0));
+        lows.push(b.low.to_f64().unwrap_or(0.0));
+        closes.push(b.close.to_f64().unwrap_or(0.0));
+    }
+    let last_close = bars.first().map(|b| b.close);
+    let oldest_close = bars.last().map(|b| b.close);
+    let last_close_f = closes.first().copied().unwrap_or(0.0);
+    let oldest_close_f = closes.last().copied().unwrap_or(last_close_f);
+    let pct_change = if oldest_close_f.abs() > f64::EPSILON {
+        ((last_close_f - oldest_close_f) / oldest_close_f) * 100.0
+    } else {
+        0.0
+    };
+    let high_max = highs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let low_min = lows.iter().copied().fold(f64::INFINITY, f64::min);
+    let mean_close = closes.iter().sum::<f64>() / closes.len().max(1) as f64;
+    let range_pct = if mean_close.abs() > f64::EPSILON {
+        ((high_max - low_min) / mean_close) * 100.0
+    } else {
+        0.0
+    };
+    Ok(Some(RecentBarsStats {
+        bar_count: bars.len(),
+        last_close,
+        oldest_close_in_window: oldest_close,
+        approx_change_over_window_pct: pct_change,
+        high_low_range_pct_of_mean_close: range_pct,
+        last_open_time: bars.first().map(|b| b.open_time),
+    }))
+}

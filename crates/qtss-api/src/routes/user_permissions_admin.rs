@@ -13,6 +13,7 @@ use qtss_storage::{insert_http_audit, AuditHttpRow};
 
 use crate::audit_event::UserPermissionsReplaceDetailsV1;
 use crate::audit_http::http_audit_enabled;
+use crate::error::ApiError;
 use crate::oauth::rbac::is_known_qtss_permission;
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
@@ -33,27 +34,25 @@ async fn ensure_same_org(
     claims: &AccessClaims,
     st: &SharedState,
     target_user_id: Uuid,
-) -> Result<(), String> {
+) -> Result<(), ApiError> {
     let caller_org = Uuid::parse_str(claims.org_id.trim())
-        .map_err(|_| "geçersiz token org_id".to_string())?;
-    let Some(target_org) = st
-        .user_permissions
-        .org_id_for_user(target_user_id)
-        .await
-        .map_err(|e| e.to_string())?
+        .map_err(|_| ApiError::bad_request("geçersiz token org_id"))?;
+    let Some(target_org) = st.user_permissions.org_id_for_user(target_user_id).await?
     else {
-        return Err("kullanıcı bulunamadı".to_string());
+        return Err(ApiError::not_found("kullanıcı bulunamadı"));
     };
     if caller_org != target_org {
-        return Err("hedef kullanıcı aynı kuruma ait değil".to_string());
+        return Err(ApiError::forbidden(
+            "hedef kullanıcı aynı kuruma ait değil",
+        ));
     }
     Ok(())
 }
 
-fn validate_permissions(perms: &[String]) -> Result<(), String> {
+fn validate_permissions(perms: &[String]) -> Result<(), ApiError> {
     for p in perms {
         if !is_known_qtss_permission(p) {
-            return Err(format!("geçersiz permission: {p}"));
+            return Err(ApiError::bad_request(format!("geçersiz permission: {p}")));
         }
     }
     Ok(())
@@ -63,13 +62,9 @@ async fn get_user_permissions(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Path(user_id): Path<Uuid>,
-) -> Result<Json<Vec<String>>, String> {
+) -> Result<Json<Vec<String>>, ApiError> {
     ensure_same_org(&claims, &st, user_id).await?;
-    let rows = st
-        .user_permissions
-        .list_for_user(user_id)
-        .await
-        .map_err(|e| e.to_string())?;
+    let rows = st.user_permissions.list_for_user(user_id).await?;
     Ok(Json(rows))
 }
 
@@ -79,7 +74,7 @@ async fn put_user_permissions(
     State(st): State<SharedState>,
     Path(user_id): Path<Uuid>,
     Json(body): Json<ReplacePermissionsBody>,
-) -> Result<Json<Vec<String>>, String> {
+) -> Result<Json<Vec<String>>, ApiError> {
     ensure_same_org(&claims, &st, user_id).await?;
     validate_permissions(&body.permissions)?;
     let unique: Vec<String> = body
@@ -88,15 +83,10 @@ async fn put_user_permissions(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let before = st
-        .user_permissions
-        .list_for_user(user_id)
-        .await
-        .map_err(|e| e.to_string())?;
+    let before = st.user_permissions.list_for_user(user_id).await?;
     st.user_permissions
         .replace_for_user(user_id, &unique)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
     if http_audit_enabled() {
         let request_id = headers

@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use qtss_binance::{
@@ -22,7 +22,10 @@ use qtss_execution::{BinanceLiveGateway, DryRunGateway, ExecutionGateway};
 use qtss_storage::{
     list_recent_bars, ExchangeAccountRepository, ExchangeOrderRepository, ExchangeOrderRow,
 };
+use qtss_ai::feedback::record_decision_outcome;
+use qtss_ai::storage::{fetch_latest_approved_directive, fetch_latest_approved_tactical, mark_applied, AiRecordTable};
 use rust_decimal::Decimal;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -244,6 +247,8 @@ pub async fn position_manager_loop(pool: PgPool) {
     let tp = tp_pct() / Decimal::from(100u32);
     let min_q = min_qty_filter();
     let acct_repo = ExchangeAccountRepository::new(pool.clone());
+    let live_gateway_cache: Mutex<HashMap<(Uuid, String), Arc<BinanceLiveGateway>>> =
+        Mutex::new(HashMap::new());
     loop {
         tokio::time::sleep(tick).await;
         let rows = match repo.list_recent_filled_orders_global(1500).await {
@@ -276,10 +281,68 @@ pub async fn position_manager_loop(pool: PgPool) {
                 tracing::debug!(symbol = %key.symbol, "position_manager: bar yok");
                 continue;
             };
-            let sl_price = entry * (Decimal::ONE - sl);
-            let tp_price = entry * (Decimal::ONE + tp);
+            let mut sl_frac = sl;
+            let mut tp_frac = tp;
+            let mut tactical_applied_id: Option<Uuid> = None;
+            let mut directive_applied_id: Option<Uuid> = None;
+            let mut ai_outcome_decision_id: Option<Uuid> = None;
+            if let Ok(Some(td)) = fetch_latest_approved_tactical(&pool, &key.symbol).await {
+                ai_outcome_decision_id = Some(td.decision_id);
+                if let Some(p) = td.stop_loss_pct {
+                    if let Some(d) = Decimal::from_f64(p) {
+                        sl_frac = d / Decimal::from(100u32);
+                    }
+                }
+                if let Some(p) = td.take_profit_pct {
+                    if let Some(d) = Decimal::from_f64(p) {
+                        tp_frac = d / Decimal::from(100u32);
+                    }
+                }
+                tactical_applied_id = Some(td.id);
+            }
+            if let Ok(Some(dir)) = fetch_latest_approved_directive(&pool, &key.symbol).await {
+                if ai_outcome_decision_id.is_none() {
+                    ai_outcome_decision_id = Some(dir.decision_id);
+                }
+                match dir.action.as_str() {
+                    "tighten_stop" => {
+                        if let Some(p) = dir.new_stop_loss_pct {
+                            if let Some(d) = Decimal::from_f64(p) {
+                                sl_frac = d / Decimal::from(100u32);
+                            }
+                        } else {
+                            sl_frac = sl_frac * Decimal::new(9, 1) / Decimal::TEN;
+                        }
+                    }
+                    "widen_stop" => {
+                        if let Some(p) = dir.new_stop_loss_pct {
+                            if let Some(d) = Decimal::from_f64(p) {
+                                sl_frac = d / Decimal::from(100u32);
+                            }
+                        } else {
+                            sl_frac = sl_frac * Decimal::new(11, 1) / Decimal::TEN;
+                        }
+                    }
+                    _ => {}
+                }
+                directive_applied_id = Some(dir.id);
+            }
+            let sl_price = entry * (Decimal::ONE - sl_frac);
+            let tp_price = entry * (Decimal::ONE + tp_frac);
             let hit_sl = mark <= sl_price;
             let hit_tp = mark >= tp_price;
+            if tactical_applied_id.is_some() || directive_applied_id.is_some() {
+                if let Some(id) = tactical_applied_id {
+                    if let Err(e) = mark_applied(&pool, AiRecordTable::TacticalChild, id).await {
+                        warn!(%e, symbol = %key.symbol, "mark tactical AI applied");
+                    }
+                }
+                if let Some(id) = directive_applied_id {
+                    if let Err(e) = mark_applied(&pool, AiRecordTable::PositionDirectiveChild, id).await {
+                        warn!(%e, symbol = %key.symbol, "mark position directive applied");
+                    }
+                }
+            }
             if !hit_sl && !hit_tp {
                 continue;
             }
@@ -301,7 +364,29 @@ pub async fn position_manager_loop(pool: PgPool) {
                     continue;
                 }
                 match gw.place(intent).await {
-                    Ok(cid) => info!(%cid, symbol = %key.symbol, "position_manager: dry kapatma emri"),
+                    Ok(cid) => {
+                        info!(%cid, symbol = %key.symbol, "position_manager: dry kapatma emri");
+                        if let Some(did) = ai_outcome_decision_id {
+                            let pnl_pct = entry.to_f64().and_then(|e| {
+                                mark.to_f64()
+                                    .and_then(|m| (e > 0.0).then_some((m - e) / e * 100.0))
+                            });
+                            let outcome = if hit_tp { "profit" } else { "loss" };
+                            if let Err(e) = record_decision_outcome(
+                                &pool,
+                                did,
+                                pnl_pct,
+                                None,
+                                outcome,
+                                None,
+                                Some("sl_tp_close_dry"),
+                            )
+                            .await
+                            {
+                                warn!(%e, symbol = %key.symbol, "record_decision_outcome");
+                            }
+                        }
+                    }
                     Err(e) => warn!(%e, symbol = %key.symbol, "position_manager: dry place başarısız"),
                 }
             } else if live_on {
@@ -340,15 +425,27 @@ pub async fn position_manager_loop(pool: PgPool) {
                     );
                     continue;
                 };
-                let cfg = BinanceClientConfig::mainnet_with_keys(creds.api_key, creds.api_secret);
-                let client = match BinanceClient::new(cfg) {
-                    Ok(c) => Arc::new(c),
-                    Err(e) => {
-                        warn!(%e, "position_manager: BinanceClient oluşturulamadı");
-                        continue;
+                let seg_norm = key.segment.trim().to_lowercase();
+                let gw_cache_key = (key.user_id, seg_norm);
+                let gw = {
+                    let mut guard = live_gateway_cache.lock().unwrap();
+                    if let Some(g) = guard.get(&gw_cache_key) {
+                        g.clone()
+                    } else {
+                        let cfg =
+                            BinanceClientConfig::mainnet_with_keys(creds.api_key, creds.api_secret);
+                        let client = match BinanceClient::new(cfg) {
+                            Ok(c) => Arc::new(c),
+                            Err(e) => {
+                                warn!(%e, "position_manager: BinanceClient oluşturulamadı");
+                                continue;
+                            }
+                        };
+                        let g = Arc::new(BinanceLiveGateway::new(client));
+                        guard.insert(gw_cache_key, g.clone());
+                        g
                     }
                 };
-                let gw = BinanceLiveGateway::new(client);
                 let intent_record = intent.clone();
                 match gw.place_with_venue_response(intent).await {
                     Ok((cid, venue_json)) => {
@@ -367,11 +464,34 @@ pub async fn position_manager_loop(pool: PgPool) {
                             )
                             .await
                         {
-                            Ok(_) => info!(
-                                %cid,
-                                symbol = %key.symbol,
-                                "position_manager: live reduce-only kapatma kaydedildi"
-                            ),
+                            Ok(_) => {
+                                info!(
+                                    %cid,
+                                    symbol = %key.symbol,
+                                    "position_manager: live reduce-only kapatma kaydedildi"
+                                );
+                                if let Some(did) = ai_outcome_decision_id {
+                                    let pnl_pct = entry.to_f64().and_then(|e| {
+                                        mark.to_f64().and_then(|m| {
+                                            (e > 0.0).then_some((m - e) / e * 100.0)
+                                        })
+                                    });
+                                    let outcome = if hit_tp { "profit" } else { "loss" };
+                                    if let Err(e) = record_decision_outcome(
+                                        &pool,
+                                        did,
+                                        pnl_pct,
+                                        None,
+                                        outcome,
+                                        None,
+                                        Some("sl_tp_close_live"),
+                                    )
+                                    .await
+                                    {
+                                        warn!(%e, symbol = %key.symbol, "record_decision_outcome");
+                                    }
+                                }
+                            }
                             Err(e) => warn!(%e, %cid, "position_manager: live emir DB yazımı başarısız"),
                         }
                     }

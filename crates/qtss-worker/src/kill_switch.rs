@@ -3,29 +3,28 @@
 //!
 //! Öncelik: `QTSS_MAX_DRAWDOWN_PCT` + `QTSS_KILL_SWITCH_REFERENCE_EQUITY_USDT` tanımlıysa eşik
 //! `-(equity * pct / 100)` olur. Aksi halde `QTSS_KILL_SWITCH_DAILY_LOSS_USDT` (varsayılan: çok büyük).
+//!
+//! **API süreçleri ayrı:** `kill_switch_trading_halted` `app_config` üzerinden tutulur; `kill_switch_db_sync_loop`
+//! worker sürecinde atomik bayrağı DB ile hizalar (`POST /api/v1/admin/kill-switch/reset`).
 
 use std::ops::Neg;
 use std::str::FromStr;
 use std::time::Duration;
 
 use qtss_common::{halt_trading, is_trading_halted};
-use qtss_storage::sum_today_daily_realized_pnl;
+use qtss_storage::{
+    resolve_worker_tick_secs, sum_today_daily_realized_pnl, AppConfigRepository,
+};
 use rust_decimal::Decimal;
 use sqlx::PgPool;
 use tracing::{info, warn};
+
+pub const KILL_SWITCH_APP_CONFIG_KEY: &str = "kill_switch_trading_halted";
 
 fn enabled() -> bool {
     std::env::var("QTSS_KILL_SWITCH_ENABLED")
         .ok()
         .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
-}
-
-fn tick_secs() -> u64 {
-    std::env::var("QTSS_KILL_SWITCH_TICK_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(60)
-        .max(15)
 }
 
 fn reference_equity_usdt() -> Decimal {
@@ -59,20 +58,92 @@ fn effective_trigger_neg() -> Decimal {
     trigger_from_drawdown_pct().unwrap_or_else(trigger_from_daily_loss_env)
 }
 
+async fn persist_halt_flag(pool: &PgPool, halted: bool) {
+    let repo = AppConfigRepository::new(pool.clone());
+    if let Err(e) = repo
+        .upsert(
+            KILL_SWITCH_APP_CONFIG_KEY,
+            serde_json::json!(halted),
+            Some("Trading halt flag — API/worker senkronu (kill_switch_db_sync_loop)"),
+            None,
+        )
+        .await
+    {
+        warn!(%e, "kill_switch: app_config kill_switch_trading_halted yazılamadı");
+    }
+}
+
+/// Worker başlangıcında DB’de halt=true ise süreç bayrağını yükle (restart sonrası).
+pub async fn apply_initial_halt_from_db(pool: &PgPool) {
+    match AppConfigRepository::get_value_json(pool, KILL_SWITCH_APP_CONFIG_KEY).await {
+        Ok(Some(v)) if v.as_bool() == Some(true) => {
+            halt_trading();
+            info!("kill_switch: app_config kill_switch_trading_halted=true — başlangıç halt");
+        }
+        Ok(_) => {}
+        Err(e) => warn!(%e, "kill_switch: başlangıç app_config okunamadı"),
+    }
+}
+
+/// `app_config` ↔ `qtss_common` atomik halt senkronu (API reset ve çok süreç).
+pub async fn kill_switch_db_sync_loop(pool: PgPool) {
+    let pool_tick = pool.clone();
+    info!("kill_switch_db_sync_loop: app_config kill_switch_trading_halted senkronu (poll from system_config / env)");
+    loop {
+        let poll_secs = resolve_worker_tick_secs(
+            &pool_tick,
+            "worker",
+            "kill_switch_db_sync_tick_secs",
+            "QTSS_KILL_SWITCH_DB_SYNC_SECS",
+            5,
+            2,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(poll_secs)).await;
+        match AppConfigRepository::get_value_json(&pool, KILL_SWITCH_APP_CONFIG_KEY).await {
+            Ok(Some(v)) => match v.as_bool() {
+                Some(false) => {
+                    if is_trading_halted() {
+                        qtss_common::clear_trading_halt();
+                        info!("kill_switch_db_sync: halt kaldırıldı (app_config=false)");
+                    }
+                }
+                Some(true) => {
+                    if !is_trading_halted() {
+                        halt_trading();
+                        info!("kill_switch_db_sync: halt uygulandı (app_config=true)");
+                    }
+                }
+                None => {}
+            },
+            Ok(None) => {}
+            Err(e) => warn!(%e, "kill_switch_db_sync: app_config okunamadı"),
+        }
+    }
+}
+
 pub async fn kill_switch_loop(pool: PgPool) {
     if !enabled() {
         info!("QTSS_KILL_SWITCH_ENABLED kapalı — kill_switch_loop çıkıyor");
         return;
     }
-    let tick = Duration::from_secs(tick_secs());
+    let pool_tick = pool.clone();
     let trigger_neg = effective_trigger_neg();
     info!(
-        poll_secs = tick.as_secs(),
         %trigger_neg,
-        "kill_switch_loop: günlük realized P&L < eşik ise halt (QTSS_MAX_DRAWDOWN_PCT veya QTSS_KILL_SWITCH_DAILY_LOSS_USDT)"
+        "kill_switch_loop: günlük realized P&L < eşik ise halt (poll from system_config / env; QTSS_MAX_DRAWDOWN_PCT veya QTSS_KILL_SWITCH_DAILY_LOSS_USDT)"
     );
     loop {
-        tokio::time::sleep(tick).await;
+        let poll_secs = resolve_worker_tick_secs(
+            &pool_tick,
+            "worker",
+            "kill_switch_pnl_poll_tick_secs",
+            "QTSS_KILL_SWITCH_TICK_SECS",
+            60,
+            15,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(poll_secs)).await;
         if is_trading_halted() {
             continue;
         }
@@ -86,6 +157,7 @@ pub async fn kill_switch_loop(pool: PgPool) {
         if sum < trigger_neg {
             warn!(%sum, %trigger_neg, "kill_switch: eşik altı — halt (yeni emirleri stratejiler engellemeli)");
             halt_trading();
+            persist_halt_flag(&pool, true).await;
         }
     }
 }

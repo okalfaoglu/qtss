@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use qtss_storage::{CatalogRepository, ExchangeRow};
 
+use crate::error::ApiError;
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
 use axum::Extension;
@@ -134,19 +135,17 @@ pub struct MarketWithExchangeRow {
 async fn list_exchanges_api(
     Extension(_claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
-) -> Result<Json<Vec<ExchangeRow>>, (StatusCode, String)> {
+) -> Result<Json<Vec<ExchangeRow>>, ApiError> {
     let cat = CatalogRepository::new(st.pool.clone());
-    cat.list_exchanges()
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-        .map(Json)
+    let rows = cat.list_exchanges().await?;
+    Ok(Json(rows))
 }
 
 async fn list_markets_api(
     Extension(_claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Query(q): Query<MarketsListQuery>,
-) -> Result<Json<Vec<MarketWithExchangeRow>>, (StatusCode, String)> {
+) -> Result<Json<Vec<MarketWithExchangeRow>>, ApiError> {
     let cat = CatalogRepository::new(st.pool.clone());
     let lim = q.limit.clamp(1, 2000);
     let markets = match q
@@ -155,21 +154,12 @@ async fn list_markets_api(
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
     {
-        Some(code) => cat
-            .list_markets_by_exchange_code(code)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-        None => cat
-            .list_markets_all(lim)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        Some(code) => cat.list_markets_by_exchange_code(code).await?,
+        None => cat.list_markets_all(lim).await?,
     };
     let mut out = Vec::with_capacity(markets.len());
     for m in markets {
-        let ex = cat
-            .get_exchange_by_id(m.exchange_id)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let ex = cat.get_exchange_by_id(m.exchange_id).await?;
         let exchange_code = ex.map(|e| e.code).unwrap_or_default();
         out.push(MarketWithExchangeRow {
             market: m,
@@ -195,12 +185,10 @@ async fn list_instruments_api(
 async fn list_bar_intervals_api(
     Extension(_claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
-) -> Result<Json<Vec<qtss_storage::BarIntervalRow>>, (StatusCode, String)> {
+) -> Result<Json<Vec<qtss_storage::BarIntervalRow>>, ApiError> {
     let cat = CatalogRepository::new(st.pool.clone());
-    cat.list_bar_intervals()
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-        .map(Json)
+    let rows = cat.list_bar_intervals().await?;
+    Ok(Json(rows))
 }
 
 async fn post_exchange_api(
@@ -224,13 +212,12 @@ async fn patch_exchange_api(
     State(st): State<SharedState>,
     Path(id): Path<Uuid>,
     Json(body): Json<PatchExchangeBody>,
-) -> Result<Json<ExchangeRow>, (StatusCode, String)> {
+) -> Result<Json<ExchangeRow>, ApiError> {
     let cat = CatalogRepository::new(st.pool.clone());
     let row = cat
         .update_exchange(id, body.display_name.as_deref(), body.is_active, body.metadata)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "exchange bulunamadı".into()))?;
+        .await?
+        .ok_or_else(|| ApiError::not_found("exchange bulunamadı"))?;
     Ok(Json(row))
 }
 
@@ -238,14 +225,11 @@ async fn delete_exchange_api(
     Extension(_claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let cat = CatalogRepository::new(st.pool.clone());
-    let n = cat
-        .delete_exchange(id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let n = cat.delete_exchange(id).await?;
     if n == 0 {
-        return Err((StatusCode::NOT_FOUND, "exchange bulunamadı".into()));
+        return Err(ApiError::not_found("exchange bulunamadı"));
     }
     Ok(Json(json!({ "deleted": n })))
 }
@@ -274,13 +258,12 @@ async fn patch_market_api(
     State(st): State<SharedState>,
     Path(id): Path<Uuid>,
     Json(body): Json<PatchMarketBody>,
-) -> Result<Json<qtss_storage::MarketRow>, (StatusCode, String)> {
+) -> Result<Json<qtss_storage::MarketRow>, ApiError> {
     let cat = CatalogRepository::new(st.pool.clone());
     let row = cat
         .update_market(id, body.display_name.as_deref(), body.is_active, body.metadata)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "market bulunamadı".into()))?;
+        .await?
+        .ok_or_else(|| ApiError::not_found("market bulunamadı"))?;
     Ok(Json(row))
 }
 
@@ -288,14 +271,11 @@ async fn delete_market_api(
     Extension(_claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let cat = CatalogRepository::new(st.pool.clone());
-    let n = cat
-        .delete_market(id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let n = cat.delete_market(id).await?;
     if n == 0 {
-        return Err((StatusCode::NOT_FOUND, "market bulunamadı".into()));
+        return Err(ApiError::not_found("market bulunamadı"));
     }
     Ok(Json(json!({ "deleted": n })))
 }
@@ -304,22 +284,23 @@ async fn post_instrument_api(
     Extension(_claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Json(body): Json<PostInstrumentBody>,
-) -> Result<Json<qtss_storage::InstrumentRow>, (StatusCode, String)> {
+) -> Result<Json<qtss_storage::InstrumentRow>, ApiError> {
     let cat = CatalogRepository::new(st.pool.clone());
-    cat.upsert_instrument(
-        body.market_id,
-        body.native_symbol.trim(),
-        body.base_asset.trim(),
-        body.quote_asset.trim(),
-        body.status.trim(),
-        body.is_trading,
-        body.price_filter,
-        body.lot_filter,
-        body.metadata,
-    )
-    .await
-    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
-    .map(Json)
+    let row = cat
+        .upsert_instrument(
+            body.market_id,
+            body.native_symbol.trim(),
+            body.base_asset.trim(),
+            body.quote_asset.trim(),
+            body.status.trim(),
+            body.is_trading,
+            body.price_filter,
+            body.lot_filter,
+            body.metadata,
+        )
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    Ok(Json(row))
 }
 
 async fn patch_instrument_api(
@@ -327,7 +308,7 @@ async fn patch_instrument_api(
     State(st): State<SharedState>,
     Path(id): Path<Uuid>,
     Json(body): Json<PatchInstrumentBody>,
-) -> Result<Json<qtss_storage::InstrumentRow>, (StatusCode, String)> {
+) -> Result<Json<qtss_storage::InstrumentRow>, ApiError> {
     let cat = CatalogRepository::new(st.pool.clone());
     let row = cat
         .update_instrument(
@@ -338,9 +319,8 @@ async fn patch_instrument_api(
             body.is_trading,
             body.metadata,
         )
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "instrument bulunamadı".into()))?;
+        .await?
+        .ok_or_else(|| ApiError::not_found("instrument bulunamadı"))?;
     Ok(Json(row))
 }
 
@@ -348,14 +328,11 @@ async fn delete_instrument_api(
     Extension(_claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let cat = CatalogRepository::new(st.pool.clone());
-    let n = cat
-        .delete_instrument(id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let n = cat.delete_instrument(id).await?;
     if n == 0 {
-        return Err((StatusCode::NOT_FOUND, "instrument bulunamadı".into()));
+        return Err(ApiError::not_found("instrument bulunamadı"));
     }
     Ok(Json(json!({ "deleted": n })))
 }
@@ -364,23 +341,23 @@ async fn post_bar_interval_api(
     Extension(_claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Json(body): Json<PostBarIntervalBody>,
-) -> Result<Json<qtss_storage::BarIntervalRow>, (StatusCode, String)> {
+) -> Result<Json<qtss_storage::BarIntervalRow>, ApiError> {
     let code = body.code.trim();
     if code.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "code gerekli".into()));
+        return Err(ApiError::bad_request("code gerekli"));
     }
     let cat = CatalogRepository::new(st.pool.clone());
-    cat.upsert_bar_interval(
-        code,
-        body.label.as_deref(),
-        body.duration_seconds,
-        body.sort_order,
-        body.is_active,
-        body.metadata,
-    )
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-    .map(Json)
+    let row = cat
+        .upsert_bar_interval(
+            code,
+            body.label.as_deref(),
+            body.duration_seconds,
+            body.sort_order,
+            body.is_active,
+            body.metadata,
+        )
+        .await?;
+    Ok(Json(row))
 }
 
 async fn patch_bar_interval_api(
@@ -388,15 +365,14 @@ async fn patch_bar_interval_api(
     State(st): State<SharedState>,
     Path(id): Path<Uuid>,
     Json(body): Json<PatchBarIntervalBody>,
-) -> Result<Json<qtss_storage::BarIntervalRow>, (StatusCode, String)> {
+) -> Result<Json<qtss_storage::BarIntervalRow>, ApiError> {
     let cat = CatalogRepository::new(st.pool.clone());
     let cur = cat
         .list_bar_intervals()
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .await?
         .into_iter()
         .find(|r| r.id == id)
-        .ok_or((StatusCode::NOT_FOUND, "interval bulunamadı".into()))?;
+        .ok_or_else(|| ApiError::not_found("interval bulunamadı"))?;
     let row = cat
         .upsert_bar_interval(
             &cur.code,
@@ -406,8 +382,7 @@ async fn patch_bar_interval_api(
             body.is_active.unwrap_or(cur.is_active),
             body.metadata.unwrap_or(cur.metadata),
         )
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .await?;
     Ok(Json(row))
 }
 
@@ -415,14 +390,11 @@ async fn delete_bar_interval_api(
     Extension(_claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let cat = CatalogRepository::new(st.pool.clone());
-    let n = cat
-        .delete_bar_interval(id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let n = cat.delete_bar_interval(id).await?;
     if n == 0 {
-        return Err((StatusCode::NOT_FOUND, "interval bulunamadı".into()));
+        return Err(ApiError::not_found("interval bulunamadı"));
     }
     Ok(Json(json!({ "deleted": n })))
 }

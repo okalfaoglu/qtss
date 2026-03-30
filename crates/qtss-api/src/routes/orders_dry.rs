@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use qtss_storage::{PaperBalanceRow, PaperFillRow};
 
+use crate::error::ApiError;
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
 
@@ -26,11 +27,13 @@ pub struct PlaceDryBody {
     pub initial_quote_balance: Option<Decimal>,
 }
 
-fn segment_db_key(segment: qtss_domain::exchange::MarketSegment) -> Result<&'static str, String> {
+fn segment_db_key(
+    segment: qtss_domain::exchange::MarketSegment,
+) -> Result<&'static str, ApiError> {
     match segment {
         qtss_domain::exchange::MarketSegment::Spot => Ok("spot"),
         qtss_domain::exchange::MarketSegment::Futures => Ok("futures"),
-        _ => Err("bu segment için paper emir kapalı".into()),
+        _ => Err(ApiError::bad_request("bu segment için paper emir kapalı")),
     }
 }
 
@@ -87,14 +90,11 @@ async fn list_paper_fills(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Query(q): Query<PaperFillsQuery>,
-) -> Result<Json<Vec<PaperFillRow>>, String> {
-    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| "geçersiz token sub".to_string())?;
+) -> Result<Json<Vec<PaperFillRow>>, ApiError> {
+    let user_id =
+        Uuid::parse_str(&claims.sub).map_err(|_| ApiError::bad_request("geçersiz token sub"))?;
     let lim = q.limit.clamp(1, 500);
-    let rows = st
-        .paper
-        .list_fills_for_user(user_id, lim)
-        .await
-        .map_err(|e| e.to_string())?;
+    let rows = st.paper.list_fills_for_user(user_id, lim).await?;
     Ok(Json(rows))
 }
 
@@ -102,25 +102,27 @@ async fn place_dry_order(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Json(body): Json<PlaceDryBody>,
-) -> Result<Json<serde_json::Value>, String> {
-    let org_id =
-        Uuid::parse_str(&claims.org_id).map_err(|_| "geçersiz token org_id".to_string())?;
-    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| "geçersiz token sub".to_string())?;
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let org_id = Uuid::parse_str(&claims.org_id)
+        .map_err(|_| ApiError::bad_request("geçersiz token org_id"))?;
+    let user_id =
+        Uuid::parse_str(&claims.sub).map_err(|_| ApiError::bad_request("geçersiz token sub"))?;
 
     if matches!(body.intent.order_type, OrderType::Market) && body.mark_price.is_none() {
-        return Err("dry: Market emri için mark_price gerekli".into());
+        return Err(ApiError::bad_request(
+            "dry: Market emri için mark_price gerekli",
+        ));
     }
 
     let seg = segment_db_key(body.intent.instrument.segment)?;
     let ex = exchange_db_key(body.intent.instrument.exchange);
     let symbol = body.intent.instrument.symbol.clone();
 
-    let mut tx = st.pool.begin().await.map_err(|e| e.to_string())?;
+    let mut tx = st.pool.begin().await?;
     let locked = st
         .paper
         .lock_balance_for_update(&mut tx, user_id)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
     let mut ledger = if let Some(r) = locked {
         ledger_from_row(r)
@@ -131,8 +133,7 @@ async fn place_dry_order(
         let row = st
             .paper
             .insert_balance(&mut tx, org_id, user_id, init)
-            .await
-            .map_err(|e| e.to_string())?;
+            .await?;
         ledger_from_row(row)
     };
 
@@ -144,7 +145,7 @@ async fn place_dry_order(
         body.intent.clone(),
         body.mark_price,
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| ApiError::bad_request(e.to_string()))?;
 
     st.paper
         .update_balance(
@@ -153,8 +154,7 @@ async fn place_dry_order(
             out.quote_balance_after,
             &out.base_positions_after,
         )
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
     let side_str = match body.intent.side {
         OrderSide::Buy => "buy",
@@ -178,10 +178,9 @@ async fn place_dry_order(
             &out.base_positions_after,
             &body.intent,
         )
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
-    tx.commit().await.map_err(|e| e.to_string())?;
+    tx.commit().await?;
 
     Ok(Json(serde_json::json!({
         "client_order_id": out.client_order_id,

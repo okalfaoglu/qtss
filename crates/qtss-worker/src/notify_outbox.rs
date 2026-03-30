@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
-use qtss_storage::NotifyOutboxRepository;
+use qtss_storage::{resolve_worker_tick_secs, NotifyOutboxRepository};
 use serde_json::json;
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -12,14 +12,6 @@ fn enabled() -> bool {
     std::env::var("QTSS_NOTIFY_OUTBOX_ENABLED")
         .ok()
         .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
-}
-
-fn tick_secs() -> u64 {
-    std::env::var("QTSS_NOTIFY_OUTBOX_TICK_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(10)
-        .max(2)
 }
 
 fn parse_channels(raw: &[String]) -> Vec<NotificationChannel> {
@@ -33,15 +25,21 @@ pub async fn notify_outbox_loop(pool: PgPool) {
         info!("QTSS_NOTIFY_OUTBOX_ENABLED off — notify_outbox_loop exit");
         return;
     }
-    let tick = Duration::from_secs(tick_secs());
+    let pool_tick = pool.clone();
     let repo = NotifyOutboxRepository::new(pool);
     let dispatcher = NotificationDispatcher::from_env();
-    info!(
-        poll_secs = tick.as_secs(),
-        "notify_outbox_loop: draining notify_outbox → qtss-notify"
-    );
+    info!("notify_outbox_loop: draining notify_outbox → qtss-notify (poll from system_config / env)");
     loop {
-        tokio::time::sleep(tick).await;
+        let poll_secs = resolve_worker_tick_secs(
+            &pool_tick,
+            "worker",
+            "notify_outbox_tick_secs",
+            "QTSS_NOTIFY_OUTBOX_TICK_SECS",
+            10,
+            2,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(poll_secs)).await;
         loop {
             let row = match repo.claim_next_pending().await {
                 Ok(r) => r,

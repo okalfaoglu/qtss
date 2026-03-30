@@ -1,0 +1,47 @@
+{
+  "common": {
+    "language": "Language"
+  },
+  "drawer": {
+    "queues": "Queues",
+    "setting": "Setting",
+    "general": "General",
+    "status": "Status",
+    "apiHealth": "API health:",
+    "sessionConfig": "Session & config",
+    "sessionHint": "API access is limited by JWT and server RBAC; roles below are UI hints only.",
+    "loginTry": "Try login",
+    "configRefresh": "Refresh config",
+    "configLoading": "Config…",
+    "logout": "Sign out",
+    "rolesLoading": "Loading roles…",
+    "appearance": "Appearance",
+    "themeToggleDark": "Switch to light theme",
+    "themeToggleLight": "Switch to dark theme"
+  },
+  "elliott": {
+    "summary": "Summary",
+    "impulse": "Impulse (1–5)",
+    "corrective": "Corrective (2/4)"
+  },
+  "aiDecisions": {
+    "loginPrompt": "Sign in to view AI decisions.",
+    "title": "AI decisions (`ai_decisions`)",
+    "refresh": "Refresh",
+    "portfolio": "Portfolio directive",
+    "tacticalSection": "Latest approved tactical (symbol)",
+    "tactical": "Tactical (symbol)",
+    "load": "Load",
+    "layerFilter": "layer",
+    "statusFilter": "status",
+    "approve": "Approve",
+    "reject": "Reject",
+    "colCreated": "created",
+    "colLayer": "layer",
+    "colSymbol": "symbol",
+    "colStatus": "status",
+    "colConf": "conf",
+    "colModel": "model",
+    "colAction": "action"
+  }
+}

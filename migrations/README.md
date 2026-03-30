@@ -2,10 +2,10 @@
 
 - **Dosya adı:** `NNNN_short_description.sql` (İngilizce slug) — SQLx sürümü = `NNNN` (örn. `0034` → `_sqlx_migrations.version = 34`).
 - **Tek dosya / sürüm:** Aynı `NNNN` önekinden iki `.sql` olamaz (`qtss-sync-sqlx-checksums` ve `migrate` kırılır).
-- **Tam liste:** Bu klasör geliştirme / CI / üretim ile **aynı** olmalı; aşağıdaki envanterdeki **`.sql` satır sayısı** `ls migrations/*.sql | wc -l` ve `git ls-files 'migrations/*.sql' | wc -l` ile eşleşmeli (tam repoda şu an **0001–0039**, 39 dosya).
-- **Dokümantasyon / kesin kural:** `docs/QTSS_CURSOR_DEV_GUIDE.md` §0, §4 (ADIM ↔ kod), §5 (ortam tek kaynak: kök `.env.example`), §6 (numaralandırma, 29–36 tablo), `docs/PROJECT.md` §7; migrasyon hata metni: `crates/qtss-storage/src/pool.rs`. Çift önek düzeltmesi: tek `0013_worker_analytics_schema.sql`, tek `0014_catalog_fk_columns.sql`. `0034` / `0035`: `engine_symbols` FK; `0036_bar_intervals_repair_if_missing.sql`: `bar_intervals` yoksa oluşturur (bozuk 0013 telafisi).
+- **Tam liste:** Bu klasör geliştirme / CI / üretim ile **aynı** olmalı; aşağıdaki envanterdeki **`.sql` satır sayısı** `ls migrations/*.sql | wc -l` ve `git ls-files 'migrations/*.sql' | wc -l` ile eşleşmeli (tam repoda şu an **0001–0047**, **47** dosya).
+- **Dokümantasyon:** `docs/QTSS_MASTER_DEV_GUIDE.md` (Bölüm 5, FAZ 0.5), kök `.env.example`, `docs/PROJECT.md`; eski `QTSS_CURSOR_DEV_GUIDE.md` referansları mümkünse ana rehbere taşınmalıdır. Migrasyon hata metni: `crates/qtss-storage/src/pool.rs`. Çift önek düzeltmesi: tek `0013_worker_analytics_schema.sql`, tek `0014_catalog_fk_columns.sql`. `0034` / `0035`: `engine_symbols` FK; `0036_bar_intervals_repair_if_missing.sql`: `bar_intervals` yoksa oluşturur (bozuk 0013 telafisi).
 
-## Inventory (`*.sql` — tam repoda 38 dosya, 0001–0038)
+## Inventory (`*.sql` — tam repoda 45 dosya, 0001–0045)
 
 Sıra `sqlx::migrate!` uygulama sırası ile aynı olmalı (`sort`).
 
@@ -49,6 +49,14 @@ Sıra `sqlx::migrate!` uygulama sırası ile aynı olmalı (`sort`).
 0037_copy_trade_execution_jobs.sql
 0038_ai_approval_requests.sql
 0039_notify_outbox.sql
+0040_user_permissions.sql
+0041_audit_log_details.sql
+0042_ai_engine_tables.sql
+0043_ai_engine_config.sql
+0044_system_config.sql
+0045_users_preferred_locale_and_worker_ticks.sql
+0046_worker_paper_live_notify_tick_secs.sql
+0047_worker_kill_switch_tick_secs.sql
 ```
 
-Yeni migration: bir sonraki boş numara **`0040_*.sql`** (veya dizindeki en yüksek önek + 1).
+Yeni migration: bir sonraki boş numara **`0048_*.sql`** (veya dizindeki en yüksek önek + 1).

@@ -1,7 +1,6 @@
 //! SPEC_ONCHAIN_SIGNALS §7 — on-chain skor tablosu okuma uçları.
 
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -12,6 +11,7 @@ use qtss_storage::{
     DataSnapshotRow, OnchainSignalScoreRow,
 };
 
+use crate::error::ApiError;
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
 use axum::Extension;
@@ -37,14 +37,12 @@ async fn onchain_signals_latest(
     Extension(_claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Query(q): Query<OnchainSymbolQuery>,
-) -> Result<Json<Option<OnchainSignalScoreRow>>, (StatusCode, String)> {
+) -> Result<Json<Option<OnchainSignalScoreRow>>, ApiError> {
     let sym = q.symbol.trim();
     if sym.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "query symbol is required".into()));
+        return Err(ApiError::bad_request("query symbol is required"));
     }
-    let row = fetch_latest_onchain_signal_score(&st.pool, sym)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row = fetch_latest_onchain_signal_score(&st.pool, sym).await?;
     Ok(Json(row))
 }
 
@@ -53,14 +51,12 @@ async fn onchain_signals_history(
     Extension(_claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Query(q): Query<OnchainHistoryQuery>,
-) -> Result<Json<Vec<OnchainSignalScoreRow>>, (StatusCode, String)> {
+) -> Result<Json<Vec<OnchainSignalScoreRow>>, ApiError> {
     let sym = q.symbol.trim();
     if sym.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "query symbol is required".into()));
+        return Err(ApiError::bad_request("query symbol is required"));
     }
-    let rows = list_onchain_signal_scores_history(&st.pool, sym, q.limit)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let rows = list_onchain_signal_scores_history(&st.pool, sym, q.limit).await?;
     Ok(Json(rows))
 }
 
@@ -69,14 +65,12 @@ async fn onchain_signals_breakdown(
     Extension(_claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Query(q): Query<OnchainSymbolQuery>,
-) -> Result<Json<Value>, (StatusCode, String)> {
+) -> Result<Json<Value>, ApiError> {
     let sym = q.symbol.trim().to_uppercase();
     if sym.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "query symbol is required".into()));
+        return Err(ApiError::bad_request("query symbol is required"));
     }
-    let score = fetch_latest_onchain_signal_score(&st.pool, &sym)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let score = fetch_latest_onchain_signal_score(&st.pool, &sym).await?;
     let base = sym
         .strip_suffix("USDT")
         .unwrap_or(sym.as_str())

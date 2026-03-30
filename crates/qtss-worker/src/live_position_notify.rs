@@ -6,8 +6,10 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
-use qtss_storage::{ExchangeOrderRepository, ExchangeOrderRow};
+use qtss_notify::{resolve_bilingual, Notification, NotificationChannel, NotificationDispatcher};
+use qtss_storage::{
+    resolve_notify_default_locale, resolve_worker_tick_secs, ExchangeOrderRepository, ExchangeOrderRow,
+};
 use rust_decimal::Decimal;
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -26,15 +28,15 @@ fn live_notify_channels_from_env() -> Vec<NotificationChannel> {
         .collect()
 }
 
-fn live_notify_tick_secs() -> u64 {
-    std::env::var("QTSS_NOTIFY_LIVE_TICK_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(45)
-        .max(15)
+fn order_summary_line_tr(row: &ExchangeOrderRow) -> String {
+    order_summary_line_inner(row, false)
 }
 
-fn order_summary_line(row: &ExchangeOrderRow) -> String {
+fn order_summary_line_en(row: &ExchangeOrderRow) -> String {
+    order_summary_line_inner(row, true)
+}
+
+fn order_summary_line_inner(row: &ExchangeOrderRow, english: bool) -> String {
     let side = row
         .intent
         .get("side")
@@ -62,18 +64,33 @@ fn order_summary_line(row: &ExchangeOrderRow) -> String {
         (Ok(qty_e), Ok(q)) if qty_e > Decimal::ZERO => (q / qty_e).to_string(),
         _ => "-".into(),
     };
-    format!(
-        "· {} {} {} | intent {} {} | venue {} exQty {} ~px {} | user {}",
-        row.exchange,
-        row.segment,
-        row.symbol,
-        side,
-        qty,
-        st,
-        exq,
-        avg_px,
-        row.user_id
-    )
+    if english {
+        format!(
+            "· {} {} {} | intent {} {} | venue {} exQty {} ~px {} | user {}",
+            row.exchange,
+            row.segment,
+            row.symbol,
+            side,
+            qty,
+            st,
+            exq,
+            avg_px,
+            row.user_id
+        )
+    } else {
+        format!(
+            "· {} {} {} | intent {} {} | venue {} exQty {} ~px {} | kullanıcı {}",
+            row.exchange,
+            row.segment,
+            row.symbol,
+            side,
+            qty,
+            st,
+            exq,
+            avg_px,
+            row.user_id
+        )
+    }
 }
 
 pub async fn live_position_notify_loop(pool: PgPool) {
@@ -86,14 +103,24 @@ pub async fn live_position_notify_loop(pool: PgPool) {
         warn!("Canlı pozisyon bildirimi açık fakat QTSS_NOTIFY_LIVE_POSITION_CHANNELS boş veya tanınmadı");
         return;
     }
-    let tick = Duration::from_secs(live_notify_tick_secs());
+    let pool_tick = pool.clone();
+    let pool_locale = pool.clone();
     let repo = ExchangeOrderRepository::new(pool);
     let mut cursor: Option<DateTime<Utc>> = None;
 
-    info!(poll_secs = tick.as_secs(), "canlı dolum bildirim döngüsü (exchange_orders)");
+    info!("canlı dolum bildirim döngüsü (exchange_orders; poll from system_config / env)");
 
     loop {
-        tokio::time::sleep(tick).await;
+        let poll_secs = resolve_worker_tick_secs(
+            &pool_tick,
+            "worker",
+            "live_position_notify_tick_secs",
+            "QTSS_NOTIFY_LIVE_TICK_SECS",
+            45,
+            15,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(poll_secs)).await;
         if cursor.is_none() {
             cursor = Some(Utc::now());
             continue;
@@ -116,16 +143,41 @@ pub async fn live_position_notify_loop(pool: PgPool) {
             .unwrap_or(after);
         cursor = Some(last_t);
 
-        let title = if rows.len() == 1 {
+        let loc = resolve_notify_default_locale(&pool_locale).await;
+        let title_tr = if rows.len() == 1 {
             let r = &rows[0];
             format!(
                 "Canlı dolum — {} {} {}",
-                r.exchange, r.symbol, r.intent.get("side").and_then(|x| x.as_str()).unwrap_or("?")
+                r.exchange,
+                r.symbol,
+                r.intent.get("side").and_then(|x| x.as_str()).unwrap_or("?")
             )
         } else {
             format!("Canlı dolum — {} emir", rows.len())
         };
-        let body = rows.iter().map(order_summary_line).collect::<Vec<_>>().join("\n");
+        let title_en = if rows.len() == 1 {
+            let r = &rows[0];
+            format!(
+                "Live fill — {} {} {}",
+                r.exchange,
+                r.symbol,
+                r.intent.get("side").and_then(|x| x.as_str()).unwrap_or("?")
+            )
+        } else {
+            format!("Live fill — {} orders", rows.len())
+        };
+        let title = resolve_bilingual(&loc, &title_en, &title_tr);
+        let body_tr = rows
+            .iter()
+            .map(order_summary_line_tr)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body_en = rows
+            .iter()
+            .map(order_summary_line_en)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body = resolve_bilingual(&loc, &body_en, &body_tr);
         let n = Notification::new(title, body);
         let d = NotificationDispatcher::from_env();
         for r in d.send_all(&chans, &n).await {

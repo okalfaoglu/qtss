@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use qtss_storage::AiApprovalRequestRow;
 
+use crate::error::ApiError;
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
 
@@ -48,23 +49,22 @@ pub fn ai_approval_admin_router() -> Router<SharedState> {
     Router::new().route("/ai/approval-requests/{id}", patch(decide_approval_request))
 }
 
-fn parse_org(claims: &AccessClaims) -> Result<Uuid, String> {
-    Uuid::parse_str(claims.org_id.trim()).map_err(|_| "geçersiz token org_id".to_string())
+fn parse_org(claims: &AccessClaims) -> Result<Uuid, ApiError> {
+    Uuid::parse_str(claims.org_id.trim()).map_err(|_| ApiError::bad_request("geçersiz token org_id"))
 }
 
 async fn list_approval_requests(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Query(q): Query<ListApprovalQuery>,
-) -> Result<Json<Vec<AiApprovalRequestRow>>, String> {
+) -> Result<Json<Vec<AiApprovalRequestRow>>, ApiError> {
     let org_id = parse_org(&claims)?;
     let limit = q.limit.unwrap_or(50);
     let status = q.status.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let rows = st
         .ai_approval
         .list_for_org(org_id, status, limit)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     Ok(Json(rows))
 }
 
@@ -72,9 +72,10 @@ async fn create_approval_request(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Json(body): Json<CreateApprovalBody>,
-) -> Result<Json<AiApprovalRequestRow>, String> {
+) -> Result<Json<AiApprovalRequestRow>, ApiError> {
     let org_id = parse_org(&claims)?;
-    let uid = Uuid::parse_str(claims.sub.trim()).map_err(|_| "geçersiz token sub".to_string())?;
+    let uid = Uuid::parse_str(claims.sub.trim())
+        .map_err(|_| ApiError::bad_request("geçersiz token sub"))?;
     let kind = body
         .kind
         .as_deref()
@@ -95,8 +96,7 @@ async fn create_approval_request(
             body.payload,
             model_hint,
         )
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     Ok(Json(row))
 }
 
@@ -105,13 +105,15 @@ async fn decide_approval_request(
     State(st): State<SharedState>,
     Path(id): Path<Uuid>,
     Json(body): Json<DecideBody>,
-) -> Result<Json<DecideResponse>, String> {
+) -> Result<Json<DecideResponse>, ApiError> {
     let org_id = parse_org(&claims)?;
-    let admin_id =
-        Uuid::parse_str(claims.sub.trim()).map_err(|_| "geçersiz token sub".to_string())?;
+    let admin_id = Uuid::parse_str(claims.sub.trim())
+        .map_err(|_| ApiError::bad_request("geçersiz token sub"))?;
     let st_norm = body.status.trim().to_ascii_lowercase();
     if st_norm != "approved" && st_norm != "rejected" {
-        return Err("status: approved veya rejected olmalı".into());
+        return Err(ApiError::bad_request(
+            "status: approved veya rejected olmalı",
+        ));
     }
     let note = body
         .admin_note
@@ -121,12 +123,11 @@ async fn decide_approval_request(
     let n = st
         .ai_approval
         .decide(id, org_id, admin_id, &st_norm, note)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     if n == 0 {
-        return Err(
-            "kayıt bulunamadı, org eşleşmedi veya durum pending değil".into(),
-        );
+        return Err(ApiError::not_found(
+            "kayıt bulunamadı, org eşleşmedi veya durum pending değil",
+        ));
     }
     Ok(Json(DecideResponse { updated: n }))
 }

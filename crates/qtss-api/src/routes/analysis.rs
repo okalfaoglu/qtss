@@ -28,6 +28,7 @@ use qtss_storage::{
     RangeSignalEventJoinedRow,
 };
 
+use crate::error::ApiError;
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
 
@@ -70,11 +71,11 @@ pub fn analysis_write_router() -> Router<SharedState> {
         .route("/analysis/engine/symbols/{id}", patch(patch_engine_symbol_api))
 }
 
-async fn list_engine_symbols_api(State(st): State<SharedState>) -> Result<Json<Vec<EngineSymbolRow>>, String> {
-    list_engine_symbols_all(&st.pool)
-        .await
-        .map(Json)
-        .map_err(|e| e.to_string())
+async fn list_engine_symbols_api(
+    State(st): State<SharedState>,
+) -> Result<Json<Vec<EngineSymbolRow>>, ApiError> {
+    let rows = list_engine_symbols_all(&st.pool).await?;
+    Ok(Json(rows))
 }
 
 #[derive(Deserialize)]
@@ -94,14 +95,14 @@ struct PostEngineSymbolBody {
 async fn post_engine_symbol_api(
     State(st): State<SharedState>,
     Json(body): Json<PostEngineSymbolBody>,
-) -> Result<Json<EngineSymbolRow>, String> {
+) -> Result<Json<EngineSymbolRow>, ApiError> {
     let sym = body.symbol.trim().to_uppercase();
     if sym.is_empty() {
-        return Err("symbol boş olamaz".to_string());
+        return Err(ApiError::bad_request("symbol boş olamaz"));
     }
     let iv = body.interval.trim().to_string();
     if iv.is_empty() {
-        return Err("interval boş olamaz".to_string());
+        return Err(ApiError::bad_request("interval boş olamaz"));
     }
     let mode = body
         .signal_direction_mode
@@ -124,19 +125,15 @@ async fn post_engine_symbol_api(
         label: body.label,
         signal_direction_mode: mode,
     };
-    insert_engine_symbol(&st.pool, &row)
-        .await
-        .map(Json)
-        .map_err(|e| e.to_string())
+    let inserted = insert_engine_symbol(&st.pool, &row).await?;
+    Ok(Json(inserted))
 }
 
 async fn list_engine_snapshots_api(
     State(st): State<SharedState>,
-) -> Result<Json<Vec<AnalysisSnapshotJoinedRow>>, String> {
-    list_analysis_snapshots_with_symbols(&st.pool)
-        .await
-        .map(Json)
-        .map_err(|e| e.to_string())
+) -> Result<Json<Vec<AnalysisSnapshotJoinedRow>>, ApiError> {
+    let rows = list_analysis_snapshots_with_symbols(&st.pool).await?;
+    Ok(Json(rows))
 }
 
 /// SPEC §7.1 — tek sembol için son `confluence` JSON (`market-context/latest` ile aynı eşleştirme).
@@ -155,38 +152,30 @@ async fn get_confluence_latest_by_symbol_api(
     Extension(_claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Query(q): Query<ConfluenceLatestQuery>,
-) -> Result<Json<Option<serde_json::Value>>, (StatusCode, String)> {
+) -> Result<Json<Option<serde_json::Value>>, ApiError> {
     let sym_in = q.symbol.trim();
     if sym_in.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "query symbol is required".into()));
+        return Err(ApiError::bad_request("query symbol is required"));
     }
     let interval = q.interval.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let exchange = q.exchange.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let segment = q.segment.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let matches = list_engine_symbols_matching(&st.pool, sym_in, interval, exchange, segment)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let matches =
+        list_engine_symbols_matching(&st.pool, sym_in, interval, exchange, segment).await?;
     let row = matches.into_iter().next().ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            format!(
-                "no engine_symbols row for symbol={}",
-                sym_in.to_uppercase()
-            ),
-        )
+        ApiError::not_found(format!(
+            "no engine_symbols row for symbol={}",
+            sym_in.to_uppercase()
+        ))
     })?;
-    let conf = fetch_analysis_snapshot_payload(&st.pool, row.id, "confluence")
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let conf = fetch_analysis_snapshot_payload(&st.pool, row.id, "confluence").await?;
     Ok(Json(conf))
 }
 
 async fn list_confluence_snapshots_api(
     State(st): State<SharedState>,
-) -> Result<Json<Vec<AnalysisSnapshotJoinedRow>>, String> {
-    let rows = list_analysis_snapshots_with_symbols(&st.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+) -> Result<Json<Vec<AnalysisSnapshotJoinedRow>>, ApiError> {
+    let rows = list_analysis_snapshots_with_symbols(&st.pool).await?;
     Ok(Json(
         rows.into_iter()
             .filter(|r| r.engine_kind == "confluence")
@@ -196,11 +185,9 @@ async fn list_confluence_snapshots_api(
 
 async fn list_data_snapshots_api(
     State(st): State<SharedState>,
-) -> Result<Json<Vec<DataSnapshotRow>>, String> {
-    list_data_snapshots(&st.pool)
-        .await
-        .map(Json)
-        .map_err(|e| e.to_string())
+) -> Result<Json<Vec<DataSnapshotRow>>, ApiError> {
+    let rows = list_data_snapshots(&st.pool).await?;
+    Ok(Json(rows))
 }
 
 /// Confluence ile aynı bağlam anahtarları (Nansen DEX + Binance funding/OI + HL + BTC Coinglass).
@@ -257,42 +244,27 @@ struct MarketContextLatestResponse {
 async fn get_market_context_latest_api(
     State(st): State<SharedState>,
     Query(q): Query<MarketContextQuery>,
-) -> Result<Json<MarketContextLatestResponse>, (StatusCode, String)> {
+) -> Result<Json<MarketContextLatestResponse>, ApiError> {
     let sym_in = q.symbol.trim();
     if sym_in.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "query symbol is required".into()));
+        return Err(ApiError::bad_request("query symbol is required"));
     }
     let interval = q.interval.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let exchange = q.exchange.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let segment = q.segment.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let matches = list_engine_symbols_matching(
-        &st.pool,
-        sym_in,
-        interval,
-        exchange,
-        segment,
-    )
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let matches =
+        list_engine_symbols_matching(&st.pool, sym_in, interval, exchange, segment).await?;
     let row = matches.into_iter().next().ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            format!(
-                "no engine_symbols row for symbol={} (optional interval/exchange/segment filters)",
-                sym_in.to_uppercase()
-            ),
-        )
+        ApiError::not_found(format!(
+            "no engine_symbols row for symbol={} (optional interval/exchange/segment filters)",
+            sym_in.to_uppercase()
+        ))
     })?;
     let id = row.id;
-    let signal_dashboard = fetch_analysis_snapshot_payload(&st.pool, id, "signal_dashboard")
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let trading_range = fetch_analysis_snapshot_payload(&st.pool, id, "trading_range")
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let confluence = fetch_analysis_snapshot_payload(&st.pool, id, "confluence")
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let signal_dashboard =
+        fetch_analysis_snapshot_payload(&st.pool, id, "signal_dashboard").await?;
+    let trading_range = fetch_analysis_snapshot_payload(&st.pool, id, "trading_range").await?;
+    let confluence = fetch_analysis_snapshot_payload(&st.pool, id, "confluence").await?;
     let mut context_data_snapshots: Vec<DataSnapshotRow> = Vec::new();
     for key in context_data_snapshot_keys_for_symbol(&row.symbol) {
         if let Ok(Some(r)) = fetch_data_snapshot(&st.pool, &key).await {
@@ -500,35 +472,33 @@ fn default_confluence_history_limit() -> i64 {
 async fn list_market_confluence_history_api(
     State(st): State<SharedState>,
     Query(q): Query<MarketConfluenceHistoryQuery>,
-) -> Result<Json<Vec<MarketConfluenceSnapshotRow>>, (StatusCode, String)> {
+) -> Result<Json<Vec<MarketConfluenceSnapshotRow>>, ApiError> {
     let lim = q.limit.clamp(1, 200);
     let id = if let Some(id) = q.engine_symbol_id {
         id
     } else {
-        let sym_in = q.symbol.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or((
-            StatusCode::BAD_REQUEST,
-            "query engine_symbol_id or symbol is required".into(),
-        ))?;
+        let sym_in = q
+            .symbol
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                ApiError::bad_request("query engine_symbol_id or symbol is required")
+            })?;
         let interval = q.interval.as_deref().map(str::trim).filter(|s| !s.is_empty());
         let exchange = q.exchange.as_deref().map(str::trim).filter(|s| !s.is_empty());
         let segment = q.segment.as_deref().map(str::trim).filter(|s| !s.is_empty());
-        let matches = list_engine_symbols_matching(&st.pool, sym_in, interval, exchange, segment)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let matches =
+            list_engine_symbols_matching(&st.pool, sym_in, interval, exchange, segment).await?;
         let row = matches.into_iter().next().ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                format!(
-                    "no engine_symbols row for symbol={} (optional interval/exchange/segment)",
-                    sym_in.to_uppercase()
-                ),
-            )
+            ApiError::not_found(format!(
+                "no engine_symbols row for symbol={} (optional interval/exchange/segment)",
+                sym_in.to_uppercase()
+            ))
         })?;
         row.id
     };
-    let rows = list_market_confluence_snapshots_for_symbol(&st.pool, id, lim)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let rows = list_market_confluence_snapshots_for_symbol(&st.pool, id, lim).await?;
     Ok(Json(rows))
 }
 
@@ -536,7 +506,7 @@ async fn list_market_confluence_history_api(
 async fn list_market_context_summary_api(
     State(st): State<SharedState>,
     Query(q): Query<MarketContextSummaryQuery>,
-) -> Result<Json<Vec<MarketContextSummaryItem>>, String> {
+) -> Result<Json<Vec<MarketContextSummaryItem>>, ApiError> {
     let ex = q.exchange.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let seg = q.segment.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let sym = q.symbol.as_deref().map(str::trim).filter(|s| !s.is_empty());
@@ -548,19 +518,16 @@ async fn list_market_context_summary_api(
         q.enabled_only,
         q.limit,
     )
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
     Ok(Json(rows.into_iter().map(map_summary_row).collect()))
 }
 
 /// Son Nansen token screener snapshot’ı (`qtss-worker` + `NANSEN_API_KEY`). Satır yoksa `null`.
 async fn get_nansen_snapshot_api(
     State(st): State<SharedState>,
-) -> Result<Json<Option<NansenSnapshotRow>>, String> {
-    fetch_nansen_snapshot(&st.pool, "token_screener")
-        .await
-        .map(Json)
-        .map_err(|e| e.to_string())
+) -> Result<Json<Option<NansenSnapshotRow>>, ApiError> {
+    let row = fetch_nansen_snapshot(&st.pool, "token_screener").await?;
+    Ok(Json(row))
 }
 
 #[derive(Serialize)]
@@ -603,11 +570,9 @@ fn default_range_signals_limit() -> i64 {
 async fn list_range_signals_api(
     State(st): State<SharedState>,
     Query(q): Query<RangeSignalsQuery>,
-) -> Result<Json<Vec<RangeSignalEventJoinedRow>>, String> {
-    list_range_signal_events_joined(&st.pool, q.engine_symbol_id, q.limit)
-        .await
-        .map(Json)
-        .map_err(|e| e.to_string())
+) -> Result<Json<Vec<RangeSignalEventJoinedRow>>, ApiError> {
+    let rows = list_range_signal_events_joined(&st.pool, q.engine_symbol_id, q.limit).await?;
+    Ok(Json(rows))
 }
 
 #[derive(Deserialize, Default)]
@@ -618,15 +583,15 @@ struct PatchEngineSymbolBody {
     pub signal_direction_mode: Option<String>,
 }
 
-fn normalize_signal_direction_mode(raw: &str) -> Result<String, String> {
+fn normalize_signal_direction_mode(raw: &str) -> Result<String, ApiError> {
     match raw.trim().to_lowercase().as_str() {
         "both" | "bidirectional" | "long_short" | "long_and_short" => Ok("both".into()),
         "long_only" | "longonly" => Ok("long_only".into()),
         "short_only" | "shortonly" => Ok("short_only".into()),
         "auto_segment" | "auto" => Ok("auto_segment".into()),
-        _ => Err(format!(
+        _ => Err(ApiError::bad_request(format!(
             "signal_direction_mode geçersiz: {raw} (both | long_only | short_only | auto_segment)"
-        )),
+        ))),
     }
 }
 
@@ -634,20 +599,20 @@ async fn patch_engine_symbol_api(
     State(st): State<SharedState>,
     Path(id): Path<Uuid>,
     Json(body): Json<PatchEngineSymbolBody>,
-) -> Result<StatusCode, String> {
+) -> Result<StatusCode, ApiError> {
     if body.enabled.is_none() && body.signal_direction_mode.is_none() {
-        return Err("gövdede enabled veya signal_direction_mode gerekli".into());
+        return Err(ApiError::bad_request(
+            "gövdede enabled veya signal_direction_mode gerekli",
+        ));
     }
     let mode = body
         .signal_direction_mode
         .as_deref()
         .map(normalize_signal_direction_mode)
         .transpose()?;
-    let n = update_engine_symbol_patch(&st.pool, id, body.enabled, mode.as_deref())
-        .await
-        .map_err(|e| e.to_string())?;
+    let n = update_engine_symbol_patch(&st.pool, id, body.enabled, mode.as_deref()).await?;
     if n == 0 {
-        return Err("engine_symbol bulunamadı".into());
+        return Err(ApiError::not_found("engine_symbol bulunamadı"));
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -666,12 +631,10 @@ async fn get_chart_patterns_config(State(st): State<SharedState>) -> Result<Json
 }
 
 /// `app_config.elliott_wave` — yoksa web ile uyumlu fabrika varsayılanları.
-async fn get_elliott_wave_config(State(st): State<SharedState>) -> Result<Json<serde_json::Value>, String> {
-    let row = st
-        .config
-        .get_by_key(ELLIOTT_WAVE_CONFIG_KEY)
-        .await
-        .map_err(|e| e.to_string())?;
+async fn get_elliott_wave_config(
+    State(st): State<SharedState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let row = st.config.get_by_key(ELLIOTT_WAVE_CONFIG_KEY).await?;
     Ok(Json(
         row.map(|e| e.value)
             .unwrap_or_else(default_elliott_wave_json),

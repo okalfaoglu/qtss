@@ -2,12 +2,14 @@ pub mod ai_approval;
 pub mod audit_log;
 pub mod catalog;
 pub mod config;
+pub mod config_tick;
 pub mod copy_trade;
 pub mod copy_trade_jobs;
 pub mod data_snapshots;
 pub mod engine_analysis;
 pub mod error;
 pub mod external_fetch;
+pub mod fill_long_estimate;
 pub mod exchange_accounts;
 pub mod exchange_orders;
 pub mod market_bars;
@@ -17,9 +19,11 @@ pub mod nansen;
 pub mod nansen_setup_scan;
 pub mod notify_outbox;
 pub mod pool;
+pub mod system_config;
 pub mod paper;
 pub mod pnl;
 pub mod user_permissions;
+pub mod users;
 
 pub use ai_approval::{AiApprovalRepository, AiApprovalRequestRow};
 pub use audit_log::{insert_http_audit, list_recent as audit_list_recent, AuditHttpListRow, AuditHttpRow};
@@ -28,6 +32,9 @@ pub use catalog::{
     MarketRow, SeriesCatalogIds,
 };
 pub use config::{AppConfigEntry, AppConfigRepository};
+pub use config_tick::{
+    resolve_notify_default_locale, resolve_worker_tick_secs, tick_secs_from_config_value,
+};
 pub use copy_trade::{CopySubscriptionRepository, CopySubscriptionRow};
 pub use copy_trade_jobs::{CopyTradeJobRepository, CopyTradeJobRow};
 pub use data_snapshots::{
@@ -48,10 +55,12 @@ pub use external_fetch::{
     delete_external_source, external_snapshot_age_secs, list_enabled_external_sources,
     list_external_sources, upsert_external_source, ExternalDataSourceRow,
 };
+pub use fill_long_estimate::{symbols_with_positive_long_from_fills, FillPositionKey};
 pub use exchange_accounts::{ExchangeAccountRepository, ExchangeCredentials};
 pub use exchange_orders::{ExchangeOrderRepository, ExchangeOrderRow};
 pub use market_bars::{
-    list_recent_bars, upsert_market_bar, MarketBarRow, MarketBarUpsert,
+    fetch_recent_bars_stats, list_recent_bars, upsert_market_bar, MarketBarRow, MarketBarUpsert,
+    RecentBarsStats,
 };
 pub use market_confluence_snapshots::{
     insert_market_confluence_snapshot, list_market_confluence_snapshots_for_symbol,
@@ -73,4 +82,6 @@ pub use pnl::{
     sum_today_daily_realized_pnl, PnlBucket, PnlRebuildStats, PnlRollupRepository, PnlRollupRow,
 };
 pub use pool::{create_pool, run_migrations};
+pub use system_config::{SystemConfigRepository, SystemConfigRow};
 pub use user_permissions::UserPermissionRepository;
+pub use users::UserRepository;

@@ -1,4 +1,5 @@
 mod ai_approval;
+mod ai_decisions;
 mod analysis;
 mod audit_admin;
 mod catalog_admin;
@@ -8,6 +9,7 @@ mod copy_trade;
 mod dashboard;
 mod external_fetch;
 mod health;
+mod kill_switch_admin;
 mod market_binance;
 mod notify;
 mod onchain_signals;
@@ -15,6 +17,7 @@ mod orders_binance;
 mod orders_dry;
 mod reconcile;
 mod session;
+mod system_config_admin;
 mod user_permissions_admin;
 
 use axum::middleware::from_fn;
@@ -27,6 +30,7 @@ pub use dashboard::{dashboard_admin_router, dashboard_router};
 pub use health::health_router;
 
 use crate::audit_http::audit_http_middleware;
+use crate::locale::locale_middleware;
 use crate::oauth::middleware::require_jwt;
 use crate::oauth::rbac::{
     require_admin, require_audit_read, require_dashboard_roles, require_ops_roles,
@@ -53,6 +57,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         )
         .merge(
             config_router()
+                .merge(system_config_admin::system_config_admin_router())
                 .layer(from_fn(require_admin)),
         )
         .merge(
@@ -62,6 +67,9 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(
             dashboard_admin_router()
                 .layer(from_fn(require_admin)),
+        )
+        .merge(
+            kill_switch_admin::kill_switch_admin_router().layer(from_fn(require_admin)),
         )
         .merge(
             catalog_sync_router()
@@ -116,12 +124,19 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
                 .layer(from_fn(require_ops_roles)),
         )
         .merge(
+            ai_decisions::ai_decisions_read_router(),
+        )
+        .merge(
             ai_approval::ai_approval_read_router()
                 .layer(from_fn(require_dashboard_roles)),
         )
         .merge(
             ai_approval::ai_approval_submit_router()
                 .layer(from_fn(require_ops_roles)),
+        )
+        .merge(
+            ai_decisions::ai_decisions_admin_router()
+                .layer(from_fn(require_admin)),
         )
         .merge(
             ai_approval::ai_approval_admin_router()
@@ -139,6 +154,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
                 .merge(external_fetch::external_fetch_write_router())
                 .layer(from_fn(require_ops_roles)),
         )
+        .layer(from_fn(locale_middleware))
         .layer(audit_layer)
         .layer(jwt_layer)
 }

@@ -18,6 +18,14 @@
   - *Geliştirme*: Düz metin kabul edilebilir.
   - *Hedef*: **HashiCorp Vault**, AWS Secrets Manager, GCP Secret Manager veya benzeri; uygulama yalnızca kısa ömürlü okuma.
   - *Uygulama*: Anahtarları alan servis Vault’tan çözer, DB’de sadece **referans** (path / version) tutulabilir; veya alan düzeyinde uygulama içi AEAD (ör. KMS ile data key).
+- **Telegram bot token** (`QTSS_NOTIFY_TELEGRAM_BOT_TOKEN`): Üretimde secret store; git ve paylaşılan loglarda yok. Sohbet/kanal ID’leri (`QTSS_NOTIFY_TELEGRAM_CHAT_ID`) operasyonel hassasiyet taşıyabilir. Ayrıntılı iş listesi: `docs/QTSS_MASTER_DEV_GUIDE.md` **FAZ 10**.
+
+### Telegram’ı açmak için (operatör özeti, FAZ 10.6)
+
+1. BotFather’dan bot oluşturun; token’ı yalnızca secret store / kök `.env` içinde tutun (`QTSS_NOTIFY_TELEGRAM_BOT_TOKEN`).
+2. Sohbet veya kanal ID’sini alın (`QTSS_NOTIFY_TELEGRAM_CHAT_ID`); test mesajı için botun sohbete ekli olduğundan emin olun.
+3. API smoke: yetkili istemci ile `POST /api/v1/notify/test` gövdesinde `channel`: `telegram` (Bearer token gerekir).
+4. Worker tarafı kuyruk: `QTSS_NOTIFY_OUTBOX_ENABLED=1` ve outbox kaydında `channels` listesine `telegram` ekleyin; veya doğrudan sweep/setup/sinyal hatlarında ilgili `*_CHANNELS=telegram` env’lerini açın (`.env.example` ile hizalı).
 
 ## Denetim
 

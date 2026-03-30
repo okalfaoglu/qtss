@@ -237,6 +237,22 @@ async fn onchain_pillar_score(pool: &PgPool, symbol: &str) -> f64 {
 }
 
 /// Confluence JSON traceability — okunan `data_snapshots` anahtarları (PLAN §4.2 / §8).
+async fn data_snapshot_keys_availability(
+    pool: &PgPool,
+    keys: &[String],
+) -> (usize, Vec<String>) {
+    let mut available = 0usize;
+    let mut missing = Vec::new();
+    for k in keys {
+        if data_snapshot_json(pool, k.as_str()).await.is_some() {
+            available += 1;
+        } else {
+            missing.push(k.clone());
+        }
+    }
+    (available, missing)
+}
+
 fn build_data_sources_considered(symbol: &str) -> Vec<String> {
     let base = symbol_base_lower(symbol);
     let mut v = vec![
@@ -358,6 +374,13 @@ pub async fn compute_and_persist(
     };
 
     let data_sources_considered = build_data_sources_considered(&t.symbol);
+    let (snap_available, components_missing) =
+        data_snapshot_keys_availability(pool, &data_sources_considered).await;
+    let snapshot_expected = data_sources_considered.len();
+    let total_expected_components = snapshot_expected + 1;
+    let data_available_count = snap_available + 1;
+    let availability_ratio = (data_available_count as f64 / total_expected_components as f64)
+        .clamp(0.0, 1.0);
 
     let composite_score =
         (wt * technical + wo * onchain + ws * smart_money).clamp(-1.0, 1.0);
@@ -432,6 +455,14 @@ pub async fn compute_and_persist(
         "segment": t.segment,
         "interval": t.interval,
         "data_sources_considered": data_sources_considered,
+        "data_availability": {
+            "snapshot_available_count": snap_available,
+            "snapshot_expected_count": snapshot_expected,
+            "total_expected_components": total_expected_components,
+            "data_available_count": data_available_count,
+            "availability_ratio": availability_ratio
+        },
+        "components_missing": components_missing,
         "category_scores": {
             "nansen_response_coverage": nansen_response_coverage_cat,
             "dex_pressure": dex_pressure_cat,
@@ -554,5 +585,20 @@ mod tests {
         });
         let s = technical_pillar_score(&dash);
         assert!(s > 0.5);
+    }
+
+    #[test]
+    fn lot_scale_hint_clamps_by_conflict_count() {
+        assert!((lot_scale_hint_from_conflict_count(0) - 1.0).abs() < f64::EPSILON);
+        assert!(lot_scale_hint_from_conflict_count(3) < 1.0);
+        assert!((lot_scale_hint_from_conflict_count(100) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pillar_from_durum_scales_strength() {
+        let long_full = pillar_from_durum_and_strength("LONG", 10.0);
+        assert!(long_full > 0.5);
+        let short_half = pillar_from_durum_and_strength("SHORT", 5.0);
+        assert!(short_half < 0.0);
     }
 }

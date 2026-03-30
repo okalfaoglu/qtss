@@ -23,3 +23,37 @@ pub fn clear_trading_halt() {
     TRADING_HALTED.store(false, Ordering::SeqCst);
     tracing::warn!("TRADING_HALTED cleared");
 }
+
+/// [`clear_trading_halt`] ile aynı — master rehber / API uç adı uyumu.
+#[inline]
+pub fn resume_trading() {
+    clear_trading_halt();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static HALT_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn halt_and_clear_roundtrip() {
+        let _g = HALT_TEST_LOCK.lock().expect("halt test lock");
+        clear_trading_halt();
+        assert!(!is_trading_halted());
+        set_trading_halted(true);
+        assert!(is_trading_halted());
+        clear_trading_halt();
+        assert!(!is_trading_halted());
+    }
+
+    #[test]
+    fn resume_trading_clears_halt() {
+        let _g = HALT_TEST_LOCK.lock().expect("halt test lock");
+        set_trading_halted(true);
+        assert!(is_trading_halted());
+        resume_trading();
+        assert!(!is_trading_halted());
+    }
+}

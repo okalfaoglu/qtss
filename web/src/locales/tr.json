@@ -1,0 +1,47 @@
+{
+  "common": {
+    "language": "Dil"
+  },
+  "drawer": {
+    "queues": "Kuyruklar",
+    "setting": "Ayarlar",
+    "general": "Genel",
+    "status": "Durum",
+    "apiHealth": "API sağlık:",
+    "sessionConfig": "Oturum ve yapılandırma",
+    "sessionHint": "API erişimi JWT ve sunucu RBAC ile sınırlıdır; roller yalnızca arayüz rehberidir.",
+    "loginTry": "Giriş dene",
+    "configRefresh": "Yapılandırmayı yenile",
+    "configLoading": "Yapılandırma…",
+    "logout": "Çıkış",
+    "rolesLoading": "Roller yükleniyor…",
+    "appearance": "Görünüm",
+    "themeToggleDark": "Açık temaya geç",
+    "themeToggleLight": "Koyu temaya geç"
+  },
+  "elliott": {
+    "summary": "Özet",
+    "impulse": "İtki (1–5)",
+    "corrective": "Düzeltme (2/4)"
+  },
+  "aiDecisions": {
+    "loginPrompt": "AI kararları için giriş yapın.",
+    "title": "AI kararları (`ai_decisions`)",
+    "refresh": "Yenile",
+    "portfolio": "Portföy direktifi",
+    "tacticalSection": "Son onaylı taktik (sembol)",
+    "tactical": "Taktik (sembol)",
+    "load": "Yükle",
+    "layerFilter": "katman",
+    "statusFilter": "durum",
+    "approve": "Onayla",
+    "reject": "Reddet",
+    "colCreated": "oluşturulma",
+    "colLayer": "katman",
+    "colSymbol": "sembol",
+    "colStatus": "durum",
+    "colConf": "güven",
+    "colModel": "model",
+    "colAction": "aksiyon"
+  }
+}

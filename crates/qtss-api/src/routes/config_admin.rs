@@ -10,6 +10,7 @@ use uuid::Uuid;
 use qtss_common::{log_business, QtssLogLevel};
 use qtss_storage::AppConfigEntry;
 
+use crate::error::ApiError;
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
 
@@ -30,9 +31,9 @@ pub fn config_router() -> Router<SharedState> {
 async fn list_config(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
-) -> Result<Json<Vec<AppConfigEntry>>, String> {
+) -> Result<Json<Vec<AppConfigEntry>>, ApiError> {
     let _ = claims;
-    let rows = st.config.list(500).await.map_err(|e| e.to_string())?;
+    let rows = st.config.list(500).await?;
     log_business(QtssLogLevel::Debug, "qtss_api::config", "list_config");
     Ok(Json(rows))
 }
@@ -41,7 +42,7 @@ async fn upsert_config(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Json(body): Json<UpsertBody>,
-) -> Result<Json<AppConfigEntry>, String> {
+) -> Result<Json<AppConfigEntry>, ApiError> {
     let _ = claims;
     let row = st
         .config
@@ -51,8 +52,7 @@ async fn upsert_config(
             body.description.as_deref(),
             body.actor_user_id,
         )
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     log_business(
         QtssLogLevel::Info,
         "qtss_api::config",
@@ -65,9 +65,9 @@ async fn delete_config(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
     Path(key): Path<String>,
-) -> Result<Json<u64>, String> {
+) -> Result<Json<u64>, ApiError> {
     let _ = claims;
-    let n = st.config.delete_by_key(&key).await.map_err(|e| e.to_string())?;
+    let n = st.config.delete_by_key(&key).await?;
     log_business(
         QtssLogLevel::Warning,
         "qtss_api::config",

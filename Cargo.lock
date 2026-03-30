@@ -1688,6 +1688,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "qtss-ai"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "hex",
+ "qtss-common",
+ "qtss-notify",
+ "qtss-storage",
+ "reqwest",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "qtss-analysis"
 version = "0.1.0"
 dependencies = [
@@ -1716,6 +1739,7 @@ dependencies = [
  "hex",
  "ipnet",
  "jsonwebtoken",
+ "qtss-ai",
  "qtss-backtest",
  "qtss-binance",
  "qtss-chart-patterns",
@@ -1918,6 +1942,7 @@ dependencies = [
  "axum",
  "chrono",
  "futures-util",
+ "qtss-ai",
  "qtss-analysis",
  "qtss-binance",
  "qtss-chart-patterns",

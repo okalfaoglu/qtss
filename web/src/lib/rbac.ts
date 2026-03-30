@@ -12,6 +12,8 @@ export type AuthSession = {
   /** JWT `permissions` claim (e.g. `qtss:read`, `qtss:ops`, `qtss:admin`) when issued by API. */
   permissions: string[];
   oauthClientId: string;
+  /** Server `users.preferred_locale` when set (`en` | `tr`). */
+  preferredLocale?: string | null;
 };
 
 export function hasAnyRole(roles: readonly string[], ...allowed: string[]): boolean {

@@ -14,6 +14,101 @@ export type TokenResponse = {
   refresh_token?: string;
 };
 
+/** `App.tsx` registers this so 401 responses can refresh the Bearer token. */
+export type ApiAuthConfig = {
+  getRefreshToken: () => string | null;
+  setTokens: (accessToken: string, refreshToken: string | null) => void;
+  getOAuthClientCredentials: () => { clientId: string; clientSecret: string };
+};
+
+let apiAuthConfig: ApiAuthConfig | null = null;
+let refreshInFlight: Promise<string | null> | null = null;
+
+export function configureApiAuth(cfg: ApiAuthConfig | null) {
+  apiAuthConfig = cfg;
+}
+
+export async function oauthTokenRefresh(params: {
+  refreshToken: string;
+  clientId: string;
+  clientSecret: string;
+}): Promise<TokenResponse> {
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: params.refreshToken,
+    client_id: params.clientId,
+    client_secret: params.clientSecret,
+  });
+  const r = await fetch(`${API_BASE}/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+  const t = await r.text();
+  if (!r.ok) {
+    let detail = t;
+    try {
+      const j = JSON.parse(t) as { error?: string; error_description?: string };
+      if (j.error_description) detail = j.error_description;
+      else if (j.error) detail = j.error;
+    } catch {
+      /* raw */
+    }
+    throw new Error(`oauth refresh ${r.status}: ${detail}`);
+  }
+  return JSON.parse(t) as TokenResponse;
+}
+
+async function refreshAccessToken(): Promise<string | null> {
+  const cfg = apiAuthConfig;
+  if (!cfg) return null;
+  if (refreshInFlight) return refreshInFlight;
+
+  refreshInFlight = (async (): Promise<string | null> => {
+    try {
+      const rt = cfg.getRefreshToken();
+      const { clientId, clientSecret } = cfg.getOAuthClientCredentials();
+      if (!rt?.trim() || !clientId || !clientSecret) return null;
+      const tr = await oauthTokenRefresh({
+        refreshToken: rt.trim(),
+        clientId,
+        clientSecret,
+      });
+      const nextRt = tr.refresh_token?.trim() ? tr.refresh_token.trim() : rt.trim();
+      cfg.setTokens(tr.access_token, nextRt);
+      return tr.access_token;
+    } catch {
+      return null;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+
+  return refreshInFlight;
+}
+
+/**
+ * Protected API calls: on 401, attempts one OAuth `refresh_token` grant (single-flight),
+ * updates tokens via `configureApiAuth`, then retries the request once.
+ */
+export async function fetchWithBearerRetry(
+  url: string,
+  accessToken: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${accessToken}`);
+  let res = await fetch(url, { ...init, headers });
+  if (res.status !== 401) return res;
+
+  const newAccess = await refreshAccessToken();
+  if (!newAccess) return res;
+
+  const h2 = new Headers(init.headers);
+  h2.set("Authorization", `Bearer ${newAccess}`);
+  return fetch(url, { ...init, headers: h2 });
+}
+
 export async function fetchHealth(): Promise<unknown> {
   const r = await fetch(`${API_BASE}/health`);
   if (!r.ok) throw new Error(`health ${r.status}`);
@@ -59,9 +154,7 @@ export async function oauthTokenPassword(params: {
 
 /** JWT doğrulandıktan sonra rol / org özeti (GUI RBAC). */
 export async function fetchAuthMe(accessToken: string): Promise<AuthSession> {
-  const r = await fetch(`${API_BASE}/api/v1/me`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/me`, accessToken, {});
   const t = await r.text();
   if (!r.ok) {
     throw new Error(`me ${r.status}: ${t.slice(0, 300)}`);
@@ -72,6 +165,7 @@ export async function fetchAuthMe(accessToken: string): Promise<AuthSession> {
     roles: string[];
     azp: string;
     permissions?: string[];
+    preferred_locale?: string | null;
   };
   return {
     userId: j.sub,
@@ -79,13 +173,35 @@ export async function fetchAuthMe(accessToken: string): Promise<AuthSession> {
     roles: Array.isArray(j.roles) ? j.roles : [],
     permissions: Array.isArray(j.permissions) ? j.permissions : [],
     oauthClientId: j.azp,
+    preferredLocale:
+      typeof j.preferred_locale === "string" && j.preferred_locale.trim() !== ""
+        ? j.preferred_locale.trim()
+        : j.preferred_locale === null
+          ? null
+          : undefined,
   };
 }
 
-export async function fetchConfigList(accessToken: string): Promise<unknown> {
-  const r = await fetch(`${API_BASE}/api/v1/config`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+/** Persists `users.preferred_locale` (`en` | `tr`); pass `null` to clear. */
+export async function patchMePreferredLocale(
+  accessToken: string,
+  preferred_locale: string | null,
+): Promise<void> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/me/locale`, accessToken, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ preferred_locale }),
   });
+  const text = await r.text();
+  if (!r.ok) {
+    throw new Error(`me/locale ${r.status}: ${text.slice(0, 300)}`);
+  }
+}
+
+export async function fetchConfigList(accessToken: string): Promise<unknown> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/config`, accessToken, {});
   if (!r.ok) {
     const t = await r.text();
     throw new Error(`config ${r.status}: ${t}`);
@@ -95,9 +211,7 @@ export async function fetchConfigList(accessToken: string): Promise<unknown> {
 
 /** Dashboard rolleri — `app_config.acp_chart_patterns` ile aynı JSON (admin değil). */
 export async function fetchChartPatternsConfig(accessToken: string): Promise<unknown> {
-  const r = await fetch(`${API_BASE}/api/v1/analysis/chart-patterns-config`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/chart-patterns-config`, accessToken, {});
   if (!r.ok) {
     const t = await r.text();
     throw new Error(`chart-patterns-config ${r.status}: ${t}`);
@@ -107,9 +221,7 @@ export async function fetchChartPatternsConfig(accessToken: string): Promise<unk
 
 /** Dashboard rolleri — `app_config.elliott_wave` veya sunucu varsayılanı. */
 export async function fetchElliottWaveConfig(accessToken: string): Promise<unknown> {
-  const r = await fetch(`${API_BASE}/api/v1/analysis/elliott-wave-config`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/elliott-wave-config`, accessToken, {});
   if (!r.ok) {
     const t = await r.text();
     throw new Error(`elliott-wave-config ${r.status}: ${t}`);
@@ -122,10 +234,9 @@ export async function upsertAppConfig(
   accessToken: string,
   body: { key: string; value: unknown; description?: string },
 ): Promise<unknown> {
-  const r = await fetch(`${API_BASE}/api/v1/config`, {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/config`, accessToken, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
@@ -173,9 +284,7 @@ export async function fetchMarketBarsRecent(
     interval: params.interval,
   });
   if (params.limit != null) q.set("limit", String(params.limit));
-  const r = await fetch(`${API_BASE}/api/v1/market/bars/recent?${q}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/market/bars/recent?${q}`, accessToken, {});
   if (!r.ok) {
     const t = await r.text();
     throw new Error(`market/bars/recent ${r.status}: ${t}`);
@@ -221,9 +330,7 @@ export async function fetchMarketBinanceKlinesForChart(
   }
   const seg = params.segment?.trim();
   if (seg) q.set("segment", seg);
-  const r = await fetch(`${API_BASE}/api/v1/market/binance/klines?${q}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/market/binance/klines?${q}`, accessToken, {});
   if (!r.ok) {
     const t = await r.text();
     throw new Error(`market/binance/klines ${r.status}: ${t.slice(0, 200)}`);
@@ -256,10 +363,9 @@ export async function backfillMarketBarsFromRest(
     limit?: number;
   },
 ): Promise<{ upserted: number; source?: string; symbol?: string; segment?: string }> {
-  const r = await fetch(`${API_BASE}/api/v1/market/binance/bars/backfill`, {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/market/binance/bars/backfill`, accessToken, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -419,10 +525,9 @@ export async function scanChannelSix(
     };
   },
 ): Promise<ChannelSixResponse> {
-  const r = await fetch(`${API_BASE}/api/v1/analysis/patterns/channel-six`, {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/patterns/channel-six`, accessToken, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
@@ -464,18 +569,14 @@ export type EngineSnapshotJoinedApiRow = {
 };
 
 export async function fetchEngineSymbols(accessToken: string): Promise<EngineSymbolApiRow[]> {
-  const r = await fetch(`${API_BASE}/api/v1/analysis/engine/symbols`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/engine/symbols`, accessToken, {});
   const t = await r.text();
   if (!r.ok) throw new Error(`engine/symbols ${r.status}: ${t.slice(0, 300)}`);
   return JSON.parse(t) as EngineSymbolApiRow[];
 }
 
 export async function fetchEngineSnapshots(accessToken: string): Promise<EngineSnapshotJoinedApiRow[]> {
-  const r = await fetch(`${API_BASE}/api/v1/analysis/engine/snapshots`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/engine/snapshots`, accessToken, {});
   const t = await r.text();
   if (!r.ok) throw new Error(`engine/snapshots ${r.status}: ${t.slice(0, 300)}`);
   return JSON.parse(t) as EngineSnapshotJoinedApiRow[];
@@ -532,9 +633,7 @@ export async function fetchOnchainSignalsBreakdown(
   symbol: string,
 ): Promise<OnchainSignalsBreakdownResult> {
   const params = new URLSearchParams({ symbol: symbol.trim().toUpperCase() });
-  const r = await fetch(`${API_BASE}/api/v1/analysis/onchain-signals/breakdown?${params}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/onchain-signals/breakdown?${params}`, accessToken, {});
   const t = await r.text();
   if (r.status === 404) {
     return { data: null, endpoint_missing: true };
@@ -551,9 +650,7 @@ export async function fetchOnchainSignalsBreakdown(
 export async function fetchConfluenceSnapshotsLatest(
   accessToken: string,
 ): Promise<ConfluenceSnapshotsLatestResult> {
-  const r = await fetch(`${API_BASE}/api/v1/analysis/engine/confluence/latest`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/engine/confluence/latest`, accessToken, {});
   const t = await r.text();
   if (r.status === 404) {
     return { rows: [], endpoint_missing: true };
@@ -576,9 +673,7 @@ export type DataSnapshotApiRow = {
 };
 
 export async function fetchDataSnapshots(accessToken: string): Promise<DataSnapshotApiRow[]> {
-  const r = await fetch(`${API_BASE}/api/v1/analysis/data-snapshots`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/data-snapshots`, accessToken, {});
   const t = await r.text();
   if (r.status === 404) return [];
   if (!r.ok) throw new Error(`analysis/data-snapshots ${r.status}: ${t.slice(0, 300)}`);
@@ -598,9 +693,7 @@ export type ExternalDataSourceApiRow = {
 };
 
 export async function fetchExternalFetchSources(accessToken: string): Promise<ExternalDataSourceApiRow[]> {
-  const r = await fetch(`${API_BASE}/api/v1/analysis/external-fetch/sources`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/external-fetch/sources`, accessToken, {});
   const t = await r.text();
   if (r.status === 404) return [];
   if (!r.ok) throw new Error(`external-fetch/sources ${r.status}: ${t.slice(0, 300)}`);
@@ -631,9 +724,7 @@ export async function fetchMarketContextLatest(
   if (q.interval?.trim()) params.set("interval", q.interval.trim());
   if (q.exchange?.trim()) params.set("exchange", q.exchange.trim().toLowerCase());
   if (q.segment?.trim()) params.set("segment", q.segment.trim().toLowerCase());
-  const r = await fetch(`${API_BASE}/api/v1/analysis/market-context/latest?${params}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/market-context/latest?${params}`, accessToken, {});
   const t = await r.text();
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`market-context/latest ${r.status}: ${t.slice(0, 300)}`);
@@ -681,9 +772,10 @@ export async function fetchMarketContextSummary(
   if (q.segment?.trim()) params.set("segment", q.segment.trim().toLowerCase());
   if (q.symbol?.trim()) params.set("symbol", q.symbol.trim().toUpperCase());
   const qs = params.toString();
-  const r = await fetch(
+  const r = await fetchWithBearerRetry(
     `${API_BASE}/api/v1/analysis/market-context/summary${qs ? `?${qs}` : ""}`,
-    { headers: { Authorization: `Bearer ${accessToken}` } },
+    accessToken,
+    {},
   );
   const t = await r.text();
   if (r.status === 404) return [];
@@ -702,9 +794,7 @@ export type NansenSnapshotApiRow = {
 };
 
 export async function fetchNansenSnapshot(accessToken: string): Promise<NansenSnapshotApiRow | null> {
-  const r = await fetch(`${API_BASE}/api/v1/analysis/nansen/snapshot`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/nansen/snapshot`, accessToken, {});
   const t = await r.text();
   if (!r.ok) throw new Error(`nansen/snapshot ${r.status}: ${t.slice(0, 300)}`);
   const j = JSON.parse(t) as NansenSnapshotApiRow | null;
@@ -758,9 +848,7 @@ export type NansenSetupsLatestApiResponse = {
 
 /** Son setup taraması + en iyi 5 LONG ve 5 SHORT satırı (`nansen_setup_*`, migration 0020). */
 export async function fetchNansenSetupsLatest(accessToken: string): Promise<NansenSetupsLatestApiResponse> {
-  const r = await fetch(`${API_BASE}/api/v1/analysis/nansen/setups/latest`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/nansen/setups/latest`, accessToken, {});
   const t = await r.text();
   if (r.status === 404) {
     return {
@@ -785,10 +873,9 @@ export async function postEngineSymbol(
     signal_direction_mode?: string;
   },
 ): Promise<EngineSymbolApiRow> {
-  const r = await fetch(`${API_BASE}/api/v1/analysis/engine/symbols`, {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/engine/symbols`, accessToken, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
@@ -803,10 +890,9 @@ export async function patchEngineSymbol(
   id: string,
   body: { enabled?: boolean; signal_direction_mode?: string },
 ): Promise<void> {
-  const r = await fetch(`${API_BASE}/api/v1/analysis/engine/symbols/${encodeURIComponent(id)}`, {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/engine/symbols/${encodeURIComponent(id)}`, accessToken, {
     method: "PATCH",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
@@ -840,9 +926,7 @@ export async function fetchEngineRangeSignals(
   const lim = opts?.limit ?? 80;
   const params = new URLSearchParams({ limit: String(lim) });
   if (opts?.engineSymbolId) params.set("engine_symbol_id", opts.engineSymbolId);
-  const r = await fetch(`${API_BASE}/api/v1/analysis/engine/range-signals?${params}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/engine/range-signals?${params}`, accessToken, {});
   const t = await r.text();
   if (!r.ok) throw new Error(`engine/range-signals ${r.status}: ${t.slice(0, 300)}`);
   return JSON.parse(t) as RangeSignalEventApiRow[];
@@ -876,9 +960,7 @@ export type PaperFillRow = {
 };
 
 export async function fetchPaperBalance(accessToken: string): Promise<PaperBalanceRow | null> {
-  const r = await fetch(`${API_BASE}/api/v1/orders/dry/balance`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/orders/dry/balance`, accessToken, {});
   const t = await r.text();
   if (!r.ok) throw new Error(`orders/dry/balance ${r.status}: ${t.slice(0, 300)}`);
   return JSON.parse(t) as PaperBalanceRow | null;
@@ -886,9 +968,7 @@ export async function fetchPaperBalance(accessToken: string): Promise<PaperBalan
 
 export async function fetchPaperFills(accessToken: string, limit = 20): Promise<PaperFillRow[]> {
   const params = new URLSearchParams({ limit: String(limit) });
-  const r = await fetch(`${API_BASE}/api/v1/orders/dry/fills?${params}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/orders/dry/fills?${params}`, accessToken, {});
   const t = await r.text();
   if (!r.ok) throw new Error(`orders/dry/fills ${r.status}: ${t.slice(0, 300)}`);
   return JSON.parse(t) as PaperFillRow[];
@@ -909,9 +989,7 @@ export async function fetchBinanceCommissionDefaults(
   const params = new URLSearchParams();
   params.set("segment", (q.segment ?? "spot").toLowerCase());
   if (q.symbol?.trim()) params.set("symbol", q.symbol.trim().toUpperCase());
-  const r = await fetch(`${API_BASE}/api/v1/market/binance/commission-defaults?${params}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/market/binance/commission-defaults?${params}`, accessToken, {});
   const t = await r.text();
   if (!r.ok) throw new Error(`commission-defaults ${r.status}: ${t.slice(0, 300)}`);
   return JSON.parse(t) as BinanceCommissionDefaultsApi;
@@ -933,9 +1011,7 @@ export async function fetchBinanceCommissionAccount(
   const params = new URLSearchParams();
   params.set("symbol", q.symbol.trim().toUpperCase());
   params.set("segment", (q.segment ?? "spot").toLowerCase());
-  const r = await fetch(`${API_BASE}/api/v1/market/binance/commission-account?${params}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/market/binance/commission-account?${params}`, accessToken, {});
   const t = await r.text();
   if (!r.ok) throw new Error(`commission-account ${r.status}: ${t.slice(0, 300)}`);
   return JSON.parse(t) as BinanceCommissionAccountApi;
@@ -959,9 +1035,7 @@ export type NotifyOutboxRowApi = {
 
 export async function fetchNotifyOutbox(accessToken: string, limit = 50): Promise<NotifyOutboxRowApi[]> {
   const params = new URLSearchParams({ limit: String(limit) });
-  const r = await fetch(`${API_BASE}/api/v1/notify/outbox?${params}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/notify/outbox?${params}`, accessToken, {});
   const t = await r.text();
   if (!r.ok) throw new Error(`notify/outbox ${r.status}: ${t.slice(0, 400)}`);
   return JSON.parse(t) as NotifyOutboxRowApi[];
@@ -971,10 +1045,9 @@ export async function postNotifyOutbox(
   accessToken: string,
   body: { title: string; body: string; channels?: string[] },
 ): Promise<NotifyOutboxRowApi> {
-  const r = await fetch(`${API_BASE}/api/v1/notify/outbox`, {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/notify/outbox`, accessToken, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
@@ -1007,9 +1080,7 @@ export async function fetchAiApprovalRequests(
   const params = new URLSearchParams();
   if (q?.status?.trim()) params.set("status", q.status.trim());
   params.set("limit", String(q?.limit ?? 50));
-  const r = await fetch(`${API_BASE}/api/v1/ai/approval-requests?${params}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/approval-requests?${params}`, accessToken, {});
   const t = await r.text();
   if (!r.ok) throw new Error(`ai/approval-requests ${r.status}: ${t.slice(0, 400)}`);
   return JSON.parse(t) as AiApprovalRequestRowApi[];
@@ -1019,10 +1090,9 @@ export async function postAiApprovalRequest(
   accessToken: string,
   body: { kind?: string; payload: unknown; model_hint?: string },
 ): Promise<AiApprovalRequestRowApi> {
-  const r = await fetch(`${API_BASE}/api/v1/ai/approval-requests`, {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/approval-requests`, accessToken, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
@@ -1037,10 +1107,9 @@ export async function patchAiApprovalRequest(
   id: string,
   body: { status: "approved" | "rejected"; admin_note?: string },
 ): Promise<{ updated: number }> {
-  const r = await fetch(`${API_BASE}/api/v1/ai/approval-requests/${encodeURIComponent(id)}`, {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/approval-requests/${encodeURIComponent(id)}`, accessToken, {
     method: "PATCH",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
@@ -1048,4 +1117,103 @@ export async function patchAiApprovalRequest(
   const t = await r.text();
   if (!r.ok) throw new Error(`ai/approval-requests PATCH ${r.status}: ${t.slice(0, 400)}`);
   return JSON.parse(t) as { updated: number };
+}
+
+/** `ai_decisions` chain (qtss-ai) — FAZ 7.1 */
+export type AiDecisionListRowApi = {
+  id: string;
+  created_at: string;
+  layer: string;
+  symbol: string | null;
+  status: string;
+  confidence: number | null;
+  model_id: string | null;
+};
+
+export type AiDecisionDetailRowApi = {
+  id: string;
+  created_at: string;
+  layer: string;
+  symbol: string | null;
+  model_id: string | null;
+  prompt_hash: string | null;
+  input_snapshot: unknown;
+  raw_output: string | null;
+  parsed_decision: unknown;
+  status: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  applied_at: string | null;
+  expires_at: string | null;
+  confidence: number | null;
+  meta_json: unknown;
+};
+
+export async function fetchAiDecisions(
+  accessToken: string,
+  q?: { layer?: string; symbol?: string; status?: string; limit?: number },
+): Promise<AiDecisionListRowApi[]> {
+  const params = new URLSearchParams();
+  if (q?.layer?.trim()) params.set("layer", q.layer.trim());
+  if (q?.symbol?.trim()) params.set("symbol", q.symbol.trim());
+  if (q?.status?.trim()) params.set("status", q.status.trim());
+  params.set("limit", String(q?.limit ?? 80));
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/decisions?${params}`, accessToken, {});
+  const t = await r.text();
+  if (!r.ok) throw new Error(`ai/decisions ${r.status}: ${t.slice(0, 400)}`);
+  return JSON.parse(t) as AiDecisionListRowApi[];
+}
+
+export async function fetchAiDecisionDetail(
+  accessToken: string,
+  id: string,
+): Promise<AiDecisionDetailRowApi> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/decisions/${encodeURIComponent(id)}`, accessToken, {});
+  const t = await r.text();
+  if (!r.ok) throw new Error(`ai/decisions/${id} ${r.status}: ${t.slice(0, 400)}`);
+  return JSON.parse(t) as AiDecisionDetailRowApi;
+}
+
+export async function postAiDecisionApprove(
+  accessToken: string,
+  id: string,
+): Promise<{ updated: number }> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/decisions/${encodeURIComponent(id)}/approve`, accessToken, {
+    method: "POST",
+    headers: {},
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`ai/decisions approve ${r.status}: ${t.slice(0, 400)}`);
+  return JSON.parse(t) as { updated: number };
+}
+
+export async function postAiDecisionReject(
+  accessToken: string,
+  id: string,
+): Promise<{ updated: number }> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/decisions/${encodeURIComponent(id)}/reject`, accessToken, {
+    method: "POST",
+    headers: {},
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`ai/decisions reject ${r.status}: ${t.slice(0, 400)}`);
+  return JSON.parse(t) as { updated: number };
+}
+
+export async function fetchAiTacticalDirective(
+  accessToken: string,
+  symbol: string,
+): Promise<unknown> {
+  const q = new URLSearchParams({ symbol: symbol.trim() });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/directives/tactical?${q}`, accessToken, {});
+  const t = await r.text();
+  if (!r.ok) throw new Error(`ai/directives/tactical ${r.status}: ${t.slice(0, 400)}`);
+  return JSON.parse(t) as unknown;
+}
+
+export async function fetchAiPortfolioDirective(accessToken: string): Promise<unknown> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/directives/portfolio`, accessToken, {});
+  const t = await r.text();
+  if (!r.ok) throw new Error(`ai/directives/portfolio ${r.status}: ${t.slice(0, 400)}`);
+  return JSON.parse(t) as unknown;
 }

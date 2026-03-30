@@ -49,10 +49,14 @@ fn tick_secs() -> u64 {
         .max(30)
 }
 
-fn notify_onchain_enabled() -> bool {
-    std::env::var("QTSS_NOTIFY_ON_ONCHAIN_SIGNAL")
+fn notify_on_signal_edge_enabled() -> bool {
+    let onchain = std::env::var("QTSS_NOTIFY_ON_ONCHAIN_SIGNAL")
         .ok()
-        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
+        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"));
+    let generic = std::env::var("QTSS_NOTIFY_SIGNAL_ENABLED")
+        .ok()
+        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"));
+    onchain || generic
 }
 
 fn notify_threshold() -> f64 {
@@ -283,7 +287,7 @@ async fn maybe_notify_edge(
     confidence: f64,
     prev: Option<&OnchainSignalScoreRow>,
 ) {
-    if !notify_onchain_enabled() || conflict {
+    if !notify_on_signal_edge_enabled() || conflict {
         return;
     }
     let th = notify_threshold();

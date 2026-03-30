@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { fetchBinanceKlinesAsChartRows } from "./api/binanceKlines";
 import {
   backfillMarketBarsFromRest,
@@ -13,6 +14,7 @@ import {
   type ChannelSixRejectJson,
   type ChannelSixResponse,
   fetchAuthMe,
+  configureApiAuth,
   type DataSnapshotApiRow,
   type ExternalDataSourceApiRow,
   fetchEngineSnapshots,
@@ -53,7 +55,10 @@ import {
   type MultiPatternChartOverlay,
 } from "./lib/patternDrawingBatchOverlay";
 import { ChannelScanMatchesTable } from "./components/ChannelScanMatchesTable";
+import { AiDecisionsPanel } from "./components/AiDecisionsPanel";
+import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import { OperationsQueuesPanel } from "./components/OperationsQueuesPanel";
+import i18n from "./i18n";
 import { mergeChartOhlcRowsByOpenTime } from "./lib/mergeChartOhlcRows";
 import type { ChartOhlcRow } from "./lib/marketBarsToCandles";
 import { chartOhlcRowsToScanBars, chartOhlcRowsSortedChrono } from "./lib/chartRowsToOhlcBars";
@@ -305,7 +310,18 @@ function readStoredAccessToken(): string | null {
   }
 }
 
+function readStoredRefreshToken(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const t = localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
+    return t != null && t.trim() !== "" ? t.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function App() {
+  const { t } = useTranslation();
   const defaults = readChartDefaults();
   const [theme, setTheme] = useState<Theme>(() => {
     if (typeof window === "undefined") return "dark";
@@ -337,11 +353,36 @@ export default function App() {
         localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, token);
       } else {
         localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+        localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
       }
     } catch {
       /* private mode, quota */
     }
   }, [token]);
+
+  useEffect(() => {
+    configureApiAuth({
+      getRefreshToken: readStoredRefreshToken,
+      setTokens: (accessToken, refreshToken) => {
+        setToken(accessToken);
+        try {
+          if (typeof window === "undefined") return;
+          const rt = refreshToken?.trim() ?? "";
+          if (rt) localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, rt);
+          else localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+        } catch {
+          /* private mode, quota */
+        }
+      },
+      getOAuthClientCredentials: () => ({
+        clientId: import.meta.env.VITE_OAUTH_CLIENT_ID ?? "",
+        clientSecret: import.meta.env.VITE_OAUTH_CLIENT_SECRET ?? "",
+      }),
+    });
+    return () => {
+      configureApiAuth(null);
+    };
+  }, []);
   const [authSession, setAuthSession] = useState<AuthSession | null>(null);
   const [authMeErr, setAuthMeErr] = useState("");
   const [authMeLoading, setAuthMeLoading] = useState(false);
@@ -553,6 +594,13 @@ export default function App() {
       cancelled = true;
     };
   }, [token]);
+
+  useEffect(() => {
+    const pl = authSession?.preferredLocale;
+    if (pl === "en" || pl === "tr") {
+      void i18n.changeLanguage(pl);
+    }
+  }, [authSession?.preferredLocale]);
 
   const lastBarClose = useMemo(() => {
     if (!bars?.length) return null;
@@ -1591,6 +1639,15 @@ export default function App() {
     try {
       const tok = await oauthTokenPassword(env);
       setToken(tok.access_token);
+      try {
+        if (typeof window !== "undefined") {
+          const rt = tok.refresh_token?.trim() ?? "";
+          if (rt) localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, rt);
+          else localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+        }
+      } catch {
+        /* private mode, quota */
+      }
       const cfg = await fetchConfigList(tok.access_token);
       setConfigPreview(JSON.stringify(cfg, null, 2));
       /* Token state henüz bir sonraki render’a kadar güncellenmediği için Elliott/ACP’yi doğrudan tok ile yükle. */
@@ -1766,7 +1823,7 @@ export default function App() {
                   className={`tv-settings__tab ${drawerTab === "general" ? "is-active" : ""}`}
                   onClick={() => setDrawerTab("general")}
                 >
-                  Genel
+                  {t("drawer.general")}
                 </button>
                 <button
                   type="button"
@@ -1820,7 +1877,7 @@ export default function App() {
                   className={`tv-settings__tab ${drawerTab === "queues" ? "is-active" : ""}`}
                   onClick={() => setDrawerTab("queues")}
                 >
-                  Kuyruklar
+                  {t("drawer.queues")}
                 </button>
                 <button
                   type="button"
@@ -1829,7 +1886,7 @@ export default function App() {
                   className={`tv-settings__tab ${drawerTab === "setting" ? "is-active" : ""}`}
                   onClick={() => setDrawerTab("setting")}
                 >
-                  Setting
+                  {t("drawer.setting")}
                 </button>
               </div>
               {isElliottDrawerGroup ? (
@@ -1845,7 +1902,7 @@ export default function App() {
                     className={`tv-settings__tab ${drawerTab === "elliott" ? "is-active" : ""}`}
                     onClick={() => setDrawerTab("elliott")}
                   >
-                    Özet
+                    {t("elliott.summary")}
                   </button>
                   <button
                     type="button"
@@ -1854,7 +1911,7 @@ export default function App() {
                     className={`tv-settings__tab ${drawerTab === "elliott_impulse" ? "is-active" : ""}`}
                     onClick={() => setDrawerTab("elliott_impulse")}
                   >
-                    İtki (1–5)
+                    {t("elliott.impulse")}
                   </button>
                   <button
                     type="button"
@@ -1863,7 +1920,7 @@ export default function App() {
                     className={`tv-settings__tab ${drawerTab === "elliott_corrective" ? "is-active" : ""}`}
                     onClick={() => setDrawerTab("elliott_corrective")}
                   >
-                    Düzeltme (2/4)
+                    {t("elliott.corrective")}
                   </button>
                 </div>
               ) : null}
@@ -1872,23 +1929,32 @@ export default function App() {
                 <>
                   {matchesSetting("api sağlık", "health", "durum") ? (
                     <div className="card">
-                      <p className="tv-drawer__section-head">Durum</p>
-                      <p className="muted" style={{ margin: 0 }}>API sağlık: <span className="mono">{health}</span></p>
+                      <p className="tv-drawer__section-head">{t("drawer.status")}</p>
+                      <p className="muted" style={{ margin: 0 }}>
+                        {t("drawer.apiHealth")} <span className="mono">{health}</span>
+                      </p>
                     </div>
                   ) : null}
                   {matchesSetting("oturum", "config", "giriş", "token", "rol", "rbac") ? (
                     <div className="card">
-                      <p className="tv-drawer__section-head">Oturum ve Config</p>
+                      <p className="tv-drawer__section-head">{t("drawer.sessionConfig")}</p>
                       <p className="muted" style={{ fontSize: "0.75rem", marginBottom: "0.35rem" }}>
-                        API erişimi JWT + sunucu RBAC ile sınırlıdır; aşağıdaki roller yalnızca arayüz rehberi içindir,
-                        asıl kontrol uçlardadır.
+                        {t("drawer.sessionHint")}
                       </p>
                       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+                        <LanguageSwitcher
+                          accessToken={token}
+                          onLocalePatched={(code) => {
+                            setAuthSession((prev) =>
+                              prev ? { ...prev, preferredLocale: code } : prev,
+                            );
+                          }}
+                        />
                         <button type="button" className="theme-toggle" onClick={tryDevLogin}>
-                          Giriş dene
+                          {t("drawer.loginTry")}
                         </button>
                         <button type="button" className="theme-toggle" onClick={refreshConfig} disabled={!token || configLoading}>
-                          {configLoading ? "Config…" : "Config yenile"}
+                          {configLoading ? t("drawer.configLoading") : t("drawer.configRefresh")}
                         </button>
                         <button
                           type="button"
@@ -1901,10 +1967,14 @@ export default function App() {
                             setAuthMeErr("");
                           }}
                         >
-                          Çıkış
+                          {t("drawer.logout")}
                         </button>
                       </div>
-                      {authMeLoading ? <p className="muted" style={{ marginTop: "0.35rem" }}>Roller yükleniyor…</p> : null}
+                      {authMeLoading ? (
+                        <p className="muted" style={{ marginTop: "0.35rem" }}>
+                          {t("drawer.rolesLoading")}
+                        </p>
+                      ) : null}
                       {authMeErr ? <p className="err" style={{ marginTop: "0.35rem" }}>{authMeErr}</p> : null}
                       {authSession ? (
                         <p className="muted mono" style={{ marginTop: "0.35rem", fontSize: "0.72rem", wordBreak: "break-all" }}>
@@ -1926,9 +1996,9 @@ export default function App() {
                   ) : null}
                   {matchesSetting("tema", "theme") ? (
                     <div className="card">
-                      <p className="tv-drawer__section-head">Görünüm</p>
+                      <p className="tv-drawer__section-head">{t("drawer.appearance")}</p>
                       <button type="button" className="theme-toggle" onClick={toggleTheme}>
-                        {theme === "dark" ? "Açık temaya geç" : "Koyu temaya geç"}
+                        {theme === "dark" ? t("drawer.themeToggleDark") : t("drawer.themeToggleLight")}
                       </button>
                     </div>
                   ) : null}
@@ -3914,6 +3984,22 @@ export default function App() {
                       canOps={rbacIsOps}
                       canAdmin={rbacIsAdmin}
                     />
+                  ) : null}
+                  {matchesSetting(
+                    "kuyruk",
+                    "queue",
+                    "notify",
+                    "outbox",
+                    "bildirim",
+                    "ai",
+                    "karar",
+                    "decision",
+                    "onay",
+                    "approval",
+                    "ops",
+                    "worker",
+                  ) ? (
+                    <AiDecisionsPanel accessToken={token} canAdmin={rbacIsAdmin} />
                   ) : null}
                 </>
               ) : null}

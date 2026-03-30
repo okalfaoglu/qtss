@@ -16,6 +16,7 @@ qtss-execution.workspace = true
 qtss-reconcile.workspace = true
 qtss-strategy.workspace = true
 qtss-analysis.workspace = true
+qtss-ai.workspace = true
 sqlx.workspace = true
 axum.workspace = true
 serde.workspace = true

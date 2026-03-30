@@ -1,9 +1,9 @@
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::{routing::get, Json, Router};
 use serde::Serialize;
 use sqlx::PgPool;
 
+use crate::error::ApiError;
 use crate::state::SharedState;
 
 #[derive(Serialize)]
@@ -48,10 +48,10 @@ async fn live() -> Json<LiveBody> {
 }
 
 /// Readiness — PostgreSQL erişimi; başarısızsa 503 (kube `readinessProbe`).
-async fn ready(State(st): State<SharedState>) -> Result<Json<ReadyBody>, StatusCode> {
+async fn ready(State(st): State<SharedState>) -> Result<Json<ReadyBody>, ApiError> {
     ping_db(&st.pool)
         .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        .map_err(|_| ApiError::service_unavailable("veritabanına erişilemiyor"))?;
     Ok(Json(ReadyBody {
         status: "ready",
         service: "qtss-api",
