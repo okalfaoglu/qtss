@@ -31,14 +31,14 @@ impl SafetyConfig {
 }
 
 fn needs_stop_loss(direction: &str) -> bool {
-    matches!(direction, "strong_buy" | "buy" | "sell" | "strong_sell")
+    matches!(
+        direction,
+        "strong_buy" | "buy" | "sell" | "strong_sell"
+    )
 }
 
 /// Validates parsed tactical JSON before persistence.
-pub fn validate_ai_decision_safety(
-    decision: &Value,
-    config: &SafetyConfig,
-) -> Result<(), &'static str> {
+pub fn validate_ai_decision_safety(decision: &Value, config: &SafetyConfig) -> Result<(), &'static str> {
     if qtss_common::is_trading_halted() {
         return Err("trading halted (kill switch)");
     }

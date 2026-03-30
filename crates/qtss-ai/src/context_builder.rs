@@ -6,8 +6,8 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 
 use qtss_storage::{
-    fetch_analysis_snapshot_payload, fetch_latest_onchain_signal_score,
-    list_enabled_engine_symbols, list_engine_symbols_matching, list_recent_bars, ExchangeOrderRow,
+    fetch_analysis_snapshot_payload, fetch_latest_onchain_signal_score, list_enabled_engine_symbols,
+    list_engine_symbols_matching, list_recent_bars, ExchangeOrderRow,
 };
 
 use crate::error::{AiError, AiResult};
@@ -54,10 +54,7 @@ pub async fn build_tactical_context(pool: &PgPool, symbol: &str) -> AiResult<Val
         .map(|r| serde_json::to_value(&r).unwrap_or(Value::Null));
 
     let engine_rows = list_engine_symbols_matching(pool, sym, None, None, None).await?;
-    let engine_row = engine_rows
-        .iter()
-        .find(|r| r.enabled)
-        .or_else(|| engine_rows.first());
+    let engine_row = engine_rows.iter().find(|r| r.enabled).or_else(|| engine_rows.first());
 
     let confluence = if let Some(e) = engine_row {
         fetch_analysis_snapshot_payload(pool, e.id, "confluence")
@@ -186,20 +183,9 @@ pub async fn build_operational_context(pool: &PgPool, symbol: &str) -> AiResult<
         .await?
         .map(|r| serde_json::to_value(&r).unwrap_or(Value::Null));
     let engine_rows = list_engine_symbols_matching(pool, sym, None, None, None).await?;
-    let engine_row = engine_rows
-        .iter()
-        .find(|r| r.enabled)
-        .or_else(|| engine_rows.first());
+    let engine_row = engine_rows.iter().find(|r| r.enabled).or_else(|| engine_rows.first());
     let recent_price_stats = if let Some(e) = engine_row {
-        summarize_recent_bars(
-            pool,
-            &e.exchange,
-            &e.segment,
-            &e.symbol,
-            &e.interval,
-            OP_BARS,
-        )
-        .await?
+        summarize_recent_bars(pool, &e.exchange, &e.segment, &e.symbol, &e.interval, OP_BARS).await?
     } else {
         Value::Null
     };

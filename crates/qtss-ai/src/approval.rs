@@ -67,7 +67,10 @@ pub async fn maybe_auto_approve(
     if channels.is_empty() {
         return Ok(());
     }
-    let title = format!("AI decision pending approval {}", symbol.unwrap_or("-"));
+    let title = format!(
+        "AI decision pending approval {}",
+        symbol.unwrap_or("-")
+    );
     let body = format!(
         "symbol={:?} direction={:?} confidence={:.4} (threshold {:.2} auto={})\nreasoning={:?}",
         symbol,

@@ -176,19 +176,46 @@ impl ExchangeOrderRepository {
         user_id: Uuid,
         limit: i64,
     ) -> Result<Vec<ExchangeOrderRow>, StorageError> {
-        let rows = sqlx::query_as::<_, ExchangeOrderRow>(
-            r#"SELECT id, org_id, user_id, exchange, segment, symbol,
-                      client_order_id, status, intent, venue_order_id,
-                      venue_response, created_at, updated_at
-               FROM exchange_orders
-               WHERE user_id = $1
-               ORDER BY created_at DESC
-               LIMIT $2"#,
-        )
-        .bind(user_id)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
+        self.list_for_user_filtered(user_id, None, limit).await
+    }
+
+    /// Optional `since` filters `updated_at >= since` (UTC). `limit` as requested (clamp at call site).
+    pub async fn list_for_user_filtered(
+        &self,
+        user_id: Uuid,
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<ExchangeOrderRow>, StorageError> {
+        let rows = if let Some(ts) = since {
+            sqlx::query_as::<_, ExchangeOrderRow>(
+                r#"SELECT id, org_id, user_id, exchange, segment, symbol,
+                          client_order_id, status, intent, venue_order_id,
+                          venue_response, created_at, updated_at
+                   FROM exchange_orders
+                   WHERE user_id = $1 AND updated_at >= $2
+                   ORDER BY updated_at DESC
+                   LIMIT $3"#,
+            )
+            .bind(user_id)
+            .bind(ts)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, ExchangeOrderRow>(
+                r#"SELECT id, org_id, user_id, exchange, segment, symbol,
+                          client_order_id, status, intent, venue_order_id,
+                          venue_response, created_at, updated_at
+                   FROM exchange_orders
+                   WHERE user_id = $1
+                   ORDER BY updated_at DESC
+                   LIMIT $2"#,
+            )
+            .bind(user_id)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        };
         Ok(rows)
     }
 

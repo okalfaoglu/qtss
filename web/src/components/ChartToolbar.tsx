@@ -6,6 +6,7 @@ export type ChartTool =
   | "ray"
   | "rect"
   | "fibo"
+  | "measure"
   | "calc";
 
 type Props = {
@@ -23,7 +24,8 @@ const tools: { id: ChartTool; label: string; title: string }[] = [
   { id: "trend", label: "╱", title: "Trend çizgisi (2 nokta)" },
   { id: "ray", label: "↗", title: "Ray (2 nokta, sağa uzar)" },
   { id: "rect", label: "▭", title: "Bölge kutusu (2 nokta)" },
-  { id: "fibo", label: "ɸ", title: "Fibonacci geri çekilme" },
+  { id: "fibo", label: "ɸ", title: "Fibonacci geri çekilme (seviye etiketleri)" },
+  { id: "measure", label: "↕", title: "Ölçüm: iki nokta — fiyat farkı, %, mum sayısı" },
   { id: "calc", label: "₿", title: "Kar / zarar hesabı" },
 ];
 

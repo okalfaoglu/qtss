@@ -7,6 +7,32 @@ import type {
   SeriesMarker,
   UTCTimestamp,
 } from "lightweight-charts";
+
+const FIBO_LEVELS: { ratio: number; label: string }[] = [
+  { ratio: 0, label: "0%" },
+  { ratio: 0.236, label: "23.6%" },
+  { ratio: 0.382, label: "38.2%" },
+  { ratio: 0.5, label: "50%" },
+  { ratio: 0.618, label: "61.8%" },
+  { ratio: 0.786, label: "78.6%" },
+  { ratio: 1, label: "100%" },
+];
+
+function formatChartPrice(n: number): string {
+  const a = Math.abs(n);
+  if (a >= 10_000) return n.toFixed(2);
+  if (a >= 1) return n.toFixed(4);
+  return n.toFixed(6);
+}
+
+function barsBetweenInclusive(candles: CandlestickData<UTCTimestamp>[], tLo: number, tHi: number): number {
+  let n = 0;
+  for (const c of candles) {
+    const ct = c.time as number;
+    if (ct >= tLo && ct <= tHi) n += 1;
+  }
+  return n;
+}
 import {
   chartResetView,
   chartScrollLeft,
@@ -167,7 +193,8 @@ type UserDrawing =
   | { kind: "vline"; time: number }
   | { kind: "trend" | "ray"; t1: number; p1: number; t2: number; p2: number }
   | { kind: "rect"; t1: number; p1: number; t2: number; p2: number }
-  | { kind: "fibo"; t1: number; p1: number; t2: number; p2: number };
+  | { kind: "fibo"; t1: number; p1: number; t2: number; p2: number }
+  | { kind: "measure"; t1: number; p1: number; t2: number; p2: number };
 
 function chartLayout(theme: Theme) {
   if (theme === "dark") {
@@ -309,7 +336,13 @@ export function TvChartPane({
     const span = Math.max(60, lastT - firstT);
     const rayT = lastT + span;
 
-    const addLine = (points: LinePoint[], lineStyle: LineStyle = LineStyle.Solid, lineWidth = 2, c = color) => {
+    const addLine = (
+      points: LinePoint[],
+      lineStyle: LineStyle = LineStyle.Solid,
+      lineWidth = 2,
+      c = color,
+      markers?: SeriesMarker<UTCTimestamp>[],
+    ) => {
       const s = chart.addLineSeries({
         color: c,
         lineWidth,
@@ -318,6 +351,9 @@ export function TvChartPane({
         lastValueVisible: false,
       });
       s.setData(lineSeriesDataStrictAsc(points));
+      if (markers?.length) {
+        s.setMarkers([...markers].sort((a, b) => (a.time as number) - (b.time as number)));
+      }
       drawSeriesRefs.current.push(s);
     };
 
@@ -377,16 +413,54 @@ export function TvChartPane({
         const hi = Math.max(d.p1, d.p2);
         const lo = Math.min(d.p1, d.p2);
         const range = Math.max(1e-8, hi - lo);
-        const levels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
-        for (const lv of levels) {
+        const fibColor = chartTheme === "dark" ? "#90caf9" : "#1565c0";
+        const labelColor = chartTheme === "dark" ? "#e3f2fd" : "#0d47a1";
+        for (const { ratio: lv, label } of FIBO_LEVELS) {
           const y = hi - range * lv;
           addLine(
             [{ time: t1 as UTCTimestamp, value: y }, { time: t2 as UTCTimestamp, value: y }],
             LineStyle.Dashed,
             lv === 0.5 ? 2 : 1,
-            chartTheme === "dark" ? "#90caf9" : "#1565c0",
+            fibColor,
+            [
+              {
+                time: t2 as UTCTimestamp,
+                position: "belowBar",
+                color: labelColor,
+                shape: "circle",
+                text: `${label} (${formatChartPrice(y)})`,
+              },
+            ],
           );
         }
+      } else if (d.kind === "measure") {
+        const t1 = d.t1 as UTCTimestamp;
+        const t2 = d.t2 as UTCTimestamp;
+        const dp = d.p2 - d.p1;
+        const deltaStr = (dp >= 0 ? "+" : "") + formatChartPrice(dp);
+        const pct =
+          d.p1 !== 0 && Number.isFinite(d.p1) ? `${((dp / d.p1) * 100).toFixed(2)}%` : "—";
+        const tLo = Math.min(d.t1, d.t2);
+        const tHi = Math.max(d.t1, d.t2);
+        const barN = barsBetweenInclusive(candles, tLo, tHi);
+        const barLabel = barN === 1 ? "1 mum" : `${barN} mum`;
+        const measureText = `${deltaStr} (${pct}) · ${barLabel}`;
+        const measureColor = chartTheme === "dark" ? "#ce93d8" : "#6a1b9a";
+        addLine(
+          [{ time: t1, value: d.p1 }, { time: t2, value: d.p2 }],
+          LineStyle.Solid,
+          2,
+          measureColor,
+          [
+            {
+              time: t2,
+              position: dp >= 0 ? "belowBar" : "aboveBar",
+              color: measureColor,
+              shape: "square",
+              text: measureText,
+            },
+          ],
+        );
       }
     }
   };
@@ -483,7 +557,7 @@ export function TvChartPane({
         userDrawingsRef.current.push({ kind: "hline", price });
       } else if (tool === "vline") {
         userDrawingsRef.current.push({ kind: "vline", time: t });
-      } else if (tool === "trend" || tool === "fibo" || tool === "ray" || tool === "rect") {
+      } else if (tool === "trend" || tool === "fibo" || tool === "ray" || tool === "rect" || tool === "measure") {
         const p = pendingPointRef.current;
         if (!p) {
           pendingPointRef.current = { time: t, price };
@@ -493,6 +567,7 @@ export function TvChartPane({
         if (tool === "ray") userDrawingsRef.current.push({ kind: "ray", t1: p.time, p1: p.price, t2: t, p2: price });
         if (tool === "rect") userDrawingsRef.current.push({ kind: "rect", t1: p.time, p1: p.price, t2: t, p2: price });
         if (tool === "fibo") userDrawingsRef.current.push({ kind: "fibo", t1: p.time, p1: p.price, t2: t, p2: price });
+        if (tool === "measure") userDrawingsRef.current.push({ kind: "measure", t1: p.time, p1: p.price, t2: t, p2: price });
         pendingPointRef.current = null;
       }
 

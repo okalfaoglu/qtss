@@ -318,15 +318,18 @@ pub async fn fetch_latest_approved_directive(
 pub async fn mark_applied(pool: &PgPool, table: AiRecordTable, child_id: Uuid) -> AiResult<()> {
     match table {
         AiRecordTable::TacticalChild => {
-            let decision_id: Uuid =
-                sqlx::query_scalar("SELECT decision_id FROM ai_tactical_decisions WHERE id = $1")
-                    .bind(child_id)
-                    .fetch_one(pool)
-                    .await?;
-            sqlx::query("UPDATE ai_tactical_decisions SET status = 'applied' WHERE id = $1")
-                .bind(child_id)
-                .execute(pool)
-                .await?;
+            let decision_id: Uuid = sqlx::query_scalar(
+                "SELECT decision_id FROM ai_tactical_decisions WHERE id = $1",
+            )
+            .bind(child_id)
+            .fetch_one(pool)
+            .await?;
+            sqlx::query(
+                "UPDATE ai_tactical_decisions SET status = 'applied' WHERE id = $1",
+            )
+            .bind(child_id)
+            .execute(pool)
+            .await?;
             sqlx::query(
                 r#"UPDATE ai_decisions SET status = 'applied', applied_at = COALESCE(applied_at, now())
                    WHERE id = $1"#,
@@ -336,15 +339,18 @@ pub async fn mark_applied(pool: &PgPool, table: AiRecordTable, child_id: Uuid) -
             .await?;
         }
         AiRecordTable::PositionDirectiveChild => {
-            let decision_id: Uuid =
-                sqlx::query_scalar("SELECT decision_id FROM ai_position_directives WHERE id = $1")
-                    .bind(child_id)
-                    .fetch_one(pool)
-                    .await?;
-            sqlx::query("UPDATE ai_position_directives SET status = 'applied' WHERE id = $1")
-                .bind(child_id)
-                .execute(pool)
-                .await?;
+            let decision_id: Uuid = sqlx::query_scalar(
+                "SELECT decision_id FROM ai_position_directives WHERE id = $1",
+            )
+            .bind(child_id)
+            .fetch_one(pool)
+            .await?;
+            sqlx::query(
+                "UPDATE ai_position_directives SET status = 'applied' WHERE id = $1",
+            )
+            .bind(child_id)
+            .execute(pool)
+            .await?;
             sqlx::query(
                 r#"UPDATE ai_decisions SET status = 'applied', applied_at = COALESCE(applied_at, now())
                    WHERE id = $1"#,
@@ -354,15 +360,18 @@ pub async fn mark_applied(pool: &PgPool, table: AiRecordTable, child_id: Uuid) -
             .await?;
         }
         AiRecordTable::PortfolioDirectiveChild => {
-            let decision_id: Uuid =
-                sqlx::query_scalar("SELECT decision_id FROM ai_portfolio_directives WHERE id = $1")
-                    .bind(child_id)
-                    .fetch_one(pool)
-                    .await?;
-            sqlx::query("UPDATE ai_portfolio_directives SET status = 'applied' WHERE id = $1")
-                .bind(child_id)
-                .execute(pool)
-                .await?;
+            let decision_id: Uuid = sqlx::query_scalar(
+                "SELECT decision_id FROM ai_portfolio_directives WHERE id = $1",
+            )
+            .bind(child_id)
+            .fetch_one(pool)
+            .await?;
+            sqlx::query(
+                "UPDATE ai_portfolio_directives SET status = 'applied' WHERE id = $1",
+            )
+            .bind(child_id)
+            .execute(pool)
+            .await?;
             sqlx::query(
                 r#"UPDATE ai_decisions SET status = 'applied', applied_at = COALESCE(applied_at, now())
                    WHERE id = $1"#,
@@ -390,11 +399,7 @@ pub async fn expire_stale_decisions(pool: &PgPool) -> AiResult<u64> {
 
 /// Duplicate prompt suppression within `ttl_minutes` (Postgres `interval`).
 /// TTL behavior is covered by `tests/decision_exists_for_hash_it.rs` in CI (`postgres-migrations` + `DATABASE_URL`).
-pub async fn decision_exists_for_hash(
-    pool: &PgPool,
-    prompt_hash: &str,
-    ttl_minutes: i64,
-) -> AiResult<bool> {
+pub async fn decision_exists_for_hash(pool: &PgPool, prompt_hash: &str, ttl_minutes: i64) -> AiResult<bool> {
     let exists: bool = sqlx::query_scalar(
         r#"SELECT EXISTS(
             SELECT 1 FROM ai_decisions
@@ -489,9 +494,7 @@ pub async fn list_ai_decisions(
 ) -> AiResult<Vec<AiDecisionListRow>> {
     let lim = limit.clamp(1, 500);
     let layer = layer.map(|s| s.trim()).filter(|s| !s.is_empty());
-    let symbol_u = symbol
-        .map(|s| s.trim().to_uppercase())
-        .filter(|s| !s.is_empty());
+    let symbol_u = symbol.map(|s| s.trim().to_uppercase()).filter(|s| !s.is_empty());
     let status_f = status.map(|s| s.trim()).filter(|s| !s.is_empty());
     let rows = match (layer, symbol_u, status_f) {
         (Some(l), Some(sym), Some(st)) => {
@@ -590,10 +593,7 @@ pub async fn list_ai_decisions(
     Ok(rows)
 }
 
-pub async fn fetch_ai_decision_detail(
-    pool: &PgPool,
-    id: Uuid,
-) -> AiResult<Option<AiDecisionDetailRow>> {
+pub async fn fetch_ai_decision_detail(pool: &PgPool, id: Uuid) -> AiResult<Option<AiDecisionDetailRow>> {
     let row = sqlx::query_as::<_, AiDecisionDetailRow>(
         r#"SELECT id, created_at, layer, symbol, model_id, prompt_hash, input_snapshot,
                   raw_output, parsed_decision, status, approved_by, approved_at, applied_at,
@@ -606,11 +606,7 @@ pub async fn fetch_ai_decision_detail(
     Ok(row)
 }
 
-pub async fn admin_approve_ai_decision(
-    pool: &PgPool,
-    id: Uuid,
-    approved_by: &str,
-) -> AiResult<u64> {
+pub async fn admin_approve_ai_decision(pool: &PgPool, id: Uuid, approved_by: &str) -> AiResult<u64> {
     let n = sqlx::query(
         r#"UPDATE ai_decisions
            SET status = 'approved', approved_at = now(), approved_by = $2
@@ -663,9 +659,7 @@ pub async fn admin_reject_ai_decision(pool: &PgPool, id: Uuid, approved_by: &str
 }
 
 /// Latest active portfolio directive (FAZ 7.1).
-pub async fn fetch_active_portfolio_directive(
-    pool: &PgPool,
-) -> AiResult<Option<AiPortfolioDirectiveRow>> {
+pub async fn fetch_active_portfolio_directive(pool: &PgPool) -> AiResult<Option<AiPortfolioDirectiveRow>> {
     let row = sqlx::query_as::<_, AiPortfolioDirectiveRow>(
         r#"SELECT id, decision_id, created_at, valid_until, risk_budget_pct, max_open_positions,
                   preferred_regime, symbol_scores, macro_note, status
@@ -734,11 +728,7 @@ pub async fn fetch_recent_outcome_stats(pool: &PgPool, n: i64) -> AiResult<Value
         }
     }
     let total = rows.len() as f64;
-    let win_rate = if total > 0.0 {
-        wins as f64 / total
-    } else {
-        0.0
-    };
+    let win_rate = if total > 0.0 { wins as f64 / total } else { 0.0 };
     let avg_pnl_pct = if count_pnl > 0 {
         sum_pnl / count_pnl as f64
     } else {

@@ -179,19 +179,47 @@ impl PaperLedgerRepository {
         user_id: Uuid,
         limit: i64,
     ) -> Result<Vec<PaperFillRow>, StorageError> {
-        let rows = sqlx::query_as::<_, PaperFillRow>(
-            r#"SELECT id, org_id, user_id, exchange, segment, symbol,
-                      client_order_id, side, quantity, avg_price, fee,
-                      quote_balance_after, base_positions_after, intent, created_at
-               FROM paper_fills
-               WHERE user_id = $1
-               ORDER BY created_at DESC
-               LIMIT $2"#,
-        )
-        .bind(user_id)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
+        self.list_fills_for_user_filtered(user_id, None, limit).await
+    }
+
+    /// `since` inclusive (UTC); `limit` clamped 1..=1000.
+    pub async fn list_fills_for_user_filtered(
+        &self,
+        user_id: Uuid,
+        since: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> Result<Vec<PaperFillRow>, StorageError> {
+        let lim = limit.clamp(1, 1000);
+        let rows = if let Some(ts) = since {
+            sqlx::query_as::<_, PaperFillRow>(
+                r#"SELECT id, org_id, user_id, exchange, segment, symbol,
+                          client_order_id, side, quantity, avg_price, fee,
+                          quote_balance_after, base_positions_after, intent, created_at
+                   FROM paper_fills
+                   WHERE user_id = $1 AND created_at >= $2
+                   ORDER BY created_at DESC
+                   LIMIT $3"#,
+            )
+            .bind(user_id)
+            .bind(ts)
+            .bind(lim)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, PaperFillRow>(
+                r#"SELECT id, org_id, user_id, exchange, segment, symbol,
+                          client_order_id, side, quantity, avg_price, fee,
+                          quote_balance_after, base_positions_after, intent, created_at
+                   FROM paper_fills
+                   WHERE user_id = $1
+                   ORDER BY created_at DESC
+                   LIMIT $2"#,
+            )
+            .bind(user_id)
+            .bind(lim)
+            .fetch_all(&self.pool)
+            .await?
+        };
         Ok(rows)
     }
 

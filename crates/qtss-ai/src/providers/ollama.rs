@@ -21,9 +21,7 @@ impl OllamaProvider {
             .or_else(|_| std::env::var("OLLAMA_HOST"))
             .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
         if base_url.trim().is_empty() {
-            return Err(AiError::ProviderNotConfigured(
-                "QTSS_AI_OLLAMA_BASE_URL".into(),
-            ));
+            return Err(AiError::ProviderNotConfigured("QTSS_AI_OLLAMA_BASE_URL".into()));
         }
         let base_url = base_url.trim_end_matches('/').to_string();
         let timeout_secs = std::env::var("QTSS_AI_ONPREM_TIMEOUT_SECS")
@@ -103,16 +101,16 @@ impl AiCompletionProvider for OllamaProvider {
         let txt = res.text().await.map_err(|e| AiError::http(e.to_string()))?;
         if !status.is_success() {
             let preview: String = txt.chars().take(500).collect();
-            return Err(AiError::http(format!(
-                "ollama HTTP {}: {}",
-                status, preview
-            )));
+            return Err(AiError::http(format!("ollama HTTP {}: {}", status, preview)));
         }
         let parsed: OllamaResp = serde_json::from_str(&txt).map_err(|e| {
             let preview: String = txt.chars().take(500).collect();
             AiError::http(format!("ollama json: {e}; body: {preview}"))
         })?;
-        let text = parsed.message.and_then(|m| m.content).unwrap_or_default();
+        let text = parsed
+            .message
+            .and_then(|m| m.content)
+            .unwrap_or_default();
         if text.is_empty() {
             return Err(AiError::http("ollama empty message.content"));
         }

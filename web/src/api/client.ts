@@ -535,7 +535,7 @@ export async function scanChannelSix(
   });
   const t = await r.text();
   if (!r.ok) {
-    throw new Error(`channel-six ${r.status}: ${t.slice(0, 400)}`);
+    throwQtssApiError("channel-six", r, t);
   }
   return JSON.parse(t) as ChannelSixResponse;
 }
@@ -858,7 +858,7 @@ export async function fetchNansenSetupsLatest(accessToken: string): Promise<Nans
       setup_endpoint_missing: true,
     };
   }
-  if (!r.ok) throw new Error(`nansen/setups/latest ${r.status}: ${t.slice(0, 300)}`);
+  if (!r.ok) throwQtssApiError("nansen/setups/latest", r, t);
   const parsed = JSON.parse(t) as NansenSetupsLatestApiResponse;
   return { ...parsed, setup_endpoint_missing: false };
 }
@@ -967,12 +967,90 @@ export async function fetchPaperBalance(accessToken: string): Promise<PaperBalan
   return JSON.parse(t) as PaperBalanceRow | null;
 }
 
-export async function fetchPaperFills(accessToken: string, limit = 20): Promise<PaperFillRow[]> {
+export async function fetchPaperFills(
+  accessToken: string,
+  limit = 20,
+  sinceRfc3339?: string | null,
+): Promise<PaperFillRow[]> {
   const params = new URLSearchParams({ limit: String(limit) });
+  if (sinceRfc3339?.trim()) params.set("since", sinceRfc3339.trim());
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/orders/dry/fills?${params}`, accessToken, {});
   const t = await r.text();
   if (!r.ok) throwQtssApiError("orders/dry/fills", r, t);
   return JSON.parse(t) as PaperFillRow[];
+}
+
+/** `pnl_rollups` dashboard row (`GET /api/v1/dashboard/pnl`). */
+export type PnlRollupRowApi = {
+  org_id: string;
+  exchange: string;
+  symbol: string | null;
+  ledger: string;
+  bucket: string;
+  period_start: string;
+  realized_pnl: string | number;
+  fees: string | number;
+  volume: string | number;
+  trade_count: number;
+};
+
+export async function fetchDashboardPnlRollups(
+  accessToken: string,
+  ledger: string,
+  bucket: string,
+): Promise<PnlRollupRowApi[]> {
+  const params = new URLSearchParams({ ledger, bucket });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/dashboard/pnl?${params}`, accessToken, {});
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("dashboard/pnl", r, t);
+  return JSON.parse(t) as PnlRollupRowApi[];
+}
+
+export type PnlRebuildStatsApi = {
+  orders_scanned: number;
+  orders_with_fills: number;
+  rollup_rows_written: number;
+};
+
+/** Admin — yeniden `pnl_rollups` üret (live). */
+export async function postDashboardPnlRebuild(accessToken: string): Promise<PnlRebuildStatsApi> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/dashboard/pnl/rebuild`, accessToken, {
+    method: "POST",
+    headers: {},
+  });
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("dashboard/pnl/rebuild", r, t);
+  return JSON.parse(t) as PnlRebuildStatsApi;
+}
+
+/** Kullanıcının Binance emirleri (`GET /api/v1/orders/binance`). */
+export type ExchangeOrderRowApi = {
+  id: string;
+  org_id: string;
+  user_id: string;
+  exchange: string;
+  segment: string;
+  symbol: string;
+  client_order_id: string;
+  status: string;
+  intent: unknown;
+  venue_order_id: number | null;
+  venue_response: unknown;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function fetchMyBinanceOrders(
+  accessToken: string,
+  opts?: { limit?: number; sinceRfc3339?: string | null },
+): Promise<ExchangeOrderRowApi[]> {
+  const params = new URLSearchParams();
+  params.set("limit", String(opts?.limit ?? 200));
+  if (opts?.sinceRfc3339?.trim()) params.set("since", opts.sinceRfc3339.trim());
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/orders/binance?${params}`, accessToken, {});
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("orders/binance", r, t);
+  return JSON.parse(t) as ExchangeOrderRowApi[];
 }
 
 /** SPEC §7.2 / F5 — `exchangeInfo` ipucu veya tier0 fallback (hesap anahtarı gerekmez). */
@@ -1038,7 +1116,7 @@ export async function fetchNotifyOutbox(accessToken: string, limit = 50): Promis
   const params = new URLSearchParams({ limit: String(limit) });
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/notify/outbox?${params}`, accessToken, {});
   const t = await r.text();
-  if (!r.ok) throw new Error(`notify/outbox ${r.status}: ${t.slice(0, 400)}`);
+  if (!r.ok) throwQtssApiError("notify/outbox", r, t);
   return JSON.parse(t) as NotifyOutboxRowApi[];
 }
 
@@ -1171,7 +1249,7 @@ export async function fetchAiDecisionDetail(
 ): Promise<AiDecisionDetailRowApi> {
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/decisions/${encodeURIComponent(id)}`, accessToken, {});
   const t = await r.text();
-  if (!r.ok) throw new Error(`ai/decisions/${id} ${r.status}: ${t.slice(0, 400)}`);
+  if (!r.ok) throwQtssApiError(`ai/decisions/${id}`, r, t);
   return JSON.parse(t) as AiDecisionDetailRowApi;
 }
 
@@ -1197,7 +1275,7 @@ export async function postAiDecisionReject(
     headers: {},
   });
   const t = await r.text();
-  if (!r.ok) throw new Error(`ai/decisions reject ${r.status}: ${t.slice(0, 400)}`);
+  if (!r.ok) throwQtssApiError("ai/decisions reject", r, t);
   return JSON.parse(t) as { updated: number };
 }
 

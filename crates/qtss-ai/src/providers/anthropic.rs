@@ -27,9 +27,7 @@ impl AnthropicProvider {
             .or_else(|_| std::env::var("QTSS_AI_ANTHROPIC_API_KEY"))
             .map_err(|_| AiError::ProviderNotConfigured("ANTHROPIC_API_KEY".into()))?;
         if api_key.trim().is_empty() {
-            return Err(AiError::ProviderNotConfigured(
-                "ANTHROPIC_API_KEY empty".into(),
-            ));
+            return Err(AiError::ProviderNotConfigured("ANTHROPIC_API_KEY empty".into()));
         }
         let base_url = std::env::var("ANTHROPIC_BASE_URL")
             .or_else(|_| std::env::var("QTSS_AI_ANTHROPIC_BASE_URL"))
@@ -125,10 +123,7 @@ impl AiCompletionProvider for AnthropicProvider {
         let txt = res.text().await.map_err(|e| AiError::http(e.to_string()))?;
         if !status.is_success() {
             let preview = truncate_chars(&txt, 500);
-            return Err(AiError::http(format!(
-                "anthropic HTTP {}: {}",
-                status, preview
-            )));
+            return Err(AiError::http(format!("anthropic HTTP {}: {}", status, preview)));
         }
         let parsed: MessagesResp = serde_json::from_str(&txt).map_err(|e| {
             let preview = truncate_chars(&txt, 500);

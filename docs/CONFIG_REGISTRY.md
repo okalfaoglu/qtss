@@ -46,6 +46,7 @@ Central operational parameters live in PostgreSQL table **`system_config`** (mig
 | `worker` | `nansen_flow_intel_tick_secs` | `{"secs":900}` — `nansen_flow_intel_loop`; env `NANSEN_FLOW_INTEL_TICK_SECS`; min **600s**. |
 | `worker` | `nansen_perp_leaderboard_tick_secs` | `{"secs":604800}` — `nansen_perp_leaderboard_loop`; env `NANSEN_PERP_LEADERBOARD_TICK_SECS`; min **3600s**. |
 | `worker` | `nansen_whale_perp_positions_tick_secs` | `{"secs":1800}` — `nansen_whale_perp_aggregate_loop`; env `NANSEN_WHALE_PERP_POSITIONS_TICK_SECS`; min **600s**. |
+| `worker` | `external_fetch_poll_tick_secs` | `{"secs":30}` — sleep between full sweeps in `qtss_worker::engines::external_common` (Binance / Coinglass / Hyperliquid / misc `external_data_sources` families share this interval); env `QTSS_EXTERNAL_FETCH_POLL_SECS`; min **10s**. Seeded in full migration chains that include `system_config` (e.g. **0048+** idempotent `ON CONFLICT DO NOTHING`). |
 
 ## Admin API
 

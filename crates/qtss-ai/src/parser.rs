@@ -42,9 +42,7 @@ pub fn extract_json_block(raw: &str) -> AiResult<String> {
             }
         }
     }
-    let start = t
-        .find('{')
-        .ok_or_else(|| AiError::parse("no JSON object start"))?;
+    let start = t.find('{').ok_or_else(|| AiError::parse("no JSON object start"))?;
     let slice = &t[start..];
     let end = find_matching_brace(slice).ok_or_else(|| AiError::parse("unbalanced JSON braces"))?;
     Ok(slice[..=end].to_string())
@@ -95,10 +93,7 @@ fn require_direction(v: &Value) -> AiResult<String> {
 }
 
 fn require_confidence(v: &Value) -> AiResult<f64> {
-    let c = v
-        .get("confidence")
-        .and_then(|x| x.as_f64())
-        .ok_or_else(|| AiError::parse("missing confidence"))?;
+    let c = v.get("confidence").and_then(|x| x.as_f64()).ok_or_else(|| AiError::parse("missing confidence"))?;
     if !(0.0..=1.0).contains(&c) {
         return Err(AiError::parse("confidence must be 0.0..=1.0"));
     }

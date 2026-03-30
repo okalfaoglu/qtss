@@ -44,13 +44,8 @@ impl OpenAiCompatibleProvider {
         let api_key = std::env::var("QTSS_AI_ONPREM_API_KEY")
             .ok()
             .filter(|s| !s.trim().is_empty())
-            .or_else(|| {
-                std::env::var("OPENAI_API_KEY")
-                    .ok()
-                    .filter(|s| !s.trim().is_empty())
-            });
-        let extra_headers =
-            parse_headers_json(std::env::var("QTSS_AI_OPENAI_COMPAT_HEADERS_JSON").ok());
+            .or_else(|| std::env::var("OPENAI_API_KEY").ok().filter(|s| !s.trim().is_empty()));
+        let extra_headers = parse_headers_json(std::env::var("QTSS_AI_OPENAI_COMPAT_HEADERS_JSON").ok());
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
@@ -82,8 +77,7 @@ impl OpenAiCompatibleProvider {
             );
         }
         for (name, val) in &self.extra_headers {
-            let hn = HeaderName::from_bytes(name.as_bytes())
-                .map_err(|e| AiError::http(e.to_string()))?;
+            let hn = HeaderName::from_bytes(name.as_bytes()).map_err(|e| AiError::http(e.to_string()))?;
             let hv = HeaderValue::from_str(val).map_err(|e| AiError::http(e.to_string()))?;
             h.insert(hn, hv);
         }
@@ -194,10 +188,7 @@ impl OpenAiCompatibleProvider {
         let txt = res.text().await.map_err(|e| AiError::http(e.to_string()))?;
         if !status.is_success() {
             let preview: String = txt.chars().take(500).collect();
-            return Err(AiError::http(format!(
-                "openai_compat HTTP {}: {}",
-                status, preview
-            )));
+            return Err(AiError::http(format!("openai_compat HTTP {}: {}", status, preview)));
         }
         let parsed: ChatResp = serde_json::from_str(&txt).map_err(|e| {
             let preview: String = txt.chars().take(500).collect();

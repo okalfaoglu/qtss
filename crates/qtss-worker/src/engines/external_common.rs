@@ -3,7 +3,9 @@
 
 use std::time::Duration;
 
-use qtss_storage::{external_snapshot_age_secs, list_enabled_external_sources};
+use qtss_storage::{
+    external_snapshot_age_secs, list_enabled_external_sources, resolve_worker_tick_secs,
+};
 use reqwest::Client;
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -23,24 +25,25 @@ pub fn external_fetch_enabled() -> bool {
     }
 }
 
-fn poll_interval_secs() -> u64 {
-    std::env::var("QTSS_EXTERNAL_FETCH_POLL_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(30)
-        .max(10)
-}
-
 fn tick_floor_secs(s: i32) -> i64 {
     (s as i64).max(30)
 }
 
+async fn external_fetch_engine_poll(pool: &PgPool) -> Duration {
+    let secs = resolve_worker_tick_secs(
+        pool,
+        "worker",
+        "external_fetch_poll_tick_secs",
+        "QTSS_EXTERNAL_FETCH_POLL_SECS",
+        30,
+        10,
+    )
+    .await;
+    Duration::from_secs(secs)
+}
+
 /// Tek API ailesi: `key_filter` ile satırlar seçilir; hepsi aynı `data_snapshots` tablosuna yazılır.
-pub async fn run_external_sources_engine(
-    pool: PgPool,
-    engine_label: &'static str,
-    key_filter: fn(&str) -> bool,
-) {
+pub async fn run_external_sources_engine(pool: PgPool, engine_label: &'static str, key_filter: fn(&str) -> bool) {
     if !external_fetch_enabled() {
         info!(
             engine = engine_label,
@@ -49,8 +52,11 @@ pub async fn run_external_sources_engine(
         return;
     }
 
-    let poll = Duration::from_secs(poll_interval_secs());
-    let client = match Client::builder().timeout(Duration::from_secs(120)).build() {
+    let initial_poll = external_fetch_engine_poll(&pool).await;
+    let client = match Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
+    {
         Ok(c) => c,
         Err(e) => {
             warn!(%e, engine = engine_label, "reqwest client");
@@ -60,11 +66,13 @@ pub async fn run_external_sources_engine(
 
     info!(
         engine = engine_label,
-        poll_secs = poll.as_secs(),
-        "external HTTP motoru"
+        poll_secs = initial_poll.as_secs(),
+        "external HTTP engine poll interval (system_config worker.external_fetch_poll_tick_secs or QTSS_EXTERNAL_FETCH_POLL_SECS)"
     );
 
     loop {
+        let poll = external_fetch_engine_poll(&pool).await;
+
         let sources = match list_enabled_external_sources(&pool).await {
             Ok(s) => s,
             Err(e) => {

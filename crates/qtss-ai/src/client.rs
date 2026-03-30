@@ -9,12 +9,10 @@ use sqlx::PgPool;
 use crate::approval::maybe_auto_approve;
 use crate::config::AiEngineConfig;
 use crate::error::AiResult;
-use crate::parser::{
-    parse_operational_decision, parse_portfolio_decision, parse_tactical_decision,
-};
-use crate::providers;
+use crate::parser::{parse_operational_decision, parse_portfolio_decision, parse_tactical_decision};
 use crate::providers::{AiCompletionProvider, AiRequest, LayerKind};
-use crate::safety::{validate_ai_decision_safety, SafetyConfig};
+use crate::providers;
+use crate::safety::{SafetyConfig, validate_ai_decision_safety};
 use crate::storage::{
     decision_exists_for_hash, expire_stale_decisions, insert_ai_decision, insert_ai_decision_error,
     insert_portfolio_directive, insert_position_directive, insert_tactical_decision,
@@ -60,23 +58,15 @@ impl AiRuntime {
     pub async fn from_pool(pool: PgPool) -> AiResult<Self> {
         let repo = AppConfigRepository::new(pool.clone());
         let mut config = match repo.get_by_key("ai_engine_config").await? {
-            Some(row) => serde_json::from_value(row.value)
-                .unwrap_or_else(|_| AiEngineConfig::default_disabled()),
+            Some(row) => serde_json::from_value(row.value).unwrap_or_else(|_| AiEngineConfig::default_disabled()),
             None => AiEngineConfig::default_disabled(),
         };
         config.merge_env_overrides();
-        let tactical_provider =
-            connect_optional_provider(&config, LayerKind::Tactical, config.tactical_layer_enabled);
-        let operational_provider = connect_optional_provider(
-            &config,
-            LayerKind::Operational,
-            config.operational_layer_enabled,
-        );
-        let strategic_provider = connect_optional_provider(
-            &config,
-            LayerKind::Strategic,
-            config.strategic_layer_enabled,
-        );
+        let tactical_provider = connect_optional_provider(&config, LayerKind::Tactical, config.tactical_layer_enabled);
+        let operational_provider =
+            connect_optional_provider(&config, LayerKind::Operational, config.operational_layer_enabled);
+        let strategic_provider =
+            connect_optional_provider(&config, LayerKind::Strategic, config.strategic_layer_enabled);
         let notify = NotificationDispatcher::from_env();
         let notify = if notify.config().telegram.is_some() || notify.config().webhook.is_some() {
             Some(notify)
@@ -229,10 +219,7 @@ pub async fn run_tactical_sweep(rt: &AiRuntime) -> AiResult<()> {
                     "tactical",
                     Some(&sym),
                     &ctx,
-                    &format!(
-                        "parse_error: {err}; raw_head={}",
-                        &resp.text.chars().take(400).collect::<String>()
-                    ),
+                    &format!("parse_error: {err}; raw_head={}", &resp.text.chars().take(400).collect::<String>()),
                     &json!({
                         "provider": resp.provider_id,
                         "model": resp.model,
@@ -250,10 +237,7 @@ pub async fn run_tactical_sweep(rt: &AiRuntime) -> AiResult<()> {
             tracing::info!(%sym, "tactical LLM returned no_trade; skipping persistence");
             continue;
         }
-        let confidence = parsed
-            .get("confidence")
-            .and_then(|x| x.as_f64())
-            .unwrap_or(0.0);
+        let confidence = parsed.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.0);
         if confidence + f64::EPSILON < rt.config().require_min_confidence {
             tracing::info!(
                 %sym,
@@ -276,8 +260,8 @@ pub async fn run_tactical_sweep(rt: &AiRuntime) -> AiResult<()> {
             .await;
             continue;
         }
-        let valid_until =
-            chrono::Utc::now() + chrono::Duration::seconds(rt.config().decision_ttl_secs as i64);
+        let valid_until = chrono::Utc::now()
+            + chrono::Duration::seconds(rt.config().decision_ttl_secs as i64);
         let meta = json!({
             "provider": resp.provider_id,
             "model": resp.model,
@@ -362,10 +346,7 @@ pub async fn run_operational_sweep(rt: &AiRuntime) -> AiResult<()> {
                 continue;
             }
         };
-        let confidence = parsed
-            .get("confidence")
-            .and_then(|x| x.as_f64())
-            .unwrap_or(0.75);
+        let confidence = parsed.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.75);
         let meta = json!({ "provider": resp.provider_id, "model": resp.model });
         let decision_id = insert_ai_decision(
             rt.pool(),
@@ -427,10 +408,7 @@ pub async fn run_strategic_sweep(rt: &AiRuntime) -> AiResult<()> {
             return Ok(());
         }
     };
-    let confidence = parsed
-        .get("confidence")
-        .and_then(|x| x.as_f64())
-        .unwrap_or(0.7);
+    let confidence = parsed.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.7);
     let meta = json!({ "provider": resp.provider_id, "model": resp.model });
     let valid_until = chrono::Utc::now() + chrono::Duration::hours(24 * 7);
     let decision_id = insert_ai_decision(

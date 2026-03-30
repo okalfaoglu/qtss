@@ -16,16 +16,7 @@ pub async fn record_decision_outcome(
     holding_hours: Option<f64>,
     notes: Option<&str>,
 ) -> AiResult<Uuid> {
-    insert_ai_decision_outcome(
-        pool,
-        decision_id,
-        pnl_pct,
-        pnl_usdt,
-        outcome,
-        holding_hours,
-        notes,
-    )
-    .await
+    insert_ai_decision_outcome(pool, decision_id, pnl_pct, pnl_usdt, outcome, holding_hours, notes).await
 }
 
 /// Last `n` decision outcomes aggregated for prompts.

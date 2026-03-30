@@ -2,9 +2,10 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Extension, State};
+use axum::extract::{Extension, Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -33,6 +34,17 @@ pub struct CancelBinanceBody {
     pub segment: String,
 }
 
+#[derive(Deserialize)]
+pub struct ListBinanceOrdersQuery {
+    #[serde(default = "list_binance_orders_default_limit")]
+    limit: i64,
+    since: Option<String>,
+}
+
+fn list_binance_orders_default_limit() -> i64 {
+    200
+}
+
 pub fn orders_binance_read_router() -> Router<SharedState> {
     Router::new().route("/orders/binance", get(list_my_orders))
 }
@@ -46,10 +58,34 @@ pub fn orders_binance_write_router() -> Router<SharedState> {
 async fn list_my_orders(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
+    Query(q): Query<ListBinanceOrdersQuery>,
 ) -> Result<Json<Vec<ExchangeOrderRow>>, ApiError> {
     let user_id =
         Uuid::parse_str(&claims.sub).map_err(|_| ApiError::bad_request("geçersiz token sub"))?;
-    let rows = st.exchange_orders.list_for_user(user_id, 200).await?;
+    let lim = q.limit.clamp(1, 1000);
+    let since_dt: Option<DateTime<Utc>> = match &q.since {
+        None => None,
+        Some(raw) => {
+            let t = raw.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(
+                    DateTime::parse_from_rfc3339(t)
+                        .map_err(|_| {
+                            ApiError::bad_request(
+                                "invalid since — use RFC3339 e.g. 2026-01-01T00:00:00Z",
+                            )
+                        })?
+                        .with_timezone(&Utc),
+                )
+            }
+        }
+    };
+    let rows = st
+        .exchange_orders
+        .list_for_user_filtered(user_id, since_dt, lim)
+        .await?;
     Ok(Json(rows))
 }
 
@@ -84,7 +120,9 @@ async fn place_order(
             ))
         })?;
     let cfg = BinanceClientConfig::mainnet_with_keys(creds.api_key, creds.api_secret);
-    let client = Arc::new(BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?);
+    let client = Arc::new(
+        BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?,
+    );
     let intent = body.intent;
     let symbol = intent.instrument.symbol.clone();
     let intent_record = intent.clone();
@@ -130,7 +168,8 @@ async fn cancel_order(
         .await?
         .ok_or_else(|| ApiError::bad_request(format!("Binance {seg} API anahtarı yok")))?;
     let cfg = BinanceClientConfig::mainnet_with_keys(creds.api_key, creds.api_secret);
-    let client = BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?;
+    let client =
+        BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?;
     let cid = body.client_order_id.as_simple().to_string();
     match seg {
         "futures" => {

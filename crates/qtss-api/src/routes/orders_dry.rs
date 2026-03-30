@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use axum::extract::{Extension, Query, State};
+use chrono::{DateTime, Utc};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use qtss_domain::exchange::ExchangeId;
@@ -27,7 +28,9 @@ pub struct PlaceDryBody {
     pub initial_quote_balance: Option<Decimal>,
 }
 
-fn segment_db_key(segment: qtss_domain::exchange::MarketSegment) -> Result<&'static str, ApiError> {
+fn segment_db_key(
+    segment: qtss_domain::exchange::MarketSegment,
+) -> Result<&'static str, ApiError> {
     match segment {
         qtss_domain::exchange::MarketSegment::Spot => Ok("spot"),
         qtss_domain::exchange::MarketSegment::Futures => Ok("futures"),
@@ -52,9 +55,11 @@ fn ledger_from_row(row: PaperBalanceRow) -> DryLedgerState {
 
 #[derive(Deserialize)]
 pub struct PaperFillsQuery {
-    /// 1–500; varsayılan 50.
+    /// 1–1000; varsayılan 50.
     #[serde(default = "paper_fills_default_limit")]
     limit: i64,
+    /// RFC3339 UTC — yalnızca bu zaman ve sonrası dolumlar.
+    since: Option<String>,
 }
 
 fn paper_fills_default_limit() -> i64 {
@@ -91,8 +96,28 @@ async fn list_paper_fills(
 ) -> Result<Json<Vec<PaperFillRow>>, ApiError> {
     let user_id =
         Uuid::parse_str(&claims.sub).map_err(|_| ApiError::bad_request("geçersiz token sub"))?;
-    let lim = q.limit.clamp(1, 500);
-    let rows = st.paper.list_fills_for_user(user_id, lim).await?;
+    let lim = q.limit.clamp(1, 1000);
+    let since_dt: Option<DateTime<Utc>> = match &q.since {
+        None => None,
+        Some(raw) => {
+            let t = raw.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(
+                    DateTime::parse_from_rfc3339(t)
+                        .map_err(|_| {
+                            ApiError::bad_request("invalid since — use RFC3339 e.g. 2026-01-01T00:00:00Z")
+                        })?
+                        .with_timezone(&Utc),
+                )
+            }
+        }
+    };
+    let rows = st
+        .paper
+        .list_fills_for_user_filtered(user_id, since_dt, lim)
+        .await?;
     Ok(Json(rows))
 }
 
@@ -117,7 +142,10 @@ async fn place_dry_order(
     let symbol = body.intent.instrument.symbol.clone();
 
     let mut tx = st.pool.begin().await?;
-    let locked = st.paper.lock_balance_for_update(&mut tx, user_id).await?;
+    let locked = st
+        .paper
+        .lock_balance_for_update(&mut tx, user_id)
+        .await?;
 
     let mut ledger = if let Some(r) = locked {
         ledger_from_row(r)

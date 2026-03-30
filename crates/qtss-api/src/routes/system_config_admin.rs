@@ -32,10 +32,7 @@ pub struct SystemConfigUpsertBody {
 
 pub fn system_config_admin_router() -> Router<SharedState> {
     Router::new()
-        .route(
-            "/admin/system-config",
-            get(list_system_config).post(upsert_system_config),
-        )
+        .route("/admin/system-config", get(list_system_config).post(upsert_system_config))
         .route(
             "/admin/system-config/{module}/{key}",
             get(get_system_config).delete(delete_system_config),

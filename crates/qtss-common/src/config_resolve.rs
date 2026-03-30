@@ -20,10 +20,7 @@ pub fn env_override(key: &str) -> Option<String> {
     if !env_overrides_enabled() {
         return None;
     }
-    std::env::var(key)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    std::env::var(key).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
 #[cfg(test)]
@@ -35,7 +32,10 @@ mod tests {
 
     fn with_clean_env(f: impl FnOnce()) {
         let _g = ENV_LOCK.lock().expect("env test lock");
-        let keys = ["QTSS_CONFIG_ENV_OVERRIDES", "QTSS_CONFIG_RESOLVE_TEST_KEY"];
+        let keys = [
+            "QTSS_CONFIG_ENV_OVERRIDES",
+            "QTSS_CONFIG_RESOLVE_TEST_KEY",
+        ];
         let saved: Vec<(String, Result<String, std::env::VarError>)> = keys
             .iter()
             .map(|k| (k.to_string(), std::env::var(k)))
