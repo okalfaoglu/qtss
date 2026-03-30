@@ -23,10 +23,12 @@ pub use error::{AiError, AiResult};
 
 use std::time::Duration;
 
+use qtss_storage::resolve_worker_tick_secs;
 use sqlx::PgPool;
 use tracing::warn;
 
-/// Expire pending AI decisions past `expires_at` every 5 minutes (FAZ 5.2).
+/// Expire pending AI decisions past `expires_at` (FAZ 5.2).
+/// Interval: `system_config.worker.ai_expire_stale_decisions_tick_secs` (`{"secs":300}`), env `QTSS_AI_EXPIRE_STALE_TICK_SECS`, min **60s** (`QTSS_CONFIG_ENV_OVERRIDES` precedence — see `docs/CONFIG_REGISTRY.md`).
 pub async fn expire_stale_ai_decisions_loop(pool: PgPool) {
     loop {
         match storage::expire_stale_decisions(&pool).await {
@@ -34,6 +36,15 @@ pub async fn expire_stale_ai_decisions_loop(pool: PgPool) {
             Err(e) => warn!(%e, "expire_stale_decisions"),
             _ => {}
         }
-        tokio::time::sleep(Duration::from_secs(300)).await;
+        let sleep_secs = resolve_worker_tick_secs(
+            &pool,
+            "worker",
+            "ai_expire_stale_decisions_tick_secs",
+            "QTSS_AI_EXPIRE_STALE_TICK_SECS",
+            300,
+            60,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
     }
 }

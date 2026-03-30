@@ -58,7 +58,10 @@ pub trait AiCompletionProvider: Send + Sync {
 }
 
 /// Build the configured provider for a layer (`ai_engine_config.provider_*` + env URLs / keys).
-pub fn provider_for_layer(cfg: &AiEngineConfig, layer: LayerKind) -> AiResult<Arc<dyn AiCompletionProvider>> {
+pub fn provider_for_layer(
+    cfg: &AiEngineConfig,
+    layer: LayerKind,
+) -> AiResult<Arc<dyn AiCompletionProvider>> {
     let id = match layer {
         LayerKind::Tactical => cfg.provider_tactical.trim(),
         LayerKind::Operational => cfg.provider_operational.trim(),

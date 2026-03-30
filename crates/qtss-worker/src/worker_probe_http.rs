@@ -55,7 +55,10 @@ async fn live() -> Json<LiveBody> {
 
 async fn ready(State(st): State<Arc<ProbeState>>) -> impl IntoResponse {
     if let Some(ref pool) = st.pool {
-        if let Err(e) = sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(pool).await {
+        if let Err(e) = sqlx::query_scalar::<_, i32>("SELECT 1")
+            .fetch_one(pool)
+            .await
+        {
             warn!(%e, "worker /ready: PostgreSQL ping başarısız");
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }

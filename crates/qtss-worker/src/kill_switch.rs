@@ -12,9 +12,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use qtss_common::{halt_trading, is_trading_halted};
-use qtss_storage::{
-    resolve_worker_tick_secs, sum_today_daily_realized_pnl, AppConfigRepository,
-};
+use qtss_storage::{resolve_worker_tick_secs, sum_today_daily_realized_pnl, AppConfigRepository};
 use rust_decimal::Decimal;
 use sqlx::PgPool;
 use tracing::{info, warn};

@@ -106,20 +106,12 @@ fn wilder_rsi(closes: &[f64], period: usize) -> Vec<f64> {
     }
     avg_g /= period as f64;
     avg_l /= period as f64;
-    let rs = if avg_l <= 1e-12 {
-        100.0
-    } else {
-        avg_g / avg_l
-    };
+    let rs = if avg_l <= 1e-12 { 100.0 } else { avg_g / avg_l };
     out[period] = 100.0 - (100.0 / (1.0 + rs));
     for i in (period + 1)..n {
         avg_g = (avg_g * (period as f64 - 1.0) + gains[i]) / period as f64;
         avg_l = (avg_l * (period as f64 - 1.0) + losses[i]) / period as f64;
-        let rs = if avg_l <= 1e-12 {
-            100.0
-        } else {
-            avg_g / avg_l
-        };
+        let rs = if avg_l <= 1e-12 { 100.0 } else { avg_g / avg_l };
         out[i] = 100.0 - (100.0 / (1.0 + rs));
     }
     out
@@ -270,7 +262,10 @@ pub fn compute_signal_dashboard_v1_with_policy(
     .to_string();
 
     let (rh, rl) = (tr.range_high, tr.range_low);
-    let buffer = rh.zip(rl).map(|(h, l)| (h - l).abs() * 0.008).unwrap_or(0.0);
+    let buffer = rh
+        .zip(rl)
+        .map(|(h, l)| (h - l).abs() * 0.008)
+        .unwrap_or(0.0);
 
     let (mut giris_gercek, mut stop_ilk, mut kar_al_ilk) = if tr.long_sweep_signal {
         let entry = last_c.is_finite().then_some(last_c);
@@ -398,7 +393,9 @@ mod tests {
 
     #[test]
     fn dashboard_runs() {
-        let mut v: Vec<OhlcBar> = (0..120_i64).map(|i| bar(i, 100.0 + (i as f64) * 0.01)).collect();
+        let mut v: Vec<OhlcBar> = (0..120_i64)
+            .map(|i| bar(i, 100.0 + (i as f64) * 0.01))
+            .collect();
         let p = TradingRangeParams {
             lookback: 40,
             atr_period: 14,
@@ -416,7 +413,9 @@ mod tests {
 
     #[test]
     fn long_only_neutralizes_short_side_but_keeps_raw() {
-        let v: Vec<OhlcBar> = (0..120_i64).map(|i| bar(i, 200.0 - (i as f64) * 0.8)).collect();
+        let v: Vec<OhlcBar> = (0..120_i64)
+            .map(|i| bar(i, 200.0 - (i as f64) * 0.8))
+            .collect();
         let p = TradingRangeParams {
             lookback: 40,
             atr_period: 14,
@@ -425,7 +424,8 @@ mod tests {
         };
         let tr = analyze_trading_range(&v, &p);
         let both = compute_signal_dashboard_v1_with_policy(&v, &tr, SignalDirectionPolicy::Both);
-        let long_only = compute_signal_dashboard_v1_with_policy(&v, &tr, SignalDirectionPolicy::LongOnly);
+        let long_only =
+            compute_signal_dashboard_v1_with_policy(&v, &tr, SignalDirectionPolicy::LongOnly);
         assert_eq!(both.durum_model_raw, long_only.durum_model_raw);
         if both.durum_model_raw == "SHORT" {
             assert_eq!(long_only.durum, "NOTR");

@@ -97,7 +97,9 @@ pub fn trend_line_inspect(
             loop_valid = false;
             break;
         }
-        if line_price * direction >= bar_out * direction && line_price * direction <= bar_price * direction {
+        if line_price * direction >= bar_out * direction
+            && line_price * direction <= bar_price * direction
+        {
             score += 1.0;
         } else if b == other_bar {
             loop_valid = false;
@@ -120,9 +122,36 @@ pub fn inspect_pick_best_three_point_line(
 ) -> (bool, u8, f64) {
     let first_index = p0.0.min(p1.0).min(p2.0);
     let last_index = p0.0.max(p1.0).max(p2.0);
-    let (ok1, s1) = trend_line_inspect(p0, p2, first_index, last_index, p1.0, direction, bars, score_ratio_max);
-    let (ok2, s2) = trend_line_inspect(p0, p1, first_index, last_index, p2.0, direction, bars, score_ratio_max);
-    let (ok3, s3) = trend_line_inspect(p1, p2, first_index, last_index, p0.0, direction, bars, score_ratio_max);
+    let (ok1, s1) = trend_line_inspect(
+        p0,
+        p2,
+        first_index,
+        last_index,
+        p1.0,
+        direction,
+        bars,
+        score_ratio_max,
+    );
+    let (ok2, s2) = trend_line_inspect(
+        p0,
+        p1,
+        first_index,
+        last_index,
+        p2.0,
+        direction,
+        bars,
+        score_ratio_max,
+    );
+    let (ok3, s3) = trend_line_inspect(
+        p1,
+        p2,
+        first_index,
+        last_index,
+        p0.0,
+        direction,
+        bars,
+        score_ratio_max,
+    );
     let pick = if ok1 && s1 > s2.max(s3) {
         1_u8
     } else if ok2 && s2 > s1.max(s3) {

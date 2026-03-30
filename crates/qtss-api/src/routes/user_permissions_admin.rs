@@ -37,14 +37,11 @@ async fn ensure_same_org(
 ) -> Result<(), ApiError> {
     let caller_org = Uuid::parse_str(claims.org_id.trim())
         .map_err(|_| ApiError::bad_request("geçersiz token org_id"))?;
-    let Some(target_org) = st.user_permissions.org_id_for_user(target_user_id).await?
-    else {
+    let Some(target_org) = st.user_permissions.org_id_for_user(target_user_id).await? else {
         return Err(ApiError::not_found("kullanıcı bulunamadı"));
     };
     if caller_org != target_org {
-        return Err(ApiError::forbidden(
-            "hedef kullanıcı aynı kuruma ait değil",
-        ));
+        return Err(ApiError::forbidden("hedef kullanıcı aynı kuruma ait değil"));
     }
     Ok(())
 }
@@ -96,7 +93,8 @@ async fn put_user_permissions(
         let actor_user_id = Uuid::parse_str(claims.sub.trim()).ok();
         let org_id = Uuid::parse_str(claims.org_id.trim()).ok();
         let path = format!("/api/v1/users/{user_id}/permissions");
-        let details = UserPermissionsReplaceDetailsV1::new(user_id, before, unique.clone()).to_value();
+        let details =
+            UserPermissionsReplaceDetailsV1::new(user_id, before, unique.clone()).to_value();
         let pool = st.pool.clone();
         let roles = claims.roles.clone();
         tokio::spawn(async move {

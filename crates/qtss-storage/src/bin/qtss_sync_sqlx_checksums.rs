@@ -40,13 +40,19 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("migrations dizini okunamadı: {}", migrations_dir.display()))?;
 
     let mut by_version: HashMap<i64, Vec<String>> = HashMap::new();
-    for entry in fs::read_dir(&migrations_dir).with_context(|| migrations_dir.display().to_string())? {
+    for entry in
+        fs::read_dir(&migrations_dir).with_context(|| migrations_dir.display().to_string())?
+    {
         let entry = entry?;
         let path = entry.path();
         if !path.is_file() {
             continue;
         }
-        let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let file_name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
         let parts: Vec<&str> = file_name.splitn(2, '_').collect();
         if parts.len() != 2 || !parts[1].ends_with(".sql") {
             continue;
@@ -74,7 +80,9 @@ async fn main() -> anyhow::Result<()> {
         .context("PostgreSQL bağlantısı")?;
 
     let mut updated = 0u64;
-    for entry in fs::read_dir(&migrations_dir).with_context(|| migrations_dir.display().to_string())? {
+    for entry in
+        fs::read_dir(&migrations_dir).with_context(|| migrations_dir.display().to_string())?
+    {
         let entry = entry?;
         let path = entry.path();
         if !path.is_file() {
@@ -93,14 +101,12 @@ async fn main() -> anyhow::Result<()> {
         let digest = Sha384::digest(sql.as_bytes());
         let checksum: &[u8] = digest.as_slice();
 
-        let res = sqlx::query(
-            r#"UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2"#,
-        )
-        .bind(checksum)
-        .bind(version)
-        .execute(&pool)
-        .await
-        .context("_sqlx_migrations güncelleme")?;
+        let res = sqlx::query(r#"UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2"#)
+            .bind(checksum)
+            .bind(version)
+            .execute(&pool)
+            .await
+            .context("_sqlx_migrations güncelleme")?;
 
         if res.rows_affected() == 0 {
             eprintln!("atlandı (DB’de yok): v{version} {file_name}");

@@ -80,8 +80,7 @@ fn period_starts(ts: DateTime<Utc>) -> [(&'static str, DateTime<Utc>); 4] {
     let wd = d.weekday().num_days_from_monday();
     let week_naive = d - Duration::days(i64::from(wd));
     let weekly = utc_day_start(week_naive);
-    let month_naive =
-        NaiveDate::from_ymd_opt(d.year(), d.month(), 1).expect("month day 1");
+    let month_naive = NaiveDate::from_ymd_opt(d.year(), d.month(), 1).expect("month day 1");
     let monthly = utc_day_start(month_naive);
     let year_naive = NaiveDate::from_ymd_opt(d.year(), 1, 1).expect("jan 1");
     let yearly = utc_day_start(year_naive);

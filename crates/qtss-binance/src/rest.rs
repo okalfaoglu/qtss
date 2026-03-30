@@ -78,7 +78,8 @@ impl RestCore {
         let mut headers = HeaderMap::new();
         headers.insert(
             "X-MBX-APIKEY",
-            HeaderValue::from_str(&creds.api_key).map_err(|e| BinanceError::Other(e.to_string()))?,
+            HeaderValue::from_str(&creds.api_key)
+                .map_err(|e| BinanceError::Other(e.to_string()))?,
         );
         let resp = self.client.post(url).headers(headers).send().await?;
         self.parse_json(resp).await
@@ -99,7 +100,8 @@ impl RestCore {
         let mut headers = HeaderMap::new();
         headers.insert(
             "X-MBX-APIKEY",
-            HeaderValue::from_str(&creds.api_key).map_err(|e| BinanceError::Other(e.to_string()))?,
+            HeaderValue::from_str(&creds.api_key)
+                .map_err(|e| BinanceError::Other(e.to_string()))?,
         );
         let resp = req.headers(headers).send().await?;
         self.parse_json(resp).await
@@ -120,7 +122,8 @@ impl RestCore {
         let mut headers = HeaderMap::new();
         headers.insert(
             "X-MBX-APIKEY",
-            HeaderValue::from_str(&creds.api_key).map_err(|e| BinanceError::Other(e.to_string()))?,
+            HeaderValue::from_str(&creds.api_key)
+                .map_err(|e| BinanceError::Other(e.to_string()))?,
         );
         let resp = req.headers(headers).send().await?;
         self.parse_json(resp).await
@@ -138,7 +141,8 @@ impl RestCore {
         let mut headers = HeaderMap::new();
         headers.insert(
             "X-MBX-APIKEY",
-            HeaderValue::from_str(&creds.api_key).map_err(|e| BinanceError::Other(e.to_string()))?,
+            HeaderValue::from_str(&creds.api_key)
+                .map_err(|e| BinanceError::Other(e.to_string()))?,
         );
         let resp = self.client.get(url).headers(headers).send().await?;
         self.parse_json(resp).await
@@ -156,7 +160,8 @@ impl RestCore {
         let mut headers = HeaderMap::new();
         headers.insert(
             "X-MBX-APIKEY",
-            HeaderValue::from_str(&creds.api_key).map_err(|e| BinanceError::Other(e.to_string()))?,
+            HeaderValue::from_str(&creds.api_key)
+                .map_err(|e| BinanceError::Other(e.to_string()))?,
         );
         headers.insert(
             "Content-Type",
@@ -184,7 +189,8 @@ impl RestCore {
         let mut headers = HeaderMap::new();
         headers.insert(
             "X-MBX-APIKEY",
-            HeaderValue::from_str(&creds.api_key).map_err(|e| BinanceError::Other(e.to_string()))?,
+            HeaderValue::from_str(&creds.api_key)
+                .map_err(|e| BinanceError::Other(e.to_string()))?,
         );
         let resp = self.client.delete(url).headers(headers).send().await?;
         self.parse_json(resp).await
@@ -204,7 +210,8 @@ impl RestCore {
         let mut headers = HeaderMap::new();
         headers.insert(
             "X-MBX-APIKEY",
-            HeaderValue::from_str(&creds.api_key).map_err(|e| BinanceError::Other(e.to_string()))?,
+            HeaderValue::from_str(&creds.api_key)
+                .map_err(|e| BinanceError::Other(e.to_string()))?,
         );
         let resp = self.client.put(url).headers(headers).send().await?;
         self.parse_json(resp).await
@@ -214,13 +221,13 @@ impl RestCore {
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {
-            return Err(
-                BinanceError::from_body(&text).unwrap_or_else(|| BinanceError::Other(format!(
+            return Err(BinanceError::from_body(&text).unwrap_or_else(|| {
+                BinanceError::Other(format!(
                     "http {}: {}",
                     status.as_u16(),
                     text.chars().take(500).collect::<String>()
-                ))),
-            );
+                ))
+            }));
         }
         if text.is_empty() {
             return Ok(serde_json::Value::Null);

@@ -458,7 +458,10 @@ impl CatalogRepository {
         Ok(row)
     }
 
-    pub async fn get_instrument_by_id(&self, id: Uuid) -> Result<Option<InstrumentRow>, StorageError> {
+    pub async fn get_instrument_by_id(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<InstrumentRow>, StorageError> {
         let row = sqlx::query_as::<_, InstrumentRow>(
             r#"SELECT id, market_id, native_symbol, base_asset, quote_asset, status,
                       is_trading, price_filter, lot_filter, metadata, created_at, updated_at

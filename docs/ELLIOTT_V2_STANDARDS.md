@@ -66,3 +66,22 @@ The chart anchor is `15m`. `1h` and `4h` are rendered as overlays on the same ch
   - hard rules pass/fail,
   - structure completeness,
   - ratio proximity (soft scoring).
+
+## 8) Implementation map (web — drift control)
+
+This document is the **normative** label/color/rule set. The running engine lives under `web/src/lib/elliottEngineV2/`:
+
+| Topic | Primary code |
+|-------|----------------|
+| Timeframe type + MTF bucketing (`15m` anchor → `15m`+`1h`+`4h`, …) | `types.ts`, `mtf.ts` |
+| Impulse / corrective wave logic | `impulse.ts`, `corrective.ts` |
+| Hard checks (compression, overlap-style guards) | `tezWaveChecks.ts`, `engine.ts` |
+| ZigZag-driven pivots | `zigzag.ts` |
+| Chart overlays: labels, line styles, per-TF coloring hooks | `adapter.ts` (label glyphs per TF; colors often supplied via `elliottWaveAppConfig` / chart layer) |
+| Engine orchestration, state merge across TFs | `engine.ts` |
+| Projection / drawing geometry | `projection.ts` |
+| Public exports | `index.ts` |
+
+On-chart **hex colors** for macro/intermediate/micro are typically driven by app config (`web/src/lib/elliottWaveAppConfig.ts` and friends), not only this doc — keep **§3** and the config defaults in sync when you change the palette.
+
+When behavior or labels change in code, update **§2–§5** here in the same PR when the change is intentional; if code diverges by mistake, treat this file as the checklist to reconcile (see `QTSS_MASTER_DEV_GUIDE.md` §1.3 **L4**).

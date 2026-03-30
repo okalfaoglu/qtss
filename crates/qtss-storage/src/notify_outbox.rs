@@ -3,8 +3,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::PgPool;
 use sqlx::types::Json;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::StorageError;

@@ -169,10 +169,7 @@ pub fn score_nansen_buyer_quality(response: &Value) -> f64 {
             || label.contains("institution")
         {
             good += 1;
-        } else if label.contains("bot")
-            || label.contains("mev")
-            || label.contains("wash")
-        {
+        } else if label.contains("bot") || label.contains("mev") || label.contains("wash") {
             bad += 1;
         }
     }
@@ -336,9 +333,7 @@ fn sum_numeric_array_path(v: &Value, path: &[&str]) -> f64 {
     let Some(arr) = cur.as_array() else {
         return 0.0;
     };
-    arr.iter()
-        .filter_map(|x| parse_json_f64(Some(x)))
-        .sum()
+    arr.iter().filter_map(|x| parse_json_f64(Some(x))).sum()
 }
 
 /// Coinglass / benzeri: netflow, exchange flow — yaygın `data` dizisi veya `inflow`/`outflow` alanları.

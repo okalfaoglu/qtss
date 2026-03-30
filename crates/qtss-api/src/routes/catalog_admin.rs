@@ -201,10 +201,15 @@ async fn post_exchange_api(
         return Err((StatusCode::BAD_REQUEST, "code gerekli".into()));
     }
     let cat = CatalogRepository::new(st.pool.clone());
-    cat.upsert_exchange(code, body.display_name.trim(), body.is_active, body.metadata)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-        .map(Json)
+    cat.upsert_exchange(
+        code,
+        body.display_name.trim(),
+        body.is_active,
+        body.metadata,
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    .map(Json)
 }
 
 async fn patch_exchange_api(
@@ -215,7 +220,12 @@ async fn patch_exchange_api(
 ) -> Result<Json<ExchangeRow>, ApiError> {
     let cat = CatalogRepository::new(st.pool.clone());
     let row = cat
-        .update_exchange(id, body.display_name.as_deref(), body.is_active, body.metadata)
+        .update_exchange(
+            id,
+            body.display_name.as_deref(),
+            body.is_active,
+            body.metadata,
+        )
         .await?
         .ok_or_else(|| ApiError::not_found("exchange bulunamadı"))?;
     Ok(Json(row))
@@ -261,7 +271,12 @@ async fn patch_market_api(
 ) -> Result<Json<qtss_storage::MarketRow>, ApiError> {
     let cat = CatalogRepository::new(st.pool.clone());
     let row = cat
-        .update_market(id, body.display_name.as_deref(), body.is_active, body.metadata)
+        .update_market(
+            id,
+            body.display_name.as_deref(),
+            body.is_active,
+            body.metadata,
+        )
         .await?
         .ok_or_else(|| ApiError::not_found("market bulunamadı"))?;
     Ok(Json(row))
@@ -410,9 +425,15 @@ pub fn catalog_read_router() -> Router<SharedState> {
 pub fn catalog_write_router() -> Router<SharedState> {
     Router::new()
         .route("/catalog/exchanges", post(post_exchange_api))
-        .route("/catalog/exchanges/{id}", patch(patch_exchange_api).delete(delete_exchange_api))
+        .route(
+            "/catalog/exchanges/{id}",
+            patch(patch_exchange_api).delete(delete_exchange_api),
+        )
         .route("/catalog/markets", post(post_market_api))
-        .route("/catalog/markets/{id}", patch(patch_market_api).delete(delete_market_api))
+        .route(
+            "/catalog/markets/{id}",
+            patch(patch_market_api).delete(delete_market_api),
+        )
         .route("/catalog/instruments", post(post_instrument_api))
         .route(
             "/catalog/instruments/{id}",

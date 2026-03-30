@@ -32,14 +32,10 @@ impl ExecutionGateway for LiveGateway {
             Self::MODULE,
             "LiveGateway henüz bağlı değil — adapter eklenince doldurulacak",
         );
-        Err(ExecutionError::Exchange(
-            "live adapter not wired".into(),
-        ))
+        Err(ExecutionError::Exchange("live adapter not wired".into()))
     }
 
     async fn cancel(&self, _client_order_id: Uuid) -> Result<(), ExecutionError> {
-        Err(ExecutionError::Exchange(
-            "live adapter not wired".into(),
-        ))
+        Err(ExecutionError::Exchange("live adapter not wired".into()))
     }
 }

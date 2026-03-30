@@ -132,9 +132,7 @@ impl Optimizer {
     }
 }
 
-fn cartesian_product(
-    axes: &BTreeMap<String, Vec<JsonValue>>,
-) -> Vec<BTreeMap<String, JsonValue>> {
+fn cartesian_product(axes: &BTreeMap<String, Vec<JsonValue>>) -> Vec<BTreeMap<String, JsonValue>> {
     if axes.is_empty() {
         return vec![BTreeMap::new()];
     }

@@ -114,7 +114,10 @@ pub async fn run(pool: PgPool, gateway: Arc<dyn ExecutionGateway>) {
         let qty = leg_quantity();
 
         if fr > th {
-            info!(funding_rate = fr, "arb_funding: pozitif funding — spot AL + futures SHORT");
+            info!(
+                funding_rate = fr,
+                "arb_funding: pozitif funding — spot AL + futures SHORT"
+            );
             if dry_two_leg() {
                 if let Some(px) = mark {
                     let leg_qty = clamp_qty_by_max_notional_usdt(qty, px);
@@ -181,7 +184,9 @@ pub async fn run(pool: PgPool, gateway: Arc<dyn ExecutionGateway>) {
                 };
                 match gateway.place(spot_sell).await {
                     Ok(id) => info!(%id, "arb_funding: paper spot SAT"),
-                    Err(e) => warn!(%e, "arb_funding: negatif bacak spot SAT (çoğu paper defterde taban yok)"),
+                    Err(e) => {
+                        warn!(%e, "arb_funding: negatif bacak spot SAT (çoğu paper defterde taban yok)")
+                    }
                 }
                 let fut_long = OrderIntent {
                     instrument: fut_inst.clone(),

@@ -8,7 +8,7 @@
 
 ## İçindekiler
 
-**0.** Durum özeti (yönlendirme tabloları) · **1.** Hatalar ve sorunlar · **2.** İyileştirme önerileri · **3.** AI planı (çoklu sağlayıcı) · **4.** FAZ 0–11 görev listesi · **5.** Migration kuralları · **6.** Ortam değişkenleri (AI + bildirim + DB config hedefi) · **7.** Test stratejisi · **8.** Kod kalitesi kuralları · **9.** Güvenlik · **10.** Worker spawn sırası · **11.** `docs/` dosya envanteri
+**0.** Durum özeti (yönlendirme tabloları) · **1.** Hatalar ve sorunlar · **2.** İyileştirme önerileri · **3.** AI planı (çoklu sağlayıcı) · **4.** FAZ 0–11 görev listesi · **5.** Migration kuralları · **6.** Ortam değişkenleri (AI + bildirim + DB config hedefi) · **7.** Test stratejisi · **8.** Kod kalitesi kuralları (**8.1** log seviyeleri) · **9.** Güvenlik · **10.** Worker spawn sırası · **11.** `docs/` dosya envanteri
 
 *Önerilen okuma sırası (ilk oturum):* **0 → 1 → 2 → 4** (FAZ tabloları) → ihtiyaca göre **5–11**. Mimari özet için ayrıca `docs/PROJECT.md`.
 
@@ -18,7 +18,7 @@
 
 **Kısa cevap:** **Evet — 17/17 temel yönlendirme tamam** (`qtss-ai` crate, `0042`–`0047` şeması — `0045`: `users.preferred_locale` + worker `system_config` tohumları; `0046`: paper/live pozisyon bildirim tick; `0047`: kill switch DB senkron + PnL poll tick; çoklu sağlayıcı + on-prem, API + web paneli, `system_config`, kapanışta `ai_decision_outcomes` geri bildirimi). Tasarım tek üreticiye kilitli değildir; **Anthropic**, **OpenAI-uyumlu iç uç**, **Ollama** vb. aynı trait ile seçilir. `ai_approval_requests` genel onay kuyruğu olarak `ai_decisions` zincirinden ayrı kalır.
 
-**FAZ 0–11** (Bölüm 4) izleme tablolarıdır; **FAZ 0–8**, **FAZ 9 çekirdek i18n**, **FAZ 10** ve **FAZ 11** çekirdeği uygulanmıştır. **FAZ 9**’da tüm statik UI metinleri henüz kataloglanmamış olabilir (ör. büyük `App.tsx` gövdesi); **FAZ 11.7** ortam → DB taşıması aşamalıdır — outbox, PnL rollup, notify locale, paper/live pozisyon bildirim tick, **kill switch** (`kill_switch_db_sync_tick_secs`, `kill_switch_pnl_poll_tick_secs`) `system_config` + `resolve_worker_tick_secs` ile kodda; kalan döngü/env anahtarları sırada. Tamamlanan alt görev **✅ DONE** ile işaretlenir.
+**FAZ 0–11** (Bölüm 4) izleme tablolarıdır; **FAZ 0–8**, **FAZ 9 çekirdek i18n**, **FAZ 10** ve **FAZ 11** çekirdeği uygulanmıştır. **FAZ 9**’da `App.tsx` operatör metinleri anahtarlanır: çekmece/AI paneli, **üst şerit**, **ACP + kanal taraması**, **motor çekmecesi** (`app.engineDrawer.*` — DB snapshot, sinyal paneli tablosu `app.signalDashboard.*`, Paper/F4–F5 `app.paperDrawer.*`, snapshot/Confluence özetleri), komisyon/backfill/dev-login (`app.chartToolbar.*`, `app.channelReject.*`, `app.channelScan.*`, `app.acp.*`, `app.drawerPanel.*`, …). **Elliott** uzun yardım paragrafları, **bağlam / Nansen** çekmece metinleri ve `matchesSetting` arama anahtar kelimeleri kademeli kalabilir; API **`error_key`** için web istemci kataloğu genişletmesi isteğe bağlıdır. **FAZ 11.7** — outbox, PnL rollup, notify locale, paper/live pozisyon bildirim tick, **kill switch**, **engine analiz**, **on-chain sinyal**, **position manager**, **Nansen token screener + genişletilmiş HTTP döngüleri** (`nansen_extended`) için `system_config` + `resolve_worker_tick_secs` kodda (**`docs/CONFIG_REGISTRY.md`**). Harici Binance/Coinglass/Hyperliquid worker döngüleri ayrı modülde; tam ağaçta tick eşlemesi genişletilebilir. İsteğe bağlı **0048+** tohum satırları yeni anahtarlar için idempotent eklenir. Tamamlanan alt görev **✅ DONE** ile işaretlenir.
 
 **Çalıştırma (yerel):** HTTP API → `cargo run -p qtss-api`; arka plan worker → `cargo run -p qtss-worker`. İkisi ayrı süreç; **PostgreSQL** ve `DATABASE_URL` zorunlu. İlk kurulumda örnek org/admin için: `cargo run -p qtss-api --bin qtss-seed`. Bağlantı ve gizli anahtarlar için kök `.env` / `.env.example` tek kaynak kabul edilir. Worker üzerinde `/live`, `/ready`, `/metrics` için HTTP dinleyici: `.env.example` içindeki **`QTSS_WORKER_HTTP_BIND`** (ör. `127.0.0.1:9090`). Web arayüzü: `web/` içinde `npm install`, `npm run dev` (geliştirme) / `npm run build` (üretim paketi); API adresi için `web/.env` veya Vite proxy ayarı `.env.example` / proje dokümanı ile uyumlu olmalıdır.
 
@@ -40,7 +40,7 @@
 | 12 | AI onay kuyruğu (basit) | ✅ DONE | Migration 0038 + API routes (list/create/decide) |
 | 13 | Notify outbox | ✅ DONE | Migration 0039 + worker loop + API |
 | 14 | User permissions + audit | ✅ DONE | Migration 0040-0041 + RBAC + admin CRUD |
-| 15 | CI pipeline | ✅ DONE | `.github/workflows/ci.yml`: `qtss-storage`/`qtss-notify`/`qtss-common`/`qtss-worker` lib testleri + `cargo check` (api/worker); **`postgres-migrations`**: `migrations_apply`; `web/`: `npm ci`, `i18n:check`, `build` |
+| 15 | CI pipeline | ✅ DONE | `.github/workflows/ci.yml`: `qtss-storage`/`qtss-notify`/`qtss-common` lib + **`qtss-worker --bin qtss-worker`** + `cargo check` (api/worker); **`postgres-migrations`**: `migrations_apply` + **`qtss-ai` `decision_exists_for_hash_it`** + **`maybe_auto_approve_it`**; `web/`: `npm ci`, `i18n:check`, `build` |
 | 16 | Probe endpoints | ✅ DONE | Worker: `/live`, `/ready`, `/metrics` — `QTSS_WORKER_HTTP_BIND` ile açılır (`.env.example`) |
 
 *Kanıt sütunundaki satır sayıları `wc -l <dosya>` ile ölçülür; üstteki rakamlar 2026-03 repo durumuyla uyumludur (`signal_scorer` 514, `onchain_signal_scorer` 790, `qtss-strategy` src toplamı 1098, `strategy_runner` 61, `position_manager` 383, `confluence` 558, `kill_switch` 25). `qtss-strategy` için: `wc -l crates/qtss-strategy/src/*.rs | tail -1`. Crate toplamları değiştikçe tablo güncellenmelidir.*
@@ -83,7 +83,7 @@
 
 **M2: `main.rs` (worker) — `SinkExt` ve WebSocket `send`**
 - Durum: `futures_util::SinkExt`, `ws.send(Message::Pong(...))` çağrıları için **gereklidir**; trait import edilmezse derleme hata verir. “Kullanılmıyor” algısı, IDE’nin trait metodlarını import satırına bağlamamasından kaynaklanabilir.
-- İsteğe bağlı: `use futures_util::{SinkExt, StreamExt};` satırına kısa yorum: `// SinkExt: WebSocket sink .send`.
+- **Not:** `qtss-worker/src/main.rs` içinde import satırına kısa açıklayıcı yorum eklendi (`SinkExt` → WebSocket `.send`).
 
 **M3: `web/nul` ve kök `nul` — Windows artifact**
 - Sorun: Windows’ta yanlış çıktı yönlendirmesi `web/nul` veya repo kökünde `nul` dosyası oluşturabilir.
@@ -99,13 +99,13 @@
 
 ### 1.3 DÜŞÜK — İyileştirme Fırsatları
 
-**L1: Test coverage düşük** — `signal_scorer.rs` ve `confluence.rs` (rejim/yön/lot ölçeği yardımcıları) birim testleri; `qtss-common` `kill_switch` + `config_resolve` testleri; `position_manager.rs`, `strategy_runner.rs` için hedeflenen birim testler sırada.
+**L1: Test coverage düşük (kısmen iyileştirildi)** — `qtss-ai`: `parser` / `safety` / `approval` / `context_builder` (`bar_ohlc_window_metrics`) birim testleri (`cargo test -p qtss-ai`). **Postgres entegrasyonları:** `decision_exists_for_hash_it`, `maybe_auto_approve_it` + CI `postgres-migrations` (`DATABASE_URL`). `qtss-storage` `config_tick`: `normalize_notify_locale_code` + JSON tick testleri. `qtss-worker`: `signal_scorer`, `confluence` yardımcıları; **`position_manager`** (`aggregate_long_books`, `intent_side`); **`strategy_runner`** (`strategy_env_suffix_normalized`). **İsteğe bağlı / ağır:** `position_manager` uçtan uca tick + AI + canlı DB senaryosu; `build_*_context` tam async yolu için ayrı DB fikstürü.
 
 **L2: `pnl_rollup_loop` gecikme riski (iyileştirildi)** — Varsayılan tick **DB `system_config.worker.pnl_rollup_tick_secs`** (`{"secs":300}`) + `QTSS_PNL_ROLLUP_TICK_SECS` yedeği; `qtss_storage::resolve_worker_tick_secs` + `QTSS_CONFIG_ENV_OVERRIDES` önceliği (**FAZ 11**). Kill switch ile uyum için rollup sıklığı üretimde admin API veya env ile ayarlanmalıdır.
 
-**L3: `migrations/README.md` envanter drift’i** — Liste **0001–0047** (47 dosya); sonraki boş **0048**. Drift: `ls migrations/*.sql | wc -l` ile README satır sayısı.
+**L3: `migrations/README.md` envanter drift’i** — `migrations/README.md` bu checkout’taki dosyaları tablo ile listeler; tam ürün hattında **0001–0047** (+ **0048** sıradaki boş önek) olabilir. Drift: `ls migrations/*.sql | wc -l` ile README satır sayısı; §5 çift izlenebilirlik notu.
 
-**L4: `docs/ELLIOTT_V2_STANDARDS.md` projede aktif kullanılmıyor** — Elliott V2 engine `web/src/lib/elliottEngineV2/` altında JS/TS; bu doküman referans ama güncelliğinden emin olunmalı.
+**L4: `docs/ELLIOTT_V2_STANDARDS.md` ↔ kod** — **§8 Implementation map** eklendi (`elliottEngineV2/*.ts`); kasıtlı değişikliklerde §2–§5 ile kod birlikte gözden geçirilmelidir.
 
 ### 1.4 Risk → FAZ eşlemesi (hızlı referans)
 
@@ -122,7 +122,7 @@
 | Test ağırlığı (worker çekirdeği) | L1 | Bölüm 7; **2.2** numaralı listede madde **9** (integration test) |
 | PnL rollup vs kill switch gecikmesi | L2 | **2.2** numaralı listede madde **7** (PnL rollup sıklığı) |
 | `exchange = "binance"` sabiti | M4 | Uzun vadeli öneri **12** (çoklu borsa adapter); ayrı FAZ satırı yok |
-| Elliott doküman ↔ kod drift | L4 | `docs/ELLIOTT_V2_STANDARDS.md` ile `web/src/lib/elliottEngineV2/` senkronu (manuel gözden geçirme) |
+| Elliott doküman ↔ kod drift | L4 | `docs/ELLIOTT_V2_STANDARDS.md` **§8** (`elliottEngineV2/*.ts` eşlemesi) + §2–§5 ile kod senkronu |
 | Çok dil (i18n) ürün hedefi | Bölüm 2.4 madde **13** | **FAZ 9** |
 | Ortam değişkeni çoğalması / tek kaynak ihtiyacı | Bölüm 2.5 madde **14** | **FAZ 11** |
 
@@ -140,7 +140,7 @@ Bu bölümdeki öneriler **1–12** numaralı sürekli liste + **13** (çok dil)
 
 3. **Strateji başına ayrı DryRunGateway** — **Tamamlandı (FAZ 0.2):** `dry_gateway_for_strategy` + env bütçeleri.
 
-4. **Migrations README güncelle** — **tamamlandı** (**FAZ 0.5 + 1.7 ✅**): 0001–0047 envanter, sonraki **0048**.
+4. **Migrations README güncelle** — **tamamlandı** (**FAZ 0.5 + 1.7 ✅**): `migrations/README.md` güncel envanter + tam hatta **0048** sıradaki önek (§5).
 
 5. **`web/nul`** — **tamamlandı** (M3, FAZ 0.6): repodan silindi, `.gitignore`’da `web/nul`.
 
@@ -227,7 +227,7 @@ Uygulama sırası ve DB/API işleri bu belgede **FAZ 1–8** (AI), **FAZ 9** (ç
 
 ## 4. Cursor İçin Sıralı Görev Listesi
 
-Aşağıdaki **FAZ 0–11** maddeleri **❌** / **✅ DONE** ile izlenir. **FAZ 0–8** (AI çekirdeği + API + web + env örnekleri), **FAZ 9** çekirdek i18n (web `react-i18next`, API locale, `0045`, bildirim çift dili, CI `i18n:check`), **FAZ 10** ve **FAZ 11** çekirdeği tamamlandı. **FAZ 11.7** kalan `QTSS_*` → DB taşımaları aşamalıdır.
+Aşağıdaki **FAZ 0–11** maddeleri **❌** / **✅ DONE** ile izlenir. **FAZ 0–8** (AI çekirdeği + API + web + env örnekleri), **FAZ 9** çekirdek i18n (web `react-i18next`, API locale, **`GET /api/v1/locales`**, `0045`, bildirim çift dili, CI `i18n:check`), **FAZ 10** ve **FAZ 11** çekirdeği tamamlandı. **FAZ 11.7** ana worker tick’leri `resolve_worker_tick_secs` ile bağlandı (tablo **11.7** + **CONFIG_REGISTRY**).
 
 **Öncelik:** Üretim stabilitesi için **FAZ 0** (özellikle **0.1** kill switch, **0.2** bakiye, **0.3** confluence, **0.4** gateway) **FAZ 1–8** (AI) başlamadan tamamlanmalıdır; aksi halde LLM katmanı mevcut riskleri büyütür veya maskeler. **FAZ 9** (çok dil), **FAZ 0** sonrasında **FAZ 7** (web UI) ile paralel başlatılabilir; AI tarafında **9.5**, **FAZ 5–6** ile hizalanır. **FAZ 10** (Telegram ve olay bildirimleri) **AI’dan bağımsız** yürütülebilir; operasyonel değer için **FAZ 0** ile çakışmadan, `qtss-notify` + worker env’leri hazır oldukça erken devreye alınması önerilir. **FAZ 9.4** (bildirim şablonları / dil), **FAZ 10** metinleriyle koordine edilir. **FAZ 11** (DB yapılandırması) **AI ile seri değildir**; mevcut `app_config` kullanımını bozmamak için aşamalı taşıma ve çakışan migration numaraları (**Bölüm 5**) ile planlanmalıdır — **11.1** notuna bakın.
 
@@ -241,7 +241,7 @@ Aşağıdaki **FAZ 0–11** maddeleri **❌** / **✅ DONE** ile izlenir. **FAZ 
 | 0.2 | Strategy runner bakiye izolasyonu | `qtss-worker/src/strategy_runner.rs` | `dry_gateway_for_strategy`; `QTSS_STRATEGY_<NAME>_BALANCE` veya toplam/4. | ✅ DONE |
 | 0.3 | Confluence confidence düşürme | `qtss-worker/src/confluence.rs` | Snapshot kullanılabilirliği ile `confidence` çarpanı; `components_missing`, `data_availability`. | ✅ DONE |
 | 0.4 | Position manager gateway caching | `qtss-worker/src/position_manager.rs` | Live: `(user_id, segment)` → `Arc<BinanceLiveGateway>`. | ✅ DONE |
-| 0.5 | Migrations README güncelle | `migrations/README.md` | Envanter güncel tutulur; son migration **0047**; sıradaki boş **0048** (**1.7**). | ✅ DONE |
+| 0.5 | Migrations README güncelle | `migrations/README.md` | Checkout envanteri tabloda; tam hatta son önek **0047** / sıradaki **0048** — §5. | ✅ DONE |
 | 0.6 | `web/nul` sil + ignore | `web/nul`, `.gitignore` | Repo’dan kaldırıldı; `.gitignore`’da `web/nul`. | ✅ DONE |
 | 0.7 | API error standardizasyonu | `qtss-api/src/error.rs`, route handler'lar | `ApiError` + `IntoResponse`; JSON `{"error": "..."}`; `From<sqlx::Error>` / `From<StorageError>`. OAuth `/oauth/token` ayrı gövde (RFC 6749). | ✅ DONE |
 
@@ -255,7 +255,7 @@ Aşağıdaki **FAZ 0–11** maddeleri **❌** / **✅ DONE** ile izlenir. **FAZ 
 | 1.4 | `ai_portfolio_directives` | 0042 içinde | `symbol_scores` JSONB, `status` default `active`. | ✅ DONE |
 | 1.5 | `ai_decision_outcomes` | 0042 içinde | `outcome` CHECK; `recorded_at`. | ✅ DONE |
 | 1.6 | Migration: `0043_ai_engine_config.sql` | `migrations/0043_ai_engine_config.sql` | `app_config` `ai_engine_config` seed; `ON CONFLICT (key) DO NOTHING`. | ✅ DONE |
-| 1.7 | `migrations/README.md` güncelle | `migrations/README.md` | Tam envanter 0001–0047; sonraki **0048**. | ✅ DONE |
+| 1.7 | `migrations/README.md` güncelle | `migrations/README.md` | Bu ağaç + tam ürün hattı notu; sıradaki boş önek **0048**. | ✅ DONE |
 
 ### FAZ 2 — `qtss-ai` Crate İskeleti
 
@@ -320,12 +320,12 @@ Aşağıdaki **FAZ 0–11** maddeleri **❌** / **✅ DONE** ile izlenir. **FAZ 
 
 | # | Görev | Dosya(lar) | Detay | Durum |
 |---|-------|-----------|-------|-------|
-| 9.1 | Web arayüzü i18n | `web/` | `web/src/i18n.ts`, `locales/en.json` + `tr.json`, `LanguageSwitcher`, çekmece/AI paneli anahtarları; `Intl` uyumlu genişletme sırada (kalan ham metinler `App.tsx`). | ✅ DONE (çekirdek) |
-| 9.2 | API kullanıcı mesajları | `crates/qtss-api/src/` | `locale.rs`: `Accept-Language` + `?locale=`; `X-QTSS-Negotiated-Locale`; `ApiError`: `error`, `locale`, **`error_key`**, **`error_args`** (opsiyonel JSON); istemci/i18n kataloğu ile tam mesaj eşlemesi sırada. | ✅ DONE (çekirdek) |
+| 9.1 | Web arayüzü i18n | `web/` | `web/src/i18n.ts`, `locales/en.json` + `tr.json`, **`locales/supportedLocales.ts`**, `LanguageSwitcher`; `App.tsx`: `app.channelReject` / `app.channelScan`, `app.chartToolbar`, `app.acp`, `app.engineDrawer` (motor özeti, snapshot/Confluence boş durumları), **`app.signalDashboard`** (DB sinyal paneli tablosu + wire özeti), **`app.paperDrawer`** (F4/F5 Range–Paper–komisyon kartı), `app.drawerPanel`, `app.backfill` / `app.bars` / `app.commission` / `app.config` / `app.dev` / `app.drawings`; Elliott/bağlam uzun metinler; `error_key` → metin istemci kataloğu isteğe bağlı. | ✅ DONE (çekirdek) |
+| 9.2 | API kullanıcı mesajları | `crates/qtss-api/src/` | `locale.rs`: `Accept-Language` + `?locale=`; `X-QTSS-Negotiated-Locale`; `ApiError`: `error`, `locale`, **`error_key`**, **`error_args`**. **Public katalog:** `GET /api/v1/locales` (JWT yok; `routes/locales.rs`) — `web/src/api/client.ts` **`fetchSupportedLocales`**. İstemci hata metni kataloğu (`error_key` → metin) kademeli. | ✅ DONE (çekirdek + katalog ucu) |
 | 9.3 | Kullanıcı locale tercihi | `migrations/0045_…`, `qtss-storage/users.rs`, `routes/session.rs`, `web` | `users.preferred_locale`; `GET /api/v1/me` (`preferred_locale`) + `PATCH /api/v1/me/locale`; web `patchMePreferredLocale` / `LanguageSwitcher`. | ✅ DONE |
 | 9.4 | Bildirim şablonları | `crates/qtss-notify/src/locale.rs`, worker `paper_fill_notify`, `live_position_notify` | `resolve_bilingual`; worker varsayılan dil `resolve_notify_default_locale` + `worker.notify_default_locale` / `QTSS_NOTIFY_DEFAULT_LOCALE`. | ✅ DONE (paper/live özet) |
 | 9.5 | AI dil politikası (sağlayıcıdan bağımsız) | `crates/qtss-ai/`, `app_config` | Sistem promptu ve `reasoning` çıktısı için hedef dil (örn. `QTSS_AI_OUTPUT_LOCALE` veya `ai_engine_config` alanı); tüm `AiCompletionProvider` implementasyonları aynı locale kuralına uyar; **FAZ 4–6** ile uyumlu. | ✅ DONE (prompt kökü `AiEngineConfig.output_locale` + `QTSS_AI_OUTPUT_LOCALE`) |
-| 9.6 | Test ve CI | `.github/workflows/ci.yml`, `web/scripts/check-i18n-keys.mjs` | CI: `npm run i18n:check` + `npm run build`; Rust lib testleri; **`postgres-migrations`**: `migrations_apply` (**§2.2 madde 9**). | ✅ DONE |
+| 9.6 | Test ve CI | `.github/workflows/ci.yml`, `web/scripts/check-i18n-keys.mjs`, kök `scripts/check-i18n-keys.mjs` | Yerel: `cd web && npm run i18n:check` veya repo kökünden `node scripts/check-i18n-keys.mjs`. CI: `npm run i18n:check` + `npm run build`; Rust (`qtss-worker --bin qtss-worker`); **`postgres-migrations`**: `migrations_apply` + **`qtss-ai` `decision_exists_for_hash_it`** + **`maybe_auto_approve_it`** (**§2.2 madde 9**, **§7**). | ✅ DONE |
 
 ### FAZ 10 — Bildirim servisleri: Telegram etkinleştirme ve olay akışları
 
@@ -385,10 +385,10 @@ Aşağıdaki **FAZ 0–11** maddeleri **❌** / **✅ DONE** ile izlenir. **FAZ 
 | 11.4 | `qtss-storage` | `crates/qtss-storage/src/system_config.rs` | `SystemConfigRepository`: list/get/upsert/delete; `is_secret` listelerde maskeleme. | ✅ DONE |
 | 11.5 | Çözümleme katmanı | `qtss-common/src/config_resolve.rs` | `QTSS_CONFIG_ENV_OVERRIDES` + `env_override`; tam DB birleşik çözüm aşamalı. | ✅ DONE (ince katman) |
 | 11.6 | Admin API | `qtss-api` | `GET/POST/DELETE /api/v1/admin/system-config` (`routes/system_config_admin.rs`); list `?module=`. **admin** rolü. | ✅ DONE |
-| 11.7 | Modül bazlı taşıma (incremental) | `qtss-worker`, `qtss-storage/src/config_tick.rs`, `0045…`–`0047`, `paper_fill_notify`, `live_position_notify`, `kill_switch` | **Kısmi ✅:** outbox, PnL rollup, notify locale, paper/live notify tick, **kill switch** sync + PnL poll tick (`0047`) DB+env; diğer döngü/env anahtarları aşamalı. | ⚠️ kısmi |
+| 11.7 | Modül bazlı taşıma (incremental) | `qtss-worker` (`nansen_engine`, `nansen_extended`, `onchain_signal_scorer`, `position_manager`, …), `qtss-analysis/src/engine_loop.rs`, `qtss-storage/src/config_tick.rs`, `qtss-ai/src/lib.rs`, `0045…`–`0047` (+ isteğe bağlı **0048+** tohum) | **✅ çekirdek taşıma:** yukarıdaki bileşenlerde `resolve_worker_tick_secs` + env yedekleri (**`docs/CONFIG_REGISTRY.md`** tablosu). `normalize_notify_locale_code` testleri. **İsteğe bağlı:** yeni `system_config` satırları için idempotent migration; harici fetch döngüleri (Binance/Coinglass/HL `engines`) tick eşlemesi ayrı PR. | ✅ DONE (çekirdek) |
 | 11.8 | Seed / import | `0044`–`0047` | Idempotent `ON CONFLICT DO NOTHING` seed. | ✅ DONE |
 | 11.9 | `.env` minimal politika | `.env.example`, `SECURITY.md`, **Bölüm 6** | Bootstrap: `DATABASE_URL`, `QTSS_JWT_SECRET`; `QTSS_CONFIG_ENV_OVERRIDES` notu. | ✅ DONE |
-| 11.10 | Test + gözlemlenebilirlik | `cargo test`, `migrations_apply`, `qtss-common/src/config_resolve.rs` | `config_tick` + `qtss-notify` `locale` birim testleri; `qtss-common` **`config_resolve`** + **`kill_switch`** mutex’li env testleri; **CI:** `migrations_apply` (Postgres, worker seed ≥7). | ⚠️ kısmi |
+| 11.10 | Test + gözlemlenebilirlik | `cargo test`, `migrations_apply`, `qtss-common/src/config_resolve.rs` | `config_tick` (`tick_secs_from_config_value`, `normalize_notify_locale_code`) + `qtss-notify` `locale`; `qtss-common` **`config_resolve`** + **`kill_switch`**; **`qtss-ai`** parser/safety/approval/context metrik testleri (**Bölüm 7**); **CI:** `migrations_apply` (Postgres) + **`qtss-ai` `decision_exists_for_hash_it`** + **`maybe_auto_approve_it`** + **`qtss-worker --bin qtss-worker`**. | ✅ çekirdek (lib + `qtss-ai` Postgres entegrasyonları) |
 
 **FAZ 0–11 üst seviye özet**
 
@@ -403,9 +403,9 @@ Aşağıdaki **FAZ 0–11** maddeleri **❌** / **✅ DONE** ile izlenir. **FAZ 
 | 6 | Operasyonel / stratejik katman + feedback | **✅ DONE** |
 | 7 | API + web UI | **✅ DONE** |
 | 8 | `.env.example` AI değişkenleri | **✅ DONE** |
-| 9 | Çok dil (web, API, bildirim, AI metinleri, test) | **✅ çekirdek** (9.3 `/me`+locale ✅; 9.2 `error_key`/`error_args` ✅; 9.5 AI locale ✅; kalan `App.tsx` ham metinleri / sunucu tarafı çeviri kataloğu sırada) |
+| 9 | Çok dil (web, API, bildirim, AI metinleri, test) | **✅ çekirdek** (9.3 `/me`+locale ✅; 9.2 `error_key`/`error_args` + **`/locales`** ✅; 9.5 AI locale ✅; `App.tsx` üst şerit + ACP/kanal + **`app.engineDrawer`** + **`app.signalDashboard`** + **`app.paperDrawer`** + komisyon/backfill + çekmece arama ✅; Elliott/bağlam uzun metinler / `error_key` web kataloğu kademeli) |
 | 10 | **Telegram** + diğer kanallar; sinyal, setup, alım/satım bildirim env ve worker hatları | **✅ DONE** (altyapı + dokümantasyon) |
-| 11 | **`system_config` + `app_config`** merkezi yapılandırma | **✅ çekirdek** (11.7 ⚠️ kısmi taşıma — kill switch tick’leri ✅ `0047`; 11.10 ⚠️ — migrasyon + `config_resolve` testleri ✅) |
+| 11 | **`system_config` + `app_config`** merkezi yapılandırma | **✅ çekirdek** (11.7 tick taşıması: notify + kill switch + engine + on-chain + position manager + Nansen ✅; 11.10 ✅ lib testleri + CI migrasyon) |
 
 ---
 
@@ -413,12 +413,12 @@ Aşağıdaki **FAZ 0–11** maddeleri **❌** / **✅ DONE** ile izlenir. **FAZ 
 
 - SQLx sürümü = dosya adındaki sayı öneki (ör. `0042_xxx.sql` → version 42).
 - **Aynı önek iki kez kullanılamaz** — SQLx çöker.
-- Mevcut son migration: **0047** (`worker.kill_switch_*_tick_secs` tohumları). Sonraki boş: **0048**.
+- **Tam ürün hattında** son migration örneği: **0047** (`worker.kill_switch_*_tick_secs` tohumları); sıradaki boş önek: **0048**. Bu checkout’ta daha kısa bir önek zinciri olabilir — kaynak: `migrations/README.md`.
 - Uygulanmış migration dosyasını **asla değiştirme** — checksum uyuşmazlığı. Yeni numara ile yeni dosya ekle.
 - Checksum sorunu olursa: `cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums`.
 - Her yeni migration sonrası `migrations/README.md` envanterini güncelle.
 - Uygulamayı çalıştırmadan önce bekleyen migrasyonların uygulanması: API veya worker başlatıldığında (ör. `cargo run -p qtss-api`) SQLx migrasyonları işlenir — ayrıntı `qtss-storage` / `pool.rs`.
-- **Drift uyarısı:** Envanter **0001–0047** ile hizalı olmalı. **Kaynak:** `ls migrations/*.sql | sort`.
+- **Drift uyarısı:** `migrations/README.md` ile `ls migrations/*.sql | sort` aynı sayıda dosya göstermelidir. Uzun hatta **0001–0047**+ beklenir.
 - **Çakışan sıra:** Yeni tablolar **0048+**; aynı PR’da çift `NNNN` kullanılmamalıdır.
 
 ---
@@ -464,15 +464,15 @@ Uzun vadede çoğu `QTSS_*` ayarı veritabanına taşınır; `.env` öncelikle *
 
 ## 7. Test Stratejisi
 
-**Mevcut testler:** `cargo test -p qtss-worker --lib` — `signal_scorer`, `confluence` yardımcıları vb.; `cargo test -p qtss-common --lib` — `config_resolve`, `kill_switch`. Tam tarama: `cargo test --workspace` (süre ve bağımlılıklar ortama göre değişir). CI’da `.github/workflows/ci.yml` bu lib testlerini + `migrations_apply` içerir.
+**Mevcut testler:** `cargo test -p qtss-worker --bin qtss-worker` — `signal_scorer`, `confluence`, **`position_manager`**, **`strategy_runner`** birimleri; `cargo test -p qtss-common --lib` — `config_resolve`, `kill_switch`; Postgres job’unda `cargo test -p qtss-ai --test decision_exists_for_hash_it` (`decision_exists_for_hash` TTL) ve `cargo test -p qtss-ai --test maybe_auto_approve_it` (`maybe_auto_approve` onay / `pending_approval` koruması). Tam tarama: `cargo test --workspace`. CI’da `.github/workflows/ci.yml` lib testleri + `migrations_apply` + bu iki `qtss-ai` entegrasyonu (tanıma göre).
 
-**Yeni AI katmanı testleri (Cursor eklemeli):**
+**AI katmanı testleri (uygulama durumu):**
 
-1. `parser.rs` — `parse_tactical_decision` ve `parse_operational_decision` için en az 5 test: geçerli JSON, geçersiz direction, eksik confidence, out-of-range multiplier, markdown içinde üçlü-backtick ile sarılı JSON bloğu.
-2. `safety.rs` — `validate_ai_decision_safety` testi: max multiplier aşımı, SL eksik, kill switch aktif.
-3. `context_builder.rs` — mock DB ile: onchain skoru var/yok, açık pozisyon var/yok.
-4. `storage.rs` — `decision_exists_for_hash` TTL testi.
-5. `approval.rs` — auto-approve threshold testi.
+1. `parser.rs` — ✅ geçerli/ geçersiz yön, eksik alan, güven aralığı dışı, çarpan sınırı, ` ```json ` / düz fence ile sarılı JSON.
+2. `safety.rs` — ✅ çarpan üst sınırı, yönlü işlemde SL zorunluluğu, `neutral` için SL muafiyeti, kill switch (`set_trading_halted`) — mutex ile seri test.
+3. `context_builder.rs` — ✅ saf fonksiyon `bar_ohlc_window_metrics` (OHLC penceresi istatistikleri); `build_tactical_context` / `build_operational_context` / `build_strategic_context` tam async yolu için ayrı Postgres fikstürü isteğe bağlı (ağır; üretimde katman tick’leri ile doğrulanır).
+4. `storage.rs` — `decision_exists_for_hash`: ✅ entegrasyon testi `crates/qtss-ai/tests/decision_exists_for_hash_it.rs`; CI `postgres-migrations` job’unda `DATABASE_URL` ile çalışır (`migrations_apply` sonrası).
+5. `approval.rs` — ✅ `auto_approve_eligible` (eşik + `auto_approve_enabled`); `maybe_auto_approve` DB dalı: ✅ `crates/qtss-ai/tests/maybe_auto_approve_it.rs` (onay + eşik altı `pending_approval`); CI `postgres-migrations` (`DATABASE_URL`).
 
 ```bash
 cargo test -p qtss-ai
@@ -487,12 +487,32 @@ Yerel kalite kapıları (CI tanımı repodaki workflow ile hizalanmalıdır): `c
 
 1. **Türkçe yorum, İngilizce identifier.** Değişken/fonksiyon/struct/kolon adları İngilizce `snake_case`. Repoda kalıcı kural: `.cursor/rules/english-identifiers.mdc`.
 2. **Her loop env'den kontrol edilebilir.** `QTSS_X_ENABLED=0` ile kapatılabilmeli.
-3. **Hata: `warn!` yaz, panic etme.** Loop'lar `loop { if err { warn!(); sleep(); continue; } }`.
+3. **Panic yok (üretim döngüleri).** Uzun ömürlü görevlerde geçici hata sonrası `continue` + uygun seviyede log (**§8.1**); kalıcı kusur için `error!` / `log_critical` tercihi.
 4. **DB yazımı her zaman upsert.** `INSERT ... ON CONFLICT DO UPDATE`.
 5. **Migration dosyası değiştirme.** Yeni numara ile yeni dosya.
 6. **`#[must_use]`** skor fonksiyonlarında.
 7. **AI kararları deterministic doğrulamadan geçmeli.** `safety.rs` zorunlu — LLM çıktısı doğrudan emir üretemez. Yeni bir **AI sağlayıcı modülü** eklerken aynı `AiRequest`/`AiResponse` ve `parser` + `safety` yolundan geçiş zorunludur; sağlayıcıya özel ham metin sadece `complete` içinde kalır.
 8. **Çok dil:** Kullanıcıya görünen yeni metinler (web, API gövdesi, bildirim) mümkün olduğunda çeviri anahtarı + katalog üzerinden eklenmelidir (**FAZ 9**). Worker/API iç log ve hata ayıklama mesajları İngilizce kalabilir (`.cursor/rules/english-identifiers.mdc` ile uyumlu).
+9. **Log seviyeleri:** Tüm Rust servisleri (`qtss-api`, `qtss-worker`, ortak crate’ler) ve mümkünse web konsolu **§8.1** tablosuna göre sınıflandırır; yeni kod bu politikaya uyar, mevcut kod modül dokunuşlarında kademeli hizalanır.
+
+### 8.1 Loglama — `trace` / `debug` / `info` / `warn` / `error` / `critical`
+
+**Altyapı:** `tracing` + `tracing-subscriber`. Giriş noktası: `qtss_common::init_logging` (API ve worker `main`). İşlevsel, modül etiketli olaylar için `qtss_common::log_business(QtssLogLevel, module, msg)` veya doğrudan `tracing::*!`. **Kritik** (operatör müdahalesi, uyarıcı hat hatları) için `qtss_common::log_critical(module, msg)` — uygulamada `tracing::error!` ile **`is_critical = true`** alanı (JSON log ve SIEM filtreleri için).
+
+| Seviye | API | Kullanım |
+|--------|-----|----------|
+| **trace** | `trace!` | En ayrıntılı akış; varsayılan üretim filtrelerinde çoğunlukla kapalı. |
+| **debug** | `debug!` | Geliştirici teşhisi: tick içi ayrıntı, sembol listesi, önbellek, isteğe bağlı veri yokluğu (gürültü istemiyorsanız `trace!`). |
+| **info** | `info!` | Normal işletme: süreç ayakta, yapılandırma özeti, başarılı tur / snapshot özeti, kullanıcıya güven veren durum. |
+| **warning** | `warn!` | Beklenmeyen ama **toparlanabilir**: harici API geçici hatası, retry, eksik opsiyonel config, rate limit yaklaşımı. Arka plan döngülerinde sık tekrar eden uyarılar için mesajı sakin tutun veya `debug!` ile seyreltin. |
+| **error** | `error!` | Toparlanması şüpheli veya kalıcı: migrasyon/DB bağlantı kopması, bozuk invariant, istek işlenemiyor (kullanıcıya dönük hata ayrıca `ApiError` ile). |
+| **critical** | `log_critical` / `log_business(..., Critical)` | İnsan veya runbook gerekir: ödeme/kredi tükendi, üretim güvenliği (`halt`), veri kaybı riski. |
+
+**Filtreleme:** `RUST_LOG` (örn. `info`, `qtss_worker=debug`, `sqlx::postgres::notice=warn`). **Yapılandırılmış log:** `QTSS_LOG_JSON=1`. **Modül etiketi:** `log_business` / `log_critical` `target: "qtss"` ve `qtss_module` ile gönderir; doğrudan `info!` kullanırken `target`/`module_path` için crate adını anlamlı tutun.
+
+**Web (`web/`):** Aynı anlamsal ayrım `console.debug` / `console.info` / `console.warn` / `console.error` ile; üretimde gereksiz `debug` spam’i kapalı tutulmalı (Vite `import.meta.env.DEV` ile koşullu).
+
+**Bakım:** Büyük refaktörde tek tek dosya taraması yerine, ilgili PR’da değişen dosyalarda seviye gözden geçirmesi yeterlidir; tam repo taraması teknik borç olarak aralıklı yapılabilir.
 
 ---
 

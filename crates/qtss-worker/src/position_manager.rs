@@ -11,6 +11,10 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use qtss_ai::feedback::record_decision_outcome;
+use qtss_ai::storage::{
+    fetch_latest_approved_directive, fetch_latest_approved_tactical, mark_applied, AiRecordTable,
+};
 use qtss_binance::{
     venue_order_id_from_binance_order_response, BinanceClient, BinanceClientConfig,
 };
@@ -20,12 +24,11 @@ use qtss_domain::orders::{FuturesExecutionExtras, OrderIntent, OrderSide, OrderT
 use qtss_domain::symbol::InstrumentId;
 use qtss_execution::{BinanceLiveGateway, DryRunGateway, ExecutionGateway};
 use qtss_storage::{
-    list_recent_bars, ExchangeAccountRepository, ExchangeOrderRepository, ExchangeOrderRow,
+    list_recent_bars, resolve_worker_tick_secs, ExchangeAccountRepository, ExchangeOrderRepository,
+    ExchangeOrderRow,
 };
-use qtss_ai::feedback::record_decision_outcome;
-use qtss_ai::storage::{fetch_latest_approved_directive, fetch_latest_approved_tactical, mark_applied, AiRecordTable};
-use rust_decimal::Decimal;
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+use rust_decimal::Decimal;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -47,14 +50,6 @@ fn live_close_enabled() -> bool {
     std::env::var("QTSS_POSITION_MANAGER_LIVE_CLOSE_ENABLED")
         .ok()
         .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
-}
-
-fn tick_secs() -> u64 {
-    std::env::var("QTSS_POSITION_MANAGER_TICK_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(10)
-        .max(5)
 }
 
 fn sl_pct() -> Decimal {
@@ -228,7 +223,6 @@ pub async fn position_manager_loop(pool: PgPool) {
         info!("QTSS_POSITION_MANAGER_ENABLED kapalı — position_manager_loop çıkıyor");
         return;
     }
-    let tick = Duration::from_secs(tick_secs());
     let repo = ExchangeOrderRepository::new(pool.clone());
     let dry_gateway: Option<Arc<DryRunGateway>> = if dry_close_enabled() {
         Some(crate::strategy_runner::dry_gateway_from_env())
@@ -236,12 +230,12 @@ pub async fn position_manager_loop(pool: PgPool) {
         None
     };
     let live_on = live_close_enabled() && dry_gateway.is_none();
-    let bar_interval = std::env::var("QTSS_POSITION_MANAGER_BAR_INTERVAL").unwrap_or_else(|_| "1m".into());
+    let bar_interval =
+        std::env::var("QTSS_POSITION_MANAGER_BAR_INTERVAL").unwrap_or_else(|_| "1m".into());
     info!(
-        poll_secs = tick.as_secs(),
         dry_close = dry_gateway.is_some(),
         live_close = live_on,
-        "position_manager_loop: SL/TP izleme"
+        "position_manager_loop: SL/TP izleme (poll: worker.position_manager_tick_secs / QTSS_POSITION_MANAGER_TICK_SECS)"
     );
     let sl = sl_pct() / Decimal::from(100u32);
     let tp = tp_pct() / Decimal::from(100u32);
@@ -250,7 +244,16 @@ pub async fn position_manager_loop(pool: PgPool) {
     let live_gateway_cache: Mutex<HashMap<(Uuid, String), Arc<BinanceLiveGateway>>> =
         Mutex::new(HashMap::new());
     loop {
-        tokio::time::sleep(tick).await;
+        let tick_secs = resolve_worker_tick_secs(
+            &pool,
+            "worker",
+            "position_manager_tick_secs",
+            "QTSS_POSITION_MANAGER_TICK_SECS",
+            10,
+            5,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(tick_secs)).await;
         let rows = match repo.list_recent_filled_orders_global(1500).await {
             Ok(r) => r,
             Err(e) => {
@@ -338,7 +341,9 @@ pub async fn position_manager_loop(pool: PgPool) {
                     }
                 }
                 if let Some(id) = directive_applied_id {
-                    if let Err(e) = mark_applied(&pool, AiRecordTable::PositionDirectiveChild, id).await {
+                    if let Err(e) =
+                        mark_applied(&pool, AiRecordTable::PositionDirectiveChild, id).await
+                    {
                         warn!(%e, symbol = %key.symbol, "mark position directive applied");
                     }
                 }
@@ -387,7 +392,9 @@ pub async fn position_manager_loop(pool: PgPool) {
                             }
                         }
                     }
-                    Err(e) => warn!(%e, symbol = %key.symbol, "position_manager: dry place başarısız"),
+                    Err(e) => {
+                        warn!(%e, symbol = %key.symbol, "position_manager: dry place başarısız")
+                    }
                 }
             } else if live_on {
                 if is_trading_halted() {
@@ -472,9 +479,8 @@ pub async fn position_manager_loop(pool: PgPool) {
                                 );
                                 if let Some(did) = ai_outcome_decision_id {
                                     let pnl_pct = entry.to_f64().and_then(|e| {
-                                        mark.to_f64().and_then(|m| {
-                                            (e > 0.0).then_some((m - e) / e * 100.0)
-                                        })
+                                        mark.to_f64()
+                                            .and_then(|m| (e > 0.0).then_some((m - e) / e * 100.0))
                                     });
                                     let outcome = if hit_tp { "profit" } else { "loss" };
                                     if let Err(e) = record_decision_outcome(
@@ -492,12 +498,81 @@ pub async fn position_manager_loop(pool: PgPool) {
                                     }
                                 }
                             }
-                            Err(e) => warn!(%e, %cid, "position_manager: live emir DB yazımı başarısız"),
+                            Err(e) => {
+                                warn!(%e, %cid, "position_manager: live emir DB yazımı başarısız")
+                            }
                         }
                     }
-                    Err(e) => warn!(%e, symbol = %key.symbol, "position_manager: live place başarısız"),
+                    Err(e) => {
+                        warn!(%e, symbol = %key.symbol, "position_manager: live place başarısız")
+                    }
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    fn order_row(
+        user_id: Uuid,
+        org_id: Uuid,
+        side: &str,
+        executed_qty: &str,
+        avg_price: &str,
+        seq: i64,
+    ) -> ExchangeOrderRow {
+        let t = Utc::now() + chrono::Duration::seconds(seq);
+        ExchangeOrderRow {
+            id: Uuid::new_v4(),
+            org_id,
+            user_id,
+            exchange: "binance".into(),
+            segment: "spot".into(),
+            symbol: "BTCUSDT".into(),
+            client_order_id: Uuid::new_v4(),
+            status: "filled".into(),
+            intent: json!({ "side": side }),
+            venue_order_id: Some(seq),
+            venue_response: Some(json!({
+                "executedQty": executed_qty,
+                "avgPrice": avg_price,
+            })),
+            created_at: t,
+            updated_at: t,
+        }
+    }
+
+    #[test]
+    fn aggregate_long_books_buy_then_partial_sell() {
+        let user_id = Uuid::new_v4();
+        let org_id = Uuid::new_v4();
+        let rows = vec![
+            order_row(user_id, org_id, "buy", "1", "100", 0),
+            order_row(user_id, org_id, "sell", "0.5", "110", 1),
+        ];
+        let m = aggregate_long_books(&rows);
+        let key = PosKey {
+            user_id,
+            exchange: "binance".into(),
+            segment: "spot".into(),
+            symbol: "BTCUSDT".into(),
+        };
+        let agg = m.get(&key).expect("position key");
+        assert_eq!(agg.book.qty, Decimal::new(5, 1));
+        assert_eq!(agg.org_id, Some(org_id));
+    }
+
+    #[test]
+    fn intent_side_parses_buy_sell() {
+        let buy = json!({"side": "Buy"});
+        let sell = json!({"side": "SELL"});
+        assert_eq!(intent_side(&buy), Some(OrderSide::Buy));
+        assert_eq!(intent_side(&sell), Some(OrderSide::Sell));
     }
 }

@@ -120,7 +120,10 @@ impl BinanceLiveGateway {
                 let (otype, tif): (SpotOrderType, Option<BTif>) = if *post_only {
                     (SpotOrderType::LimitMaker, None)
                 } else {
-                    (SpotOrderType::Limit, Some(Self::map_tif(intent.time_in_force)?))
+                    (
+                        SpotOrderType::Limit,
+                        Some(Self::map_tif(intent.time_in_force)?),
+                    )
                 };
                 let price_s = Self::dec_str(*price);
                 self.client

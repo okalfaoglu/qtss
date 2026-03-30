@@ -2,20 +2,20 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
-use uuid::Uuid;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use uuid::Uuid;
 
 use qtss_chart_patterns::{
     analyze_channel_six_from_bars, channel_six_drawing_hints, channel_six_pattern_drawing_batch,
     pattern_name_by_acp_id, ChannelSixDrawingHints, ChannelSixReject, ChannelSixScanOutcome,
-    ChannelSixWindowFilter, OhlcBar, PatternDrawingBatch, SizeFilters, SixPivotScanParams,
+    ChannelSixWindowFilter, OhlcBar, PatternDrawingBatch, SixPivotScanParams, SizeFilters,
 };
 use qtss_storage::{
     fetch_analysis_snapshot_payload, fetch_data_snapshot, fetch_latest_nansen_setup_with_rows,
@@ -43,7 +43,10 @@ pub fn analysis_read_router() -> Router<SharedState> {
             "/analysis/chart-patterns-config",
             get(get_chart_patterns_config),
         )
-        .route("/analysis/elliott-wave-config", get(get_elliott_wave_config))
+        .route(
+            "/analysis/elliott-wave-config",
+            get(get_elliott_wave_config),
+        )
         .route("/analysis/patterns/channel-six", post(channel_six_scan))
         .route("/analysis/engine/symbols", get(list_engine_symbols_api))
         .route("/analysis/engine/snapshots", get(list_engine_snapshots_api))
@@ -51,24 +54,42 @@ pub fn analysis_read_router() -> Router<SharedState> {
             "/analysis/engine/confluence/latest",
             get(list_confluence_snapshots_api),
         )
-        .route("/analysis/confluence/latest", get(get_confluence_latest_by_symbol_api))
+        .route(
+            "/analysis/confluence/latest",
+            get(get_confluence_latest_by_symbol_api),
+        )
         .route("/analysis/data-snapshots", get(list_data_snapshots_api))
-        .route("/analysis/market-context/latest", get(get_market_context_latest_api))
-        .route("/analysis/market-context/summary", get(list_market_context_summary_api))
+        .route(
+            "/analysis/market-context/latest",
+            get(get_market_context_latest_api),
+        )
+        .route(
+            "/analysis/market-context/summary",
+            get(list_market_context_summary_api),
+        )
         .route(
             "/analysis/market-confluence/history",
             get(list_market_confluence_history_api),
         )
-        .route("/analysis/engine/range-signals", get(list_range_signals_api))
+        .route(
+            "/analysis/engine/range-signals",
+            get(list_range_signals_api),
+        )
         .route("/analysis/nansen/snapshot", get(get_nansen_snapshot_api))
-        .route("/analysis/nansen/setups/latest", get(get_nansen_setups_latest_api))
+        .route(
+            "/analysis/nansen/setups/latest",
+            get(get_nansen_setups_latest_api),
+        )
 }
 
 /// `engine_symbols` yazımı — `trader` / `admin` (`require_ops_roles`).
 pub fn analysis_write_router() -> Router<SharedState> {
     Router::new()
         .route("/analysis/engine/symbols", post(post_engine_symbol_api))
-        .route("/analysis/engine/symbols/{id}", patch(patch_engine_symbol_api))
+        .route(
+            "/analysis/engine/symbols/{id}",
+            patch(patch_engine_symbol_api),
+        )
 }
 
 async fn list_engine_symbols_api(
@@ -157,9 +178,21 @@ async fn get_confluence_latest_by_symbol_api(
     if sym_in.is_empty() {
         return Err(ApiError::bad_request("query symbol is required"));
     }
-    let interval = q.interval.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let exchange = q.exchange.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let segment = q.segment.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let interval = q
+        .interval
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let exchange = q
+        .exchange
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let segment = q
+        .segment
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let matches =
         list_engine_symbols_matching(&st.pool, sym_in, interval, exchange, segment).await?;
     let row = matches.into_iter().next().ok_or_else(|| {
@@ -249,9 +282,21 @@ async fn get_market_context_latest_api(
     if sym_in.is_empty() {
         return Err(ApiError::bad_request("query symbol is required"));
     }
-    let interval = q.interval.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let exchange = q.exchange.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let segment = q.segment.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let interval = q
+        .interval
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let exchange = q
+        .exchange
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let segment = q
+        .segment
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let matches =
         list_engine_symbols_matching(&st.pool, sym_in, interval, exchange, segment).await?;
     let row = matches.into_iter().next().ok_or_else(|| {
@@ -350,7 +395,9 @@ fn json_f64(v: &serde_json::Value) -> Option<f64> {
         .or_else(|| v.as_u64().map(|u| u as f64))
 }
 
-fn confluence_brief_from_row(row: &MarketContextSummaryRow) -> Option<MarketContextConfluenceBrief> {
+fn confluence_brief_from_row(
+    row: &MarketContextSummaryRow,
+) -> Option<MarketContextConfluenceBrief> {
     if row.confluence_payload.is_none()
         && row.confluence_computed_at.is_none()
         && row.confluence_error.is_none()
@@ -482,12 +529,22 @@ async fn list_market_confluence_history_api(
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| {
-                ApiError::bad_request("query engine_symbol_id or symbol is required")
-            })?;
-        let interval = q.interval.as_deref().map(str::trim).filter(|s| !s.is_empty());
-        let exchange = q.exchange.as_deref().map(str::trim).filter(|s| !s.is_empty());
-        let segment = q.segment.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            .ok_or_else(|| ApiError::bad_request("query engine_symbol_id or symbol is required"))?;
+        let interval = q
+            .interval
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let exchange = q
+            .exchange
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let segment = q
+            .segment
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         let matches =
             list_engine_symbols_matching(&st.pool, sym_in, interval, exchange, segment).await?;
         let row = matches.into_iter().next().ok_or_else(|| {
@@ -507,18 +564,19 @@ async fn list_market_context_summary_api(
     State(st): State<SharedState>,
     Query(q): Query<MarketContextSummaryQuery>,
 ) -> Result<Json<Vec<MarketContextSummaryItem>>, ApiError> {
-    let ex = q.exchange.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let seg = q.segment.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let ex = q
+        .exchange
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let seg = q
+        .segment
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let sym = q.symbol.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let rows = list_market_context_summaries(
-        &st.pool,
-        ex,
-        seg,
-        sym,
-        q.enabled_only,
-        q.limit,
-    )
-    .await?;
+    let rows =
+        list_market_context_summaries(&st.pool, ex, seg, sym, q.enabled_only, q.limit).await?;
     Ok(Json(rows.into_iter().map(map_summary_row).collect()))
 }
 
@@ -618,7 +676,9 @@ async fn patch_engine_symbol_api(
 }
 
 /// `app_config.acp_chart_patterns` — DB’de yoksa Pine ACP v6 fabrika varsayılanları (migrations 0007–0009).
-async fn get_chart_patterns_config(State(st): State<SharedState>) -> Result<Json<serde_json::Value>, String> {
+async fn get_chart_patterns_config(
+    State(st): State<SharedState>,
+) -> Result<Json<serde_json::Value>, String> {
     let row = st
         .config
         .get_by_key(ACP_CHART_PATTERNS_CONFIG_KEY)
@@ -1027,7 +1087,8 @@ async fn channel_six_scan(
         .iter()
         .map(|r| (r.first_bar, r.last_bar))
         .collect();
-    let dup_slice = (!body.duplicate_pivot_bars.is_empty()).then_some(body.duplicate_pivot_bars.as_slice());
+    let dup_slice =
+        (!body.duplicate_pivot_bars.is_empty()).then_some(body.duplicate_pivot_bars.as_slice());
     let allowed_last = (!body.allowed_last_pivot_directions.is_empty())
         .then_some(body.allowed_last_pivot_directions.as_slice());
 

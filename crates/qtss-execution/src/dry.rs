@@ -8,8 +8,8 @@ use std::sync::RwLock;
 use async_trait::async_trait;
 use qtss_common::{log_business, Loggable, QtssLogLevel};
 use qtss_domain::commission::{commission_fee, CommissionPolicy, CommissionQuote};
-use qtss_domain::execution::VirtualLedgerParams;
 use qtss_domain::exchange::{ExchangeId, MarketSegment};
+use qtss_domain::execution::VirtualLedgerParams;
 use qtss_domain::orders::{OrderIntent, OrderSide, OrderType};
 use rust_decimal::Decimal;
 use tracing::instrument;
@@ -53,7 +53,10 @@ impl DryLedgerState {
     }
 
     fn base_qty(&self, key: &str) -> Decimal {
-        self.base_by_symbol.get(key).copied().unwrap_or(Decimal::ZERO)
+        self.base_by_symbol
+            .get(key)
+            .copied()
+            .unwrap_or(Decimal::ZERO)
     }
 }
 
@@ -71,10 +74,12 @@ fn fill_price(intent: &OrderIntent, mark: Decimal) -> Result<Decimal, ExecutionE
         OrderType::Market => Ok(mark),
         OrderType::Limit { price, .. } => Ok(*price),
         // Bracket / reduce-only simülasyonu: tetik fiyatı ile anında dolum (paper).
-        OrderType::StopMarket { stop_price }
-        | OrderType::TakeProfitMarket { stop_price } => Ok(*stop_price),
+        OrderType::StopMarket { stop_price } | OrderType::TakeProfitMarket { stop_price } => {
+            Ok(*stop_price)
+        }
         _ => Err(ExecutionError::Other(
-            "dry: bu emir tipi paper’da simüle edilmez (Market/Limit/StopMarket/TakeProfitMarket)".into(),
+            "dry: bu emir tipi paper’da simüle edilmez (Market/Limit/StopMarket/TakeProfitMarket)"
+                .into(),
         )),
     }
 }
@@ -112,7 +117,9 @@ pub fn apply_place(
 
     let price = fill_price(&intent, mark)?;
     if price <= Decimal::ZERO {
-        return Err(ExecutionError::Other("dry: işlem fiyatı pozitif olmalı".into()));
+        return Err(ExecutionError::Other(
+            "dry: işlem fiyatı pozitif olmalı".into(),
+        ));
     }
 
     let is_maker = is_maker_fill(&intent);
@@ -130,12 +137,17 @@ pub fn apply_place(
                 return Err(ExecutionError::InsufficientPaper);
             }
             ledger.quote_balance -= total;
-            *ledger.base_by_symbol.entry(key.clone()).or_insert(Decimal::ZERO) += intent.quantity;
+            *ledger
+                .base_by_symbol
+                .entry(key.clone())
+                .or_insert(Decimal::ZERO) += intent.quantity;
         }
         OrderSide::Sell => {
             let proceeds = notional - fee;
             if proceeds < Decimal::ZERO {
-                return Err(ExecutionError::Other("dry: komisyon brüt tutarı aştı".into()));
+                return Err(ExecutionError::Other(
+                    "dry: komisyon brüt tutarı aştı".into(),
+                ));
             }
             match intent.instrument.segment {
                 MarketSegment::Futures => {
@@ -152,7 +164,10 @@ pub fn apply_place(
                     if base < intent.quantity {
                         return Err(ExecutionError::InsufficientPaper);
                     }
-                    *ledger.base_by_symbol.entry(key.clone()).or_insert(Decimal::ZERO) -= intent.quantity;
+                    *ledger
+                        .base_by_symbol
+                        .entry(key.clone())
+                        .or_insert(Decimal::ZERO) -= intent.quantity;
                     if ledger.base_by_symbol[&key].is_zero() {
                         ledger.base_by_symbol.remove(&key);
                     }
@@ -189,7 +204,11 @@ impl Loggable for DryRunGateway {
 
 impl DryRunGateway {
     #[must_use]
-    pub fn new(params: VirtualLedgerParams, policy: CommissionPolicy, cq: Option<CommissionQuote>) -> Self {
+    pub fn new(
+        params: VirtualLedgerParams,
+        policy: CommissionPolicy,
+        cq: Option<CommissionQuote>,
+    ) -> Self {
         Self {
             ledger: RwLock::new(DryLedgerState::from_params(params)),
             policy,
@@ -211,9 +230,15 @@ impl DryRunGateway {
     }
 
     /// Market emri öncesi son işlem fiyatını kaydet (worker / strateji hattı).
-    pub fn set_mark(&self, instrument: &qtss_domain::symbol::InstrumentId, price: Decimal) -> Result<(), ExecutionError> {
+    pub fn set_mark(
+        &self,
+        instrument: &qtss_domain::symbol::InstrumentId,
+        price: Decimal,
+    ) -> Result<(), ExecutionError> {
         if price <= Decimal::ZERO {
-            return Err(ExecutionError::Other("dry: mark fiyatı pozitif olmalı".into()));
+            return Err(ExecutionError::Other(
+                "dry: mark fiyatı pozitif olmalı".into(),
+            ));
         }
         let key = instrument_position_key(instrument);
         self.ledger
@@ -275,7 +300,11 @@ impl ExecutionGateway for DryRunGateway {
     }
 
     async fn cancel(&self, _client_order_id: Uuid) -> Result<(), ExecutionError> {
-        log_business(QtssLogLevel::Debug, Self::MODULE, "dry cancel (no-op — anında dolum varsayımı)");
+        log_business(
+            QtssLogLevel::Debug,
+            Self::MODULE,
+            "dry cancel (no-op — anında dolum varsayımı)",
+        );
         Ok(())
     }
 }
@@ -345,7 +374,13 @@ mod tests {
             Some(Decimal::new(40_000, 0)),
         )
         .unwrap();
-        assert_eq!(out.base_positions_after.get(&k).copied().unwrap_or(Decimal::ZERO), Decimal::ZERO);
+        assert_eq!(
+            out.base_positions_after
+                .get(&k)
+                .copied()
+                .unwrap_or(Decimal::ZERO),
+            Decimal::ZERO
+        );
         assert!(out.quote_balance_after > Decimal::new(50_000, 0));
     }
 
@@ -406,7 +441,10 @@ mod tests {
         .unwrap();
         let k = instrument_position_key(&btcusdt_futures());
         assert_eq!(
-            out.base_positions_after.get(&k).copied().unwrap_or(Decimal::ZERO),
+            out.base_positions_after
+                .get(&k)
+                .copied()
+                .unwrap_or(Decimal::ZERO),
             Decimal::new(-1, 1)
         );
         assert!(out.quote_balance_after > Decimal::new(50_000, 0));

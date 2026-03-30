@@ -29,8 +29,14 @@ impl BinanceClient {
             .await
     }
 
-    pub async fn spot_exchange_info(&self, symbol: Option<&str>) -> Result<serde_json::Value, BinanceError> {
-        let base = format!("{}/api/v3/exchangeInfo", self.spot_base().trim_end_matches('/'));
+    pub async fn spot_exchange_info(
+        &self,
+        symbol: Option<&str>,
+    ) -> Result<serde_json::Value, BinanceError> {
+        let base = format!(
+            "{}/api/v3/exchangeInfo",
+            self.spot_base().trim_end_matches('/')
+        );
         let url = match symbol {
             None => base,
             Some(s) => format!("{}?symbol={}", base, urlencoding::encode(s)),
@@ -38,7 +44,11 @@ impl BinanceClient {
         self.core.get_url(&url).await
     }
 
-    pub async fn spot_depth(&self, symbol: &str, limit: Option<u32>) -> Result<serde_json::Value, BinanceError> {
+    pub async fn spot_depth(
+        &self,
+        symbol: &str,
+        limit: Option<u32>,
+    ) -> Result<serde_json::Value, BinanceError> {
         let sym = urlencoding::encode(symbol);
         let b = self.spot_base().trim_end_matches('/');
         let url = match limit {
@@ -48,7 +58,11 @@ impl BinanceClient {
         self.core.get_url(&url).await
     }
 
-    pub async fn spot_trades(&self, symbol: &str, limit: Option<u32>) -> Result<serde_json::Value, BinanceError> {
+    pub async fn spot_trades(
+        &self,
+        symbol: &str,
+        limit: Option<u32>,
+    ) -> Result<serde_json::Value, BinanceError> {
         let sym = urlencoding::encode(symbol);
         let b = self.spot_base().trim_end_matches('/');
         let url = match limit {
@@ -121,7 +135,10 @@ impl BinanceClient {
         self.core.get_url(&url).await
     }
 
-    pub async fn spot_ticker_24h(&self, symbol: Option<&str>) -> Result<serde_json::Value, BinanceError> {
+    pub async fn spot_ticker_24h(
+        &self,
+        symbol: Option<&str>,
+    ) -> Result<serde_json::Value, BinanceError> {
         let b = self.spot_base().trim_end_matches('/');
         let url = match symbol {
             None => format!("{}/api/v3/ticker/24hr", b),
@@ -130,16 +147,26 @@ impl BinanceClient {
         self.core.get_url(&url).await
     }
 
-    pub async fn spot_ticker_price(&self, symbol: Option<&str>) -> Result<serde_json::Value, BinanceError> {
+    pub async fn spot_ticker_price(
+        &self,
+        symbol: Option<&str>,
+    ) -> Result<serde_json::Value, BinanceError> {
         let b = self.spot_base().trim_end_matches('/');
         let url = match symbol {
             None => format!("{}/api/v3/ticker/price", b),
-            Some(s) => format!("{}/api/v3/ticker/price?symbol={}", b, urlencoding::encode(s)),
+            Some(s) => format!(
+                "{}/api/v3/ticker/price?symbol={}",
+                b,
+                urlencoding::encode(s)
+            ),
         };
         self.core.get_url(&url).await
     }
 
-    pub async fn spot_book_ticker(&self, symbol: Option<&str>) -> Result<serde_json::Value, BinanceError> {
+    pub async fn spot_book_ticker(
+        &self,
+        symbol: Option<&str>,
+    ) -> Result<serde_json::Value, BinanceError> {
         let b = self.spot_base().trim_end_matches('/');
         let url = match symbol {
             None => format!("{}/api/v3/ticker/bookTicker", b),
@@ -162,7 +189,10 @@ impl BinanceClient {
     }
 
     /// SAPI — hesaba özel maker/taker (`/sapi/v1/asset/tradeFee`, USER_DATA).
-    pub async fn sapi_asset_trade_fee(&self, symbol: Option<&str>) -> Result<serde_json::Value, BinanceError> {
+    pub async fn sapi_asset_trade_fee(
+        &self,
+        symbol: Option<&str>,
+    ) -> Result<serde_json::Value, BinanceError> {
         let c = self.spot_creds()?;
         let mut p = BTreeMap::new();
         if let Some(s) = symbol {
@@ -238,7 +268,10 @@ impl BinanceClient {
             .await
     }
 
-    pub async fn spot_cancel_all_open_orders(&self, symbol: &str) -> Result<serde_json::Value, BinanceError> {
+    pub async fn spot_cancel_all_open_orders(
+        &self,
+        symbol: &str,
+    ) -> Result<serde_json::Value, BinanceError> {
         let mut p = BTreeMap::new();
         p.insert("symbol".into(), symbol.into());
         let c = self.spot_creds()?;
@@ -265,7 +298,10 @@ impl BinanceClient {
             .await
     }
 
-    pub async fn spot_open_orders(&self, symbol: Option<&str>) -> Result<serde_json::Value, BinanceError> {
+    pub async fn spot_open_orders(
+        &self,
+        symbol: Option<&str>,
+    ) -> Result<serde_json::Value, BinanceError> {
         let mut p = BTreeMap::new();
         insert_opt(&mut p, "symbol", symbol);
         let c = self.spot_creds()?;
@@ -334,7 +370,10 @@ impl BinanceClient {
             .await
     }
 
-    pub async fn spot_new_oco(&self, p: BTreeMap<String, String>) -> Result<serde_json::Value, BinanceError> {
+    pub async fn spot_new_oco(
+        &self,
+        p: BTreeMap<String, String>,
+    ) -> Result<serde_json::Value, BinanceError> {
         let c = self.spot_creds()?;
         self.core
             .post_signed_form(self.spot_base(), "/api/v3/order/oco", p, c)
@@ -398,7 +437,10 @@ impl BinanceClient {
             .await
     }
 
-    pub async fn spot_user_data_stream_keepalive(&self, listen_key: &str) -> Result<serde_json::Value, BinanceError> {
+    pub async fn spot_user_data_stream_keepalive(
+        &self,
+        listen_key: &str,
+    ) -> Result<serde_json::Value, BinanceError> {
         let c = self.spot_creds()?;
         self.core
             .put_api_key_query(
@@ -410,7 +452,10 @@ impl BinanceClient {
             .await
     }
 
-    pub async fn spot_user_data_stream_close(&self, listen_key: &str) -> Result<serde_json::Value, BinanceError> {
+    pub async fn spot_user_data_stream_close(
+        &self,
+        listen_key: &str,
+    ) -> Result<serde_json::Value, BinanceError> {
         let c = self.spot_creds()?;
         self.core
             .delete_api_key_query(

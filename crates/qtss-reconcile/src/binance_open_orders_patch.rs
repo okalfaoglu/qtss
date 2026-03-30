@@ -102,12 +102,7 @@ pub async fn apply_binance_spot_open_orders_patch(
                     if let Some(st) = exchange_order_status_from_binance_json(&json) {
                         let n = orders
                             .update_submitted_status_and_venue_response(
-                                user_id,
-                                "binance",
-                                "spot",
-                                vid,
-                                &st,
-                                &json,
+                                user_id, "binance", "spot", vid, &st, &json,
                             )
                             .await?;
                         if n > 0 {
@@ -130,14 +125,15 @@ pub async fn apply_binance_spot_open_orders_patch(
     }
 
     if cfg.patch_submitted_to_reconciled_not_open {
-        let remaining: Vec<i64> = ids.iter().copied().filter(|i| !resolved.contains(i)).collect();
+        let remaining: Vec<i64> = ids
+            .iter()
+            .copied()
+            .filter(|i| !resolved.contains(i))
+            .collect();
         if !remaining.is_empty() {
             let n = orders
                 .mark_submitted_reconciled_not_open_by_venue_ids(
-                    user_id,
-                    "binance",
-                    "spot",
-                    &remaining,
+                    user_id, "binance", "spot", &remaining,
                 )
                 .await?;
             updated += n;
@@ -179,12 +175,7 @@ pub async fn apply_binance_futures_open_orders_patch(
                     if let Some(st) = exchange_order_status_from_binance_json(&json) {
                         let n = orders
                             .update_submitted_status_and_venue_response(
-                                user_id,
-                                "binance",
-                                "futures",
-                                vid,
-                                &st,
-                                &json,
+                                user_id, "binance", "futures", vid, &st, &json,
                             )
                             .await?;
                         if n > 0 {
@@ -207,14 +198,15 @@ pub async fn apply_binance_futures_open_orders_patch(
     }
 
     if cfg.patch_submitted_to_reconciled_not_open {
-        let remaining: Vec<i64> = ids.iter().copied().filter(|i| !resolved.contains(i)).collect();
+        let remaining: Vec<i64> = ids
+            .iter()
+            .copied()
+            .filter(|i| !resolved.contains(i))
+            .collect();
         if !remaining.is_empty() {
             let n = orders
                 .mark_submitted_reconciled_not_open_by_venue_ids(
-                    user_id,
-                    "binance",
-                    "futures",
-                    &remaining,
+                    user_id, "binance", "futures", &remaining,
                 )
                 .await?;
             updated += n;

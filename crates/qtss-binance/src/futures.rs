@@ -29,8 +29,14 @@ impl BinanceClient {
             .await
     }
 
-    pub async fn fapi_exchange_info(&self, symbol: Option<&str>) -> Result<serde_json::Value, BinanceError> {
-        let b = format!("{}/fapi/v1/exchangeInfo", self.fapi_base().trim_end_matches('/'));
+    pub async fn fapi_exchange_info(
+        &self,
+        symbol: Option<&str>,
+    ) -> Result<serde_json::Value, BinanceError> {
+        let b = format!(
+            "{}/fapi/v1/exchangeInfo",
+            self.fapi_base().trim_end_matches('/')
+        );
         let url = match symbol {
             None => b,
             Some(s) => format!("{}?symbol={}", b, urlencoding::encode(s)),
@@ -38,7 +44,11 @@ impl BinanceClient {
         self.core.get_url(&url).await
     }
 
-    pub async fn fapi_depth(&self, symbol: &str, limit: Option<u32>) -> Result<serde_json::Value, BinanceError> {
+    pub async fn fapi_depth(
+        &self,
+        symbol: &str,
+        limit: Option<u32>,
+    ) -> Result<serde_json::Value, BinanceError> {
         let sym = urlencoding::encode(symbol);
         let b = self.fapi_base().trim_end_matches('/');
         let url = match limit {
@@ -48,7 +58,11 @@ impl BinanceClient {
         self.core.get_url(&url).await
     }
 
-    pub async fn fapi_trades(&self, symbol: &str, limit: Option<u32>) -> Result<serde_json::Value, BinanceError> {
+    pub async fn fapi_trades(
+        &self,
+        symbol: &str,
+        limit: Option<u32>,
+    ) -> Result<serde_json::Value, BinanceError> {
         let sym = urlencoding::encode(symbol);
         let b = self.fapi_base().trim_end_matches('/');
         let url = match limit {
@@ -112,7 +126,10 @@ impl BinanceClient {
         self.core.get_url(&url).await
     }
 
-    pub async fn fapi_premium_index(&self, symbol: Option<&str>) -> Result<serde_json::Value, BinanceError> {
+    pub async fn fapi_premium_index(
+        &self,
+        symbol: Option<&str>,
+    ) -> Result<serde_json::Value, BinanceError> {
         let b = self.fapi_base().trim_end_matches('/');
         let url = match symbol {
             None => format!("{}/fapi/v1/premiumIndex", b),
@@ -145,7 +162,10 @@ impl BinanceClient {
         if let Some(x) = limit {
             parts.push(format!("limit={}", x));
         }
-        let base = format!("{}/fapi/v1/fundingRate", self.fapi_base().trim_end_matches('/'));
+        let base = format!(
+            "{}/fapi/v1/fundingRate",
+            self.fapi_base().trim_end_matches('/')
+        );
         let url = if parts.is_empty() {
             base
         } else {
@@ -154,7 +174,10 @@ impl BinanceClient {
         self.core.get_url(&url).await
     }
 
-    pub async fn fapi_ticker_24h(&self, symbol: Option<&str>) -> Result<serde_json::Value, BinanceError> {
+    pub async fn fapi_ticker_24h(
+        &self,
+        symbol: Option<&str>,
+    ) -> Result<serde_json::Value, BinanceError> {
         let b = self.fapi_base().trim_end_matches('/');
         let url = match symbol {
             None => format!("{}/fapi/v1/ticker/24hr", b),
@@ -167,7 +190,10 @@ impl BinanceClient {
         self.core.get_url(&url).await
     }
 
-    pub async fn fapi_ticker_price(&self, symbol: Option<&str>) -> Result<serde_json::Value, BinanceError> {
+    pub async fn fapi_ticker_price(
+        &self,
+        symbol: Option<&str>,
+    ) -> Result<serde_json::Value, BinanceError> {
         let b = self.fapi_base().trim_end_matches('/');
         let url = match symbol {
             None => format!("{}/fapi/v1/ticker/price", b),
@@ -180,7 +206,10 @@ impl BinanceClient {
         self.core.get_url(&url).await
     }
 
-    pub async fn fapi_book_ticker(&self, symbol: Option<&str>) -> Result<serde_json::Value, BinanceError> {
+    pub async fn fapi_book_ticker(
+        &self,
+        symbol: Option<&str>,
+    ) -> Result<serde_json::Value, BinanceError> {
         let b = self.fapi_base().trim_end_matches('/');
         let url = match symbol {
             None => format!("{}/fapi/v1/ticker/bookTicker", b),
@@ -203,7 +232,10 @@ impl BinanceClient {
     }
 
     /// USDT-M — hesaba özel komisyon oranları (`/fapi/v1/commissionRate`).
-    pub async fn fapi_commission_rate(&self, symbol: &str) -> Result<serde_json::Value, BinanceError> {
+    pub async fn fapi_commission_rate(
+        &self,
+        symbol: &str,
+    ) -> Result<serde_json::Value, BinanceError> {
         let c = self.fapi_creds()?;
         let mut p = BTreeMap::new();
         p.insert("symbol".into(), symbol.trim().to_uppercase());
@@ -213,7 +245,11 @@ impl BinanceClient {
     }
 
     /// Kaldıraç — `POST /fapi/v1/leverage` (sembol başına; borsa üst sınırına tabi).
-    pub async fn fapi_change_leverage(&self, symbol: &str, leverage: u32) -> Result<serde_json::Value, BinanceError> {
+    pub async fn fapi_change_leverage(
+        &self,
+        symbol: &str,
+        leverage: u32,
+    ) -> Result<serde_json::Value, BinanceError> {
         let c = self.fapi_creds()?;
         let mut p = BTreeMap::new();
         p.insert("symbol".into(), symbol.trim().to_uppercase());
@@ -230,7 +266,10 @@ impl BinanceClient {
             .await
     }
 
-    pub async fn fapi_position_risk(&self, symbol: Option<&str>) -> Result<serde_json::Value, BinanceError> {
+    pub async fn fapi_position_risk(
+        &self,
+        symbol: Option<&str>,
+    ) -> Result<serde_json::Value, BinanceError> {
         let mut p = BTreeMap::new();
         insert_opt(&mut p, "symbol", symbol);
         let c = self.fapi_creds()?;
@@ -297,7 +336,10 @@ impl BinanceClient {
         self.fapi_new_order_params(p).await
     }
 
-    pub async fn fapi_batch_orders(&self, batch_orders_json: &str) -> Result<serde_json::Value, BinanceError> {
+    pub async fn fapi_batch_orders(
+        &self,
+        batch_orders_json: &str,
+    ) -> Result<serde_json::Value, BinanceError> {
         let mut p = BTreeMap::new();
         p.insert("batchOrders".into(), batch_orders_json.into());
         let c = self.fapi_creds()?;
@@ -324,7 +366,10 @@ impl BinanceClient {
             .await
     }
 
-    pub async fn fapi_cancel_all_open_orders(&self, symbol: &str) -> Result<serde_json::Value, BinanceError> {
+    pub async fn fapi_cancel_all_open_orders(
+        &self,
+        symbol: &str,
+    ) -> Result<serde_json::Value, BinanceError> {
         let mut p = BTreeMap::new();
         p.insert("symbol".into(), symbol.into());
         let c = self.fapi_creds()?;
@@ -351,7 +396,10 @@ impl BinanceClient {
             .await
     }
 
-    pub async fn fapi_open_orders(&self, symbol: Option<&str>) -> Result<serde_json::Value, BinanceError> {
+    pub async fn fapi_open_orders(
+        &self,
+        symbol: Option<&str>,
+    ) -> Result<serde_json::Value, BinanceError> {
         let mut p = BTreeMap::new();
         insert_opt(&mut p, "symbol", symbol);
         let c = self.fapi_creds()?;
@@ -455,7 +503,10 @@ impl BinanceClient {
             .await
     }
 
-    pub async fn fapi_user_data_stream_keepalive(&self, listen_key: &str) -> Result<serde_json::Value, BinanceError> {
+    pub async fn fapi_user_data_stream_keepalive(
+        &self,
+        listen_key: &str,
+    ) -> Result<serde_json::Value, BinanceError> {
         let c = self.fapi_creds()?;
         self.core
             .put_api_key_query(
@@ -467,7 +518,10 @@ impl BinanceClient {
             .await
     }
 
-    pub async fn fapi_user_data_stream_close(&self, listen_key: &str) -> Result<serde_json::Value, BinanceError> {
+    pub async fn fapi_user_data_stream_close(
+        &self,
+        listen_key: &str,
+    ) -> Result<serde_json::Value, BinanceError> {
         let c = self.fapi_creds()?;
         self.core
             .delete_api_key_query(

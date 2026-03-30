@@ -29,10 +29,7 @@ pub enum CommissionPolicy {
     /// Yalnızca [`CommissionResolver`] / borsa uç noktası çıktısı.
     ExchangeApi,
     /// API yok veya VIP seviyesi simülasyonu — sabit **bps** (on binde bir).
-    ManualBps {
-        maker_bps: u32,
-        taker_bps: u32,
-    },
+    ManualBps { maker_bps: u32, taker_bps: u32 },
     /// API kotası varsa kullan; yoksa fallback bps.
     ExchangeApiWithFallback {
         fallback_maker_bps: u32,
@@ -71,11 +68,7 @@ impl CommissionPolicy {
         match self {
             Self::ExchangeApi => {
                 let q = from_exchange.ok_or("borsa komisyon kotası yok (ExchangeApi)")?;
-                Ok(if is_maker {
-                    q.maker_rate
-                } else {
-                    q.taker_rate
-                })
+                Ok(if is_maker { q.maker_rate } else { q.taker_rate })
             }
             Self::ManualBps {
                 maker_bps,
@@ -89,11 +82,7 @@ impl CommissionPolicy {
                 fallback_taker_bps,
             } => {
                 if let Some(q) = from_exchange {
-                    Ok(if is_maker {
-                        q.maker_rate
-                    } else {
-                        q.taker_rate
-                    })
+                    Ok(if is_maker { q.maker_rate } else { q.taker_rate })
                 } else {
                     let bps = if is_maker {
                         *fallback_maker_bps

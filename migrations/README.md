@@ -1,62 +1,35 @@
-# SQLx PostgreSQL migrations
+# SQL migrations (`migrations/*.sql`)
 
-- **Dosya adı:** `NNNN_short_description.sql` (İngilizce slug) — SQLx sürümü = `NNNN` (örn. `0034` → `_sqlx_migrations.version = 34`).
-- **Tek dosya / sürüm:** Aynı `NNNN` önekinden iki `.sql` olamaz (`qtss-sync-sqlx-checksums` ve `migrate` kırılır).
-- **Tam liste:** Bu klasör geliştirme / CI / üretim ile **aynı** olmalı; aşağıdaki envanterdeki **`.sql` satır sayısı** `ls migrations/*.sql | wc -l` ve `git ls-files 'migrations/*.sql' | wc -l` ile eşleşmeli (tam repoda şu an **0001–0047**, **47** dosya).
-- **Dokümantasyon:** `docs/QTSS_MASTER_DEV_GUIDE.md` (Bölüm 5, FAZ 0.5), kök `.env.example`, `docs/PROJECT.md`; eski `QTSS_CURSOR_DEV_GUIDE.md` referansları mümkünse ana rehbere taşınmalıdır. Migrasyon hata metni: `crates/qtss-storage/src/pool.rs`. Çift önek düzeltmesi: tek `0013_worker_analytics_schema.sql`, tek `0014_catalog_fk_columns.sql`. `0034` / `0035`: `engine_symbols` FK; `0036_bar_intervals_repair_if_missing.sql`: `bar_intervals` yoksa oluşturur (bozuk 0013 telafisi).
+Applied at API/worker startup via `qtss_storage::run_migrations` (SQLx).
 
-## Inventory (`*.sql` — tam repoda 45 dosya, 0001–0045)
+## Inventory (this checkout)
 
-Sıra `sqlx::migrate!` uygulama sırası ile aynı olmalı (`sort`).
+| Version | File |
+|--------:|------|
+| 1 | `0001_init.sql` |
+| 2 | `0002_oauth.sql` |
+| 3 | `0003_market_catalog.sql` |
+| 4 | `0004_exchange_orders.sql` |
+| 5 | `0005_audit_log.sql` |
+| 6 | `0006_market_bars.sql` |
+| 7 | `0007_acp_chart_patterns.sql` |
+| 8 | `0008_acp_zigzag_seven_fib.sql` |
+| 9 | `0009_acp_pine_indicator_defaults.sql` |
+| 10 | `0010_acp_abstract_size_filters.sql` |
+| 11 | `0011_acp_last_pivot_direction.sql` |
+| 12 | `0012_acp_pattern_groups.sql` |
 
-```
-0001_init.sql
-0002_oauth.sql
-0003_market_catalog.sql
-0004_exchange_orders.sql
-0005_audit_log.sql
-0006_market_bars.sql
-0007_acp_chart_patterns.sql
-0008_acp_zigzag_seven_fib.sql
-0009_acp_pine_indicator_defaults.sql
-0010_acp_abstract_size_filters.sql
-0011_acp_last_pivot_direction.sql
-0012_acp_pattern_groups.sql
-0013_worker_analytics_schema.sql
-0014_catalog_fk_columns.sql
-0015_engine_analysis.sql
-0016_range_signal_events.sql
-0017_paper_ledger.sql
-0018_engine_signal_direction_mode.sql
-0019_nansen_snapshots.sql
-0020_nansen_setup_scans.sql
-0021_external_data_fetch.sql
-0022_data_snapshots_confluence.sql
-0023_external_data_sources_seed_f7.sql
-0024_drop_external_data_snapshots.sql
-0025_confluence_weights_app_config.sql
-0026_external_source_hl_meta_asset_ctxs.sql
-0027_market_confluence_snapshots.sql
-0028_external_sources_funding_oi_liquidations.sql
-0029_market_confluence_payload_column.sql
-0030_onchain_signal_scores.sql
-0031_onchain_signal_weights_app_config.sql
-0032_nansen_extended_scores.sql
-0033_onchain_weights_hl_whale.sql
-0034_engine_symbols_fk_columns.sql
-0035_engine_symbols_bar_interval_fk_if_ready.sql
-0036_bar_intervals_repair_if_missing.sql
-0037_copy_trade_execution_jobs.sql
-0038_ai_approval_requests.sql
-0039_notify_outbox.sql
-0040_user_permissions.sql
-0041_audit_log_details.sql
-0042_ai_engine_tables.sql
-0043_ai_engine_config.sql
-0044_system_config.sql
-0045_users_preferred_locale_and_worker_ticks.sql
-0046_worker_paper_live_notify_tick_secs.sql
-0047_worker_kill_switch_tick_secs.sql
+**Count:** 12 files. Refresh with:
+
+```bash
+ls migrations/*.sql | sort
 ```
 
-Yeni migration: bir sonraki boş numara **`0048_*.sql`** (veya dizindeki en yüksek önek + 1).
+## Full deployment line (AI + `system_config` + worker seeds)
+
+Downstream / full-tree clones may continue through **`0042`–`0047`** (AI tables, `system_config`, locale ticks, kill-switch ticks, etc.). The master guide (`docs/QTSS_MASTER_DEV_GUIDE.md` §5, FAZ 1 / 11) and `docs/CONFIG_REGISTRY.md` describe that chain. **Do not renumber** existing applied migrations; add the next free prefix only.
+
+## Rules (summary)
+
+- One numeric prefix per file; never edit an already-applied migration — add a new file.
+- After adding a file, update this README table and run `qtss-sync-sqlx-checksums` if your workflow uses offline SQLx query data.

@@ -82,7 +82,10 @@ pub fn prometheus_text() -> String {
 
 pub async fn prometheus_metrics() -> impl IntoResponse {
     (
-        [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
         prometheus_text(),
     )
 }

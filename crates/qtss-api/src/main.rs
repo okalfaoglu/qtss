@@ -30,14 +30,16 @@ mod routes;
 mod state;
 
 use rate_limit::ForwardedIpKeyExtractor;
-use routes::{api_router, health_router};
+use routes::health_router;
 use state::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     load_dotenv();
     // Worker ile aynı: `_sqlx_migrations` CREATE IF NOT EXISTS NOTICE’larını INFO’da göstermez.
-    init_logging("info,qtss_api=debug,qtss_storage=debug,tower_http=info,sqlx::postgres::notice=warn");
+    init_logging(
+        "info,qtss_api=debug,qtss_storage=debug,tower_http=info,sqlx::postgres::notice=warn",
+    );
 
     let database_url = postgres_url_from_env_or_default("postgres://qtss:qtss@127.0.0.1:5432/qtss");
     ensure_postgres_scheme(&database_url).map_err(anyhow::Error::msg)?;
@@ -83,7 +85,10 @@ async fn main() -> anyhow::Result<()> {
         .merge(health_router())
         .route("/metrics", get(metrics::prometheus_metrics_gate))
         .route("/oauth/token", post(oauth::oauth_token))
-        .nest("/api/v1", api_router(state.clone()))
+        .nest(
+            "/api/v1",
+            routes::public_locales_routes().merge(routes::api_router(state.clone())),
+        )
         .layer(middleware::from_fn(metrics::count_http_requests_middleware))
         .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
         .layer(SetRequestIdLayer::new(x_request_id, MakeRequestUuid))

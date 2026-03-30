@@ -132,7 +132,10 @@ async fn load_regime_weights(pool: &PgPool, regime: &str) -> (f64, f64, f64) {
     let t = o
         .get("technical")
         .and_then(|x| x.as_f64())
-        .or_else(|| o.get("technical").and_then(|x| x.as_i64().map(|i| i as f64)))
+        .or_else(|| {
+            o.get("technical")
+                .and_then(|x| x.as_i64().map(|i| i as f64))
+        })
         .unwrap_or(0.33);
     let c = o
         .get("onchain")
@@ -142,7 +145,10 @@ async fn load_regime_weights(pool: &PgPool, regime: &str) -> (f64, f64, f64) {
     let s = o
         .get("smart_money")
         .and_then(|x| x.as_f64())
-        .or_else(|| o.get("smart_money").and_then(|x| x.as_i64().map(|i| i as f64)))
+        .or_else(|| {
+            o.get("smart_money")
+                .and_then(|x| x.as_i64().map(|i| i as f64))
+        })
         .unwrap_or(0.33);
     let sum = t + c + s;
     if sum <= 1e-9 {
@@ -237,10 +243,7 @@ async fn onchain_pillar_score(pool: &PgPool, symbol: &str) -> f64 {
 }
 
 /// Confluence JSON traceability — okunan `data_snapshots` anahtarları (PLAN §4.2 / §8).
-async fn data_snapshot_keys_availability(
-    pool: &PgPool,
-    keys: &[String],
-) -> (usize, Vec<String>) {
+async fn data_snapshot_keys_availability(pool: &PgPool, keys: &[String]) -> (usize, Vec<String>) {
     let mut available = 0usize;
     let mut missing = Vec::new();
     for k in keys {
@@ -322,11 +325,7 @@ pub async fn compute_and_persist(
     if !confluence_engine_enabled() {
         return Ok(());
     }
-    if dash_payload
-        .get("reason")
-        .and_then(|x| x.as_str())
-        == Some("insufficient_bars")
-    {
+    if dash_payload.get("reason").and_then(|x| x.as_str()) == Some("insufficient_bars") {
         return Ok(());
     }
 
@@ -379,11 +378,10 @@ pub async fn compute_and_persist(
     let snapshot_expected = data_sources_considered.len();
     let total_expected_components = snapshot_expected + 1;
     let data_available_count = snap_available + 1;
-    let availability_ratio = (data_available_count as f64 / total_expected_components as f64)
-        .clamp(0.0, 1.0);
+    let availability_ratio =
+        (data_available_count as f64 / total_expected_components as f64).clamp(0.0, 1.0);
 
-    let composite_score =
-        (wt * technical + wo * onchain + ws * smart_money).clamp(-1.0, 1.0);
+    let composite_score = (wt * technical + wo * onchain + ws * smart_money).clamp(-1.0, 1.0);
 
     let mut conflicts: Vec<Value> = Vec::new();
     if technical > 0.25 && onchain < -0.25 {
@@ -410,9 +408,7 @@ pub async fn compute_and_persist(
             "severity": "warn"
         }));
     }
-    if technical * composite_score < -0.05
-        && technical.abs() > 0.22
-        && composite_score.abs() > 0.08
+    if technical * composite_score < -0.05 && technical.abs() > 0.22 && composite_score.abs() > 0.08
     {
         conflicts.push(json!({
             "code": "technical_vs_weighted_composite_opposed",
@@ -420,8 +416,7 @@ pub async fn compute_and_persist(
         }));
     }
 
-    let mut confidence =
-        (((composite_score + 1.0) / 2.0) * 100.0).round() as i32;
+    let mut confidence = (((composite_score + 1.0) / 2.0) * 100.0).round() as i32;
     confidence -= (conflicts.len() as i32) * 15;
     confidence = confidence.clamp(0, 100);
 

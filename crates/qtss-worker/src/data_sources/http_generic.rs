@@ -34,10 +34,7 @@ impl HttpGenericProvider {
             "method": method,
         });
         if method == "POST" {
-            v["body"] = source
-                .body_json
-                .clone()
-                .unwrap_or_else(|| json!({}));
+            v["body"] = source.body_json.clone().unwrap_or_else(|| json!({}));
         }
         v
     }
@@ -47,7 +44,11 @@ impl HttpGenericProvider {
             return None;
         }
         const MAX: usize = 512 * 1024;
-        let slice = if bytes.len() > MAX { &bytes[..MAX] } else { bytes };
+        let slice = if bytes.len() > MAX {
+            &bytes[..MAX]
+        } else {
+            bytes
+        };
         if let Ok(v) = serde_json::from_slice::<Value>(slice) {
             return Some(v);
         }
@@ -77,11 +78,7 @@ impl HttpGenericProvider {
         }
 
         let resp = if method == "POST" {
-            let body = self
-                .source
-                .body_json
-                .clone()
-                .unwrap_or_else(|| json!({}));
+            let body = self.source.body_json.clone().unwrap_or_else(|| json!({}));
             req.json(&body).send().await
         } else {
             req.send().await

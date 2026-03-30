@@ -82,11 +82,18 @@ pub async fn oauth_token(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<TokenResponse>, OAuthErr> {
-    let req = parse_token_request(&headers, &body).map_err(|e| invalid_request(format!("gövde: {e}")))?;
+    let req =
+        parse_token_request(&headers, &body).map_err(|e| invalid_request(format!("gövde: {e}")))?;
 
-    let jwt = st.jwt.as_ref().ok_or_else(|| server_error("JWT yapılandırılmamış".to_string()))?;
+    let jwt = st
+        .jwt
+        .as_ref()
+        .ok_or_else(|| server_error("JWT yapılandırılmamış".to_string()))?;
 
-    let client_id = req.client_id.as_deref().ok_or_else(|| invalid_request("client_id gerekli"))?;
+    let client_id = req
+        .client_id
+        .as_deref()
+        .ok_or_else(|| invalid_request("client_id gerekli"))?;
     let client_secret = req
         .client_secret
         .as_deref()
@@ -112,9 +119,8 @@ async fn token_password(
     if !row.allowed_grant_types.iter().any(|g| g == "password") {
         return Err(invalid_grant("password grant bu istemci için kapalı"));
     }
-    verify_client_secret(&row.client_secret_hash, client_secret).map_err(|_| {
-        invalid_client("istemci kimlik doğrulaması başarısız")
-    })?;
+    verify_client_secret(&row.client_secret_hash, client_secret)
+        .map_err(|_| invalid_client("istemci kimlik doğrulaması başarısız"))?;
 
     let email = req
         .username
@@ -125,18 +131,16 @@ async fn token_password(
         .as_deref()
         .ok_or_else(|| invalid_request("password gerekli"))?;
 
-    let user: UserAuthRow = sqlx::query_as(
-        "SELECT id, org_id, password_hash FROM users WHERE email = $1",
-    )
-    .bind(email)
-    .fetch_optional(&st.pool)
-    .await
-    .map_err(|e| invalid_grant(format!("db: {e}")))?
-    .ok_or_else(|| invalid_grant("kullanıcı bulunamadı"))?;
+    let user: UserAuthRow =
+        sqlx::query_as("SELECT id, org_id, password_hash FROM users WHERE email = $1")
+            .bind(email)
+            .fetch_optional(&st.pool)
+            .await
+            .map_err(|e| invalid_grant(format!("db: {e}")))?
+            .ok_or_else(|| invalid_grant("kullanıcı bulunamadı"))?;
 
-    verify_password_hash(&user.password_hash, password).map_err(|_| {
-        invalid_grant("geçersiz kimlik bilgisi")
-    })?;
+    verify_password_hash(&user.password_hash, password)
+        .map_err(|_| invalid_grant("geçersiz kimlik bilgisi"))?;
 
     let roles = load_roles(st, user.id).await.map_err(invalid_grant)?;
 
@@ -165,13 +169,10 @@ async fn token_client_credentials(
         .iter()
         .any(|g| g == "client_credentials")
     {
-        return Err(invalid_grant(
-            "client_credentials bu istemci için kapalı",
-        ));
+        return Err(invalid_grant("client_credentials bu istemci için kapalı"));
     }
-    verify_client_secret(&row.client_secret_hash, client_secret).map_err(|_| {
-        invalid_client("istemci kimlik doğrulaması başarısız")
-    })?;
+    verify_client_secret(&row.client_secret_hash, client_secret)
+        .map_err(|_| invalid_client("istemci kimlik doğrulaması başarısız"))?;
 
     let suid = row
         .service_user_id
@@ -186,17 +187,7 @@ async fn token_client_credentials(
 
     let roles = load_roles(st, suid).await.map_err(invalid_grant)?;
 
-    finish_token_issue(
-        st,
-        jwt,
-        row.id,
-        suid,
-        org.org_id,
-        roles,
-        client_id,
-        None,
-    )
-    .await
+    finish_token_issue(st, jwt, row.id, suid, org.org_id, roles, client_id, None).await
 }
 
 async fn token_refresh(
@@ -207,18 +198,11 @@ async fn token_refresh(
     req: &TokenRequest,
 ) -> Result<Json<TokenResponse>, OAuthErr> {
     let row = fetch_oauth_client(st, client_id).await?;
-    if !row
-        .allowed_grant_types
-        .iter()
-        .any(|g| g == "refresh_token")
-    {
-        return Err(invalid_grant(
-            "refresh_token bu istemci için kapalı",
-        ));
+    if !row.allowed_grant_types.iter().any(|g| g == "refresh_token") {
+        return Err(invalid_grant("refresh_token bu istemci için kapalı"));
     }
-    verify_client_secret(&row.client_secret_hash, client_secret).map_err(|_| {
-        invalid_client("istemci kimlik doğrulaması başarısız")
-    })?;
+    verify_client_secret(&row.client_secret_hash, client_secret)
+        .map_err(|_| invalid_client("istemci kimlik doğrulaması başarısız"))?;
 
     let raw = req
         .refresh_token

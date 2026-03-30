@@ -18,12 +18,11 @@ impl UserRepository {
         &self,
         user_id: Uuid,
     ) -> Result<Option<String>, StorageError> {
-        let row: Option<(Option<String>,)> = sqlx::query_as(
-            r#"SELECT preferred_locale FROM users WHERE id = $1"#,
-        )
-        .bind(user_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row: Option<(Option<String>,)> =
+            sqlx::query_as(r#"SELECT preferred_locale FROM users WHERE id = $1"#)
+                .bind(user_id)
+                .fetch_optional(&self.pool)
+                .await?;
         Ok(row.and_then(|(l,)| l))
     }
 

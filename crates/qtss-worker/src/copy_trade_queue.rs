@@ -12,8 +12,8 @@ use qtss_domain::copy_trade::CopyRule;
 use qtss_domain::orders::OrderIntent;
 use qtss_execution::ExecutionGateway;
 use qtss_storage::{
-    CopySubscriptionRepository, CopySubscriptionRow, CopyTradeJobRepository, ExchangeOrderRepository,
-    ExchangeOrderRow,
+    CopySubscriptionRepository, CopySubscriptionRow, CopyTradeJobRepository,
+    ExchangeOrderRepository, ExchangeOrderRow,
 };
 use rust_decimal::Decimal;
 use serde_json::json;
@@ -187,7 +187,10 @@ async fn process_jobs(pool: &PgPool, gw: Option<&Arc<dyn ExecutionGateway>>) {
             continue;
         };
         if is_trading_halted() {
-            if let Err(e) = jobs.mark_skipped(job.id, "trading halted (kill switch)").await {
+            if let Err(e) = jobs
+                .mark_skipped(job.id, "trading halted (kill switch)")
+                .await
+            {
                 warn!(%e, "copy_trade_queue: mark_skipped");
             }
             continue;

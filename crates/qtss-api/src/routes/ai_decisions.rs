@@ -67,7 +67,10 @@ async fn get_ai_decision(
         .await
         .map_err(map_ai)?;
     let Some(r) = row else {
-        return Err(ApiError::new(StatusCode::NOT_FOUND, "AI decision not found"));
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "AI decision not found",
+        ));
     };
     Ok(Json(r))
 }
@@ -83,7 +86,9 @@ async fn latest_tactical_directive(
     let row = qtss_ai::storage::fetch_latest_approved_tactical(&st.pool, sym)
         .await
         .map_err(map_ai)?;
-    Ok(Json(serde_json::to_value(row).unwrap_or(serde_json::json!(null))))
+    Ok(Json(
+        serde_json::to_value(row).unwrap_or(serde_json::json!(null)),
+    ))
 }
 
 async fn active_portfolio_directive(
@@ -92,7 +97,9 @@ async fn active_portfolio_directive(
     let row = qtss_ai::storage::fetch_active_portfolio_directive(&st.pool)
         .await
         .map_err(map_ai)?;
-    Ok(Json(serde_json::to_value(row).unwrap_or(serde_json::json!(null))))
+    Ok(Json(
+        serde_json::to_value(row).unwrap_or(serde_json::json!(null)),
+    ))
 }
 
 async fn approve_ai_decision(

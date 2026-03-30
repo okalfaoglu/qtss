@@ -8,9 +8,7 @@ use qtss_binance::{BinanceClient, BinanceClientConfig};
 use qtss_execution::{
     reconcile_binance_futures_open_orders, ExchangeOrderVenueSnapshot, ReconcileReport,
 };
-use qtss_reconcile::{
-    apply_binance_futures_open_orders_patch, BinanceOpenOrdersPatchConfig,
-};
+use qtss_reconcile::{apply_binance_futures_open_orders_patch, BinanceOpenOrdersPatchConfig};
 use qtss_storage::{ExchangeAccountRepository, ExchangeOrderRepository, ExchangeOrderRow};
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -145,14 +143,10 @@ pub async fn binance_futures_reconcile_loop(pool: PgPool) {
             };
             let patch_cfg =
                 BinanceOpenOrdersPatchConfig::worker_futures(patch_exchange_order_status_enabled());
-            if patch_cfg.refine_via_order_query || patch_cfg.patch_submitted_to_reconciled_not_open {
+            if patch_cfg.refine_via_order_query || patch_cfg.patch_submitted_to_reconciled_not_open
+            {
                 match apply_binance_futures_open_orders_patch(
-                    &orders,
-                    &client,
-                    user_id,
-                    &remote,
-                    &local,
-                    &patch_cfg,
+                    &orders, &client, user_id, &remote, &local, &patch_cfg,
                 )
                 .await
                 {

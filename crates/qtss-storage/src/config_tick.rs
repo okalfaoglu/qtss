@@ -52,7 +52,8 @@ pub async fn resolve_worker_tick_secs(
         .unwrap_or_else(|| clamp_tick(default_secs, min_secs))
 }
 
-fn normalize_locale_code(raw: &str) -> Option<&'static str> {
+/// Normalizes user-facing locale hints to `en` or `tr` (worker notify default).
+pub fn normalize_notify_locale_code(raw: &str) -> Option<&'static str> {
     let t = raw.trim().to_lowercase();
     if t.starts_with("tr") {
         return Some("tr");
@@ -69,7 +70,7 @@ pub async fn resolve_notify_default_locale(pool: &PgPool) -> String {
 
     if qtss_common::env_overrides_enabled() {
         if let Ok(s) = std::env::var(ENV_KEY) {
-            if let Some(c) = normalize_locale_code(&s) {
+            if let Some(c) = normalize_notify_locale_code(&s) {
                 return c.to_string();
             }
         }
@@ -78,14 +79,14 @@ pub async fn resolve_notify_default_locale(pool: &PgPool) -> String {
     let repo = SystemConfigRepository::new(pool.clone());
     if let Ok(Some(row)) = repo.get("worker", "notify_default_locale").await {
         if let Some(c) = row.value.get("code").and_then(|x| x.as_str()) {
-            if let Some(n) = normalize_locale_code(c) {
+            if let Some(n) = normalize_notify_locale_code(c) {
                 return n.to_string();
             }
         }
     }
 
     if let Ok(s) = std::env::var(ENV_KEY) {
-        if let Some(c) = normalize_locale_code(&s) {
+        if let Some(c) = normalize_notify_locale_code(&s) {
             return c.to_string();
         }
     }
@@ -100,8 +101,30 @@ mod tests {
     #[test]
     fn tick_secs_from_object_and_scalar() {
         assert_eq!(tick_secs_from_config_value(&json!({"secs": 30})), Some(30));
-        assert_eq!(tick_secs_from_config_value(&json!({"tick_secs": 5})), Some(5));
+        assert_eq!(
+            tick_secs_from_config_value(&json!({"tick_secs": 5})),
+            Some(5)
+        );
         assert_eq!(tick_secs_from_config_value(&json!(15)), Some(15));
         assert_eq!(tick_secs_from_config_value(&json!({})), None);
+    }
+
+    #[test]
+    fn normalize_notify_locale_tr_variants() {
+        assert_eq!(normalize_notify_locale_code("tr"), Some("tr"));
+        assert_eq!(normalize_notify_locale_code("TR"), Some("tr"));
+        assert_eq!(normalize_notify_locale_code("tr-TR"), Some("tr"));
+    }
+
+    #[test]
+    fn normalize_notify_locale_en_variants() {
+        assert_eq!(normalize_notify_locale_code("en"), Some("en"));
+        assert_eq!(normalize_notify_locale_code("EN-US"), Some("en"));
+    }
+
+    #[test]
+    fn normalize_notify_locale_unknown_none() {
+        assert_eq!(normalize_notify_locale_code(""), None);
+        assert_eq!(normalize_notify_locale_code("de"), None);
     }
 }

@@ -22,7 +22,10 @@ use crate::state::SharedState;
 
 pub fn reconcile_router() -> Router<SharedState> {
     Router::new()
-        .route("/reconcile/binance/futures", post(reconcile_binance_futures))
+        .route(
+            "/reconcile/binance/futures",
+            post(reconcile_binance_futures),
+        )
         .route("/reconcile/binance", post(reconcile_binance_spot))
 }
 

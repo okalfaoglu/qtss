@@ -1,7 +1,9 @@
 use axum::extract::{Extension, State};
 use axum::routing::post;
 use axum::{Json, Router};
-use qtss_binance::{sync_full_binance_catalog, BinanceClient, BinanceClientConfig, CatalogSyncStats};
+use qtss_binance::{
+    sync_full_binance_catalog, BinanceClient, BinanceClientConfig, CatalogSyncStats,
+};
 use qtss_storage::CatalogRepository;
 
 use crate::error::ApiError;

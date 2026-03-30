@@ -59,10 +59,7 @@ pub fn parse_closed_kline_json(text: &str) -> Option<ClosedKline> {
     if !k.is_final.unwrap_or(false) {
         return None;
     }
-    let symbol = k
-        .s
-        .or(ev.s)
-        .filter(|s| !s.is_empty())?;
+    let symbol = k.s.or(ev.s).filter(|s| !s.is_empty())?;
     let interval = k.interval?.to_string();
     Some(ClosedKline {
         symbol,

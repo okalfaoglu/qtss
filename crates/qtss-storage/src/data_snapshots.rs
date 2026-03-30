@@ -75,12 +75,11 @@ pub async fn data_snapshot_age_secs(
     pool: &PgPool,
     source_key: &str,
 ) -> Result<Option<i64>, StorageError> {
-    let t: Option<DateTime<Utc>> = sqlx::query_scalar(
-        r#"SELECT computed_at FROM data_snapshots WHERE source_key = $1"#,
-    )
-    .bind(source_key)
-    .fetch_optional(pool)
-    .await?;
+    let t: Option<DateTime<Utc>> =
+        sqlx::query_scalar(r#"SELECT computed_at FROM data_snapshots WHERE source_key = $1"#)
+            .bind(source_key)
+            .fetch_optional(pool)
+            .await?;
     Ok(t.map(|at| Utc::now().signed_duration_since(at).num_seconds()))
 }
 

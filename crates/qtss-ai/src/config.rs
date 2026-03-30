@@ -117,7 +117,10 @@ impl AiEngineConfig {
 }
 
 fn env_string(key: &str) -> Option<String> {
-    std::env::var(key).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    std::env::var(key)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn env_u64(key: &str) -> Option<u64> {

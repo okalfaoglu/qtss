@@ -85,13 +85,15 @@ impl AppConfigRepository {
     }
 
     /// `app_config.value` (JSONB) — satır yoksa `None`.
-    pub async fn get_value_json(pool: &PgPool, key: &str) -> Result<Option<serde_json::Value>, StorageError> {
-        let row: Option<serde_json::Value> = sqlx::query_scalar(
-            r#"SELECT value FROM app_config WHERE key = $1"#,
-        )
-        .bind(key)
-        .fetch_optional(pool)
-        .await?;
+    pub async fn get_value_json(
+        pool: &PgPool,
+        key: &str,
+    ) -> Result<Option<serde_json::Value>, StorageError> {
+        let row: Option<serde_json::Value> =
+            sqlx::query_scalar(r#"SELECT value FROM app_config WHERE key = $1"#)
+                .bind(key)
+                .fetch_optional(pool)
+                .await?;
         Ok(row)
     }
 

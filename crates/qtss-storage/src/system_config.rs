@@ -37,7 +37,11 @@ impl SystemConfigRepository {
         row
     }
 
-    pub async fn list_by_module(&self, module: &str, limit: i64) -> Result<Vec<SystemConfigRow>, StorageError> {
+    pub async fn list_by_module(
+        &self,
+        module: &str,
+        limit: i64,
+    ) -> Result<Vec<SystemConfigRow>, StorageError> {
         let lim = limit.clamp(1, 500);
         let rows = sqlx::query_as::<_, SystemConfigRow>(
             r#"SELECT id, module, config_key, value, schema_version, description, is_secret,
@@ -65,7 +69,11 @@ impl SystemConfigRepository {
     }
 
     /// Single-row read (admin); **does not** mask `is_secret` so values can be edited intentionally.
-    pub async fn get(&self, module: &str, config_key: &str) -> Result<Option<SystemConfigRow>, StorageError> {
+    pub async fn get(
+        &self,
+        module: &str,
+        config_key: &str,
+    ) -> Result<Option<SystemConfigRow>, StorageError> {
         let row = sqlx::query_as::<_, SystemConfigRow>(
             r#"SELECT id, module, config_key, value, schema_version, description, is_secret,
                       updated_at, updated_by_user_id

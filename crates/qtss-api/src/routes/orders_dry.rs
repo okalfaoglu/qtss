@@ -27,9 +27,7 @@ pub struct PlaceDryBody {
     pub initial_quote_balance: Option<Decimal>,
 }
 
-fn segment_db_key(
-    segment: qtss_domain::exchange::MarketSegment,
-) -> Result<&'static str, ApiError> {
+fn segment_db_key(segment: qtss_domain::exchange::MarketSegment) -> Result<&'static str, ApiError> {
     match segment {
         qtss_domain::exchange::MarketSegment::Spot => Ok("spot"),
         qtss_domain::exchange::MarketSegment::Futures => Ok("futures"),
@@ -119,10 +117,7 @@ async fn place_dry_order(
     let symbol = body.intent.instrument.symbol.clone();
 
     let mut tx = st.pool.begin().await?;
-    let locked = st
-        .paper
-        .lock_balance_for_update(&mut tx, user_id)
-        .await?;
+    let locked = st.paper.lock_balance_for_update(&mut tx, user_id).await?;
 
     let mut ledger = if let Some(r) = locked {
         ledger_from_row(r)

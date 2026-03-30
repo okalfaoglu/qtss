@@ -25,9 +25,7 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 
 /// Motorun hangi ortamda çalıştığı — gateway ve veri kaynağı seçimini belirler.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString)]
 #[strum(serialize_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionMode {

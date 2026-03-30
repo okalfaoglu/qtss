@@ -2,9 +2,9 @@
 //! `DATABASE_URL=... QTSS_SEED_ADMIN_PASSWORD=... cargo run -p qtss-api --bin qtss-seed`
 
 use anyhow::Context;
-use qtss_common::{load_dotenv, require_postgres_database_url};
 use argon2::password_hash::{PasswordHasher, SaltString};
 use argon2::Argon2;
+use qtss_common::{load_dotenv, require_postgres_database_url};
 use qtss_storage::{create_pool, run_migrations};
 use uuid::Uuid;
 
@@ -14,10 +14,12 @@ async fn main() -> anyhow::Result<()> {
     let database_url = require_postgres_database_url().map_err(anyhow::Error::msg)?;
     let admin_email =
         std::env::var("QTSS_SEED_ADMIN_EMAIL").unwrap_or_else(|_| "admin@localhost".into());
-    let admin_password = std::env::var("QTSS_SEED_ADMIN_PASSWORD")
-        .context("QTSS_SEED_ADMIN_PASSWORD gerekli")?;
+    let admin_password =
+        std::env::var("QTSS_SEED_ADMIN_PASSWORD").context("QTSS_SEED_ADMIN_PASSWORD gerekli")?;
 
-    let pool = create_pool(&database_url, 2).await.context("veritabanı bağlantısı")?;
+    let pool = create_pool(&database_url, 2)
+        .await
+        .context("veritabanı bağlantısı")?;
     run_migrations(&pool).await.map_err(|e| {
         let msg = format!("{e:#}");
         if msg.contains("has been modified") {
@@ -36,9 +38,11 @@ async fn main() -> anyhow::Result<()> {
         {
             Some(id) => id,
             None => {
-                sqlx::query_scalar("INSERT INTO organizations (name) VALUES ('Default') RETURNING id")
-                    .fetch_one(&pool)
-                    .await?
+                sqlx::query_scalar(
+                    "INSERT INTO organizations (name) VALUES ('Default') RETURNING id",
+                )
+                .fetch_one(&pool)
+                .await?
             }
         };
 
@@ -66,20 +70,17 @@ async fn main() -> anyhow::Result<()> {
         .fetch_one(&pool)
         .await?;
 
-    let admin_role: Uuid =
-        sqlx::query_scalar("SELECT id FROM roles WHERE key = 'admin'")
-            .fetch_one(&pool)
-            .await?;
-    sqlx::query(
-        "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-    )
-    .bind(uid)
-    .bind(admin_role)
-    .execute(&pool)
-    .await?;
+    let admin_role: Uuid = sqlx::query_scalar("SELECT id FROM roles WHERE key = 'admin'")
+        .fetch_one(&pool)
+        .await?;
+    sqlx::query("INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+        .bind(uid)
+        .bind(admin_role)
+        .execute(&pool)
+        .await?;
 
-    let client_secret: String = std::env::var("QTSS_SEED_CLIENT_SECRET")
-        .unwrap_or_else(|_| Uuid::new_v4().to_string());
+    let client_secret: String =
+        std::env::var("QTSS_SEED_CLIENT_SECRET").unwrap_or_else(|_| Uuid::new_v4().to_string());
     let salt_c = SaltString::generate(&mut rand::thread_rng());
     let client_ph = Argon2::default()
         .hash_password(client_secret.as_bytes(), &salt_c)

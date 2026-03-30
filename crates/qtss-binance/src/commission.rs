@@ -6,7 +6,8 @@ use serde_json::Value;
 use std::str::FromStr;
 
 fn json_f64(v: &Value) -> Option<f64> {
-    v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    v.as_f64()
+        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
 }
 
 /// Oran (0–1, örn. `0.001` ≈ 10 bps) veya doğrudan bps benzeri sayı.
@@ -58,7 +59,10 @@ pub fn decimal_from_binance_fee_field(v: &Value) -> Option<Decimal> {
 
 /// `GET /sapi/v1/asset/tradeFee` gövdesi (dizi); `want_symbol` ile satır seçilir.
 #[must_use]
-pub fn trade_fee_from_sapi_response(value: &Value, want_symbol: &str) -> Option<(Decimal, Decimal)> {
+pub fn trade_fee_from_sapi_response(
+    value: &Value,
+    want_symbol: &str,
+) -> Option<(Decimal, Decimal)> {
     let arr = value.as_array()?;
     let want = want_symbol.trim().to_uppercase();
     for row in arr {
@@ -176,8 +180,7 @@ mod tests {
                 "takerCommissionRate": "0.0004"
             }]
         });
-        let c =
-            futures_commission_hint_from_exchange_info(&body, "BTCUSDT").expect("hint");
+        let c = futures_commission_hint_from_exchange_info(&body, "BTCUSDT").expect("hint");
         assert!((c.maker_bps - 2.0).abs() < 1e-9);
         assert!((c.taker_bps - 4.0).abs() < 1e-9);
     }

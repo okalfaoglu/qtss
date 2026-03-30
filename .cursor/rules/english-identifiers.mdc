@@ -11,3 +11,5 @@ alwaysApply: true
 - **Wire format vs code**: If a JSON/API field must stay Turkish for backward compatibility, keep the **Rust/TS identifier in English** and map with `#[serde(rename = "...")]` / explicit DTO mapping — do not encode Turkish in the symbol name used in logic.
 
 When touching legacy Turkish-named fields, prefer incremental migration (English in code + serde rename) rather than adding new Turkish identifiers.
+
+- **Log messages:** Prefer **English** for new operator-facing log text when practical (searchability, SIEM). Use **`trace` / `debug` / `info` / `warn` / `error` / `critical`** per `docs/QTSS_MASTER_DEV_GUIDE.md` §8.1 (`qtss_common::log_critical` for critical). Structured field names stay English (`qtss_module`, `is_critical`).

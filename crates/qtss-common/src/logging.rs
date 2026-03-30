@@ -1,7 +1,18 @@
-//! `tracing` tabanlı merkezi loglama.
+//! Central logging on `tracing` (QTSS policy: `docs/QTSS_MASTER_DEV_GUIDE.md` §8.1).
 //!
-//! Seviyeler: trace, debug, info, warn, error — ayrıca **critical** için `error!` + `is_critical` alanı.
-//! `RUST_LOG` ile filtre (örn. `qtss=debug`, `qtss_api=info`). Çağrı kaynağı `qtss_module` alanında kalır.
+//! ## Levels (which macro / helper)
+//!
+//! | Level    | Use |
+//! |----------|-----|
+//! | `trace`  | Extremely verbose flow (off in default production filters). `tracing::trace!` |
+//! | `debug`  | Developer diagnostics, per-tick / per-symbol detail. `tracing::debug!` |
+//! | `info`   | Normal lifecycle: startup, successful loop iteration summaries. `tracing::info!` |
+//! | `warn`   | Recoverable anomalies: retry, missing optional data, transient upstream errors. `tracing::warn!` |
+//! | `error`  | Serious failure: persistence broken, invariant violated, non-recoverable step. `tracing::error!` |
+//! | `critical` | Operator action required; emitted as `error!` with `is_critical = true`. [`log_critical`] or [`log_business`](QtssLogLevel::Critical) |
+//!
+//! Prefer [`log_business`] when routing through the `qtss` target with a stable `qtss_module` label.
+//! Filter with `RUST_LOG` (e.g. `qtss=debug`, `qtss_api=info`, `qtss_worker=info`). JSON lines: `QTSS_LOG_JSON=1`.
 
 use serde::Serialize;
 use std::borrow::Cow;
@@ -46,18 +57,13 @@ pub trait Loggable {
 
 /// Varsayılan subscriber: düz metin veya `QTSS_LOG_JSON=1` ile JSON satırı.
 pub fn init_logging(default_directive: &str) {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(default_directive));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_directive));
 
     if std::env::var("QTSS_LOG_JSON").ok().as_deref() == Some("1") {
         tracing_subscriber::registry()
             .with(filter)
-            .with(
-                fmt::layer()
-                    .json()
-                    .with_target(true)
-                    .with_line_number(true),
-            )
+            .with(fmt::layer().json().with_target(true).with_line_number(true))
             .init();
     } else {
         tracing_subscriber::registry()

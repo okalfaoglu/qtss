@@ -43,10 +43,11 @@ async fn pnl_rollups(
 async fn pnl_rebuild_live(
     State(st): State<SharedState>,
 ) -> Result<Json<PnlRebuildStats>, ApiError> {
-    let stats = st
-        .pnl
-        .rebuild_live_rollups_from_exchange_orders()
-        .await?;
-    log_business(QtssLogLevel::Info, "qtss_api::dashboard", "pnl_rebuild_live");
+    let stats = st.pnl.rebuild_live_rollups_from_exchange_orders().await?;
+    log_business(
+        QtssLogLevel::Info,
+        "qtss_api::dashboard",
+        "pnl_rebuild_live",
+    );
     Ok(Json(stats))
 }

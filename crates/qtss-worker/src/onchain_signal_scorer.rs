@@ -8,10 +8,10 @@ use std::time::{Duration, Instant};
 
 use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
 use qtss_storage::{
-    data_snapshot_age_secs, delete_onchain_signal_scores_older_than, fetch_analysis_snapshot_payload,
-    fetch_data_snapshot, fetch_latest_onchain_signal_score, insert_onchain_signal_score,
-    list_enabled_engine_symbols, list_engine_symbols_matching, AppConfigRepository,
-    OnchainSignalScoreInsert, OnchainSignalScoreRow,
+    data_snapshot_age_secs, delete_onchain_signal_scores_older_than,
+    fetch_analysis_snapshot_payload, fetch_data_snapshot, fetch_latest_onchain_signal_score,
+    insert_onchain_signal_score, list_enabled_engine_symbols, list_engine_symbols_matching,
+    resolve_worker_tick_secs, AppConfigRepository, OnchainSignalScoreInsert, OnchainSignalScoreRow,
 };
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -39,14 +39,6 @@ fn engine_enabled() -> bool {
         Some("0") | Some("false") | Some("no") | Some("off") => false,
         _ => true,
     }
-}
-
-fn tick_secs() -> u64 {
-    std::env::var("QTSS_ONCHAIN_SIGNAL_TICK_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(60)
-        .max(30)
 }
 
 fn notify_on_signal_edge_enabled() -> bool {
@@ -343,13 +335,22 @@ pub async fn compute_and_persist_for_symbol(pool: &PgPool, symbol: &str) -> Resu
         snapshot_score_with_conf(&pool, &prem_key, 60, score_binance_premium_funding).await;
     let (oi_v, oi_c, oi_ok) =
         snapshot_score_with_conf(&pool, &oi_key, 60, score_binance_open_interest_heat).await;
-    let (ls_v, ls_c, ls_ok) =
-        snapshot_score_with_conf(&pool, &ls_key, 300, score_binance_global_long_short_account_ratio)
-            .await;
+    let (ls_v, ls_c, ls_ok) = snapshot_score_with_conf(
+        &pool,
+        &ls_key,
+        300,
+        score_binance_global_long_short_account_ratio,
+    )
+    .await;
 
     let (nf_v, nf_c, nf_ok) = if base == "btc" {
-        snapshot_score_with_conf(&pool, "coinglass_netflow_btc", 300, score_coinglass_netflow_like)
-            .await
+        snapshot_score_with_conf(
+            &pool,
+            "coinglass_netflow_btc",
+            300,
+            score_coinglass_netflow_like,
+        )
+        .await
     } else {
         (None, 0.0, false)
     };
@@ -379,13 +380,9 @@ pub async fn compute_and_persist_for_symbol(pool: &PgPool, symbol: &str) -> Resu
     )
     .await;
 
-    let (nansen_nf_v, nansen_nf_c, nansen_nf_ok) = snapshot_score_with_conf(
-        &pool,
-        NANSEN_NETFLOWS_DATA_KEY,
-        1800,
-        score_nansen_netflows,
-    )
-    .await;
+    let (nansen_nf_v, nansen_nf_c, nansen_nf_ok) =
+        snapshot_score_with_conf(&pool, NANSEN_NETFLOWS_DATA_KEY, 1800, score_nansen_netflows)
+            .await;
     let (nansen_pt_v, nansen_pt_c, nansen_pt_ok) = snapshot_score_with_conf(
         &pool,
         NANSEN_PERP_TRADES_DATA_KEY,
@@ -418,11 +415,12 @@ pub async fn compute_and_persist_for_symbol(pool: &PgPool, symbol: &str) -> Resu
 
     let w = load_component_weights(pool).await;
     // §3.2: same exchange-flow idea as Coinglass netflow — halve Coinglass weight when both contribute.
-    let coinglass_nf_effective_w = if nf_v.is_some() && nf_ok && nansen_fi_v.is_some() && nansen_fi_ok {
-        w.coinglass_netflow * 0.5
-    } else {
-        w.coinglass_netflow
-    };
+    let coinglass_nf_effective_w =
+        if nf_v.is_some() && nf_ok && nansen_fi_v.is_some() && nansen_fi_ok {
+            w.coinglass_netflow * 0.5
+        } else {
+            w.coinglass_netflow
+        };
 
     let mut parts: Vec<(f64, f64, f64)> = Vec::new();
     let mut breakdown: Vec<Value> = Vec::new();
@@ -745,19 +743,26 @@ pub async fn onchain_signal_loop(pool: PgPool) {
         info!("QTSS_ONCHAIN_SIGNAL_ENGINE kapalı — onchain_signal_scores yazılmıyor");
         return;
     }
-    let tick = Duration::from_secs(tick_secs());
     let prune_every = Duration::from_secs(retention_prune_interval_secs());
     let days = retention_days();
     let mut last_prune = Instant::now();
     info!(
-        poll_secs = tick.as_secs(),
         prune_secs = prune_every.as_secs(),
         retention_days = days,
-        "onchain_signal_scorer döngüsü"
+        "onchain_signal_scorer döngüsü (poll: system_config worker.onchain_signal_tick_secs / QTSS_ONCHAIN_SIGNAL_TICK_SECS)"
     );
 
     loop {
-        tokio::time::sleep(tick).await;
+        let tick_secs = resolve_worker_tick_secs(
+            &pool,
+            "worker",
+            "onchain_signal_tick_secs",
+            "QTSS_ONCHAIN_SIGNAL_TICK_SECS",
+            60,
+            30,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(tick_secs)).await;
         if last_prune.elapsed() >= prune_every {
             match delete_onchain_signal_scores_older_than(&pool, days).await {
                 Ok(n) if n > 0 => {

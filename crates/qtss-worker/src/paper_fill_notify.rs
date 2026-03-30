@@ -98,11 +98,7 @@ pub async fn paper_position_notify_loop(pool: PgPool) {
         if fills.is_empty() {
             continue;
         }
-        let last_t = fills
-            .iter()
-            .map(|f| f.created_at)
-            .max()
-            .unwrap_or(after);
+        let last_t = fills.iter().map(|f| f.created_at).max().unwrap_or(after);
         cursor = Some(last_t);
 
         let loc = resolve_notify_default_locale(&pool_locale).await;
@@ -129,8 +125,16 @@ pub async fn paper_position_notify_loop(pool: PgPool) {
             format!("Dry fill — {} trades", fills.len())
         };
         let title = resolve_bilingual(&loc, &title_en, &title_tr);
-        let body_tr = fills.iter().map(fill_line_tr).collect::<Vec<_>>().join("\n");
-        let body_en = fills.iter().map(fill_line_en).collect::<Vec<_>>().join("\n");
+        let body_tr = fills
+            .iter()
+            .map(fill_line_tr)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body_en = fills
+            .iter()
+            .map(fill_line_en)
+            .collect::<Vec<_>>()
+            .join("\n");
         let body = resolve_bilingual(&loc, &body_en, &body_tr);
         let n = Notification::new(title, body);
         let d = NotificationDispatcher::from_env();

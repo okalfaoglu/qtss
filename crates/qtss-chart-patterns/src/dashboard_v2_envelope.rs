@@ -103,9 +103,9 @@ pub fn signal_dashboard_v2_envelope_from_v1(d: &SignalDashboardV1) -> SignalDash
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compute_signal_dashboard_v1;
     use crate::trading_range::{analyze_trading_range, TradingRangeParams};
     use crate::OhlcBar;
-    use crate::compute_signal_dashboard_v1;
 
     fn bar(i: i64, c: f64) -> OhlcBar {
         OhlcBar {
@@ -119,7 +119,9 @@ mod tests {
 
     #[test]
     fn v2_envelope_schema_and_maps_trends() {
-        let v: Vec<OhlcBar> = (0..120_i64).map(|i| bar(i, 100.0 + (i as f64) * 0.01)).collect();
+        let v: Vec<OhlcBar> = (0..120_i64)
+            .map(|i| bar(i, 100.0 + (i as f64) * 0.01))
+            .collect();
         let p = TradingRangeParams {
             lookback: 40,
             atr_period: 14,

@@ -113,14 +113,7 @@ pub async fn post_token_screener(
     api_key: &str,
     body: &Value,
 ) -> Result<(Value, NansenResponseMeta), NansenError> {
-    post_json_path(
-        client,
-        base_url,
-        api_key,
-        "api/v1/token-screener",
-        body,
-    )
-    .await
+    post_json_path(client, base_url, api_key, "api/v1/token-screener", body).await
 }
 
 /// `POST /api/v1/smart-money/netflow` (çoğu hesapta çoğul `/netflows` 404 döner).

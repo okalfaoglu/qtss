@@ -114,7 +114,16 @@ async fn onchain_signals_breakdown(
 
 pub fn onchain_signals_router() -> Router<SharedState> {
     Router::new()
-        .route("/analysis/onchain-signals/latest", get(onchain_signals_latest))
-        .route("/analysis/onchain-signals/history", get(onchain_signals_history))
-        .route("/analysis/onchain-signals/breakdown", get(onchain_signals_breakdown))
+        .route(
+            "/analysis/onchain-signals/latest",
+            get(onchain_signals_latest),
+        )
+        .route(
+            "/analysis/onchain-signals/history",
+            get(onchain_signals_history),
+        )
+        .route(
+            "/analysis/onchain-signals/breakdown",
+            get(onchain_signals_breakdown),
+        )
 }

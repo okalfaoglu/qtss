@@ -6,14 +6,42 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 
 use qtss_storage::{
-    fetch_analysis_snapshot_payload, fetch_latest_onchain_signal_score, list_enabled_engine_symbols,
-    list_engine_symbols_matching, list_recent_bars, ExchangeOrderRow,
+    fetch_analysis_snapshot_payload, fetch_latest_onchain_signal_score,
+    list_enabled_engine_symbols, list_engine_symbols_matching, list_recent_bars, ExchangeOrderRow,
 };
 
 use crate::error::{AiError, AiResult};
 use crate::storage::fetch_last_ai_decision_recent;
 
 const BAR_LIMIT: i64 = 20;
+
+/// OHLC window metrics for prompts (`closes[0]` = newest bar, `closes[last]` = oldest in window).
+/// Extracted for unit tests (FAZ 3 / `QTSS_MASTER_DEV_GUIDE` §7).
+pub(crate) fn bar_ohlc_window_metrics(
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+) -> Option<(f64, f64, f64, usize)> {
+    if closes.is_empty() || highs.len() != closes.len() || lows.len() != closes.len() {
+        return None;
+    }
+    let last_close = closes.first().copied().unwrap_or(0.0);
+    let oldest_close = closes.last().copied().unwrap_or(last_close);
+    let pct_change = if oldest_close.abs() > f64::EPSILON {
+        ((last_close - oldest_close) / oldest_close) * 100.0
+    } else {
+        0.0
+    };
+    let high_max = highs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let low_min = lows.iter().copied().fold(f64::INFINITY, f64::min);
+    let mean_close = closes.iter().sum::<f64>() / closes.len().max(1) as f64;
+    let range_vs_mean_pct = if mean_close.abs() > f64::EPSILON {
+        ((high_max - low_min) / mean_close) * 100.0
+    } else {
+        0.0
+    };
+    Some((last_close, pct_change, range_vs_mean_pct, closes.len()))
+}
 
 /// Builds the JSON context described in `QTSS_MASTER_DEV_GUIDE` §3.1 (token‑budget friendly).
 pub async fn build_tactical_context(pool: &PgPool, symbol: &str) -> AiResult<Value> {
@@ -26,7 +54,10 @@ pub async fn build_tactical_context(pool: &PgPool, symbol: &str) -> AiResult<Val
         .map(|r| serde_json::to_value(&r).unwrap_or(Value::Null));
 
     let engine_rows = list_engine_symbols_matching(pool, sym, None, None, None).await?;
-    let engine_row = engine_rows.iter().find(|r| r.enabled).or_else(|| engine_rows.first());
+    let engine_row = engine_rows
+        .iter()
+        .find(|r| r.enabled)
+        .or_else(|| engine_rows.first());
 
     let confluence = if let Some(e) = engine_row {
         fetch_analysis_snapshot_payload(pool, e.id, "confluence")
@@ -96,26 +127,13 @@ pub(super) async fn summarize_recent_bars(
         lows.push(b.low.to_f64().unwrap_or(0.0));
         closes.push(b.close.to_f64().unwrap_or(0.0));
     }
-    let last_close = closes.first().copied().unwrap_or(0.0);
-    let oldest_close = closes.last().copied().unwrap_or(last_close);
-    let pct_change_24h_hint = if oldest_close.abs() > f64::EPSILON {
-        ((last_close - oldest_close) / oldest_close) * 100.0
-    } else {
-        0.0
-    };
-    let high_max = highs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let low_min = lows.iter().copied().fold(f64::INFINITY, f64::min);
-    let mean_close = closes.iter().sum::<f64>() / closes.len().max(1) as f64;
-    let range_vs_mean_pct = if mean_close.abs() > f64::EPSILON {
-        ((high_max - low_min) / mean_close) * 100.0
-    } else {
-        0.0
-    };
+    let (last_close, pct_change_24h_hint, range_vs_mean_pct, bars_used) =
+        bar_ohlc_window_metrics(&highs, &lows, &closes).unwrap_or((0.0, 0.0, 0.0, 0));
     Ok(json!({
         "exchange": exchange,
         "segment": segment,
         "interval": interval,
-        "bars_used": bars.len(),
+        "bars_used": bars_used,
         "last_close": last_close,
         "approx_change_over_window_pct": pct_change_24h_hint,
         "high_low_range_pct_of_mean_close": range_vs_mean_pct,
@@ -168,9 +186,20 @@ pub async fn build_operational_context(pool: &PgPool, symbol: &str) -> AiResult<
         .await?
         .map(|r| serde_json::to_value(&r).unwrap_or(Value::Null));
     let engine_rows = list_engine_symbols_matching(pool, sym, None, None, None).await?;
-    let engine_row = engine_rows.iter().find(|r| r.enabled).or_else(|| engine_rows.first());
+    let engine_row = engine_rows
+        .iter()
+        .find(|r| r.enabled)
+        .or_else(|| engine_rows.first());
     let recent_price_stats = if let Some(e) = engine_row {
-        summarize_recent_bars(pool, &e.exchange, &e.segment, &e.symbol, &e.interval, OP_BARS).await?
+        summarize_recent_bars(
+            pool,
+            &e.exchange,
+            &e.segment,
+            &e.symbol,
+            &e.interval,
+            OP_BARS,
+        )
+        .await?
     } else {
         Value::Null
     };
@@ -233,4 +262,31 @@ pub async fn build_strategic_context(pool: &PgPool) -> AiResult<Value> {
         "pnl_rollups_7d_hint": pnl_summary,
         "recent_ai_outcomes": feedback,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bar_metrics_empty_none() {
+        assert!(bar_ohlc_window_metrics(&[], &[], &[]).is_none());
+    }
+
+    #[test]
+    fn bar_metrics_mismatched_lengths_none() {
+        assert!(bar_ohlc_window_metrics(&[1.0], &[1.0, 2.0], &[1.0]).is_none());
+    }
+
+    #[test]
+    fn bar_metrics_ten_percent_up_over_window() {
+        // newest first: 110, oldest 100 → +10%
+        let highs = vec![111.0, 100.0];
+        let lows = vec![109.0, 99.0];
+        let closes = vec![110.0, 100.0];
+        let (last, pct, _, n) = bar_ohlc_window_metrics(&highs, &lows, &closes).unwrap();
+        assert!((last - 110.0).abs() < f64::EPSILON);
+        assert!((pct - 10.0).abs() < 1e-9);
+        assert_eq!(n, 2);
+    }
 }

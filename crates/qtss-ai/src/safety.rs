@@ -31,14 +31,14 @@ impl SafetyConfig {
 }
 
 fn needs_stop_loss(direction: &str) -> bool {
-    matches!(
-        direction,
-        "strong_buy" | "buy" | "sell" | "strong_sell"
-    )
+    matches!(direction, "strong_buy" | "buy" | "sell" | "strong_sell")
 }
 
 /// Validates parsed tactical JSON before persistence.
-pub fn validate_ai_decision_safety(decision: &Value, config: &SafetyConfig) -> Result<(), &'static str> {
+pub fn validate_ai_decision_safety(
+    decision: &Value,
+    config: &SafetyConfig,
+) -> Result<(), &'static str> {
     if qtss_common::is_trading_halted() {
         return Err("trading halted (kill switch)");
     }
@@ -66,6 +66,9 @@ pub fn validate_ai_decision_safety(decision: &Value, config: &SafetyConfig) -> R
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::Mutex;
+
+    static SAFETY_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn multiplier_cap() {
@@ -74,5 +77,46 @@ mod tests {
         };
         let v = json!({"direction": "neutral", "confidence": 0.5, "position_size_multiplier": 2.0});
         assert!(validate_ai_decision_safety(&v, &cfg).is_err());
+    }
+
+    #[test]
+    fn directional_trade_requires_positive_stop_loss() {
+        let _g = SAFETY_TEST_LOCK.lock().expect("safety test lock");
+        qtss_common::clear_trading_halt();
+        let cfg = SafetyConfig {
+            max_size_multiplier: 2.0,
+        };
+        let missing_sl = json!({"direction": "buy", "confidence": 0.8});
+        assert!(validate_ai_decision_safety(&missing_sl, &cfg).is_err());
+        let zero_sl = json!({"direction": "buy", "confidence": 0.8, "stop_loss_pct": 0.0});
+        assert!(validate_ai_decision_safety(&zero_sl, &cfg).is_err());
+        let ok = json!({"direction": "buy", "confidence": 0.8, "stop_loss_pct": 1.5});
+        assert!(validate_ai_decision_safety(&ok, &cfg).is_ok());
+    }
+
+    #[test]
+    fn neutral_skips_stop_loss_requirement() {
+        let _g = SAFETY_TEST_LOCK.lock().expect("safety test lock");
+        qtss_common::clear_trading_halt();
+        let cfg = SafetyConfig {
+            max_size_multiplier: 2.0,
+        };
+        let v = json!({"direction": "neutral", "confidence": 0.5});
+        assert!(validate_ai_decision_safety(&v, &cfg).is_ok());
+    }
+
+    #[test]
+    fn rejects_when_trading_halted() {
+        let _g = SAFETY_TEST_LOCK.lock().expect("safety test lock");
+        qtss_common::set_trading_halted(true);
+        let cfg = SafetyConfig {
+            max_size_multiplier: 2.0,
+        };
+        let v = json!({"direction": "neutral", "confidence": 0.5});
+        assert_eq!(
+            validate_ai_decision_safety(&v, &cfg),
+            Err("trading halted (kill switch)")
+        );
+        qtss_common::clear_trading_halt();
     }
 }

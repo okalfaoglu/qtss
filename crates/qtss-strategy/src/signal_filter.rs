@@ -77,14 +77,8 @@ fn bracket_stop_take(
     let slf = sl_pct / Decimal::from(100u32);
     let tpf = tp_pct / Decimal::from(100u32);
     match side {
-        OrderSide::Buy => (
-            entry * (Decimal::ONE - slf),
-            entry * (Decimal::ONE + tpf),
-        ),
-        OrderSide::Sell => (
-            entry * (Decimal::ONE + slf),
-            entry * (Decimal::ONE - tpf),
-        ),
+        OrderSide::Buy => (entry * (Decimal::ONE - slf), entry * (Decimal::ONE + tpf)),
+        OrderSide::Sell => (entry * (Decimal::ONE + slf), entry * (Decimal::ONE - tpf)),
     }
 }
 
@@ -220,9 +214,7 @@ impl SignalFilterStrategy {
                                     instrument,
                                     side: exit_side,
                                     quantity: qty,
-                                    order_type: OrderType::TakeProfitMarket {
-                                        stop_price: tp_px,
-                                    },
+                                    order_type: OrderType::TakeProfitMarket { stop_price: tp_px },
                                     time_in_force: TimeInForce::Gtc,
                                     requires_human_approval: false,
                                     futures: fut,

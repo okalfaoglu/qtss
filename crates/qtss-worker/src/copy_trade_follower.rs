@@ -280,16 +280,8 @@ pub async fn copy_trade_follower_loop(pool: PgPool) {
                 }
                 if let Some(ref g) = gw {
                     if let Some(j) = perp_snapshot_json(&pool).await {
-                        place_for_subscriptions(
-                            &pool,
-                            g,
-                            &j,
-                            &rows,
-                            &bar_ex,
-                            &bar_seg,
-                            &bar_iv,
-                        )
-                        .await;
+                        place_for_subscriptions(&pool, g, &j, &rows, &bar_ex, &bar_seg, &bar_iv)
+                            .await;
                     }
                 } else {
                     for sub in &rows {

@@ -19,7 +19,13 @@ impl ReportRenderer {
         let font = doc.add_builtin_font(BuiltinFont::Helvetica)?;
         let current_layer = doc.get_page(page1).get_layer(layer1);
 
-        current_layer.use_text(format!("QTSS — {}", title), 16.0, Mm(20.0), Mm(270.0), &font);
+        current_layer.use_text(
+            format!("QTSS — {}", title),
+            16.0,
+            Mm(20.0),
+            Mm(270.0),
+            &font,
+        );
 
         let generated = format!("Olusturulma: {}", Utc::now().format("%Y-%m-%d %H:%M UTC"));
         current_layer.use_text(generated, 10.0, Mm(20.0), Mm(255.0), &font);

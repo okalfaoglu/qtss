@@ -62,7 +62,10 @@ pub fn is_known_qtss_permission(p: &str) -> bool {
 }
 
 /// JWT’deki (rol/claim) izinlere `user_permissions` satırlarını ekler (bilinmeyen dizgiler yok sayılır).
-pub fn merge_jwt_with_db_permissions(mut claims: AccessClaims, db_perms: &[String]) -> AccessClaims {
+pub fn merge_jwt_with_db_permissions(
+    mut claims: AccessClaims,
+    db_perms: &[String],
+) -> AccessClaims {
     let mut set: BTreeSet<String> = claims.permissions.iter().cloned().collect();
     for p in db_perms {
         if is_known_qtss_permission(p) {
@@ -138,7 +141,9 @@ pub async fn require_ops_roles(
     next: Next,
 ) -> Result<Response, Forbidden> {
     if !allows_ops(&claims) {
-        return Err(Forbidden::new("bu işlem için admin veya trader rolü gerekli"));
+        return Err(Forbidden::new(
+            "bu işlem için admin veya trader rolü gerekli",
+        ));
     }
     Ok(next.run(req).await)
 }

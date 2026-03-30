@@ -1,41 +1,42 @@
 //! Arka plan işleri: rollup, mutabakat; isteğe bağlı kline WebSocket → `market_bars`;
 //! `engine_symbols` → analiz snapshot (Trading Range, …).
 
-mod data_sources;
-mod confluence_hook;
-mod engines;
-mod confluence;
-mod nansen_engine;
-mod nansen_extended;
-mod signal_scorer;
-mod nansen_query;
-mod notify_outbox;
-mod paper_fill_notify;
-mod live_position_notify;
-mod setup_scan_engine;
-mod onchain_signal_scorer;
-mod kill_switch;
-mod position_manager;
-mod copy_trade_follower;
-mod copy_trade_queue;
+mod ai_engine;
 mod binance_futures_reconcile;
 mod binance_spot_reconcile;
+mod confluence;
+mod confluence_hook;
+mod copy_trade_follower;
+mod copy_trade_queue;
+mod data_sources;
+mod engines;
+mod kill_switch;
+mod live_position_notify;
+mod nansen_engine;
+mod nansen_extended;
+mod nansen_query;
+mod notify_outbox;
+mod onchain_signal_scorer;
+mod paper_fill_notify;
+mod position_manager;
+mod setup_scan_engine;
+mod signal_scorer;
 mod strategy_runner;
 mod worker_probe_http;
-mod ai_engine;
 
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
+// `SinkExt`: required for WebSocket sink `.send` (trait methods are not inherent on the type).
+use anyhow::Context;
 use futures_util::{SinkExt, StreamExt};
 use qtss_binance::{
     connect_url, parse_closed_kline_json, public_spot_combined_kline_url, public_spot_kline_url,
     public_usdm_combined_kline_url, public_usdm_kline_url,
 };
 use qtss_common::{init_logging, load_dotenv, postgres_url_from_env_or_default};
-use anyhow::Context;
 use qtss_storage::{
     create_pool, resolve_worker_tick_secs, run_migrations, upsert_market_bar, MarketBarUpsert,
     PnlRollupRepository,
@@ -89,14 +90,17 @@ async fn main() -> anyhow::Result<()> {
         "worker: built-in data source registry (Phase G) — ayrıntı için qtss_worker=debug"
     );
     for k in crate::data_sources::registry::REGISTERED_NANSEN_HTTP_KEYS {
-        tracing::debug!(source_key = *k, "nansen HTTP snapshot key (nansen_extended)");
+        tracing::debug!(
+            source_key = *k,
+            "nansen HTTP snapshot key (nansen_extended)"
+        );
     }
 
     let db_url = postgres_url_from_env_or_default("");
     let pool_opt: Option<PgPool> = if !db_url.trim().is_empty() {
-        let pool = create_pool(&db_url, 3)
-            .await
-            .context("qtss-worker: PostgreSQL pool failed (check DATABASE_URL, host, port, credentials)")?;
+        let pool = create_pool(&db_url, 3).await.context(
+            "qtss-worker: PostgreSQL pool failed (check DATABASE_URL, host, port, credentials)",
+        )?;
         run_migrations(&pool).await.context(
             "qtss-worker: SQL migrations failed — journalctl -u qtss-worker -n 100 --no-pager. \
              Yaygın: checksum uyuşmazlığı → `cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums` (DATABASE_URL); \
@@ -151,11 +155,15 @@ async fn main() -> anyhow::Result<()> {
         let onchain_pool = pool.clone();
         tokio::spawn(onchain_signal_scorer::onchain_signal_loop(onchain_pool));
         let paper_notify_pool = pool.clone();
-        tokio::spawn(paper_fill_notify::paper_position_notify_loop(paper_notify_pool));
+        tokio::spawn(paper_fill_notify::paper_position_notify_loop(
+            paper_notify_pool,
+        ));
         let outbox_pool = pool.clone();
         tokio::spawn(notify_outbox::notify_outbox_loop(outbox_pool));
         let live_notify_pool = pool.clone();
-        tokio::spawn(live_position_notify::live_position_notify_loop(live_notify_pool));
+        tokio::spawn(live_position_notify::live_position_notify_loop(
+            live_notify_pool,
+        ));
         let ks_pool = pool.clone();
         tokio::spawn(kill_switch::kill_switch_loop(ks_pool));
         let pm_pool = pool.clone();
@@ -257,18 +265,14 @@ fn segment_ws_db(segment: &str) -> &'static str {
 
 fn kline_url(symbol: &str, interval: &str, segment: &str) -> String {
     match segment {
-        "futures" | "usdt_futures" | "fapi" => {
-            public_usdm_kline_url(symbol, interval)
-        }
+        "futures" | "usdt_futures" | "fapi" => public_usdm_kline_url(symbol, interval),
         _ => public_spot_kline_url(symbol, interval),
     }
 }
 
 fn combined_kline_url(symbols: &[String], interval: &str, segment: &str) -> String {
     match segment {
-        "futures" | "usdt_futures" | "fapi" => {
-            public_usdm_combined_kline_url(symbols, interval)
-        }
+        "futures" | "usdt_futures" | "fapi" => public_usdm_combined_kline_url(symbols, interval),
         _ => public_spot_combined_kline_url(symbols, interval),
     }
 }
@@ -397,13 +401,8 @@ async fn kline_ws_loop(symbol: String, interval: String, segment: String, pool: 
                         Ok(Message::Text(t)) => {
                             if let Some(pool) = pool.as_ref() {
                                 if let Some(k) = parse_closed_kline_json(&t) {
-                                    if let Err(e) = persist_kline_closed_bar(
-                                        pool,
-                                        exchange,
-                                        seg_db,
-                                        &k,
-                                    )
-                                    .await
+                                    if let Err(e) =
+                                        persist_kline_closed_bar(pool, exchange, seg_db, &k).await
                                     {
                                         warn!(%e, symbol = %k.symbol, "market_bars upsert");
                                     } else {

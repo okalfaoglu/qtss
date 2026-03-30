@@ -25,29 +25,29 @@ mod zigzag;
 
 pub use pattern_catalog::{pattern_name_by_id, PatternId};
 
-pub use find::{
-    analyze_channel_six_from_bars, channel_six_drawing_hints, last_six_pivots_chrono,
-    scan_six_alternating_pivots, six_pivots_chrono_tail_skip, try_scan_channel_six_from_bars,
-    zigzag_from_ohlc_bars, ChannelLineEndpoint, ChannelSixAnalyzeResult, ChannelSixDrawingHints,
-    ChannelSixReject, ChannelSixRejectCode, ChannelSixScanOutcome, ChannelSixWindowFilter, PivotTriple,
-    SizeFilters, SixPivotScanParams, SixPivotScanResult,
-};
-pub use ohlc::OhlcBar;
-pub use resolve::resolve_pattern_type_id;
-pub use scan::{
-    check_bar_ratio, get_ratio_diff, in_range, inspect_pick_best_three_point_line, inspect_two_point_line,
-    trend_line_inspect,
-};
 pub use dashboard_v1::{
     compute_signal_dashboard_v1, compute_signal_dashboard_v1_with_policy, SignalDashboardV1,
     SignalDirectionPolicy,
 };
 pub use dashboard_v2_envelope::{signal_dashboard_v2_envelope_from_v1, SignalDashboardV2Envelope};
-pub use trading_range::{analyze_trading_range, TradingRangeParams, TradingRangeResult};
+pub use find::{
+    analyze_channel_six_from_bars, channel_six_drawing_hints, last_six_pivots_chrono,
+    scan_six_alternating_pivots, six_pivots_chrono_tail_skip, try_scan_channel_six_from_bars,
+    zigzag_from_ohlc_bars, ChannelLineEndpoint, ChannelSixAnalyzeResult, ChannelSixDrawingHints,
+    ChannelSixReject, ChannelSixRejectCode, ChannelSixScanOutcome, ChannelSixWindowFilter,
+    PivotTriple, SixPivotScanParams, SixPivotScanResult, SizeFilters,
+};
+pub use ohlc::OhlcBar;
+pub use resolve::resolve_pattern_type_id;
+pub use scan::{
+    check_bar_ratio, get_ratio_diff, in_range, inspect_pick_best_three_point_line,
+    inspect_two_point_line, trend_line_inspect,
+};
 pub use theme::{rgb_to_hex, THEME_DARK_RGB, THEME_LIGHT_RGB};
+pub use trading_range::{analyze_trading_range, TradingRangeParams, TradingRangeResult};
 pub use zigzag::{
-    next_level_from_pivot_prices, next_level_from_zigzag, pivots_chronological, ChartPoint, ZigzagFlags, ZigzagLite,
-    ZigzagPivot,
+    next_level_from_pivot_prices, next_level_from_zigzag, pivots_chronological, ChartPoint,
+    ZigzagFlags, ZigzagLite, ZigzagPivot,
 };
 
 use serde::{Deserialize, Serialize};
@@ -232,11 +232,11 @@ pub fn channel_six_pattern_drawing_batch(
         line_width: zigzag_line_width,
         color_hex: zigzag_hex,
     });
-    let last = outcome
-        .pivots
-        .last()
-        .copied()
-        .unwrap_or((hints.upper[1].bar_index, hints.upper[1].price, 0));
+    let last = outcome.pivots.last().copied().unwrap_or((
+        hints.upper[1].bar_index,
+        hints.upper[1].price,
+        0,
+    ));
     commands.push(DrawingCommand::PatternLabel {
         at: time_price_bar(last.0, last.1),
         text: name.clone(),

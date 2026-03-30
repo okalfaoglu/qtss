@@ -62,15 +62,7 @@ pub async fn sync_spot_instruments(
 
         catalog
             .upsert_instrument(
-                market.id,
-                native,
-                base,
-                quote,
-                "TRADING",
-                true,
-                price_f,
-                lot_f,
-                meta,
+                market.id, native, base, quote, "TRADING", true, price_f, lot_f, meta,
             )
             .await
             .map_err(storage_err)?;
@@ -129,15 +121,7 @@ pub async fn sync_usdt_futures_instruments(
 
         catalog
             .upsert_instrument(
-                market.id,
-                native,
-                base,
-                quote,
-                "TRADING",
-                true,
-                price_f,
-                lot_f,
-                meta,
+                market.id, native, base, quote, "TRADING", true, price_f, lot_f, meta,
             )
             .await
             .map_err(storage_err)?;

@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use qtss_storage::{
-    list_enabled_engine_symbols, upsert_data_snapshot, AppConfigRepository,
+    list_enabled_engine_symbols, resolve_worker_tick_secs, upsert_data_snapshot,
+    AppConfigRepository,
 };
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -59,13 +60,19 @@ fn default_chains_for_smart_money() -> Value {
 
 fn default_netflows_request_body() -> Value {
     let mut body = default_pagination_body();
-    json_merge(&mut body, json!({ "chains": default_chains_for_smart_money() }));
+    json_merge(
+        &mut body,
+        json!({ "chains": default_chains_for_smart_money() }),
+    );
     body
 }
 
 fn default_holdings_request_body() -> Value {
     let mut body = default_pagination_body();
-    json_merge(&mut body, json!({ "chains": default_chains_for_smart_money() }));
+    json_merge(
+        &mut body,
+        json!({ "chains": default_chains_for_smart_money() }),
+    );
     body
 }
 
@@ -74,7 +81,9 @@ static WHO_BOUGHT_MISSING_CONFIG_LOGGED: AtomicBool = AtomicBool::new(false);
 /// Tam gövde: `NANSEN_WHO_BOUGHT_BODY_JSON` (JSON object).
 fn who_bought_body_from_env_json() -> Option<Value> {
     let raw = std::env::var("NANSEN_WHO_BOUGHT_BODY_JSON").ok()?;
-    serde_json::from_str::<Value>(raw.trim()).ok().filter(|v| v.is_object())
+    serde_json::from_str::<Value>(raw.trim())
+        .ok()
+        .filter(|v| v.is_object())
 }
 
 /// `tgm/who-bought-sold`: API `chain` + `token_address` zorunlu.
@@ -135,11 +144,7 @@ fn perp_pnl_leaderboard_request_body() -> Value {
     body
 }
 
-fn meta_json(
-    meta: &qtss_nansen::NansenResponseMeta,
-    insufficient: bool,
-    fetch_ms: u64,
-) -> Value {
+fn meta_json(meta: &qtss_nansen::NansenResponseMeta, insufficient: bool, fetch_ms: u64) -> Value {
     let mut m = json!({
         "qtss_fetch_duration_ms": fetch_ms,
         "nansen_insufficient_credits": insufficient,
@@ -167,15 +172,8 @@ async fn persist_nansen_result(
     match res {
         Ok((v, meta)) => {
             let m = meta_json(&meta, false, ms);
-            if let Err(e) = upsert_data_snapshot(
-                pool,
-                source_key,
-                request,
-                Some(&v),
-                Some(&m),
-                None,
-            )
-            .await
+            if let Err(e) =
+                upsert_data_snapshot(pool, source_key, request, Some(&v), Some(&m), None).await
             {
                 warn!(%e, %source_key, "nansen_extended upsert_data_snapshot");
             } else {
@@ -190,7 +188,8 @@ async fn persist_nansen_result(
                 "nansen_insufficient_credits": insufficient,
                 "error": err_s.chars().take(500).collect::<String>(),
             });
-            if let Err(e2) = upsert_data_snapshot(pool, source_key, request, None, Some(&m), Some(&err_s)).await
+            if let Err(e2) =
+                upsert_data_snapshot(pool, source_key, request, None, Some(&m), Some(&err_s)).await
             {
                 warn!(%e2, %source_key, "nansen_extended error upsert");
             }
@@ -221,10 +220,7 @@ fn insufficient_sleep_default(tick: u64) -> u64 {
 }
 
 async fn nansen_client() -> Option<Client> {
-    match Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()
-    {
+    match Client::builder().timeout(Duration::from_secs(120)).build() {
         Ok(c) => Some(c),
         Err(e) => {
             warn!(%e, "nansen_extended: reqwest client");
@@ -238,25 +234,37 @@ pub async fn nansen_netflows_loop(pool: PgPool) {
         info!("NANSEN_NETFLOWS_ENABLED kapalı — nansen_netflows döngüsü çıkıyor");
         return;
     }
-    let tick: u64 = std::env::var("NANSEN_NETFLOWS_TICK_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1800)
-        .max(900);
     let Some(client) = nansen_client().await else {
         return;
     };
     let base = nansen_api_base();
     let body = default_netflows_request_body();
     loop {
-        let Some(key) = std::env::var("NANSEN_API_KEY").ok().filter(|s| !s.trim().is_empty()) else {
+        let tick = resolve_worker_tick_secs(
+            &pool,
+            "worker",
+            "nansen_netflows_tick_secs",
+            "NANSEN_NETFLOWS_TICK_SECS",
+            1800,
+            900,
+        )
+        .await;
+        let Some(key) = std::env::var("NANSEN_API_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+        else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
         let started = Instant::now();
         let res = qtss_nansen::post_smart_money_netflows(&client, &base, key.trim(), &body).await;
         let mut next = tick;
-        if res.as_ref().err().map(|e| e.is_insufficient_credits()).unwrap_or(false) {
+        if res
+            .as_ref()
+            .err()
+            .map(|e| e.is_insufficient_credits())
+            .unwrap_or(false)
+        {
             next = insufficient_sleep_default(tick);
         }
         persist_nansen_result(&pool, NANSEN_NETFLOWS_DATA_KEY, &body, res, started).await;
@@ -269,25 +277,37 @@ pub async fn nansen_holdings_loop(pool: PgPool) {
         info!("NANSEN_HOLDINGS_ENABLED kapalı — nansen_holdings döngüsü çıkıyor");
         return;
     }
-    let tick: u64 = std::env::var("NANSEN_HOLDINGS_TICK_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1800)
-        .max(900);
     let Some(client) = nansen_client().await else {
         return;
     };
     let base = nansen_api_base();
     let body = default_holdings_request_body();
     loop {
-        let Some(key) = std::env::var("NANSEN_API_KEY").ok().filter(|s| !s.trim().is_empty()) else {
+        let tick = resolve_worker_tick_secs(
+            &pool,
+            "worker",
+            "nansen_holdings_tick_secs",
+            "NANSEN_HOLDINGS_TICK_SECS",
+            1800,
+            900,
+        )
+        .await;
+        let Some(key) = std::env::var("NANSEN_API_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+        else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
         let started = Instant::now();
         let res = qtss_nansen::post_smart_money_holdings(&client, &base, key.trim(), &body).await;
         let mut next = tick;
-        if res.as_ref().err().map(|e| e.is_insufficient_credits()).unwrap_or(false) {
+        if res
+            .as_ref()
+            .err()
+            .map(|e| e.is_insufficient_credits())
+            .unwrap_or(false)
+        {
             next = insufficient_sleep_default(tick);
         }
         persist_nansen_result(&pool, NANSEN_HOLDINGS_DATA_KEY, &body, res, started).await;
@@ -300,18 +320,25 @@ pub async fn nansen_perp_trades_loop(pool: PgPool) {
         info!("NANSEN_PERP_TRADES_ENABLED kapalı — nansen_perp_trades döngüsü çıkıyor");
         return;
     }
-    let tick: u64 = std::env::var("NANSEN_PERP_TRADES_TICK_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1800)
-        .max(900);
     let Some(client) = nansen_client().await else {
         return;
     };
     let base = nansen_api_base();
     let body = default_pagination_body();
     loop {
-        let Some(key) = std::env::var("NANSEN_API_KEY").ok().filter(|s| !s.trim().is_empty()) else {
+        let tick = resolve_worker_tick_secs(
+            &pool,
+            "worker",
+            "nansen_perp_trades_tick_secs",
+            "NANSEN_PERP_TRADES_TICK_SECS",
+            1800,
+            900,
+        )
+        .await;
+        let Some(key) = std::env::var("NANSEN_API_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+        else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
@@ -319,7 +346,12 @@ pub async fn nansen_perp_trades_loop(pool: PgPool) {
         let res =
             qtss_nansen::post_smart_money_perp_trades(&client, &base, key.trim(), &body).await;
         let mut next = tick;
-        if res.as_ref().err().map(|e| e.is_insufficient_credits()).unwrap_or(false) {
+        if res
+            .as_ref()
+            .err()
+            .map(|e| e.is_insufficient_credits())
+            .unwrap_or(false)
+        {
             next = insufficient_sleep_default(tick);
         }
         persist_nansen_result(&pool, NANSEN_PERP_TRADES_DATA_KEY, &body, res, started).await;
@@ -352,14 +384,22 @@ pub async fn nansen_who_bought_loop(pool: PgPool) {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
-        let Some(key) = std::env::var("NANSEN_API_KEY").ok().filter(|s| !s.trim().is_empty()) else {
+        let Some(key) = std::env::var("NANSEN_API_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+        else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
         let started = Instant::now();
         let res = qtss_nansen::post_tgm_who_bought_sold(&client, &base, key.trim(), &body).await;
         let mut next = tick;
-        if res.as_ref().err().map(|e| e.is_insufficient_credits()).unwrap_or(false) {
+        if res
+            .as_ref()
+            .err()
+            .map(|e| e.is_insufficient_credits())
+            .unwrap_or(false)
+        {
             next = insufficient_sleep_default(tick);
         }
         persist_nansen_result(&pool, NANSEN_WHO_BOUGHT_DATA_KEY, &body, res, started).await;
@@ -372,17 +412,24 @@ pub async fn nansen_flow_intel_loop(pool: PgPool) {
         info!("NANSEN_FLOW_INTEL_ENABLED kapalı — nansen_flow_intelligence döngüsü çıkıyor");
         return;
     }
-    let tick: u64 = std::env::var("NANSEN_FLOW_INTEL_TICK_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(900)
-        .max(600);
     let Some(client) = nansen_client().await else {
         return;
     };
     let base = nansen_api_base();
     loop {
-        let Some(api_key) = std::env::var("NANSEN_API_KEY").ok().filter(|s| !s.trim().is_empty()) else {
+        let tick = resolve_worker_tick_secs(
+            &pool,
+            "worker",
+            "nansen_flow_intel_tick_secs",
+            "NANSEN_FLOW_INTEL_TICK_SECS",
+            900,
+            600,
+        )
+        .await;
+        let Some(api_key) = std::env::var("NANSEN_API_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+        else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
@@ -391,7 +438,9 @@ pub async fn nansen_flow_intel_loop(pool: PgPool) {
             .ok()
             .flatten();
         let Some(map_v) = map_v else {
-            tracing::debug!("nansen_flow_intel: app_config nansen_flow_intel_by_symbol yok — atlanıyor");
+            tracing::debug!(
+                "nansen_flow_intel: app_config nansen_flow_intel_by_symbol yok — atlanıyor"
+            );
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
@@ -408,7 +457,10 @@ pub async fn nansen_flow_intel_loop(pool: PgPool) {
         let mut any = false;
         for es in rows {
             let sym = es.symbol.trim().to_uppercase();
-            let body = obj.get(&sym).cloned().or_else(|| obj.get(sym.as_str()).cloned());
+            let body = obj
+                .get(&sym)
+                .cloned()
+                .or_else(|| obj.get(sym.as_str()).cloned());
             let Some(body) = body else {
                 continue;
             };
@@ -418,7 +470,8 @@ pub async fn nansen_flow_intel_loop(pool: PgPool) {
             any = true;
             let started = Instant::now();
             let res =
-                qtss_nansen::post_tgm_flow_intelligence(&client, &base, api_key.trim(), &body).await;
+                qtss_nansen::post_tgm_flow_intelligence(&client, &base, api_key.trim(), &body)
+                    .await;
             persist_nansen_result(&pool, NANSEN_FLOW_INTEL_DATA_KEY, &body, res, started).await;
         }
         if !any {
@@ -471,11 +524,6 @@ pub async fn nansen_perp_leaderboard_loop(pool: PgPool) {
         info!("NANSEN_PERP_LEADERBOARD_ENABLED kapalı — perp_leaderboard döngüsü çıkıyor");
         return;
     }
-    let tick: u64 = std::env::var("NANSEN_PERP_LEADERBOARD_TICK_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(604_800)
-        .max(3_600);
     let Some(client) = nansen_client().await else {
         return;
     };
@@ -488,7 +536,19 @@ pub async fn nansen_perp_leaderboard_loop(pool: PgPool) {
         .unwrap_or_else(|| "api/v1/tgm/perp-pnl-leaderboard".to_string());
     let repo = AppConfigRepository::new(pool.clone());
     loop {
-        let Some(api_key) = std::env::var("NANSEN_API_KEY").ok().filter(|s| !s.trim().is_empty()) else {
+        let tick = resolve_worker_tick_secs(
+            &pool,
+            "worker",
+            "nansen_perp_leaderboard_tick_secs",
+            "NANSEN_PERP_LEADERBOARD_TICK_SECS",
+            604_800,
+            3_600,
+        )
+        .await;
+        let Some(api_key) = std::env::var("NANSEN_API_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+        else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
@@ -519,14 +579,7 @@ pub async fn nansen_perp_leaderboard_loop(pool: PgPool) {
                 warn!(%e, "nansen_whale_watchlist app_config upsert");
             }
         }
-        persist_nansen_result(
-            &pool,
-            NANSEN_PERP_LEADERBOARD_DATA_KEY,
-            &body,
-            res,
-            started,
-        )
-        .await;
+        persist_nansen_result(&pool, NANSEN_PERP_LEADERBOARD_DATA_KEY, &body, res, started).await;
         tokio::time::sleep(Duration::from_secs(tick)).await;
     }
 }
@@ -536,17 +589,24 @@ pub async fn nansen_whale_perp_aggregate_loop(pool: PgPool) {
         info!("NANSEN_WHALE_PERP_AGGREGATE_ENABLED kapalı — whale perp aggregate döngüsü çıkıyor");
         return;
     }
-    let tick: u64 = std::env::var("NANSEN_WHALE_PERP_POSITIONS_TICK_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1800)
-        .max(600);
     let Some(client) = nansen_client().await else {
         return;
     };
     let base = nansen_api_base();
     loop {
-        let Some(api_key) = std::env::var("NANSEN_API_KEY").ok().filter(|s| !s.trim().is_empty()) else {
+        let tick = resolve_worker_tick_secs(
+            &pool,
+            "worker",
+            "nansen_whale_perp_positions_tick_secs",
+            "NANSEN_WHALE_PERP_POSITIONS_TICK_SECS",
+            1800,
+            600,
+        )
+        .await;
+        let Some(api_key) = std::env::var("NANSEN_API_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+        else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
@@ -577,7 +637,9 @@ pub async fn nansen_whale_perp_aggregate_loop(pool: PgPool) {
         let mut last_err: Option<qtss_nansen::NansenError> = None;
         for w in &wallets {
             let body = json!({ "address": w });
-            match qtss_nansen::post_profiler_perp_positions(&client, &base, api_key.trim(), &body).await {
+            match qtss_nansen::post_profiler_perp_positions(&client, &base, api_key.trim(), &body)
+                .await
+            {
                 Ok((v, _)) => merge_position_rows(&mut merged, &v),
                 Err(e) => last_err = Some(e),
             }
@@ -603,7 +665,8 @@ pub async fn nansen_whale_perp_aggregate_loop(pool: PgPool) {
             }
         } else {
             let response = json!({ "data": merged });
-            let m = json!({ "qtss_fetch_duration_ms": elapsed, "nansen_insufficient_credits": false });
+            let m =
+                json!({ "qtss_fetch_duration_ms": elapsed, "nansen_insufficient_credits": false });
             if let Err(e) = upsert_data_snapshot(
                 &pool,
                 NANSEN_WHALE_PERP_AGGREGATE_DATA_KEY,

@@ -11,10 +11,11 @@ use serde_json::json;
 use uuid::Uuid;
 
 use qtss_binance::{
-    commission_rate_from_fapi_response, default_spot_commission_bps, default_usdt_futures_commission_bps,
-    futures_commission_hint_from_exchange_info, parse_klines_json, public_spot_kline_url,
-    public_usdm_kline_url, spot_commission_hint_from_exchange_info, trade_fee_from_sapi_response,
-    BinanceClient, BinanceClientConfig, CommissionBps, KlineBar,
+    commission_rate_from_fapi_response, default_spot_commission_bps,
+    default_usdt_futures_commission_bps, futures_commission_hint_from_exchange_info,
+    parse_klines_json, public_spot_kline_url, public_usdm_kline_url,
+    spot_commission_hint_from_exchange_info, trade_fee_from_sapi_response, BinanceClient,
+    BinanceClientConfig, CommissionBps, KlineBar,
 };
 use qtss_storage::{list_recent_bars, upsert_market_bar, MarketBarUpsert};
 use rust_decimal::Decimal;
@@ -64,8 +65,14 @@ pub struct StreamUrlQuery {
 pub fn market_binance_router() -> Router<SharedState> {
     Router::new()
         .route("/market/binance/klines", get(binance_klines))
-        .route("/market/binance/commission-defaults", get(binance_commission_defaults))
-        .route("/market/binance/commission-account", get(binance_commission_account))
+        .route(
+            "/market/binance/commission-defaults",
+            get(binance_commission_defaults),
+        )
+        .route(
+            "/market/binance/commission-account",
+            get(binance_commission_account),
+        )
         .route("/market/binance/stream-urls", get(binance_stream_urls))
         .route("/market/bars/recent", get(market_bars_recent))
 }
@@ -108,30 +115,14 @@ async fn binance_klines(
     let client = BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?;
     let seg = q.segment.as_deref().unwrap_or("spot");
     let raw = match seg {
-        "futures" | "usdt_futures" | "fapi" => {
-            client
-                .fapi_klines(
-                    &q.symbol,
-                    &q.interval,
-                    q.start_time,
-                    q.end_time,
-                    q.limit,
-                )
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        _ => {
-            client
-                .spot_klines(
-                    &q.symbol,
-                    &q.interval,
-                    q.start_time,
-                    q.end_time,
-                    q.limit,
-                )
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
+        "futures" | "usdt_futures" | "fapi" => client
+            .fapi_klines(&q.symbol, &q.interval, q.start_time, q.end_time, q.limit)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?,
+        _ => client
+            .spot_klines(&q.symbol, &q.interval, q.start_time, q.end_time, q.limit)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?,
     };
     let bars = parse_klines_json(&raw).map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(bars))
@@ -320,7 +311,7 @@ async fn backfill_market_bars_from_rest(
         pages += 1;
         let need = (target - upserted) as u32;
         let batch_lim = need.min(PAGE);
-            let raw = match seg {
+        let raw = match seg {
             "futures" | "usdt_futures" | "fapi" => client
                 .fapi_klines(&sym, &interval, None, end_time, Some(batch_lim))
                 .await
@@ -339,7 +330,9 @@ async fn backfill_market_bars_from_rest(
             let open_time = Utc
                 .timestamp_millis_opt(b.open_time as i64)
                 .single()
-                .ok_or_else(|| ApiError::bad_request(format!("open_time geçersiz: {}", b.open_time)))?;
+                .ok_or_else(|| {
+                    ApiError::bad_request(format!("open_time geçersiz: {}", b.open_time))
+                })?;
             let quote_volume = if b.quote_asset_volume.trim().is_empty() {
                 None
             } else {
@@ -354,11 +347,16 @@ async fn backfill_market_bars_from_rest(
                 symbol: sym.clone(),
                 interval: interval.clone(),
                 open_time,
-                open: Decimal::from_str(b.open.trim()).map_err(|e| ApiError::bad_request(e.to_string()))?,
-                high: Decimal::from_str(b.high.trim()).map_err(|e| ApiError::bad_request(e.to_string()))?,
-                low: Decimal::from_str(b.low.trim()).map_err(|e| ApiError::bad_request(e.to_string()))?,
-                close: Decimal::from_str(b.close.trim()).map_err(|e| ApiError::bad_request(e.to_string()))?,
-                volume: Decimal::from_str(b.volume.trim()).map_err(|e| ApiError::bad_request(e.to_string()))?,
+                open: Decimal::from_str(b.open.trim())
+                    .map_err(|e| ApiError::bad_request(e.to_string()))?,
+                high: Decimal::from_str(b.high.trim())
+                    .map_err(|e| ApiError::bad_request(e.to_string()))?,
+                low: Decimal::from_str(b.low.trim())
+                    .map_err(|e| ApiError::bad_request(e.to_string()))?,
+                close: Decimal::from_str(b.close.trim())
+                    .map_err(|e| ApiError::bad_request(e.to_string()))?,
+                volume: Decimal::from_str(b.volume.trim())
+                    .map_err(|e| ApiError::bad_request(e.to_string()))?,
                 quote_volume,
                 trade_count: Some(b.number_of_trades as i64),
                 instrument_id: None,

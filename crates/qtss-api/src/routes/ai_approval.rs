@@ -50,7 +50,8 @@ pub fn ai_approval_admin_router() -> Router<SharedState> {
 }
 
 fn parse_org(claims: &AccessClaims) -> Result<Uuid, ApiError> {
-    Uuid::parse_str(claims.org_id.trim()).map_err(|_| ApiError::bad_request("geçersiz token org_id"))
+    Uuid::parse_str(claims.org_id.trim())
+        .map_err(|_| ApiError::bad_request("geçersiz token org_id"))
 }
 
 async fn list_approval_requests(
@@ -61,10 +62,7 @@ async fn list_approval_requests(
     let org_id = parse_org(&claims)?;
     let limit = q.limit.unwrap_or(50);
     let status = q.status.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let rows = st
-        .ai_approval
-        .list_for_org(org_id, status, limit)
-        .await?;
+    let rows = st.ai_approval.list_for_org(org_id, status, limit).await?;
     Ok(Json(rows))
 }
 
@@ -89,13 +87,7 @@ async fn create_approval_request(
         .filter(|s| !s.is_empty());
     let row = st
         .ai_approval
-        .insert(
-            org_id,
-            uid,
-            kind,
-            body.payload,
-            model_hint,
-        )
+        .insert(org_id, uid, kind, body.payload, model_hint)
         .await?;
     Ok(Json(row))
 }

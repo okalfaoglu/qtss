@@ -28,7 +28,9 @@ pub async fn notify_outbox_loop(pool: PgPool) {
     let pool_tick = pool.clone();
     let repo = NotifyOutboxRepository::new(pool);
     let dispatcher = NotificationDispatcher::from_env();
-    info!("notify_outbox_loop: draining notify_outbox → qtss-notify (poll from system_config / env)");
+    info!(
+        "notify_outbox_loop: draining notify_outbox → qtss-notify (poll from system_config / env)"
+    );
     loop {
         let poll_secs = resolve_worker_tick_secs(
             &pool_tick,

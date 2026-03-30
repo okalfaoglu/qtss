@@ -9,15 +9,15 @@ use chrono::Utc;
 
 use super::ConfluencePersist;
 use qtss_chart_patterns::{
-    analyze_trading_range, compute_signal_dashboard_v1_with_policy, signal_dashboard_v2_envelope_from_v1,
-    OhlcBar, SignalDirectionPolicy,
-    TradingRangeParams, TradingRangeResult,
+    analyze_trading_range, compute_signal_dashboard_v1_with_policy,
+    signal_dashboard_v2_envelope_from_v1, OhlcBar, SignalDirectionPolicy, TradingRangeParams,
+    TradingRangeResult,
 };
 use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
 use qtss_storage::{
     fetch_analysis_snapshot_payload, fetch_latest_onchain_signal_score, insert_range_signal_event,
-    list_enabled_engine_symbols, list_recent_bars, upsert_analysis_snapshot, EngineSymbolRow,
-    RangeSignalEventInsert,
+    list_enabled_engine_symbols, list_recent_bars, resolve_worker_tick_secs,
+    upsert_analysis_snapshot, EngineSymbolRow, RangeSignalEventInsert,
 };
 use rust_decimal::prelude::ToPrimitive;
 use serde_json::json;
@@ -55,7 +55,9 @@ fn trading_range_params_from_env() -> TradingRangeParams {
         .unwrap_or(50);
     let require_range_regime = std::env::var("QTSS_TR_REQUIRE_RANGE_REGIME")
         .ok()
-        .is_some_and(|s| s == "1" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes"));
+        .is_some_and(|s| {
+            s == "1" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes")
+        });
     TradingRangeParams {
         lookback,
         atr_period,
@@ -100,10 +102,7 @@ fn signal_direction_policy_for_row(t: &EngineSymbolRow) -> SignalDirectionPolicy
         "short_only" | "shortonly" => SignalDirectionPolicy::ShortOnly,
         "auto_segment" | "auto" | "" => {
             let seg = t.segment.trim().to_lowercase();
-            if matches!(
-                seg.as_str(),
-                "futures" | "usdt_futures" | "fapi" | "future"
-            ) {
+            if matches!(seg.as_str(), "futures" | "usdt_futures" | "fapi" | "future") {
                 SignalDirectionPolicy::Both
             } else {
                 SignalDirectionPolicy::LongOnly
@@ -115,10 +114,7 @@ fn signal_direction_policy_for_row(t: &EngineSymbolRow) -> SignalDirectionPolicy
                 "tanınmayan signal_direction_mode — segment ile auto_segment uygulanıyor"
             );
             let seg = t.segment.trim().to_lowercase();
-            if matches!(
-                seg.as_str(),
-                "futures" | "usdt_futures" | "fapi" | "future"
-            ) {
+            if matches!(seg.as_str(), "futures" | "usdt_futures" | "fapi" | "future") {
                 SignalDirectionPolicy::Both
             } else {
                 SignalDirectionPolicy::LongOnly
@@ -192,7 +188,10 @@ async fn merge_confluence_and_onchain_into_dashboard_json(
         obj.insert("pozisyon_gucu_10".into(), json!(norm_u8));
     }
 
-    if let Some(v2) = dash.get_mut("signal_dashboard_v2").and_then(|x| x.as_object_mut()) {
+    if let Some(v2) = dash
+        .get_mut("signal_dashboard_v2")
+        .and_then(|x| x.as_object_mut())
+    {
         v2.insert("position_strength_10".into(), json!(norm_u8));
         if let Some(ref c) = conf {
             v2.insert(
@@ -231,7 +230,10 @@ fn enrich_dashboard_payload(
 ) -> serde_json::Value {
     let mut v = serde_json::to_value(dash).unwrap_or(json!({}));
     if let serde_json::Value::Object(ref mut m) = v {
-        m.insert("last_bar_open_time".into(), json!(last_open_time.to_rfc3339()));
+        m.insert(
+            "last_bar_open_time".into(),
+            json!(last_open_time.to_rfc3339()),
+        );
         if let Some(x) = tr.range_high {
             m.insert("range_high".into(), json!(x));
         }
@@ -261,9 +263,9 @@ fn enrich_dashboard_payload(
 }
 
 fn env_truthy(name: &str) -> bool {
-    std::env::var(name)
-        .ok()
-        .is_some_and(|s| s == "1" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes"))
+    std::env::var(name).ok().is_some_and(|s| {
+        s == "1" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes")
+    })
 }
 
 fn sweep_notify_channels_from_env() -> Vec<NotificationChannel> {
@@ -378,7 +380,10 @@ fn durum_transition_event_kinds(prev: Option<DashDurum>, new_d: DashDurum) -> Ve
     }
 }
 
-fn reference_price_for_signal(dash: &qtss_chart_patterns::SignalDashboardV1, last_close: f64) -> f64 {
+fn reference_price_for_signal(
+    dash: &qtss_chart_patterns::SignalDashboardV1,
+    last_close: f64,
+) -> f64 {
     dash.giris_gercek
         .filter(|x| x.is_finite())
         .unwrap_or(last_close)
@@ -472,20 +477,22 @@ async fn run_engines_for_symbol(
     }
 
     for t in targets {
-        let prev_tr_payload = match fetch_analysis_snapshot_payload(pool, t.id, "trading_range").await {
-            Ok(p) => p,
-            Err(e) => {
-                warn!(%e, symbol = %t.symbol, "önceki trading_range payload");
-                None
-            }
-        };
-        let prev_dash_payload = match fetch_analysis_snapshot_payload(pool, t.id, "signal_dashboard").await {
-            Ok(p) => p,
-            Err(e) => {
-                warn!(%e, symbol = %t.symbol, "önceki signal_dashboard payload");
-                None
-            }
-        };
+        let prev_tr_payload =
+            match fetch_analysis_snapshot_payload(pool, t.id, "trading_range").await {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!(%e, symbol = %t.symbol, "önceki trading_range payload");
+                    None
+                }
+            };
+        let prev_dash_payload =
+            match fetch_analysis_snapshot_payload(pool, t.id, "signal_dashboard").await {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!(%e, symbol = %t.symbol, "önceki signal_dashboard payload");
+                    None
+                }
+            };
 
         let rows = match list_recent_bars(
             pool,
@@ -579,7 +586,13 @@ async fn run_engines_for_symbol(
                 valid = tr.valid,
                 "trading_range snapshot"
             );
-            maybe_notify_sweep_transitions(sweep_bundle.as_ref(), &t, prev_tr_payload.as_ref(), &tr).await;
+            maybe_notify_sweep_transitions(
+                sweep_bundle.as_ref(),
+                &t,
+                prev_tr_payload.as_ref(),
+                &tr,
+            )
+            .await;
         }
 
         let direction_policy = signal_direction_policy_for_row(&t);
@@ -587,11 +600,17 @@ async fn run_engines_for_symbol(
         let mut dash_payload = enrich_dashboard_payload(
             &dash,
             &tr,
-            rows_chrono.last().map(|r| r.open_time).unwrap_or_else(Utc::now),
+            rows_chrono
+                .last()
+                .map(|r| r.open_time)
+                .unwrap_or_else(Utc::now),
             &t,
             direction_policy,
         );
-        let last_bar_ot = rows_chrono.last().map(|r| r.open_time).unwrap_or_else(Utc::now);
+        let last_bar_ot = rows_chrono
+            .last()
+            .map(|r| r.open_time)
+            .unwrap_or_else(Utc::now);
         let last_close = rows_chrono
             .last()
             .and_then(|r| r.close.to_f64())
@@ -634,12 +653,6 @@ async fn run_engines_for_symbol(
 }
 
 pub async fn engine_analysis_loop(pool: PgPool, confluence: Arc<dyn ConfluencePersist>) {
-    let secs: u64 = std::env::var("QTSS_ENGINE_TICK_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(120)
-        .max(15);
-
     let bar_limit: i64 = std::env::var("QTSS_ENGINE_BARS_LIMIT")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -650,6 +663,15 @@ pub async fn engine_analysis_loop(pool: PgPool, confluence: Arc<dyn ConfluencePe
 
     loop {
         run_engines_for_symbol(&pool, bar_limit, &params, &confluence).await;
-        tokio::time::sleep(Duration::from_secs(secs)).await;
+        let sleep_secs = resolve_worker_tick_secs(
+            &pool,
+            "worker",
+            "engine_analysis_tick_secs",
+            "QTSS_ENGINE_TICK_SECS",
+            120,
+            15,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
     }
 }

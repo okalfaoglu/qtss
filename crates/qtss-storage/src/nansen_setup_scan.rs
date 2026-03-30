@@ -74,7 +74,10 @@ pub struct NansenSetupRowInsert {
     pub raw_metrics: JsonValue,
 }
 
-pub async fn insert_nansen_setup_run(pool: &PgPool, row: &NansenSetupRunInsert) -> Result<Uuid, StorageError> {
+pub async fn insert_nansen_setup_run(
+    pool: &PgPool,
+    row: &NansenSetupRunInsert,
+) -> Result<Uuid, StorageError> {
     let id = sqlx::query_scalar::<_, Uuid>(
         r#"INSERT INTO nansen_setup_runs (
                request_json, source, candidate_count, meta_json, error
@@ -91,7 +94,11 @@ pub async fn insert_nansen_setup_run(pool: &PgPool, row: &NansenSetupRunInsert) 
     Ok(id)
 }
 
-pub async fn insert_nansen_setup_row(pool: &PgPool, run_id: Uuid, row: &NansenSetupRowInsert) -> Result<(), StorageError> {
+pub async fn insert_nansen_setup_row(
+    pool: &PgPool,
+    run_id: Uuid,
+    row: &NansenSetupRowInsert,
+) -> Result<(), StorageError> {
     sqlx::query(
         r#"INSERT INTO nansen_setup_rows (
                run_id, rank, chain, token_address, token_symbol, direction,

@@ -7,7 +7,7 @@ pub mod locale;
 pub mod types;
 
 pub use config::NotifyConfig;
-pub use locale::resolve_bilingual;
 pub use dispatch::NotificationDispatcher;
 pub use error::{NotifyError, NotifyResult};
+pub use locale::resolve_bilingual;
 pub use types::{DeliveryReceipt, Notification, NotificationChannel};

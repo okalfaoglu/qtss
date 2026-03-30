@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { fetchBinanceKlinesAsChartRows } from "./api/binanceKlines";
 import {
@@ -254,35 +255,38 @@ function formatConfluenceExtras(p: Record<string, unknown>): string {
   return parts.length ? ` · ${parts.join(" · ")}` : "";
 }
 
-function channelSixRejectTr(reject: ChannelSixRejectJson | undefined): string {
-  if (!reject) return "reject alanı yok (eski API?)";
+function channelSixRejectMessage(t: TFunction, reject: ChannelSixRejectJson | undefined): string {
+  if (!reject) return t("app.channelReject.missing");
   switch (reject.code) {
     case "insufficient_pivots":
-      return `Zigzag pivot yetersiz (${reject.have_pivots ?? "?"}/${reject.need_pivots ?? 6})`;
+      return t("app.channelReject.insufficientPivots", {
+        have: String(reject.have_pivots ?? "?"),
+        need: String(reject.need_pivots ?? 6),
+      });
     case "pivot_alternation":
-      return "Son 6 pivot alterne değil";
+      return t("app.channelReject.pivotAlternation");
     case "bar_ratio_upper":
-      return "Bar oranı (üç tepe) limit dışı";
+      return t("app.channelReject.barRatioUpper");
     case "bar_ratio_lower":
-      return "Bar oranı (üç dip) limit dışı";
+      return t("app.channelReject.barRatioLower");
     case "inspect_upper":
-      return "Üst sınır inspect geçmedi (Pine: score/total < 0.2)";
+      return t("app.channelReject.inspectUpper");
     case "inspect_lower":
-      return "Alt sınır inspect geçmedi";
+      return t("app.channelReject.inspectLower");
     case "pattern_not_allowed":
-      return "Pattern id filtreye takıldı (allowed_pattern_ids)";
+      return t("app.channelReject.patternNotAllowed");
     case "overlap_ignored":
-      return "Overlapping formasyon nedeniyle yok sayıldı (avoid_overlap)";
+      return t("app.channelReject.overlapIgnored");
     case "duplicate_pivot_window":
-      return "Aynı 5 pivot penceresi tekrar ettiği için yok sayıldı";
+      return t("app.channelReject.duplicatePivotWindow");
     case "last_pivot_direction":
-      return "Son pivot yön filtresi uyuşmadı (allowed_last_pivot_directions)";
+      return t("app.channelReject.lastPivotDirection");
     case "size_filter":
-      return "Boyut filtresi (SizeFilters.checkSize) geçmedi";
+      return t("app.channelReject.sizeFilter");
     case "ratio_diff":
-      return "Eğim farkı (getRatioDiff / ratioDiff) eşiği aşıldı";
+      return t("app.channelReject.ratioDiff");
     case "entry_not_in_channel":
-      return "Son kapanış kanal bandı dışında (ignoreIfEntryCrossed)";
+      return t("app.channelReject.entryNotInChannel");
     default:
       return reject.code;
   }
@@ -432,8 +436,8 @@ export default function App() {
         if (!scanWindow.length) {
           setChannelScanError(
             acpConfig.scanning.repaint
-              ? "ACP taraması için yeterli mum yok."
-              : "ACP taraması (repaint kapalı): en az iki kapanmış mum gerekir.",
+              ? t("app.channelScan.errorInsufficientRepaint")
+              : t("app.channelScan.errorInsufficientNoRepaint"),
           );
           setLastChannelScan(null);
           setChannelScanJson("");
@@ -450,10 +454,15 @@ export default function App() {
           const id = res.outcome.scan.pattern_type_id;
           const name = res.pattern_name ?? `id ${id}`;
           const sk = res.outcome.pivot_tail_skip ?? 0;
-          const skipNote = sk > 0 ? ` · pivot_skip ${sk}` : "";
+          const skipNote = sk > 0 ? t("app.channelScan.segmentPivotSkip", { count: sk }) : "";
           const lvl = res.outcome.zigzag_level ?? 0;
-          const lvlNote = lvl > 0 ? ` · level ${lvl}` : "";
-          const zzNote = res.used_zigzag ? ` · zg ${res.used_zigzag.length}/${res.used_zigzag.depth}` : "";
+          const lvlNote = lvl > 0 ? t("app.channelScan.segmentLevel", { level: lvl }) : "";
+          const zzNote = res.used_zigzag
+            ? t("app.channelScan.segmentZg", {
+                len: res.used_zigzag.length,
+                depth: res.used_zigzag.depth,
+              })
+            : "";
           const nMatch = res.pattern_matches?.length ?? 1;
           const multiNames =
             nMatch > 1
@@ -463,19 +472,41 @@ export default function App() {
                   .join(" · ")
               : "";
           const multiTail = nMatch > 5 ? "…" : "";
-          const multi = nMatch > 1 ? ` · ${nMatch} formasyon (${multiNames}${multiTail})` : "";
+          const multi =
+            nMatch > 1
+              ? t("app.channelScan.segmentMultiFormations", {
+                  count: nMatch,
+                  names: `${multiNames}${multiTail}`,
+                })
+              : "";
           const hoverNames =
             res.pattern_matches?.map((m) => m.pattern_name ?? `id ${m.outcome.scan.pattern_type_id}`).join(" · ") ??
             name;
-          const repaintNote = acpConfig.scanning.repaint ? "" : " · kapanmış mum";
-          setChannelScanHoverTitle(`Formasyonlar: ${hoverNames}`);
+          const closedBarSuffix = acpConfig.scanning.repaint ? "" : t("app.channelScan.closedBarSuffix");
+          setChannelScanHoverTitle(t("app.channelScan.hoverFormations", { names: hoverNames }));
           setChannelScanSummary(
-            `${name} · pick ${res.outcome.scan.pick_upper}/${res.outcome.scan.pick_lower} · zz ${res.outcome.zigzag_pivot_count} pivot${skipNote}${lvlNote}${zzNote}${multi}${repaintNote}`,
+            t("app.channelScan.summaryMatch", {
+              name,
+              pickUpper: res.outcome.scan.pick_upper,
+              pickLower: res.outcome.scan.pick_lower,
+              pivots: res.outcome.zigzag_pivot_count,
+              skipNote,
+              lvlNote,
+              zzNote,
+              multi,
+              closedNote: closedBarSuffix,
+            }),
           );
         } else {
           setChannelScanHoverTitle("");
+          const closedBarSuffix = acpConfig.scanning.repaint ? "" : t("app.channelScan.closedBarSuffix");
           setChannelScanSummary(
-            `Eşleşme yok · ${channelSixRejectTr(res.reject)} · ${res.bar_count} mum · ${res.zigzag_pivot_count} zz pivot${acpConfig.scanning.repaint ? "" : " · kapanmış mum"}`,
+            t("app.channelScan.noMatchLine", {
+              reason: channelSixRejectMessage(t, res.reject),
+              bars: res.bar_count,
+              pivots: res.zigzag_pivot_count,
+              closedNote: closedBarSuffix,
+            }),
           );
         }
       } catch (e) {
@@ -487,7 +518,7 @@ export default function App() {
         setChannelScanLoading(false);
       }
     },
-    [token, acpConfig, theme],
+    [t, i18n.language, token, acpConfig, theme],
   );
 
   const runChannelSixScan = useCallback(() => {
@@ -1149,9 +1180,9 @@ export default function App() {
 
   const onClearDrawings = useCallback(() => {
     setClearDrawNonce((n) => n + 1);
-    setToolNote("Çizimler temizlendi.");
+    setToolNote(t("app.drawings.cleared"));
     window.setTimeout(() => setToolNote(""), 4000);
-  }, []);
+  }, [t]);
 
   const refreshEnginePanel = useCallback(async () => {
     if (!token) return;
@@ -1201,7 +1232,7 @@ export default function App() {
     if (!token) return;
     const sym = barSymbol.trim().toUpperCase();
     if (!sym) {
-      setCommissionAccountErr("Üst çubukta sembol gerekli.");
+      setCommissionAccountErr(t("app.commission.symbolRequired"));
       return;
     }
     setCommissionAccountBusy(true);
@@ -1218,7 +1249,7 @@ export default function App() {
     } finally {
       setCommissionAccountBusy(false);
     }
-  }, [token, barSymbol, barSegment]);
+  }, [token, barSymbol, barSegment, t]);
 
   const refreshMarketContextPanel = useCallback(async () => {
     if (!token) return;
@@ -1414,7 +1445,7 @@ export default function App() {
         }
       } else {
         if (seq !== chartLoadSeqRef.current) return;
-        setBarsError("OHLC kaynağı Veritabanı seçili — giriş yapın veya kaynağı Otomatik / Borsa yapın.");
+        setBarsError(t("app.bars.databaseRequiresAuth"));
       }
     } catch (e) {
       if (seq !== chartLoadSeqRef.current) return;
@@ -1526,7 +1557,9 @@ export default function App() {
         segment: barSegment.trim(),
         limit: lim,
       });
-      setBackfillNote(`Backfill tamam: ${res.upserted} mum yazıldı (${res.source ?? "rest"}).`);
+      setBackfillNote(
+        t("app.backfill.done", { upserted: res.upserted, source: res.source ?? "rest" }),
+      );
       await loadChartFromToolbar();
     } catch (e) {
       setBarsError(String(e));
@@ -1569,9 +1602,7 @@ export default function App() {
         const cfg = await fetchConfigList(token);
         setConfigPreview(JSON.stringify(cfg, null, 2));
       } else {
-        setConfigPreview(
-          "(Tam `GET /api/v1/config` listesi yalnızca admin — Elliott/ACP sunucu ayarları aşağıda yenilenir.)",
-        );
+        setConfigPreview(t("app.config.adminOnlyPreview"));
       }
       await refreshElliottConfig();
       await refreshAcpConfig();
@@ -1580,7 +1611,7 @@ export default function App() {
     } finally {
       setConfigLoading(false);
     }
-  }, [token, authSession, refreshElliottConfig, refreshAcpConfig]);
+  }, [t, token, authSession, refreshElliottConfig, refreshAcpConfig]);
 
   useEffect(() => {
     if (token) void refreshAcpConfig();
@@ -1598,7 +1629,7 @@ export default function App() {
       await upsertAppConfig(token, {
         key: ACP_CHART_PATTERNS_CONFIG_KEY,
         value: acpConfig,
-        description: "ACP [Trendoscope®] grafik formasyon taraması (web panel)",
+        description: t("app.acp.dbDescription"),
       });
       await refreshAcpConfig();
     } catch (e) {
@@ -1616,7 +1647,7 @@ export default function App() {
       await upsertAppConfig(token, {
         key: ELLIOTT_WAVE_CONFIG_KEY,
         value: elliottConfig,
-        description: "Elliott Wave panel (web) — analiz, formasyonlar ve parametreler",
+        description: t("app.elliottWave.dbDescription"),
       });
       await refreshElliottConfig();
     } catch (e) {
@@ -1631,9 +1662,7 @@ export default function App() {
     setConfigPreview("");
     const env = readEnvHint();
     if (!env.clientId || !env.clientSecret || !env.email || !env.password) {
-      setError(
-        "web/.env eksik veya boş. web/.env.example dosyasını .env olarak kopyalayın, CHANGEME alanlarını seed çıktısı ve admin parolası ile doldurun; dev sunucuyu yeniden başlatın.",
-      );
+      setError(t("app.dev.missingWebEnv"));
       return;
     }
     try {
@@ -1682,7 +1711,7 @@ export default function App() {
         <button
           type="button"
           className="tv-hamburger"
-          aria-label="Menü — OAuth, barlar, sağlık"
+          aria-label={t("app.chartToolbar.menuAria")}
           aria-expanded={drawerOpen}
           aria-controls="qtss-drawer"
           onClick={() => setDrawerOpen(true)}
@@ -1691,10 +1720,10 @@ export default function App() {
           <span className="tv-hamburger__bar" />
           <span className="tv-hamburger__bar" />
         </button>
-        <div className="tv-topstrip__controls" aria-label="Sembol ve zaman dilimi">
+        <div className="tv-topstrip__controls" aria-label={t("app.chartToolbar.symbolStripAria")}>
           <input
             className="tv-topstrip__input mono"
-            aria-label="Sembol"
+            aria-label={t("app.chartToolbar.symbolAria")}
             value={barSymbol}
             onChange={(e) => setBarSymbol(e.target.value.toUpperCase())}
             placeholder="BTCUSDT"
@@ -1702,7 +1731,7 @@ export default function App() {
           />
           <select
             className="tv-topstrip__select"
-            aria-label="Zaman dilimi"
+            aria-label={t("app.chartToolbar.intervalAria")}
             value={barInterval}
             onChange={(e) => setBarInterval(e.target.value)}
           >
@@ -1714,35 +1743,40 @@ export default function App() {
           </select>
           <select
             className="tv-topstrip__select"
-            aria-label="OHLC veri kaynağı"
+            aria-label={t("app.chartToolbar.ohlcSourceAria")}
             value={chartOhlcMode}
-            title="Otomatik: giriş + binance/spot → canlı REST; diğer borsa → DB. Borsa: her zaman Binance REST. DB: market_bars (JWT)."
+            title={t("app.chartToolbar.ohlcSourceTitle")}
             onChange={(e) => {
               const v = e.target.value as ChartOhlcMode;
               setChartOhlcMode(v);
               persistChartOhlcMode(v);
             }}
           >
-            <option value="auto">OHLC otomatik</option>
-            <option value="exchange">OHLC borsa</option>
-            <option value="database">OHLC DB</option>
+            <option value="auto">{t("app.chartToolbar.ohlcAuto")}</option>
+            <option value="exchange">{t("app.chartToolbar.ohlcExchange")}</option>
+            <option value="database">{t("app.chartToolbar.ohlcDatabase")}</option>
           </select>
         </div>
         <div className="tv-topstrip__symbol">
           <span className="muted">
             {ohlcFromBinance
-              ? "Binance REST (canlı)"
+              ? t("app.chartToolbar.sourceBinanceLive")
               : token
-                ? `${barExchange} / ${barSegment} · DB`
-                : "OHLC DB — giriş gerekir"}
+                ? t("app.chartToolbar.sourceDbLine", {
+                    exchange: barExchange,
+                    segment: barSegment || "spot",
+                  })
+                : t("app.chartToolbar.sourceDbNeedLogin")}
           </span>
-          {bars && bars.length > 0 ? <span className="muted">{bars.length} mum</span> : null}
+          {bars && bars.length > 0 ? (
+            <span className="muted">{t("app.chartToolbar.barCount", { count: bars.length })}</span>
+          ) : null}
           {channelScanSummary ? (
             <span
               className="tv-topstrip__scan"
-              title={channelScanHoverTitle || "Kanal taraması — çekmede tam JSON"}
+              title={channelScanHoverTitle || t("app.channelScan.defaultHoverTitle")}
             >
-              {channelScanLoading ? "Taranıyor…" : channelScanSummary}
+              {channelScanLoading ? t("app.channelScan.scanning") : channelScanSummary}
             </span>
           ) : null}
           {barsError ? <span className="err tv-topstrip__err" title={barsError}>{barsError.slice(0, 72)}{barsError.length > 72 ? "…" : ""}</span> : null}
@@ -1750,7 +1784,7 @@ export default function App() {
         </div>
         <div className="tv-topstrip__actions">
           <button type="button" className="theme-toggle" onClick={toggleTheme}>
-            {theme === "dark" ? "Açık" : "Koyu"}
+            {theme === "dark" ? t("app.chartToolbar.themeLight") : t("app.chartToolbar.themeDark")}
           </button>
         </div>
       </header>
@@ -1798,10 +1832,21 @@ export default function App() {
       {drawerOpen ? (
         <>
           <div className="tv-drawer-scrim" role="presentation" onClick={() => setDrawerOpen(false)} />
-          <aside id="qtss-drawer" className="tv-drawer" aria-modal="true" role="dialog" aria-label="QTSS panel">
+          <aside
+            id="qtss-drawer"
+            className="tv-drawer"
+            aria-modal="true"
+            role="dialog"
+            aria-label={t("app.drawerPanel.dialogAria")}
+          >
             <div className="tv-drawer__head">
               <span>QTSS</span>
-              <button type="button" className="tv-icon-btn" onClick={() => setDrawerOpen(false)} aria-label="Kapat">
+              <button
+                type="button"
+                className="tv-icon-btn"
+                onClick={() => setDrawerOpen(false)}
+                aria-label={t("app.drawerPanel.closeAria")}
+              >
                 ×
               </button>
             </div>
@@ -1811,11 +1856,11 @@ export default function App() {
                   className="tv-topstrip__input"
                   value={drawerSearch}
                   onChange={(e) => setDrawerSearch(e.target.value)}
-                  placeholder="Ayar ara (örn. zigzag, bağlam, confluence, paper, komisyon)"
-                  aria-label="Ayar arama"
+                  placeholder={t("app.drawerPanel.searchPlaceholder")}
+                  aria-label={t("app.drawerPanel.searchInputAria")}
                 />
               </div>
-              <div className="tv-settings__tabs" role="tablist" aria-label="Ayar sekmeleri">
+              <div className="tv-settings__tabs" role="tablist" aria-label={t("app.drawerPanel.tablistAria")}>
                 <button
                   type="button"
                   role="tab"
@@ -2514,20 +2559,16 @@ export default function App() {
                   ) : null}
                   {token && matchesSetting("kanal", "channel", "scan", "pattern") ? (
                     <div className="card">
-                      <p className="tv-drawer__section-head">Kanal Taraması</p>
+                      <p className="tv-drawer__section-head">{t("app.channelScan.drawerSectionTitle")}</p>
                       <p className="muted" style={{ fontSize: "0.8rem", marginBottom: "0.5rem" }}>
-                        ACP ayarlarında <strong>Timeframe değişince otomatik kanal taraması</strong> açıkken: grafik
-                        mumları her yüklendiğinde (sembol / kaynak / limit yenileme) ve üst şerit interval
-                        değiştiğinde tarama çalışır; seçeneği sonradan açarsanız bir kez daha tetiklenir.
+                        {t("app.channelScan.drawerIntro")}
                       </p>
-                      {channelScanLoading ? <p className="muted">Taranıyor…</p> : null}
+                      {channelScanLoading ? <p className="muted">{t("app.channelScan.scanning")}</p> : null}
                       {channelScanError ? <p className="err">{channelScanError}</p> : null}
                       {lastChannelScan?.matched ? <ChannelScanMatchesTable res={lastChannelScan} /> : null}
                       {channelScanSummary ? (
                         <p className="muted" style={{ fontSize: "0.75rem", marginTop: "0.5rem" }}>
-                          Özet: üst şerit. Geçmiş pencereler için ACP ayarlarında{" "}
-                          <strong>Max patterns</strong> ve <strong>pivot_tail_skip_max</strong> artırın; veri derinliği için{" "}
-                          <strong>Calculated bars</strong> ve grafik <strong>limit</strong>.
+                          {t("app.channelScan.drawerFootnote")}
                         </p>
                       ) : null}
                     </div>
@@ -2539,40 +2580,16 @@ export default function App() {
                 <>
                   {matchesSetting("motor", "engine", "snapshot", "trading", "range", "sembol", "worker") ? (
                     <div className="card">
-                      <p className="tv-drawer__section-head">Arka plan motor — DB snapshot</p>
+                      <p className="tv-drawer__section-head">{t("app.engineDrawer.sectionTitle")}</p>
                       <p className="muted" style={{ fontSize: "0.78rem", marginBottom: "0.5rem" }}>
-                        <code>qtss-worker</code> tablodaki <code>engine_symbols</code> satırlarını okur, mumları yalnız{" "}
-                        <strong>
-                          <code>market_bars</code>
-                        </strong>{" "}
-                        tablosundan çeker; <code>trading_range</code> / <code>signal_dashboard</code> sonuçlarını{" "}
-                        <code>analysis_snapshots</code>’a yazar. Bu panel API’den okur (otomatik ~60 sn); snapshot’ı üreten
-                        worker ayrı süreçtir — tick süresi{" "}
-                        <code>QTSS_ENGINE_TICK_SECS</code> (varsayılan 120 sn).
+                        {t("app.engineDrawer.intro")}
                       </p>
                       <ul className="muted" style={{ fontSize: "0.72rem", margin: "0 0 0.55rem 1rem", lineHeight: 1.45 }}>
-                        <li>
-                          <strong>Veri:</strong> İlgili exchange/segment/symbol/interval için <code>market_bars</code>{" "}
-                          dolu olmalı (Ayarlar → Market Bars backfill veya worker’da <code>DATABASE_URL</code> +{" "}
-                          <code>QTSS_KLINE_SYMBOL</code> ile canlı mum yazımı).
-                        </li>
-                        <li>
-                          <strong>Worker:</strong> <code>qtss-worker</code> çalışmalı ve <code>DATABASE_URL</code> tanımlı
-                          olmalı; aksi halde snapshot ve range olayı oluşmaz.
-                        </li>
-                        <li>
-                          <strong>Grafik eşlemesi:</strong> Üst çubuktaki sembol ve interval, <code>engine_symbols</code>{" "}
-                          satırıyla birebir aynı olmalı (ör. <code>15m</code> ile <code>4h</code> farklı hedeftir).
-                        </li>
-                        <li>
-                          <strong>Paper (F4):</strong> Dry emir (<code>orders/dry/place</code>) yoksa bakiye/dolum satırı
-                          görünmez — motor verisiyle karıştırma.
-                        </li>
-                        <li>
-                          <strong>Confluence (F7):</strong> Worker <code>signal_dashboard</code> sonrası{" "}
-                          <code>engine_kind = confluence</code> yazar; ham HTTP/Nansen birleşimi{" "}
-                          <code>data_snapshots</code> içinde. <code>QTSS_CONFLUENCE_ENGINE</code> ile kapatılabilir.
-                        </li>
+                        <li>{t("app.engineDrawer.liData")}</li>
+                        <li>{t("app.engineDrawer.liWorker")}</li>
+                        <li>{t("app.engineDrawer.liChartMapping")}</li>
+                        <li>{t("app.engineDrawer.liPaper")}</li>
+                        <li>{t("app.engineDrawer.liConfluence")}</li>
                       </ul>
                       <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
                         <input
@@ -2580,7 +2597,7 @@ export default function App() {
                           checked={showDbTradingRangeLayer}
                           onChange={(e) => setShowDbTradingRangeLayer(e.target.checked)}
                         />
-                        <span>Aktif grafik sembolü ile eşleşen DB Trading Range (üst / alt / orta çizgi)</span>
+                        <span>{t("app.engineDrawer.chkTradingRange")}</span>
                       </label>
                       <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
                         <input
@@ -2588,7 +2605,7 @@ export default function App() {
                           checked={showDbSweepMarkers}
                           onChange={(e) => setShowDbSweepMarkers(e.target.checked)}
                         />
-                        <span>Son mumda DB sweep işareti (L sweep / S sweep)</span>
+                        <span>{t("app.engineDrawer.chkSweepMarkers")}</span>
                       </label>
                       <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
                         <input
@@ -2596,9 +2613,7 @@ export default function App() {
                           checked={showDbRangeSignalMarkers}
                           onChange={(e) => setShowDbRangeSignalMarkers(e.target.checked)}
                         />
-                        <span>
-                          DB range sinyal olayları (L/S giriş-çıkış — <code>durum</code> kenarı, F2)
-                        </span>
+                        <span>{t("app.engineDrawer.chkRangeSignals")}</span>
                       </label>
                       <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
                         <input
@@ -2606,9 +2621,7 @@ export default function App() {
                           checked={showDbOpenPositionLine}
                           onChange={(e) => setShowDbOpenPositionLine(e.target.checked)}
                         />
-                        <span>
-                          DB’den türetilen açık pozisyon giriş çizgisi (<code>range_signal_events</code> zinciri)
-                        </span>
+                        <span>{t("app.engineDrawer.chkOpenPositionLine")}</span>
                       </label>
                       <button
                         type="button"
@@ -2624,18 +2637,19 @@ export default function App() {
                           }
                         }}
                       >
-                        {engineListRefreshing ? "Yenileniyor…" : "Snapshot’ları şimdi yenile"}
+                        {engineListRefreshing
+                          ? t("app.engineDrawer.refreshBusy")
+                          : t("app.engineDrawer.refreshNow")}
                       </button>
                       {enginePanelErr ? <p className="err">{enginePanelErr}</p> : null}
                       {token ? (
                         <>
                           <p className="muted" style={{ marginTop: "0.45rem", fontSize: "0.8rem" }}>
-                            Hedef ekle — exchange/segment varsayılan: üst çubuk (binance / spot veya futures).
+                            {t("app.engineDrawer.addTargetLead")}
                             {rbacIsOps ? null : (
                               <span>
                                 {" "}
-                                <strong>Yazma</strong> (ekle / politika / motor aç-kapa) yalnızca{" "}
-                                <code>trader</code> veya <code>admin</code>.
+                                {t("app.engineDrawer.addTargetRbacFull")}
                               </span>
                             )}
                           </p>
@@ -2689,7 +2703,7 @@ export default function App() {
                             </>
                           ) : null}
                           <p className="tv-drawer__section-head" style={{ marginTop: "0.75rem" }}>
-                            Kayıtlı hedefler ({engineSymbols.length})
+                            {t("app.engineDrawer.registeredTargets", { count: engineSymbols.length })}
                           </p>
                           <ul className="muted mono" style={{ fontSize: "0.72rem", maxHeight: "8rem", overflow: "auto", listStyle: "none", paddingLeft: 0 }}>
                             {engineSymbols.map((s) => (
@@ -2707,7 +2721,7 @@ export default function App() {
                                       className="mono"
                                       style={{ fontSize: "0.65rem", maxWidth: "11rem" }}
                                       value={(s.signal_direction_mode ?? "auto_segment").toLowerCase()}
-                                      title="Range sinyali yön politikası — spot’ta varsayılan tek yön (long), vadelide çift yön"
+                                      title={t("app.engineDrawer.signalModeTitle")}
                                       onChange={async (e) => {
                                         if (!token) return;
                                         try {
@@ -2720,10 +2734,10 @@ export default function App() {
                                         }
                                       }}
                                     >
-                                      <option value="auto_segment">auto (segment)</option>
-                                      <option value="long_only">tek yön (long)</option>
-                                      <option value="both">çift yön</option>
-                                      <option value="short_only">yalnız short</option>
+                                      <option value="auto_segment">{t("app.engineDrawer.optAutoSegment")}</option>
+                                      <option value="long_only">{t("app.engineDrawer.optLongOnly")}</option>
+                                      <option value="both">{t("app.engineDrawer.optBoth")}</option>
+                                      <option value="short_only">{t("app.engineDrawer.optShortOnly")}</option>
                                     </select>
                                     <button
                                       type="button"
@@ -2739,7 +2753,9 @@ export default function App() {
                                         }
                                       }}
                                     >
-                                      {s.enabled ? "Motor kapat" : "Motor aç"}
+                                      {s.enabled
+                                        ? t("app.engineDrawer.toggleDisable")
+                                        : t("app.engineDrawer.toggleEnable")}
                                     </button>
                                   </>
                                 ) : null}
@@ -2761,11 +2777,10 @@ export default function App() {
                           dbSignalDashboardSnapshot ? (
                             <div className="card" style={{ marginTop: "0.65rem", padding: "0.55rem" }}>
                               <p className="tv-drawer__section-head" style={{ marginBottom: "0.35rem" }}>
-                                Sinyal paneli (DB — aktif grafik)
+                                {t("app.signalDashboard.sectionTitle")}
                               </p>
                               <p className="muted" style={{ fontSize: "0.66rem", marginBottom: "0.35rem" }}>
-                                Öncelik: <code>signal_dashboard_v2</code> (İngilizce wire, <code>schema_version</code> 3); yoksa
-                                Türkçe v1 alanları.
+                                {t("app.signalDashboard.priorityLine")}
                               </p>
                               {dbSignalDashboardSnapshot.error ? (
                                 <p className="err" style={{ fontSize: "0.75rem" }}>
@@ -2775,29 +2790,34 @@ export default function App() {
                               {(() => {
                                 const raw = dbSignalDashboardSnapshot.payload;
                                 if (!raw || typeof raw !== "object") {
-                                  return <p className="muted" style={{ fontSize: "0.75rem" }}>Payload yok</p>;
+                                  return (
+                                    <p className="muted" style={{ fontSize: "0.75rem" }}>
+                                      {t("app.signalDashboard.payloadEmpty")}
+                                    </p>
+                                  );
                                 }
                                 const ins = raw as Record<string, unknown>;
                                 if (ins.reason === "insufficient_bars") {
                                   return (
                                     <p className="muted" style={{ fontSize: "0.75rem" }}>
-                                      Yetersiz mum — worker ve market_bars bekleyin.
+                                      {t("app.signalDashboard.insufficientBars")}
                                     </p>
                                   );
                                 }
                                 const p = raw as SignalDashboardPayload;
                                 const v2 = parseSignalDashboardV2(ins.signal_dashboard_v2);
-                                const row = (label: string, v: string) => (
-                                  <tr key={label}>
+                                const rk = (key: string, v: string) => (
+                                  <tr key={key}>
                                     <td className="muted" style={{ padding: "0.12rem 0.35rem 0.12rem 0", verticalAlign: "top" }}>
-                                      {label}
+                                      {t(`app.signalDashboard.row.${key}`)}
                                     </td>
                                     <td className="mono" style={{ padding: "0.12rem 0", wordBreak: "break-all" }}>
                                       {v}
                                     </td>
                                   </tr>
                                 );
-                                const yn = (b: boolean | undefined) => (b ? "TESPİT EDİLDİ" : "YOK");
+                                const yn = (b: boolean | undefined) =>
+                                  b ? t("app.signalDashboard.ynYes") : t("app.signalDashboard.ynNo");
                                 const posStr =
                                   v2?.position_strength_10 != null
                                     ? `${v2.position_strength_10} / 10`
@@ -2805,7 +2825,9 @@ export default function App() {
                                       ? `${p.pozisyon_gucu_10} / 10`
                                       : "—";
                                 const sysStr =
-                                  pickDashboardBool(v2?.system_active, p.sistem_aktif) === true ? "AKTİF" : "—";
+                                  pickDashboardBool(v2?.system_active, p.sistem_aktif) === true
+                                    ? t("app.signalDashboard.systemActive")
+                                    : "—";
                                 const wireRow = (key: string, val: unknown) => {
                                   if (val === undefined || val === null) return null;
                                   const s = typeof val === "boolean" ? (val ? "true" : "false") : String(val);
@@ -2827,51 +2849,55 @@ export default function App() {
                                   <>
                                   <table style={{ width: "100%", fontSize: "0.74rem", borderCollapse: "collapse" }}>
                                     <tbody>
-                                      {row("Durum", pickDashboardStr(v2?.status, p.durum))}
-                                      {row("Durum (ham model)", pickDashboardStr(v2?.status_model_raw, p.durum_model_raw))}
-                                      {row("Yön politikası (DB)", p.signal_direction_mode ?? "—")}
-                                      {row("Yön (etkin)", p.signal_direction_effective ?? "—")}
-                                      {row("Yerel trend", pickDashboardStr(v2?.local_trend, p.yerel_trend))}
-                                      {row("Global trend", pickDashboardStr(v2?.global_trend, p.global_trend))}
-                                      {row("Piyasa modu", pickDashboardStr(v2?.market_mode, p.piyasa_modu))}
-                                      {row("Giriş modu", pickDashboardStr(v2?.entry_mode, p.giris_modu))}
-                                      {row(
-                                        "Oynaklık %",
+                                      {rk("status", pickDashboardStr(v2?.status, p.durum))}
+                                      {rk("statusModelRaw", pickDashboardStr(v2?.status_model_raw, p.durum_model_raw))}
+                                      {rk("directionPolicyDb", p.signal_direction_mode ?? "—")}
+                                      {rk("directionEffective", p.signal_direction_effective ?? "—")}
+                                      {rk("localTrend", pickDashboardStr(v2?.local_trend, p.yerel_trend))}
+                                      {rk("globalTrend", pickDashboardStr(v2?.global_trend, p.global_trend))}
+                                      {rk("marketMode", pickDashboardStr(v2?.market_mode, p.piyasa_modu))}
+                                      {rk("entryMode", pickDashboardStr(v2?.entry_mode, p.giris_modu))}
+                                      {rk(
+                                        "volatilityPct",
                                         v2?.volatility_pct != null && Number.isFinite(v2.volatility_pct)
                                           ? v2.volatility_pct.toFixed(2)
                                           : p.oynaklik_pct != null
                                             ? p.oynaklik_pct.toFixed(2)
                                             : "—",
                                       )}
-                                      {row("Momentum 1", pickDashboardStr(v2?.momentum_rsi, p.momentum_1))}
-                                      {row("Momentum 2", pickDashboardStr(v2?.momentum_roc, p.momentum_2))}
-                                      {row("Giriş (gerçek)", pickDashboardNum(v2?.entry_price ?? undefined, p.giris_gercek ?? undefined))}
-                                      {row("Stop (ilk)", pickDashboardNum(v2?.stop_initial ?? undefined, p.stop_ilk ?? undefined))}
-                                      {row("Kar al (ilk)", pickDashboardNum(v2?.take_profit_initial ?? undefined, p.kar_al_ilk ?? undefined))}
-                                      {row(
-                                        "Stop/Trail (aktif)",
+                                      {rk("momentum1", pickDashboardStr(v2?.momentum_rsi, p.momentum_1))}
+                                      {rk("momentum2", pickDashboardStr(v2?.momentum_roc, p.momentum_2))}
+                                      {rk("entryActual", pickDashboardNum(v2?.entry_price ?? undefined, p.giris_gercek ?? undefined))}
+                                      {rk("stopInitial", pickDashboardNum(v2?.stop_initial ?? undefined, p.stop_ilk ?? undefined))}
+                                      {rk(
+                                        "takeProfitInitial",
+                                        pickDashboardNum(v2?.take_profit_initial ?? undefined, p.kar_al_ilk ?? undefined),
+                                      )}
+                                      {rk(
+                                        "stopTrailActive",
                                         pickDashboardNum(v2?.stop_trail ?? undefined, p.stop_trail_aktif ?? undefined),
                                       )}
-                                      {row(
-                                        "Kar al (dyn)",
+                                      {rk(
+                                        "takeProfitDynamic",
                                         pickDashboardNum(v2?.take_profit_dynamic ?? undefined, p.kar_al_dinamik ?? undefined),
                                       )}
-                                      {row("Sinyal kaynağı", pickDashboardStr(v2?.signal_source, p.sinyal_kaynagi))}
-                                      {row("Trend tükenmesi", yn(pickDashboardBool(v2?.trend_exhaustion, p.trend_tukenmesi)))}
-                                      {row("Yapı kayması", yn(pickDashboardBool(v2?.structure_shift, p.yapi_kaymasi)))}
-                                      {row("Pozisyon gücü", posStr)}
-                                      {row("Sistem", sysStr)}
-                                      {row("Range üst", formatDashboardNumber(p.range_high ?? undefined))}
-                                      {row("Range alt", formatDashboardNumber(p.range_low ?? undefined))}
-                                      {row("Range orta", formatDashboardNumber(p.range_mid ?? undefined))}
-                                      {row("ATR", formatDashboardNumber(p.atr ?? undefined))}
-                                      {row("Son bar", p.last_bar_open_time ?? "—")}
+                                      {rk("signalSource", pickDashboardStr(v2?.signal_source, p.sinyal_kaynagi))}
+                                      {rk("trendExhaustion", yn(pickDashboardBool(v2?.trend_exhaustion, p.trend_tukenmesi)))}
+                                      {rk("structureShift", yn(pickDashboardBool(v2?.structure_shift, p.yapi_kaymasi)))}
+                                      {rk("positionStrength", posStr)}
+                                      {rk("system", sysStr)}
+                                      {rk("rangeHigh", formatDashboardNumber(p.range_high ?? undefined))}
+                                      {rk("rangeLow", formatDashboardNumber(p.range_low ?? undefined))}
+                                      {rk("rangeMid", formatDashboardNumber(p.range_mid ?? undefined))}
+                                      {rk("atr", formatDashboardNumber(p.atr ?? undefined))}
+                                      {rk("lastBar", p.last_bar_open_time ?? "—")}
                                     </tbody>
                                   </table>
                                   {v2 ? (
                                     <details style={{ marginTop: "0.45rem" }}>
                                       <summary className="muted" style={{ fontSize: "0.7rem", cursor: "pointer" }}>
-                                        Wire (EN) — <code>signal_dashboard_v2</code>
+                                        {t("app.signalDashboard.wireSummary")}{" "}
+                                        <code>signal_dashboard_v2</code>
                                       </summary>
                                       <table
                                         style={{ width: "100%", fontSize: "0.68rem", borderCollapse: "collapse", marginTop: "0.28rem" }}
@@ -2926,22 +2952,20 @@ export default function App() {
                           ) ? (
                             <div className="card" style={{ marginTop: "0.65rem", padding: "0.55rem" }}>
                               <p className="tv-drawer__section-head" style={{ marginBottom: "0.35rem" }}>
-                                Range / Paper özeti (F4)
+                                {t("app.paperDrawer.rangePaperHead")}
                               </p>
                               <p className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.4rem" }}>
-                                Üst çubuk:{" "}
+                                {t("app.paperDrawer.topBarLead")}{" "}
                                 <span className="mono">
                                   {barExchange.trim() || "—"}/{normalizeMarketSegment(barSegment)}/{barSymbol.trim() || "—"}/{barInterval.trim() || "—"}
                                 </span>
-                                . Canlı emirler: <code>POST /api/v1/orders/binance/place</code> — Dry:{" "}
-                                <code>POST /api/v1/orders/dry/place</code>.
+                                {t("app.paperDrawer.topBarTrail")}
                               </p>
                               <p className="tv-drawer__section-head" style={{ marginBottom: "0.3rem", marginTop: "0.45rem" }}>
-                                Komisyon özeti (F5 / SPEC §7.2)
+                                {t("app.paperDrawer.commissionHead")}
                               </p>
                               <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.35rem" }}>
-                                Varsayılan: <code>GET …/market/binance/commission-defaults</code> (motor yenilemede). Hesap:{" "}
-                                <code>…/commission-account</code> — Binance API anahtarı <code>exchange_accounts</code>.
+                                {t("app.paperDrawer.commissionIntro")}
                               </p>
                               <table
                                 style={{ width: "100%", fontSize: "0.72rem", borderCollapse: "collapse", marginBottom: "0.35rem" }}
@@ -2949,7 +2973,7 @@ export default function App() {
                                 <tbody>
                                   <tr>
                                     <td className="muted" style={{ padding: "0.1rem 0.35rem 0.1rem 0", verticalAlign: "top" }}>
-                                      Varsayılan (bps)
+                                      {t("app.paperDrawer.defaultBps")}
                                     </td>
                                     <td className="mono" style={{ padding: "0.1rem 0", wordBreak: "break-all" }}>
                                       {commissionDefaults ? (
@@ -2970,7 +2994,7 @@ export default function App() {
                                   </tr>
                                   <tr>
                                     <td className="muted" style={{ padding: "0.1rem 0.35rem 0.1rem 0", verticalAlign: "top" }}>
-                                      Hesap (kesir)
+                                      {t("app.paperDrawer.accountFraction")}
                                     </td>
                                     <td className="mono" style={{ padding: "0.1rem 0", wordBreak: "break-all" }}>
                                       {commissionAccount ? (
@@ -2997,23 +3021,25 @@ export default function App() {
                                 disabled={commissionAccountBusy}
                                 onClick={() => void loadCommissionAccount()}
                               >
-                                {commissionAccountBusy ? "Hesap komisyonu…" : "Hesap komisyonunu çek"}
+                                {commissionAccountBusy
+                                  ? t("app.commission.fetchBusy")
+                                  : t("app.commission.fetchLabel")}
                               </button>
                               <table style={{ width: "100%", fontSize: "0.72rem", borderCollapse: "collapse", marginBottom: "0.45rem" }}>
                                 <tbody>
                                   <tr>
                                     <td className="muted" style={{ padding: "0.1rem 0.35rem 0.1rem 0", verticalAlign: "top" }}>
-                                      Motor (DB olay zinciri)
+                                      {t("app.paperDrawer.motorDbChain")}
                                     </td>
                                     <td className="mono" style={{ padding: "0.1rem 0", wordBreak: "break-all" }}>
                                       {chartDerivedOpenPosition
                                         ? `${chartDerivedOpenPosition.side.toUpperCase()} @ ${chartDerivedOpenPosition.entryPrice.toFixed(4)}`
-                                        : "Açık yön yok / olay yok"}
+                                        : t("app.paperDrawer.noOpenSide")}
                                     </td>
                                   </tr>
                                   <tr>
                                     <td className="muted" style={{ padding: "0.1rem 0.35rem 0.1rem 0", verticalAlign: "top" }}>
-                                      Son range olayları (grafik)
+                                      {t("app.paperDrawer.recentRangeEvents")}
                                     </td>
                                     <td className="mono" style={{ padding: "0.1rem 0", fontSize: "0.68rem" }}>
                                       {chartRecentRangeEvents.length === 0 ? (
@@ -3034,15 +3060,17 @@ export default function App() {
                                   </tr>
                                   <tr>
                                     <td className="muted" style={{ padding: "0.1rem 0.35rem 0.1rem 0", verticalAlign: "top" }}>
-                                      Paper quote
+                                      {t("app.paperDrawer.paperQuote")}
                                     </td>
                                     <td className="mono" style={{ padding: "0.1rem 0" }}>
-                                      {paperBalance ? String(paperBalance.quote_balance) : "Henüz dolum yok (satır oluşunca görünür)"}
+                                      {paperBalance
+                                        ? String(paperBalance.quote_balance)
+                                        : t("app.paperDrawer.paperQuoteEmpty")}
                                     </td>
                                   </tr>
                                   <tr>
                                     <td className="muted" style={{ padding: "0.1rem 0.35rem 0.1rem 0", verticalAlign: "top" }}>
-                                      Paper taban
+                                      {t("app.paperDrawer.paperBase")}
                                     </td>
                                     <td className="mono" style={{ padding: "0.1rem 0", fontSize: "0.65rem", wordBreak: "break-all" }}>
                                       {paperBalance && Object.keys(paperBalance.base_positions).length > 0
@@ -3074,17 +3102,14 @@ export default function App() {
                             </div>
                           ) : null}
                           <p className="tv-drawer__section-head" style={{ marginTop: "0.75rem" }}>
-                            Snapshot özeti
+                            {t("app.engineDrawer.snapshotSummaryHead")}
                           </p>
                           <div
                             style={{ maxHeight: "10rem", overflow: "auto", fontSize: "0.72rem" }}
                             className="mono muted"
                           >
                             {engineSnapshots.length === 0 ? (
-                              <span className="err">
-                                Snapshot satırı yok — <code>qtss-worker</code> çalışmıyor veya henüz yazım olmadı.
-                                <code>market_bars</code> + <code>DATABASE_URL</code> kontrol edin.
-                              </span>
+                              <span className="err">{t("app.engineDrawer.snapshotEmpty")}</span>
                             ) : (
                               engineSnapshots.map((s) => (
                                 <div key={`${s.engine_symbol_id}-${s.engine_kind}`} style={{ marginBottom: "0.35rem" }}>
@@ -3097,17 +3122,14 @@ export default function App() {
                             )}
                           </div>
                           <p className="tv-drawer__section-head" style={{ marginTop: "0.65rem" }}>
-                            Confluence özeti
+                            {t("app.engineDrawer.confluenceSummaryHead")}
                           </p>
                           <div
                             style={{ maxHeight: "6rem", overflow: "auto", fontSize: "0.72rem" }}
                             className="mono muted"
                           >
                             {engineSnapshots.filter((s) => s.engine_kind === "confluence").length === 0 ? (
-                              <span>
-                                Henüz <code>confluence</code> satırı yok — worker veya{" "}
-                                <code>QTSS_CONFLUENCE_ENGINE=off</code> / yetersiz bar kontrol edin.
-                              </span>
+                              <span>{t("app.engineDrawer.confluenceEmpty")}</span>
                             ) : (
                               engineSnapshots
                                 .filter((s) => s.engine_kind === "confluence")

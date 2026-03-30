@@ -35,13 +35,15 @@ pub fn default_token_screener_body() -> serde_json::Value {
 
 pub fn token_screener_body_from_env() -> serde_json::Value {
     match std::env::var("NANSEN_TOKEN_SCREENER_REQUEST_JSON") {
-        Ok(raw) if !raw.trim().is_empty() => match serde_json::from_str::<serde_json::Value>(&raw) {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(%e, "NANSEN_TOKEN_SCREENER_REQUEST_JSON geçersiz JSON — varsayılan gövde");
-                default_token_screener_body()
+        Ok(raw) if !raw.trim().is_empty() => {
+            match serde_json::from_str::<serde_json::Value>(&raw) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(%e, "NANSEN_TOKEN_SCREENER_REQUEST_JSON geçersiz JSON — varsayılan gövde");
+                    default_token_screener_body()
+                }
             }
-        },
+        }
         _ => default_token_screener_body(),
     }
 }

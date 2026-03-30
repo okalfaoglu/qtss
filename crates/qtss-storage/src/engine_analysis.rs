@@ -54,7 +54,9 @@ pub struct AnalysisSnapshotJoinedRow {
     pub error: Option<String>,
 }
 
-pub async fn list_enabled_engine_symbols(pool: &PgPool) -> Result<Vec<EngineSymbolRow>, StorageError> {
+pub async fn list_enabled_engine_symbols(
+    pool: &PgPool,
+) -> Result<Vec<EngineSymbolRow>, StorageError> {
     let rows = sqlx::query_as::<_, EngineSymbolRow>(
         r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode,
                   exchange_id, market_id, instrument_id, bar_interval_id, created_at, updated_at
@@ -140,7 +142,10 @@ pub async fn list_market_context_summaries(
     let lim = limit.clamp(1, 200);
     let ex = exchange.map(str::trim).filter(|s| !s.is_empty());
     let seg = segment.map(str::trim).filter(|s| !s.is_empty());
-    let sym = symbol.map(str::trim).filter(|s| !s.is_empty()).map(|s| s.to_uppercase());
+    let sym = symbol
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_uppercase());
     let rows = sqlx::query_as::<_, MarketContextSummaryRow>(
         r#"SELECT
              e.id AS engine_symbol_id,
@@ -175,7 +180,10 @@ pub async fn list_market_context_summaries(
     Ok(rows)
 }
 
-pub async fn sync_engine_symbol_catalog_fks(pool: &PgPool, engine_symbol_id: Uuid) -> Result<(), StorageError> {
+pub async fn sync_engine_symbol_catalog_fks(
+    pool: &PgPool,
+    engine_symbol_id: Uuid,
+) -> Result<(), StorageError> {
     let row = sqlx::query_as::<_, (String, String, String, String)>(
         r#"SELECT exchange, segment, symbol, interval FROM engine_symbols WHERE id = $1"#,
     )
@@ -205,7 +213,10 @@ pub async fn sync_engine_symbol_catalog_fks(pool: &PgPool, engine_symbol_id: Uui
     Ok(())
 }
 
-pub async fn fetch_engine_symbol_by_id(pool: &PgPool, id: Uuid) -> Result<Option<EngineSymbolRow>, StorageError> {
+pub async fn fetch_engine_symbol_by_id(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<Option<EngineSymbolRow>, StorageError> {
     let row = sqlx::query_as::<_, EngineSymbolRow>(
         r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode,
                   exchange_id, market_id, instrument_id, bar_interval_id, created_at, updated_at
@@ -217,7 +228,10 @@ pub async fn fetch_engine_symbol_by_id(pool: &PgPool, id: Uuid) -> Result<Option
     Ok(row)
 }
 
-pub async fn insert_engine_symbol(pool: &PgPool, row: &EngineSymbolInsert) -> Result<EngineSymbolRow, StorageError> {
+pub async fn insert_engine_symbol(
+    pool: &PgPool,
+    row: &EngineSymbolInsert,
+) -> Result<EngineSymbolRow, StorageError> {
     let rec = sqlx::query_as::<_, EngineSymbolRow>(
         r#"INSERT INTO engine_symbols (exchange, segment, symbol, interval, label, signal_direction_mode)
            VALUES ($1, $2, $3, $4, $5, COALESCE($6, 'auto_segment'))
@@ -295,13 +309,11 @@ pub async fn update_engine_symbol_enabled(
     id: Uuid,
     enabled: bool,
 ) -> Result<(), StorageError> {
-    sqlx::query(
-        r#"UPDATE engine_symbols SET enabled = $2, updated_at = now() WHERE id = $1"#,
-    )
-    .bind(id)
-    .bind(enabled)
-    .execute(pool)
-    .await?;
+    sqlx::query(r#"UPDATE engine_symbols SET enabled = $2, updated_at = now() WHERE id = $1"#)
+        .bind(id)
+        .bind(enabled)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -327,7 +339,9 @@ pub async fn update_engine_symbol_patch(
     Ok(res.rows_affected())
 }
 
-pub async fn list_analysis_snapshots_with_symbols(pool: &PgPool) -> Result<Vec<AnalysisSnapshotJoinedRow>, StorageError> {
+pub async fn list_analysis_snapshots_with_symbols(
+    pool: &PgPool,
+) -> Result<Vec<AnalysisSnapshotJoinedRow>, StorageError> {
     let rows = sqlx::query_as::<_, AnalysisSnapshotJoinedRow>(
         r#"SELECT
              s.engine_symbol_id,

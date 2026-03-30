@@ -6,7 +6,10 @@ use sqlx::PgPool;
 
 use super::provider::DataSourceFetchOk;
 
-pub(super) fn meta_with_fetch_duration(meta: Option<Value>, fetch_duration_ms: Option<u64>) -> Option<Value> {
+pub(super) fn meta_with_fetch_duration(
+    meta: Option<Value>,
+    fetch_duration_ms: Option<u64>,
+) -> Option<Value> {
     match (meta, fetch_duration_ms) {
         (None, None) => None,
         (Some(m), None) => Some(m),

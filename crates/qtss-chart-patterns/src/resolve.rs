@@ -165,6 +165,9 @@ mod tests {
         // t1p1 == t2p1: eski `>` ile else dalında upper den = t2p1 - min(t1p1,t1p2) çoğu zaman 0 → tüm id 0.
         // t2p2 < t1p1 iken ilk dal anlamlı payda üretir; id 0 olmamalı (geçerli işaret ile).
         let id = resolve_pattern_type_id(100.0, 110.0, 100.0, 95.0, 10, 0.2);
-        assert!(id > 0, "expected non-zero pattern id for equal left anchors, got {id}");
+        assert!(
+            id > 0,
+            "expected non-zero pattern id for equal left anchors, got {id}"
+        );
     }
 }

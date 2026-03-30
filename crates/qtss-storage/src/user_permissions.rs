@@ -25,11 +25,10 @@ impl UserPermissionRepository {
     }
 
     pub async fn org_id_for_user(&self, user_id: Uuid) -> Result<Option<Uuid>, StorageError> {
-        let row: Option<(Uuid,)> =
-            sqlx::query_as(r#"SELECT org_id FROM users WHERE id = $1"#)
-                .bind(user_id)
-                .fetch_optional(&self.pool)
-                .await?;
+        let row: Option<(Uuid,)> = sqlx::query_as(r#"SELECT org_id FROM users WHERE id = $1"#)
+            .bind(user_id)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(row.map(|(o,)| o))
     }
 
@@ -45,13 +44,11 @@ impl UserPermissionRepository {
             .execute(&mut *tx)
             .await?;
         for p in permissions {
-            sqlx::query(
-                r#"INSERT INTO user_permissions (user_id, permission) VALUES ($1, $2)"#,
-            )
-            .bind(user_id)
-            .bind(p)
-            .execute(&mut *tx)
-            .await?;
+            sqlx::query(r#"INSERT INTO user_permissions (user_id, permission) VALUES ($1, $2)"#)
+                .bind(user_id)
+                .bind(p)
+                .execute(&mut *tx)
+                .await?;
         }
         tx.commit().await?;
         Ok(())

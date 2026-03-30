@@ -95,7 +95,7 @@ Mevcut ayrı crate’ler: `qtss-nansen`, `qtss-notify`, `qtss-strategy`, `qtss-a
 
 | Crate | Sorumluluk |
 |--------|------------|
-| **qtss-common** | `AppMode` (Live / Dry), `tracing` tabanlı log, iş seviyesi (`QtssLogLevel`), kritik olay işaretleme |
+| **qtss-common** | `AppMode` (Live / Dry), `tracing` tabanlı log (`init_logging`, `log_business`, `log_critical`), `QtssLogLevel` — **seviye politikası:** [QTSS_MASTER_DEV_GUIDE.md §8.1](./QTSS_MASTER_DEV_GUIDE.md#81-loglama--trace--debug--info--warn--error--critical) |
 | **qtss-domain** | `ExchangeId`, `MarketSegment`, `InstrumentId`, `TimestampBar`, `OrderType` (tam set), copy-trade modelleri, komisyon trait’i, tenancy tipleri |
 | **qtss-storage** | Bağlantı havuzu, migrasyon, `app_config`, `engine_symbols`, `data_snapshots`, `onchain_signal_scores`, `market_bars`, paper, Nansen setup, … |
 | **qtss-execution** | `ExecutionGateway`, `BinanceLiveGateway`, `DryRunGateway`; `set_reference_price` (paper) |

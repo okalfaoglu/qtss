@@ -8,7 +8,8 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use qtss_notify::{resolve_bilingual, Notification, NotificationChannel, NotificationDispatcher};
 use qtss_storage::{
-    resolve_notify_default_locale, resolve_worker_tick_secs, ExchangeOrderRepository, ExchangeOrderRow,
+    resolve_notify_default_locale, resolve_worker_tick_secs, ExchangeOrderRepository,
+    ExchangeOrderRow,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -21,8 +22,8 @@ fn live_notify_enabled() -> bool {
 }
 
 fn live_notify_channels_from_env() -> Vec<NotificationChannel> {
-    let raw = std::env::var("QTSS_NOTIFY_LIVE_POSITION_CHANNELS")
-        .unwrap_or_else(|_| "telegram".into());
+    let raw =
+        std::env::var("QTSS_NOTIFY_LIVE_POSITION_CHANNELS").unwrap_or_else(|_| "telegram".into());
     raw.split(',')
         .filter_map(|s| NotificationChannel::parse(s.trim()))
         .collect()
@@ -67,28 +68,12 @@ fn order_summary_line_inner(row: &ExchangeOrderRow, english: bool) -> String {
     if english {
         format!(
             "· {} {} {} | intent {} {} | venue {} exQty {} ~px {} | user {}",
-            row.exchange,
-            row.segment,
-            row.symbol,
-            side,
-            qty,
-            st,
-            exq,
-            avg_px,
-            row.user_id
+            row.exchange, row.segment, row.symbol, side, qty, st, exq, avg_px, row.user_id
         )
     } else {
         format!(
             "· {} {} {} | intent {} {} | venue {} exQty {} ~px {} | kullanıcı {}",
-            row.exchange,
-            row.segment,
-            row.symbol,
-            side,
-            qty,
-            st,
-            exq,
-            avg_px,
-            row.user_id
+            row.exchange, row.segment, row.symbol, side, qty, st, exq, avg_px, row.user_id
         )
     }
 }
@@ -136,11 +121,7 @@ pub async fn live_position_notify_loop(pool: PgPool) {
         if rows.is_empty() {
             continue;
         }
-        let last_t = rows
-            .iter()
-            .map(|r| r.created_at)
-            .max()
-            .unwrap_or(after);
+        let last_t = rows.iter().map(|r| r.created_at).max().unwrap_or(after);
         cursor = Some(last_t);
 
         let loc = resolve_notify_default_locale(&pool_locale).await;

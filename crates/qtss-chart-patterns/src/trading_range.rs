@@ -119,10 +119,7 @@ pub fn analyze_trading_range(bars: &[OhlcBar], params: &TradingRangeParams) -> T
     if n < lookback + 2 {
         return TradingRangeResult {
             valid: false,
-            reason: Some(format!(
-                "en az {} mum gerekli (lookback+2)",
-                lookback + 2
-            )),
+            reason: Some(format!("en az {} mum gerekli (lookback+2)", lookback + 2)),
             bar_count: n,
             range_high: None,
             range_low: None,

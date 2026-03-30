@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use qtss_storage::{
-    delete_external_source, fetch_data_snapshot_for_external_http_source,
-    list_external_sources, list_snapshots_for_external_http_sources, upsert_external_source,
-    DataSnapshotRow, ExternalDataSourceRow,
+    delete_external_source, fetch_data_snapshot_for_external_http_source, list_external_sources,
+    list_snapshots_for_external_http_sources, upsert_external_source, DataSnapshotRow,
+    ExternalDataSourceRow,
 };
 
 use crate::error::ApiError;
@@ -39,7 +39,10 @@ fn status_code_from_meta(meta: &Option<Value>) -> Option<i16> {
 pub fn external_fetch_read_router() -> Router<SharedState> {
     Router::new()
         .route("/analysis/external-fetch/sources", get(list_sources_api))
-        .route("/analysis/external-fetch/snapshots", get(list_snapshots_api))
+        .route(
+            "/analysis/external-fetch/snapshots",
+            get(list_snapshots_api),
+        )
         .route(
             "/analysis/external-fetch/snapshots/{key}",
             get(get_snapshot_api),
@@ -188,7 +191,11 @@ async fn upsert_source_api(
             "headers_json bir JSON nesnesi olmalı",
         ));
     }
-    let desc = body.description.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
+    let desc = body
+        .description
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
     let row = upsert_external_source(
         &st.pool,
         key,

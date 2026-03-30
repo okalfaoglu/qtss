@@ -70,7 +70,8 @@ async fn notify_test(
 }
 
 fn parse_org(claims: &AccessClaims) -> Result<Uuid, ApiError> {
-    Uuid::parse_str(claims.org_id.trim()).map_err(|_| ApiError::bad_request("geçersiz token org_id"))
+    Uuid::parse_str(claims.org_id.trim())
+        .map_err(|_| ApiError::bad_request("geçersiz token org_id"))
 }
 
 async fn list_notify_outbox(

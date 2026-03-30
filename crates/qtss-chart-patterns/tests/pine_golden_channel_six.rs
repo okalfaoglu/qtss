@@ -4,8 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use qtss_chart_patterns::{
-    analyze_channel_six_from_bars, ChannelSixScanOutcome, ChannelSixWindowFilter, OhlcBar, SixPivotScanParams,
-    SizeFilters,
+    analyze_channel_six_from_bars, ChannelSixScanOutcome, ChannelSixWindowFilter, OhlcBar,
+    SixPivotScanParams, SizeFilters,
 };
 
 // NOTE:
@@ -98,16 +98,30 @@ fn approx_eq(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-9
 }
 
-fn compare_outcomes(lhs: &[ChannelSixScanOutcome], rhs: &[ChannelSixScanOutcome]) -> Result<(), String> {
+fn compare_outcomes(
+    lhs: &[ChannelSixScanOutcome],
+    rhs: &[ChannelSixScanOutcome],
+) -> Result<(), String> {
     if lhs.len() != rhs.len() {
-        return Err(format!("outcomes length mismatch: {} != {}", lhs.len(), rhs.len()));
+        return Err(format!(
+            "outcomes length mismatch: {} != {}",
+            lhs.len(),
+            rhs.len()
+        ));
     }
     for (i, (a, b)) in lhs.iter().zip(rhs.iter()).enumerate() {
         if a.pivots.len() != b.pivots.len() {
-            return Err(format!("step outcome[{i}].pivots len mismatch: {} != {}", a.pivots.len(), b.pivots.len()));
+            return Err(format!(
+                "step outcome[{i}].pivots len mismatch: {} != {}",
+                a.pivots.len(),
+                b.pivots.len()
+            ));
         }
         if a.scan.pattern_type_id != b.scan.pattern_type_id {
-            return Err(format!("step outcome[{i}] scan.pattern_type_id mismatch: {} != {}", a.scan.pattern_type_id, b.scan.pattern_type_id));
+            return Err(format!(
+                "step outcome[{i}] scan.pattern_type_id mismatch: {} != {}",
+                a.scan.pattern_type_id, b.scan.pattern_type_id
+            ));
         }
         if a.scan.pick_upper != b.scan.pick_upper || a.scan.pick_lower != b.scan.pick_lower {
             return Err(format!(
@@ -118,32 +132,60 @@ fn compare_outcomes(lhs: &[ChannelSixScanOutcome], rhs: &[ChannelSixScanOutcome]
         if a.scan.upper_ok != b.scan.upper_ok || a.scan.lower_ok != b.scan.lower_ok {
             return Err(format!("step outcome[{i}] ok flags mismatch"));
         }
-        if a.scan.upper_score.to_bits() != b.scan.upper_score.to_bits() && !approx_eq(a.scan.upper_score, b.scan.upper_score) {
-            return Err(format!("step outcome[{i}] upper_score mismatch: {} != {}", a.scan.upper_score, b.scan.upper_score));
+        if a.scan.upper_score.to_bits() != b.scan.upper_score.to_bits()
+            && !approx_eq(a.scan.upper_score, b.scan.upper_score)
+        {
+            return Err(format!(
+                "step outcome[{i}] upper_score mismatch: {} != {}",
+                a.scan.upper_score, b.scan.upper_score
+            ));
         }
-        if a.scan.lower_score.to_bits() != b.scan.lower_score.to_bits() && !approx_eq(a.scan.lower_score, b.scan.lower_score) {
-            return Err(format!("step outcome[{i}] lower_score mismatch: {} != {}", a.scan.lower_score, b.scan.lower_score));
+        if a.scan.lower_score.to_bits() != b.scan.lower_score.to_bits()
+            && !approx_eq(a.scan.lower_score, b.scan.lower_score)
+        {
+            return Err(format!(
+                "step outcome[{i}] lower_score mismatch: {} != {}",
+                a.scan.lower_score, b.scan.lower_score
+            ));
         }
         if a.zigzag_pivot_count != b.zigzag_pivot_count {
-            return Err(format!("step outcome[{i}] zigzag_pivot_count mismatch: {} != {}", a.zigzag_pivot_count, b.zigzag_pivot_count));
+            return Err(format!(
+                "step outcome[{i}] zigzag_pivot_count mismatch: {} != {}",
+                a.zigzag_pivot_count, b.zigzag_pivot_count
+            ));
         }
         if a.pivot_tail_skip != b.pivot_tail_skip {
-            return Err(format!("step outcome[{i}] pivot_tail_skip mismatch: {} != {}", a.pivot_tail_skip, b.pivot_tail_skip));
+            return Err(format!(
+                "step outcome[{i}] pivot_tail_skip mismatch: {} != {}",
+                a.pivot_tail_skip, b.pivot_tail_skip
+            ));
         }
         if a.zigzag_level != b.zigzag_level {
-            return Err(format!("step outcome[{i}] zigzag_level mismatch: {} != {}", a.zigzag_level, b.zigzag_level));
+            return Err(format!(
+                "step outcome[{i}] zigzag_level mismatch: {} != {}",
+                a.zigzag_level, b.zigzag_level
+            ));
         }
         for (pidx, (pa, pb)) in a.pivots.iter().zip(b.pivots.iter()).enumerate() {
             let (aba, pra, dira) = *pa;
             let (abb, prb, dirb) = *pb;
             if aba != abb {
-                return Err(format!("step outcome[{i}] pivot[{pidx}] bar_index mismatch: {} != {}", aba, abb));
+                return Err(format!(
+                    "step outcome[{i}] pivot[{pidx}] bar_index mismatch: {} != {}",
+                    aba, abb
+                ));
             }
             if dira != dirb {
-                return Err(format!("step outcome[{i}] pivot[{pidx}] dir mismatch: {} != {}", dira, dirb));
+                return Err(format!(
+                    "step outcome[{i}] pivot[{pidx}] dir mismatch: {} != {}",
+                    dira, dirb
+                ));
             }
             if !approx_eq(pra, prb) {
-                return Err(format!("step outcome[{i}] pivot[{pidx}] price mismatch: {} != {}", pra, prb));
+                return Err(format!(
+                    "step outcome[{i}] pivot[{pidx}] price mismatch: {} != {}",
+                    pra, prb
+                ));
             }
         }
     }
@@ -227,7 +269,10 @@ fn run_channel_six_at_step(
         .collect();
 
     let dup_bars = req.duplicate_pivot_bars.clone().unwrap_or_default();
-    let allowed_last = req.allowed_last_pivot_directions.clone().unwrap_or_default();
+    let allowed_last = req
+        .allowed_last_pivot_directions
+        .clone()
+        .unwrap_or_default();
 
     let zigzag_length = req.zigzag_length.unwrap_or(5);
     let zigzag_max_pivots = req.zigzag_max_pivots.unwrap_or(55);
@@ -364,4 +409,3 @@ fn pine_golden_channel_six_runs_and_compares() {
         }
     }
 }
-

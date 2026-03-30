@@ -36,7 +36,11 @@ fn tick_floor_secs(s: i32) -> i64 {
 }
 
 /// Tek API ailesi: `key_filter` ile satırlar seçilir; hepsi aynı `data_snapshots` tablosuna yazılır.
-pub async fn run_external_sources_engine(pool: PgPool, engine_label: &'static str, key_filter: fn(&str) -> bool) {
+pub async fn run_external_sources_engine(
+    pool: PgPool,
+    engine_label: &'static str,
+    key_filter: fn(&str) -> bool,
+) {
     if !external_fetch_enabled() {
         info!(
             engine = engine_label,
@@ -46,10 +50,7 @@ pub async fn run_external_sources_engine(pool: PgPool, engine_label: &'static st
     }
 
     let poll = Duration::from_secs(poll_interval_secs());
-    let client = match Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()
-    {
+    let client = match Client::builder().timeout(Duration::from_secs(120)).build() {
         Ok(c) => c,
         Err(e) => {
             warn!(%e, engine = engine_label, "reqwest client");

@@ -12,12 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Cargo test (storage + notify + common + worker lib, no DB)
+      - name: Cargo test (storage + notify + common + worker bin, no DB)
         run: |
           cargo test -p qtss-storage --lib
           cargo test -p qtss-notify --lib
           cargo test -p qtss-common --lib
-          cargo test -p qtss-worker --lib
+          cargo test -p qtss-worker --bin qtss-worker
       - name: Cargo check (workspace binaries)
         run: cargo check -p qtss-api -p qtss-worker
 
@@ -44,6 +44,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Integration — migrations + worker system_config seeds
         run: cargo test -p qtss-storage --test migrations_apply -- --nocapture
+      - name: Integration — qtss-ai decision_exists_for_hash TTL
+        run: cargo test -p qtss-ai --test decision_exists_for_hash_it -- --nocapture
+      - name: Integration — qtss-ai maybe_auto_approve
+        run: cargo test -p qtss-ai --test maybe_auto_approve_it -- --nocapture
 
   web:
     runs-on: ubuntu-latest

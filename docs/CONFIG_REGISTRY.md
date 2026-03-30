@@ -34,6 +34,18 @@ Central operational parameters live in PostgreSQL table **`system_config`** (mig
 | `worker` | `live_position_notify_tick_secs`   | `{"secs":45}` — live position notify loop interval; env `QTSS_NOTIFY_LIVE_TICK_SECS`; min **15s** in worker (`live_position_notify`). |
 | `worker` | `kill_switch_db_sync_tick_secs`    | `{"secs":5}` — `app_config.kill_switch_trading_halted` ↔ in-process halt sync; env `QTSS_KILL_SWITCH_DB_SYNC_SECS`; min **2s**. |
 | `worker` | `kill_switch_pnl_poll_tick_secs`   | `{"secs":60}` — `kill_switch_loop` daily PnL poll when enabled; env `QTSS_KILL_SWITCH_TICK_SECS`; min **15s**. |
+| `worker` | `ai_expire_stale_decisions_tick_secs` | `{"secs":300}` — `qtss_ai::expire_stale_ai_decisions_loop`: pending → `expired` sweep; env `QTSS_AI_EXPIRE_STALE_TICK_SECS`; min **60s**. |
+| `worker` | `engine_analysis_tick_secs` | `{"secs":120}` — `qtss_analysis::engine_analysis_loop` (`trading_range` / `signal_dashboard` snapshots); env `QTSS_ENGINE_TICK_SECS`; min **15s**. |
+| `worker` | `onchain_signal_tick_secs` | `{"secs":60}` — `onchain_signal_scorer::onchain_signal_loop`; env `QTSS_ONCHAIN_SIGNAL_TICK_SECS`; min **30s**. |
+| `worker` | `position_manager_tick_secs` | `{"secs":10}` — `position_manager_loop`; env `QTSS_POSITION_MANAGER_TICK_SECS`; min **5s**. |
+| `worker` | `nansen_token_screener_tick_secs` | `{"secs":1800}` — `nansen_token_screener_loop`; env `NANSEN_TICK_SECS`; min **60s**. |
+| `worker` | `nansen_netflows_tick_secs` | `{"secs":1800}` — `nansen_netflows_loop`; env `NANSEN_NETFLOWS_TICK_SECS`; min **900s**. |
+| `worker` | `nansen_holdings_tick_secs` | `{"secs":1800}` — `nansen_holdings_loop`; env `NANSEN_HOLDINGS_TICK_SECS`; min **900s**. |
+| `worker` | `nansen_perp_trades_tick_secs` | `{"secs":1800}` — `nansen_perp_trades_loop`; env `NANSEN_PERP_TRADES_TICK_SECS`; min **900s**. |
+| `worker` | `nansen_who_bought_tick_secs` | `{"secs":1800}` — `nansen_who_bought_loop`; env `NANSEN_WHO_BOUGHT_TICK_SECS`; min **900s**. |
+| `worker` | `nansen_flow_intel_tick_secs` | `{"secs":900}` — `nansen_flow_intel_loop`; env `NANSEN_FLOW_INTEL_TICK_SECS`; min **600s**. |
+| `worker` | `nansen_perp_leaderboard_tick_secs` | `{"secs":604800}` — `nansen_perp_leaderboard_loop`; env `NANSEN_PERP_LEADERBOARD_TICK_SECS`; min **3600s**. |
+| `worker` | `nansen_whale_perp_positions_tick_secs` | `{"secs":1800}` — `nansen_whale_perp_aggregate_loop`; env `NANSEN_WHALE_PERP_POSITIONS_TICK_SECS`; min **600s**. |
 
 ## Admin API
 

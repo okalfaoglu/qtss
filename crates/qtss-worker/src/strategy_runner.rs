@@ -16,8 +16,22 @@ fn enabled() -> bool {
         .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
 }
 
-fn env_strategy_balance_usdt(strategy_env_suffix: &str) -> Option<Decimal> {
-    let key = format!("QTSS_STRATEGY_{}_BALANCE", strategy_env_suffix.to_ascii_uppercase());
+/// Normalizes strategy name for `QTSS_STRATEGY_<SUFFIX>_BALANCE` (hyphen → underscore, ASCII upper).
+#[must_use]
+pub fn strategy_env_suffix_normalized(strategy_name: &str) -> String {
+    strategy_name
+        .trim()
+        .chars()
+        .map(|c| if c == '-' { '_' } else { c })
+        .collect::<String>()
+        .to_ascii_uppercase()
+}
+
+fn env_strategy_balance_usdt(strategy_name: &str) -> Option<Decimal> {
+    let key = format!(
+        "QTSS_STRATEGY_{}_BALANCE",
+        strategy_env_suffix_normalized(strategy_name)
+    );
     std::env::var(&key)
         .ok()
         .and_then(|s| Decimal::from_str(s.trim()).ok())
@@ -31,12 +45,7 @@ pub fn dry_gateway_for_strategy(strategy_name: &str) -> Arc<DryRunGateway> {
         .unwrap_or_else(|| Decimal::new(100_000, 0));
     let per_default = default_total / Decimal::from(4u32);
 
-    let suffix = strategy_name
-        .trim()
-        .chars()
-        .map(|c| if c == '-' { '_' } else { c })
-        .collect::<String>();
-    let init = env_strategy_balance_usdt(&suffix).unwrap_or(per_default);
+    let init = env_strategy_balance_usdt(strategy_name).unwrap_or(per_default);
 
     Arc::new(DryRunGateway::new(
         VirtualLedgerParams {
@@ -89,4 +98,21 @@ pub fn spawn_if_enabled(pool: &PgPool) {
     tokio::spawn(async move {
         qtss_strategy::copy_trade::run(p, g).await;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strategy_env_suffix_hyphen_to_underscore_uppercase() {
+        assert_eq!(
+            strategy_env_suffix_normalized("signal-filter"),
+            "SIGNAL_FILTER"
+        );
+        assert_eq!(
+            strategy_env_suffix_normalized("whale_momentum"),
+            "WHALE_MOMENTUM"
+        );
+    }
 }

@@ -115,6 +115,20 @@ export async function fetchHealth(): Promise<unknown> {
   return r.json();
 }
 
+/** Public catalog; aligns with `web/src/locales/supportedLocales.ts` and `GET /api/v1/locales`. */
+export type SupportedLocaleApi = {
+  code: string;
+  nativeName: string;
+  dir: string;
+};
+
+export async function fetchSupportedLocales(): Promise<SupportedLocaleApi[]> {
+  const r = await fetch(`${API_BASE}/api/v1/locales`);
+  if (!r.ok) throw new Error(`locales ${r.status}`);
+  const j = (await r.json()) as { locales: SupportedLocaleApi[] };
+  return j.locales ?? [];
+}
+
 export async function oauthTokenPassword(params: {
   clientId: string;
   clientSecret: string;

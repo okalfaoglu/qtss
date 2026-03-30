@@ -49,7 +49,8 @@ pub struct MarketBarUpsert {
 }
 
 pub async fn upsert_market_bar(pool: &PgPool, b: &MarketBarUpsert) -> Result<(), StorageError> {
-    let ids = resolve_series_catalog_ids(pool, &b.exchange, &b.segment, &b.symbol, &b.interval).await?;
+    let ids =
+        resolve_series_catalog_ids(pool, &b.exchange, &b.segment, &b.symbol, &b.interval).await?;
     let inst_id = b.instrument_id.or(ids.instrument_id);
     let int_id = b.bar_interval_id.or(ids.bar_interval_id);
     sqlx::query(

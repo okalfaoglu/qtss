@@ -18,7 +18,9 @@ pub struct ExternalDataSourceRow {
     pub description: Option<String>,
 }
 
-pub async fn list_external_sources(pool: &PgPool) -> Result<Vec<ExternalDataSourceRow>, StorageError> {
+pub async fn list_external_sources(
+    pool: &PgPool,
+) -> Result<Vec<ExternalDataSourceRow>, StorageError> {
     let rows = sqlx::query_as::<_, ExternalDataSourceRow>(
         r#"SELECT key, enabled, method, url, headers_json, body_json, tick_secs, description
            FROM external_data_sources ORDER BY key ASC"#,

@@ -7,6 +7,12 @@ use crate::config::AiEngineConfig;
 use crate::error::AiResult;
 use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
 
+/// Pure auto-approve gate (unit-tested; same rule as [`maybe_auto_approve`] DB branch).
+#[must_use]
+pub fn auto_approve_eligible(confidence: f64, cfg: &AiEngineConfig) -> bool {
+    cfg.auto_approve_enabled && confidence + f64::EPSILON >= cfg.auto_approve_threshold
+}
+
 /// If `auto_approve_enabled` and `confidence >= threshold`, marks parent + tactical children approved.
 /// Otherwise sends optional Telegram/webhook via `qtss-notify` (best-effort).
 pub async fn maybe_auto_approve(
@@ -19,7 +25,7 @@ pub async fn maybe_auto_approve(
     direction: Option<&str>,
     reasoning: Option<&str>,
 ) -> AiResult<()> {
-    let approve = cfg.auto_approve_enabled && confidence + f64::EPSILON >= cfg.auto_approve_threshold;
+    let approve = auto_approve_eligible(confidence, cfg);
     if approve {
         sqlx::query(
             r#"UPDATE ai_decisions
@@ -61,10 +67,7 @@ pub async fn maybe_auto_approve(
     if channels.is_empty() {
         return Ok(());
     }
-    let title = format!(
-        "AI decision pending approval {}",
-        symbol.unwrap_or("-")
-    );
+    let title = format!("AI decision pending approval {}", symbol.unwrap_or("-"));
     let body = format!(
         "symbol={:?} direction={:?} confidence={:.4} (threshold {:.2} auto={})\nreasoning={:?}",
         symbol,
@@ -86,4 +89,22 @@ pub async fn maybe_auto_approve(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_approve_requires_enabled_and_threshold() {
+        let mut cfg = AiEngineConfig::default_disabled();
+        cfg.auto_approve_enabled = false;
+        cfg.auto_approve_threshold = 0.85;
+        assert!(!auto_approve_eligible(0.99, &cfg));
+
+        cfg.auto_approve_enabled = true;
+        assert!(!auto_approve_eligible(0.84, &cfg));
+        assert!(auto_approve_eligible(0.85, &cfg));
+        assert!(auto_approve_eligible(0.851, &cfg));
+    }
 }

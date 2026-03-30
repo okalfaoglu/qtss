@@ -82,7 +82,9 @@ fn update_long_book(book: &mut LongBook, side: OrderSide, qty: Decimal, price: D
 }
 
 /// Aggregates net long books per (user, exchange, segment, symbol) from fill-like rows.
-pub(crate) fn aggregate_long_books_from_fills(rows: &[ExchangeOrderRow]) -> HashMap<FillPositionKey, BookWithOrg> {
+pub(crate) fn aggregate_long_books_from_fills(
+    rows: &[ExchangeOrderRow],
+) -> HashMap<FillPositionKey, BookWithOrg> {
     let mut sorted: Vec<_> = rows.iter().collect();
     sorted.sort_by_key(|r| r.created_at);
     let mut m: HashMap<FillPositionKey, BookWithOrg> = HashMap::new();

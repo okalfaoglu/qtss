@@ -177,7 +177,10 @@ pub async fn run(pool: PgPool, gateway: Arc<dyn ExecutionGateway>) {
     let tick = Duration::from_secs(tick_secs());
     let repo = qtss_storage::CopySubscriptionRepository::new(pool.clone());
     let (bar_ex, bar_seg, bar_iv) = bar_ctx();
-    info!(poll_secs = tick.as_secs(), "copy_trade strateji döngüsü (perp aggregate)");
+    info!(
+        poll_secs = tick.as_secs(),
+        "copy_trade strateji döngüsü (perp aggregate)"
+    );
     loop {
         tokio::time::sleep(tick).await;
         if is_trading_halted() {

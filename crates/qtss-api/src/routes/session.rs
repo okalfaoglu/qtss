@@ -32,8 +32,7 @@ pub fn session_router() -> Router<SharedState> {
 
 fn user_id_from_claims(claims: &AccessClaims) -> Result<Uuid, ApiError> {
     Uuid::parse_str(claims.sub.trim()).map_err(|_| {
-        ApiError::bad_request("invalid token subject")
-            .with_error_key("session.invalid_sub")
+        ApiError::bad_request("invalid token subject").with_error_key("session.invalid_sub")
     })
 }
 
@@ -72,10 +71,8 @@ fn normalized_locale_from_json(v: &JsonValue) -> Result<Option<String>, ApiError
     if t == "en" || t == "tr" {
         return Ok(Some(t));
     }
-    Err(
-        ApiError::bad_request("preferred_locale must be en or tr")
-            .with_error_key("session.locale_invalid_value"),
-    )
+    Err(ApiError::bad_request("preferred_locale must be en or tr")
+        .with_error_key("session.locale_invalid_value"))
 }
 
 async fn patch_me_locale(
@@ -85,6 +82,10 @@ async fn patch_me_locale(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let uid = user_id_from_claims(&claims)?;
     let locale = normalized_locale_from_json(&body.preferred_locale)?;
-    st.users.set_preferred_locale(uid, locale.as_deref()).await?;
-    Ok(Json(serde_json::json!({ "ok": true, "preferred_locale": locale })))
+    st.users
+        .set_preferred_locale(uid, locale.as_deref())
+        .await?;
+    Ok(Json(
+        serde_json::json!({ "ok": true, "preferred_locale": locale }),
+    ))
 }

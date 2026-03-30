@@ -42,7 +42,9 @@ pub fn extract_json_block(raw: &str) -> AiResult<String> {
             }
         }
     }
-    let start = t.find('{').ok_or_else(|| AiError::parse("no JSON object start"))?;
+    let start = t
+        .find('{')
+        .ok_or_else(|| AiError::parse("no JSON object start"))?;
     let slice = &t[start..];
     let end = find_matching_brace(slice).ok_or_else(|| AiError::parse("unbalanced JSON braces"))?;
     Ok(slice[..=end].to_string())
@@ -93,7 +95,10 @@ fn require_direction(v: &Value) -> AiResult<String> {
 }
 
 fn require_confidence(v: &Value) -> AiResult<f64> {
-    let c = v.get("confidence").and_then(|x| x.as_f64()).ok_or_else(|| AiError::parse("missing confidence"))?;
+    let c = v
+        .get("confidence")
+        .and_then(|x| x.as_f64())
+        .ok_or_else(|| AiError::parse("missing confidence"))?;
     if !(0.0..=1.0).contains(&c) {
         return Err(AiError::parse("confidence must be 0.0..=1.0"));
     }
@@ -235,5 +240,43 @@ mod tests {
     fn operational_missing_action() {
         let raw = r#"{"new_stop_loss_pct": 1.0}"#;
         assert!(parse_operational_decision(raw).is_err());
+    }
+
+    #[test]
+    fn tactical_confidence_out_of_range_high() {
+        let raw = r#"{"direction": "buy", "confidence": 1.01}"#;
+        assert!(parse_tactical_decision(raw).is_err());
+    }
+
+    #[test]
+    fn tactical_confidence_out_of_range_low() {
+        let raw = r#"{"direction": "buy", "confidence": -0.1}"#;
+        assert!(parse_tactical_decision(raw).is_err());
+    }
+
+    #[test]
+    fn tactical_multiplier_out_of_range() {
+        let raw = r#"{"direction": "neutral", "confidence": 0.5, "position_size_multiplier": 2.5}"#;
+        assert!(parse_tactical_decision(raw).is_err());
+    }
+
+    #[test]
+    fn tactical_json_in_plain_fence() {
+        let raw = r#"Output:
+```
+{"direction": "sell", "confidence": 0.6, "stop_loss_pct": 2.0}
+```
+"#;
+        let v = parse_tactical_decision(raw).unwrap();
+        assert_eq!(v["direction"], "sell");
+    }
+
+    #[test]
+    fn operational_fenced_json() {
+        let raw = r#"```json
+{"action": "activate_trailing", "trailing_callback_pct": 1.0}
+```"#;
+        let v = parse_operational_decision(raw).unwrap();
+        assert_eq!(v["action"], "activate_trailing");
     }
 }

@@ -84,9 +84,7 @@ async fn place_order(
             ))
         })?;
     let cfg = BinanceClientConfig::mainnet_with_keys(creds.api_key, creds.api_secret);
-    let client = Arc::new(
-        BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?,
-    );
+    let client = Arc::new(BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?);
     let intent = body.intent;
     let symbol = intent.instrument.symbol.clone();
     let intent_record = intent.clone();
@@ -132,8 +130,7 @@ async fn cancel_order(
         .await?
         .ok_or_else(|| ApiError::bad_request(format!("Binance {seg} API anahtarı yok")))?;
     let cfg = BinanceClientConfig::mainnet_with_keys(creds.api_key, creds.api_secret);
-    let client =
-        BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?;
+    let client = BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?;
     let cid = body.client_order_id.as_simple().to_string();
     match seg {
         "futures" => {

@@ -20,9 +20,7 @@ pub fn http_audit_enabled() -> bool {
 
 /// `PUT .../users/{id}/permissions` için ayrıntılı satır handler yazar; çift kayıt önlenir.
 fn skip_generic_http_audit(method: &Method, path: &str) -> bool {
-    method == Method::PUT
-        && path.starts_with("/api/v1/users/")
-        && path.ends_with("/permissions")
+    method == Method::PUT && path.starts_with("/api/v1/users/") && path.ends_with("/permissions")
 }
 
 pub async fn audit_http_middleware(
@@ -64,9 +62,7 @@ pub async fn audit_http_middleware(
         let org_id = Uuid::parse_str(&c.org_id).ok();
         let roles = c.roles.clone();
         let pool = st.pool.clone();
-        let details = Some(
-            HttpMutationDetailsV1::new(method.as_str(), &path, status).to_value(),
-        );
+        let details = Some(HttpMutationDetailsV1::new(method.as_str(), &path, status).to_value());
         let row = AuditHttpRow {
             request_id,
             user_id,

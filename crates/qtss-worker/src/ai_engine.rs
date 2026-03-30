@@ -7,7 +7,10 @@ use tracing::{info, warn};
 
 fn ai_worker_env_enabled() -> bool {
     match std::env::var("QTSS_AI_ENGINE_WORKER") {
-        Ok(s) => matches!(s.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+        Ok(s) => matches!(
+            s.trim().to_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
         Err(_) => true,
     }
 }

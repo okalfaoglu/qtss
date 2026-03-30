@@ -15,17 +15,11 @@ mod tests {
 
     #[test]
     fn picks_turkish_when_tr() {
-        assert_eq!(
-            resolve_bilingual("tr-TR", "en body", "tr body"),
-            "tr body"
-        );
+        assert_eq!(resolve_bilingual("tr-TR", "en body", "tr body"), "tr body");
     }
 
     #[test]
     fn picks_english_otherwise() {
-        assert_eq!(
-            resolve_bilingual("en-US", "en body", "tr body"),
-            "en body"
-        );
+        assert_eq!(resolve_bilingual("en-US", "en body", "tr body"), "en body");
     }
 }

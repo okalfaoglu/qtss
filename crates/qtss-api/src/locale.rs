@@ -63,10 +63,8 @@ pub async fn locale_middleware(mut req: Request, next: Next) -> Response {
     req.extensions_mut().insert(negotiated);
     let mut res = next.run(req).await;
     if let Ok(hv) = HeaderValue::from_str(&response_locale) {
-        res.headers_mut().insert(
-            HeaderName::from_static("x-qtss-negotiated-locale"),
-            hv,
-        );
+        res.headers_mut()
+            .insert(HeaderName::from_static("x-qtss-negotiated-locale"), hv);
     }
     res
 }

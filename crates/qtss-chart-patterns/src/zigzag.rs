@@ -108,7 +108,8 @@ impl ZigzagLite {
             let den_seg = (last_value - llast_value).abs().max(1e-15);
             pivot.ratio = round3((value - last_value).abs() / den_seg);
             let den_bar = (llast.point.index - last.point.index).abs().max(1);
-            pivot.bar_ratio = round3((last.point.index - pivot.point.index).abs() as f64 / den_bar as f64);
+            pivot.bar_ratio =
+                round3((last.point.index - pivot.point.index).abs() as f64 / den_bar as f64);
             if self.pivots.len() >= 3 {
                 let lllast = &self.pivots[2];
                 let den_sz = (llast.point.price - lllast.point.price).abs().max(1e-15);
@@ -124,7 +125,12 @@ impl ZigzagLite {
 
     /// Pine `ta.highest` / `ta.highestbars` benzeri: pencere `[i-(L-1)..=i]`, geri sayım 0 = güncel bar.
     #[must_use]
-    pub fn pivot_candle(length: usize, i: usize, highs: &[f64], lows: &[f64]) -> (i32, i32, f64, f64) {
+    pub fn pivot_candle(
+        length: usize,
+        i: usize,
+        highs: &[f64],
+        lows: &[f64],
+    ) -> (i32, i32, f64, f64) {
         let len = length.max(1);
         let start = i.saturating_sub(len.saturating_sub(1));
         let mut p_high = f64::NEG_INFINITY;
@@ -168,7 +174,8 @@ impl ZigzagLite {
             return;
         }
         let new_bar = bar_index - self.offset as i64;
-        let (p_high_bar, p_low_bar, p_high, p_low) = Self::pivot_candle(self.length, idx, highs, lows);
+        let (p_high_bar, p_low_bar, p_high, p_low) =
+            Self::pivot_candle(self.length, idx, highs, lows);
 
         // İlk pivot: pencerede tepe veya dip teyidi.
         if self.pivots.is_empty() {
@@ -297,7 +304,14 @@ impl ZigzagLite {
 
     /// Tüm diziyi sırayla işler (`bar_index == i` varsayımı).
     #[must_use]
-    pub fn run_series(highs: &[f64], lows: &[f64], times_ms: &[i64], length: usize, max_pivots: usize, offset: usize) -> Self {
+    pub fn run_series(
+        highs: &[f64],
+        lows: &[f64],
+        times_ms: &[i64],
+        length: usize,
+        max_pivots: usize,
+        offset: usize,
+    ) -> Self {
         let mut z = Self::new(length, max_pivots, offset);
         for i in 0..highs.len().min(lows.len()) {
             z.calculate_bar(i as i64, i, highs, lows, times_ms);
@@ -308,7 +322,13 @@ impl ZigzagLite {
 
 /// Üst seviye zigzag: pivot **fiyat** dizisine aynı `pivot_candle` kuralını uygular (Pine `nextlevel` özü).
 #[must_use]
-pub fn next_level_from_pivot_prices(prices: &[f64], bar_indices: &[i64], times_ms: &[i64], length: usize, max_pivots: usize) -> ZigzagLite {
+pub fn next_level_from_pivot_prices(
+    prices: &[f64],
+    bar_indices: &[i64],
+    times_ms: &[i64],
+    length: usize,
+    max_pivots: usize,
+) -> ZigzagLite {
     let n = prices.len().min(bar_indices.len()).min(times_ms.len());
     if n == 0 {
         return ZigzagLite::new(length, max_pivots, 0);

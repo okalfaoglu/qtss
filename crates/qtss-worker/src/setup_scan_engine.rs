@@ -12,7 +12,7 @@ use qtss_common::log_critical;
 use qtss_nansen::post_token_screener;
 use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
 use qtss_storage::{
-    fetch_nansen_snapshot, insert_nansen_setup_run, insert_nansen_setup_row, list_recent_bars,
+    fetch_nansen_snapshot, insert_nansen_setup_row, insert_nansen_setup_run, list_recent_bars,
     NansenSetupRowInsert, NansenSetupRunInsert,
 };
 use reqwest::Client;
@@ -85,7 +85,10 @@ fn setup_notify_max_items() -> usize {
 }
 
 /// PLAN Phase D — eşik üstü adaylar için tek özet bildirimi (gövde Türkçe; `run_id` başlıkta).
-async fn maybe_notify_nansen_setup_run(run_id: Uuid, ranked: &[(f64, Candidate, &'static str, i32)]) {
+async fn maybe_notify_nansen_setup_run(
+    run_id: Uuid,
+    ranked: &[(f64, Candidate, &'static str, i32)],
+) {
     if !notify_setup_env_enabled() || ranked.is_empty() {
         return;
     }
@@ -222,7 +225,9 @@ fn score_candidate(row: &Value) -> Option<Candidate> {
     let buy_volume = v_f64(row, "buy_volume").unwrap_or(0.0).max(0.0);
     let sell_volume = v_f64(row, "sell_volume").unwrap_or(0.0).max(0.0);
     let netflow = v_f64(row, "netflow").unwrap_or(0.0);
-    let volume = v_f64(row, "volume").unwrap_or(buy_volume + sell_volume).max(0.0);
+    let volume = v_f64(row, "volume")
+        .unwrap_or(buy_volume + sell_volume)
+        .max(0.0);
     let price_change = v_f64(row, "price_change").unwrap_or(0.0);
     let liquidity = v_f64(row, "liquidity").unwrap_or(0.0);
     let token_age_days = v_f64(row, "token_age_days").unwrap_or(0.0);
@@ -345,10 +350,7 @@ async fn enrich_ohlc(pool: &PgPool, c: &mut Candidate) {
     }
     let chrono: Vec<_> = rows.into_iter().rev().collect();
     let n = chrono.len();
-    let highs: Vec<f64> = chrono
-        .iter()
-        .filter_map(|r| r.high.to_f64())
-        .collect();
+    let highs: Vec<f64> = chrono.iter().filter_map(|r| r.high.to_f64()).collect();
     let lows: Vec<f64> = chrono.iter().filter_map(|r| r.low.to_f64()).collect();
     let closes: Vec<f64> = chrono.iter().filter_map(|r| r.close.to_f64()).collect();
     if highs.len() != n || lows.len() != n {
@@ -375,7 +377,10 @@ async fn enrich_ohlc(pool: &PgPool, c: &mut Candidate) {
         c.tp1_support_proxy = Some(nearest_sup);
     }
 
-    let last6_h = highs[n - 6..n].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let last6_h = highs[n - 6..n]
+        .iter()
+        .cloned()
+        .fold(f64::NEG_INFINITY, f64::max);
     let last6_l = lows[n - 6..n].iter().cloned().fold(f64::INFINITY, f64::min);
     let prev6_h = highs[n - 12..n - 6]
         .iter()
@@ -414,9 +419,7 @@ async fn enrich_ohlc(pool: &PgPool, c: &mut Candidate) {
             let highs6: Vec<f64> = ch6.iter().filter_map(|r| r.high.to_f64()).collect();
             let lows6: Vec<f64> = ch6.iter().filter_map(|r| r.low.to_f64()).collect();
             if highs6.len() == nh && lows6.len() == nh {
-                let tr: Vec<f64> = (0..nh)
-                    .map(|i| (highs6[i] - lows6[i]).max(1e-12))
-                    .collect();
+                let tr: Vec<f64> = (0..nh).map(|i| (highs6[i] - lows6[i]).max(1e-12)).collect();
                 let last = tr[nh - 1];
                 let prev_mean: f64 = tr[nh - 5..nh - 1].iter().sum::<f64>() / 4.0;
                 c.h6_vol_expansion = last > prev_mean * 1.15;
@@ -561,9 +564,7 @@ fn levels(direction: &str, entry: f64, c: &Candidate) -> (f64, f64, f64, f64, f6
             .tp1_resistance_proxy
             .filter(|&x| x > entry && x < tp2 && x >= floor);
         let tp1_used = raw.is_some();
-        let tp1 = raw
-            .unwrap_or(tp1_frac)
-            .clamp(floor, tp2 * 0.999);
+        let tp1 = raw.unwrap_or(tp1_frac).clamp(floor, tp2 * 0.999);
         let tp3 = entry * TP3_EXTEND_LONG;
         let rr = (tp2 - entry) / (entry - sl).max(1e-12);
         let pct = (tp2 - entry) / entry * 100.0;
@@ -636,7 +637,12 @@ fn append_extra_screener_signals(raw: &Value, direction: &str, out: &mut Vec<Str
             }
         }
     }
-    for key in ["cex_net_flow", "cex_netflow", "exchange_netflow", "net_cex_flow"] {
+    for key in [
+        "cex_net_flow",
+        "cex_netflow",
+        "exchange_netflow",
+        "net_cex_flow",
+    ] {
         if let Some(x) = v_f64(raw, key) {
             if x.abs() > EPS {
                 out.push(format!("Screener `{key}` = {x:.6}"));
@@ -669,14 +675,22 @@ fn build_signals(c: &Candidate, direction: &str) -> Vec<String> {
         v.push("DEX sell pressure vs buy".into());
     }
     if let Some(r) = v_f64(&c.raw, "inflow_fdv_ratio").filter(|x| *x > 0.0005) {
-        v.push(format!("Inflow/FDV ratio {:.5} (accumulation / CEX flow proxy)", r));
+        v.push(format!(
+            "Inflow/FDV ratio {:.5} (accumulation / CEX flow proxy)",
+            r
+        ));
     }
     if let Some(r) = v_f64(&c.raw, "outflow_fdv_ratio").filter(|x| *x > 0.0005) {
-        v.push(format!("Outflow/FDV ratio {:.5} (distribution / outflow proxy)", r));
+        v.push(format!(
+            "Outflow/FDV ratio {:.5} (distribution / outflow proxy)",
+            r
+        ));
     }
     if let (Some(nb), Some(ns)) = (v_i64(&c.raw, "nof_buys"), v_i64(&c.raw, "nof_sells")) {
         if nb > ns {
-            v.push(format!("Multi-wallet buy tx bias: {nb} buys vs {ns} sells (screener)"));
+            v.push(format!(
+                "Multi-wallet buy tx bias: {nb} buys vs {ns} sells (screener)"
+            ));
         } else if ns > nb {
             v.push(format!("Sell tx bias: {ns} sells vs {nb} buys (screener)"));
         }
@@ -841,8 +855,10 @@ async fn run_one_scan(
     short_ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     long_ranked.truncate(TOP_LONG);
     short_ranked.truncate(TOP_SHORT);
-    let ranked: Vec<(f64, Candidate, &'static str, i32)> =
-        long_ranked.into_iter().chain(short_ranked.into_iter()).collect();
+    let ranked: Vec<(f64, Candidate, &'static str, i32)> = long_ranked
+        .into_iter()
+        .chain(short_ranked.into_iter())
+        .collect();
 
     let meta = json!({
         "spec_version": SPEC_VERSION,
@@ -920,10 +936,7 @@ pub async fn nansen_setup_scan_loop(pool: PgPool) {
         .unwrap_or(900)
         .max(180);
 
-    let client = match Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()
-    {
+    let client = match Client::builder().timeout(Duration::from_secs(120)).build() {
         Ok(c) => c,
         Err(e) => {
             warn!(%e, "setup_scan: reqwest client");
@@ -962,11 +975,7 @@ pub async fn nansen_setup_scan_loop(pool: PgPool) {
                 source: "token_screener".into(),
                 candidate_count: 0,
                 meta_json: Some(json!({ "spec_version": SPEC_VERSION })),
-                error: Some(
-                    e.chars()
-                        .take(2000)
-                        .collect::<String>(),
-                ),
+                error: Some(e.chars().take(2000).collect::<String>()),
             };
             if let Err(e2) = insert_nansen_setup_run(&pool, &run).await {
                 warn!(%e2, "nansen_setup_runs hata satırı");

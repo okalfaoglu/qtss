@@ -25,9 +25,9 @@ pub use commission::{
     commission_fee, rate_from_bps, CommissionPolicy, CommissionQuote, CommissionResolver,
     CommissionSource,
 };
-pub use execution::{ExecutionMode, VirtualLedgerParams};
 pub use copy_trade::{CopyRule, CopySubscription, LeaderId};
 pub use exchange::{ExchangeCapability, ExchangeId, MarketSegment};
+pub use execution::{ExecutionMode, VirtualLedgerParams};
 pub use orders::{
     FuturesExecutionExtras, OrderIntent, OrderSide, OrderStatus, OrderType, TimeInForce,
 };

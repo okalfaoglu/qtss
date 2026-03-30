@@ -37,7 +37,9 @@ async fn kill_switch_reset(
         .upsert(
             KILL_SWITCH_APP_CONFIG_KEY,
             json!(false),
-            Some("Trading halt — false allows strategies; worker syncs via kill_switch_db_sync_loop"),
+            Some(
+                "Trading halt — false allows strategies; worker syncs via kill_switch_db_sync_loop",
+            ),
             Some(uid),
         )
         .await?;

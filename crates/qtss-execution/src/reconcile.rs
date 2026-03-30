@@ -44,7 +44,9 @@ fn parse_binance_open_order_ids(remote: &Value) -> Result<Vec<i64>, ExecutionErr
             .get("orderId")
             .and_then(|v| v.as_i64())
             .or_else(|| o.get("orderId").and_then(|v| v.as_u64()).map(|u| u as i64))
-            .ok_or_else(|| ExecutionError::Other("openOrders: orderId eksik veya geçersiz".into()))?;
+            .ok_or_else(|| {
+                ExecutionError::Other("openOrders: orderId eksik veya geçersiz".into())
+            })?;
         out.push(id);
     }
     Ok(out)
