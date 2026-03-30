@@ -1,5 +1,6 @@
 import type { ChartOhlcRow } from "../lib/marketBarsToCandles";
 import type { AuthSession } from "../lib/rbac";
+import { throwQtssApiError } from "../lib/apiErrorFormat";
 
 /**
  * API tabanı: geliştirmede Vite proxy kullanıldığı için "" (relative).
@@ -46,15 +47,7 @@ export async function oauthTokenRefresh(params: {
   });
   const t = await r.text();
   if (!r.ok) {
-    let detail = t;
-    try {
-      const j = JSON.parse(t) as { error?: string; error_description?: string };
-      if (j.error_description) detail = j.error_description;
-      else if (j.error) detail = j.error;
-    } catch {
-      /* raw */
-    }
-    throw new Error(`oauth refresh ${r.status}: ${detail}`);
+    throwQtssApiError("oauth refresh", r, t);
   }
   return JSON.parse(t) as TokenResponse;
 }
@@ -111,8 +104,9 @@ export async function fetchWithBearerRetry(
 
 export async function fetchHealth(): Promise<unknown> {
   const r = await fetch(`${API_BASE}/health`);
-  if (!r.ok) throw new Error(`health ${r.status}`);
-  return r.json();
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("health", r, t);
+  return JSON.parse(t) as unknown;
 }
 
 /** Public catalog; aligns with `web/src/locales/supportedLocales.ts` and `GET /api/v1/locales`. */
@@ -124,8 +118,9 @@ export type SupportedLocaleApi = {
 
 export async function fetchSupportedLocales(): Promise<SupportedLocaleApi[]> {
   const r = await fetch(`${API_BASE}/api/v1/locales`);
-  if (!r.ok) throw new Error(`locales ${r.status}`);
-  const j = (await r.json()) as { locales: SupportedLocaleApi[] };
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("locales", r, t);
+  const j = JSON.parse(t) as { locales: SupportedLocaleApi[] };
   return j.locales ?? [];
 }
 
@@ -149,19 +144,11 @@ export async function oauthTokenPassword(params: {
   });
   const t = await r.text();
   if (!r.ok) {
-    let detail = t;
-    try {
-      const j = JSON.parse(t) as { error?: string; error_description?: string };
-      if (j.error_description) detail = j.error_description;
-      else if (j.error) detail = j.error;
-    } catch {
-      /* ham metin */
-    }
     const hint =
       r.status === 401
         ? " (401: genelde VITE_OAUTH_CLIENT_SECRET, seed çıktısındaki client_secret ile aynı değil veya client_id DB’de yok.)"
         : "";
-    throw new Error(`oauth ${r.status}: ${detail}${hint}`);
+    throwQtssApiError("oauth", r, t, hint);
   }
   return JSON.parse(t) as TokenResponse;
 }
@@ -171,7 +158,7 @@ export async function fetchAuthMe(accessToken: string): Promise<AuthSession> {
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/me`, accessToken, {});
   const t = await r.text();
   if (!r.ok) {
-    throw new Error(`me ${r.status}: ${t.slice(0, 300)}`);
+    throwQtssApiError("me", r, t);
   }
   const j = JSON.parse(t) as {
     sub: string;
@@ -210,7 +197,7 @@ export async function patchMePreferredLocale(
   });
   const text = await r.text();
   if (!r.ok) {
-    throw new Error(`me/locale ${r.status}: ${text.slice(0, 300)}`);
+    throwQtssApiError("me/locale", r, text);
   }
 }
 
@@ -218,7 +205,7 @@ export async function fetchConfigList(accessToken: string): Promise<unknown> {
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/config`, accessToken, {});
   if (!r.ok) {
     const t = await r.text();
-    throw new Error(`config ${r.status}: ${t}`);
+    throwQtssApiError("config", r, t);
   }
   return r.json();
 }
@@ -228,7 +215,7 @@ export async function fetchChartPatternsConfig(accessToken: string): Promise<unk
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/chart-patterns-config`, accessToken, {});
   if (!r.ok) {
     const t = await r.text();
-    throw new Error(`chart-patterns-config ${r.status}: ${t}`);
+    throwQtssApiError("chart-patterns-config", r, t);
   }
   return r.json();
 }
@@ -238,7 +225,7 @@ export async function fetchElliottWaveConfig(accessToken: string): Promise<unkno
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/elliott-wave-config`, accessToken, {});
   if (!r.ok) {
     const t = await r.text();
-    throw new Error(`elliott-wave-config ${r.status}: ${t}`);
+    throwQtssApiError("elliott-wave-config", r, t);
   }
   return r.json();
 }
@@ -257,7 +244,7 @@ export async function upsertAppConfig(
   });
   if (!r.ok) {
     const t = await r.text();
-    throw new Error(`config upsert ${r.status}: ${t}`);
+    throwQtssApiError("config upsert", r, t);
   }
   return r.json();
 }
@@ -301,7 +288,7 @@ export async function fetchMarketBarsRecent(
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/market/bars/recent?${q}`, accessToken, {});
   if (!r.ok) {
     const t = await r.text();
-    throw new Error(`market/bars/recent ${r.status}: ${t}`);
+    throwQtssApiError("market/bars/recent", r, t);
   }
   return r.json() as Promise<MarketBarRow[]>;
 }
@@ -347,10 +334,10 @@ export async function fetchMarketBinanceKlinesForChart(
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/market/binance/klines?${q}`, accessToken, {});
   if (!r.ok) {
     const t = await r.text();
-    throw new Error(`market/binance/klines ${r.status}: ${t.slice(0, 200)}`);
+    throwQtssApiError("market/binance/klines", r, t);
   }
   const raw = (await r.json()) as unknown;
-  if (!Array.isArray(raw)) throw new Error("klines yanıtı dizi değil");
+  if (!Array.isArray(raw)) throw new Error("klines response is not a JSON array");
   const out: ChartOhlcRow[] = [];
   for (const row of raw) {
     if (row === null || typeof row !== "object") continue;
@@ -391,7 +378,7 @@ export async function backfillMarketBarsFromRest(
   });
   if (!r.ok) {
     const t = await r.text();
-    throw new Error(`market/binance/bars/backfill ${r.status}: ${t}`);
+    throwQtssApiError("market/binance/bars/backfill", r, t);
   }
   return r.json() as Promise<{ upserted: number; source?: string; symbol?: string; segment?: string }>;
 }
@@ -585,14 +572,14 @@ export type EngineSnapshotJoinedApiRow = {
 export async function fetchEngineSymbols(accessToken: string): Promise<EngineSymbolApiRow[]> {
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/engine/symbols`, accessToken, {});
   const t = await r.text();
-  if (!r.ok) throw new Error(`engine/symbols ${r.status}: ${t.slice(0, 300)}`);
+  if (!r.ok) throwQtssApiError("engine/symbols", r, t);
   return JSON.parse(t) as EngineSymbolApiRow[];
 }
 
 export async function fetchEngineSnapshots(accessToken: string): Promise<EngineSnapshotJoinedApiRow[]> {
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/engine/snapshots`, accessToken, {});
   const t = await r.text();
-  if (!r.ok) throw new Error(`engine/snapshots ${r.status}: ${t.slice(0, 300)}`);
+  if (!r.ok) throwQtssApiError("engine/snapshots", r, t);
   return JSON.parse(t) as EngineSnapshotJoinedApiRow[];
 }
 
@@ -653,7 +640,7 @@ export async function fetchOnchainSignalsBreakdown(
     return { data: null, endpoint_missing: true };
   }
   if (!r.ok) {
-    throw new Error(`onchain-signals/breakdown ${r.status}: ${t.slice(0, 300)}`);
+    throwQtssApiError("onchain-signals/breakdown", r, t);
   }
   return {
     data: JSON.parse(t) as OnchainSignalsBreakdownApi,
@@ -669,7 +656,7 @@ export async function fetchConfluenceSnapshotsLatest(
   if (r.status === 404) {
     return { rows: [], endpoint_missing: true };
   }
-  if (!r.ok) throw new Error(`engine/confluence/latest ${r.status}: ${t.slice(0, 300)}`);
+  if (!r.ok) throwQtssApiError("engine/confluence/latest", r, t);
   return {
     rows: JSON.parse(t) as EngineSnapshotJoinedApiRow[],
     endpoint_missing: false,
@@ -690,7 +677,7 @@ export async function fetchDataSnapshots(accessToken: string): Promise<DataSnaps
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/data-snapshots`, accessToken, {});
   const t = await r.text();
   if (r.status === 404) return [];
-  if (!r.ok) throw new Error(`analysis/data-snapshots ${r.status}: ${t.slice(0, 300)}`);
+  if (!r.ok) throwQtssApiError("analysis/data-snapshots", r, t);
   return JSON.parse(t) as DataSnapshotApiRow[];
 }
 
@@ -710,7 +697,7 @@ export async function fetchExternalFetchSources(accessToken: string): Promise<Ex
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/external-fetch/sources`, accessToken, {});
   const t = await r.text();
   if (r.status === 404) return [];
-  if (!r.ok) throw new Error(`external-fetch/sources ${r.status}: ${t.slice(0, 300)}`);
+  if (!r.ok) throwQtssApiError("external-fetch/sources", r, t);
   return JSON.parse(t) as ExternalDataSourceApiRow[];
 }
 
@@ -741,7 +728,7 @@ export async function fetchMarketContextLatest(
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/market-context/latest?${params}`, accessToken, {});
   const t = await r.text();
   if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`market-context/latest ${r.status}: ${t.slice(0, 300)}`);
+  if (!r.ok) throwQtssApiError("market-context/latest", r, t);
   return JSON.parse(t) as MarketContextLatestApiResponse;
 }
 
@@ -793,7 +780,7 @@ export async function fetchMarketContextSummary(
   );
   const t = await r.text();
   if (r.status === 404) return [];
-  if (!r.ok) throw new Error(`market-context/summary ${r.status}: ${t.slice(0, 300)}`);
+  if (!r.ok) throwQtssApiError("market-context/summary", r, t);
   return JSON.parse(t) as MarketContextSummaryItemApi[];
 }
 
@@ -810,7 +797,7 @@ export type NansenSnapshotApiRow = {
 export async function fetchNansenSnapshot(accessToken: string): Promise<NansenSnapshotApiRow | null> {
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/nansen/snapshot`, accessToken, {});
   const t = await r.text();
-  if (!r.ok) throw new Error(`nansen/snapshot ${r.status}: ${t.slice(0, 300)}`);
+  if (!r.ok) throwQtssApiError("nansen/snapshot", r, t);
   const j = JSON.parse(t) as NansenSnapshotApiRow | null;
   return j ?? null;
 }
@@ -895,7 +882,7 @@ export async function postEngineSymbol(
     body: JSON.stringify(body),
   });
   const t = await r.text();
-  if (!r.ok) throw new Error(`engine/symbols POST ${r.status}: ${t.slice(0, 300)}`);
+  if (!r.ok) throwQtssApiError("engine/symbols POST", r, t);
   return JSON.parse(t) as EngineSymbolApiRow;
 }
 
@@ -913,7 +900,7 @@ export async function patchEngineSymbol(
   });
   if (!r.ok) {
     const t = await r.text();
-    throw new Error(`engine/symbols PATCH ${r.status}: ${t.slice(0, 300)}`);
+    throwQtssApiError("engine/symbols PATCH", r, t);
   }
 }
 
@@ -942,7 +929,7 @@ export async function fetchEngineRangeSignals(
   if (opts?.engineSymbolId) params.set("engine_symbol_id", opts.engineSymbolId);
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/engine/range-signals?${params}`, accessToken, {});
   const t = await r.text();
-  if (!r.ok) throw new Error(`engine/range-signals ${r.status}: ${t.slice(0, 300)}`);
+  if (!r.ok) throwQtssApiError("engine/range-signals", r, t);
   return JSON.parse(t) as RangeSignalEventApiRow[];
 }
 
@@ -976,7 +963,7 @@ export type PaperFillRow = {
 export async function fetchPaperBalance(accessToken: string): Promise<PaperBalanceRow | null> {
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/orders/dry/balance`, accessToken, {});
   const t = await r.text();
-  if (!r.ok) throw new Error(`orders/dry/balance ${r.status}: ${t.slice(0, 300)}`);
+  if (!r.ok) throwQtssApiError("orders/dry/balance", r, t);
   return JSON.parse(t) as PaperBalanceRow | null;
 }
 
@@ -984,7 +971,7 @@ export async function fetchPaperFills(accessToken: string, limit = 20): Promise<
   const params = new URLSearchParams({ limit: String(limit) });
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/orders/dry/fills?${params}`, accessToken, {});
   const t = await r.text();
-  if (!r.ok) throw new Error(`orders/dry/fills ${r.status}: ${t.slice(0, 300)}`);
+  if (!r.ok) throwQtssApiError("orders/dry/fills", r, t);
   return JSON.parse(t) as PaperFillRow[];
 }
 
@@ -1005,7 +992,7 @@ export async function fetchBinanceCommissionDefaults(
   if (q.symbol?.trim()) params.set("symbol", q.symbol.trim().toUpperCase());
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/market/binance/commission-defaults?${params}`, accessToken, {});
   const t = await r.text();
-  if (!r.ok) throw new Error(`commission-defaults ${r.status}: ${t.slice(0, 300)}`);
+  if (!r.ok) throwQtssApiError("commission-defaults", r, t);
   return JSON.parse(t) as BinanceCommissionDefaultsApi;
 }
 
@@ -1027,7 +1014,7 @@ export async function fetchBinanceCommissionAccount(
   params.set("segment", (q.segment ?? "spot").toLowerCase());
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/market/binance/commission-account?${params}`, accessToken, {});
   const t = await r.text();
-  if (!r.ok) throw new Error(`commission-account ${r.status}: ${t.slice(0, 300)}`);
+  if (!r.ok) throwQtssApiError("commission-account", r, t);
   return JSON.parse(t) as BinanceCommissionAccountApi;
 }
 
@@ -1067,7 +1054,7 @@ export async function postNotifyOutbox(
     body: JSON.stringify(body),
   });
   const t = await r.text();
-  if (!r.ok) throw new Error(`notify/outbox POST ${r.status}: ${t.slice(0, 400)}`);
+  if (!r.ok) throwQtssApiError("notify/outbox POST", r, t);
   return JSON.parse(t) as NotifyOutboxRowApi;
 }
 
@@ -1096,7 +1083,7 @@ export async function fetchAiApprovalRequests(
   params.set("limit", String(q?.limit ?? 50));
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/approval-requests?${params}`, accessToken, {});
   const t = await r.text();
-  if (!r.ok) throw new Error(`ai/approval-requests ${r.status}: ${t.slice(0, 400)}`);
+  if (!r.ok) throwQtssApiError("ai/approval-requests", r, t);
   return JSON.parse(t) as AiApprovalRequestRowApi[];
 }
 
@@ -1112,7 +1099,7 @@ export async function postAiApprovalRequest(
     body: JSON.stringify(body),
   });
   const t = await r.text();
-  if (!r.ok) throw new Error(`ai/approval-requests POST ${r.status}: ${t.slice(0, 400)}`);
+  if (!r.ok) throwQtssApiError("ai/approval-requests POST", r, t);
   return JSON.parse(t) as AiApprovalRequestRowApi;
 }
 
@@ -1129,7 +1116,7 @@ export async function patchAiApprovalRequest(
     body: JSON.stringify(body),
   });
   const t = await r.text();
-  if (!r.ok) throw new Error(`ai/approval-requests PATCH ${r.status}: ${t.slice(0, 400)}`);
+  if (!r.ok) throwQtssApiError("ai/approval-requests PATCH", r, t);
   return JSON.parse(t) as { updated: number };
 }
 
@@ -1174,7 +1161,7 @@ export async function fetchAiDecisions(
   params.set("limit", String(q?.limit ?? 80));
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/decisions?${params}`, accessToken, {});
   const t = await r.text();
-  if (!r.ok) throw new Error(`ai/decisions ${r.status}: ${t.slice(0, 400)}`);
+  if (!r.ok) throwQtssApiError("ai/decisions", r, t);
   return JSON.parse(t) as AiDecisionListRowApi[];
 }
 
@@ -1197,7 +1184,7 @@ export async function postAiDecisionApprove(
     headers: {},
   });
   const t = await r.text();
-  if (!r.ok) throw new Error(`ai/decisions approve ${r.status}: ${t.slice(0, 400)}`);
+  if (!r.ok) throwQtssApiError("ai/decisions approve", r, t);
   return JSON.parse(t) as { updated: number };
 }
 
@@ -1221,13 +1208,13 @@ export async function fetchAiTacticalDirective(
   const q = new URLSearchParams({ symbol: symbol.trim() });
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/directives/tactical?${q}`, accessToken, {});
   const t = await r.text();
-  if (!r.ok) throw new Error(`ai/directives/tactical ${r.status}: ${t.slice(0, 400)}`);
+  if (!r.ok) throwQtssApiError("ai/directives/tactical", r, t);
   return JSON.parse(t) as unknown;
 }
 
 export async function fetchAiPortfolioDirective(accessToken: string): Promise<unknown> {
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/directives/portfolio`, accessToken, {});
   const t = await r.text();
-  if (!r.ok) throw new Error(`ai/directives/portfolio ${r.status}: ${t.slice(0, 400)}`);
+  if (!r.ok) throwQtssApiError("ai/directives/portfolio", r, t);
   return JSON.parse(t) as unknown;
 }

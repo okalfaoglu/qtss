@@ -21,7 +21,13 @@ export function parseQtssApiErrorJson(text: string): QtssApiErrorBody | null {
     const j = JSON.parse(text) as unknown;
     if (!j || typeof j !== "object") return null;
     const o = j as Record<string, unknown>;
-    if (typeof o.error !== "string" && typeof o.error_key !== "string") return null;
+    if (
+      typeof o.error !== "string" &&
+      typeof o.error_key !== "string" &&
+      typeof o.error_description !== "string"
+    ) {
+      return null;
+    }
     const argsRaw = o.error_args;
     let error_args: Record<string, unknown> | undefined;
     if (argsRaw !== null && typeof argsRaw === "object" && !Array.isArray(argsRaw)) {
@@ -29,6 +35,7 @@ export function parseQtssApiErrorJson(text: string): QtssApiErrorBody | null {
     }
     return {
       error: typeof o.error === "string" ? o.error : undefined,
+      error_description: typeof o.error_description === "string" ? o.error_description : undefined,
       locale: typeof o.locale === "string" ? o.locale : undefined,
       error_key: typeof o.error_key === "string" ? o.error_key : undefined,
       error_args,
@@ -55,7 +62,12 @@ function i18nInterpolationFromArgs(args: Record<string, unknown> | undefined): R
 export function formatQtssApiErrorMessage(status: number, text: string): string {
   const slice = text.length > MAX_DETAIL ? `${text.slice(0, MAX_DETAIL)}…` : text;
   const body = parseQtssApiErrorJson(text);
-  const fallback = (body?.error?.trim() || slice.trim() || "(no body)").trim();
+  const fallback = (
+    body?.error_description?.trim() ||
+    body?.error?.trim() ||
+    slice.trim() ||
+    "(no body)"
+  ).trim();
   const key = body?.error_key?.trim();
   if (!key) {
     return `${status}: ${fallback}`;
@@ -70,6 +82,7 @@ export function formatQtssApiErrorMessage(status: number, text: string): string 
   return `${status}: ${translated}`;
 }
 
-export function throwQtssApiError(endpointLabel: string, res: Response, bodyText: string): never {
-  throw new Error(`${endpointLabel} ${formatQtssApiErrorMessage(res.status, bodyText)}`);
+export function throwQtssApiError(endpointLabel: string, res: Response, bodyText: string, suffix = ""): never {
+  const extra = suffix ? `${suffix}` : "";
+  throw new Error(`${endpointLabel} ${formatQtssApiErrorMessage(res.status, bodyText)}${extra}`);
 }
