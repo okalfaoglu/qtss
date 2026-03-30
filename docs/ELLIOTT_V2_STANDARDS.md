@@ -79,8 +79,25 @@ This document is the **normative** label/color/rule set. The running engine live
 | ZigZag-driven pivots | `zigzag.ts` |
 | Chart overlays: labels, line styles, per-TF coloring hooks | `adapter.ts` (label glyphs per TF; colors often supplied via `elliottWaveAppConfig` / chart layer) |
 | Engine orchestration, state merge across TFs | `engine.ts` |
-| Projection / drawing geometry | `projection.ts` |
+| **Forward projection (İleri Fib / Elliott projeksiyon)** | `projection.ts` — `buildElliottProjectionOverlayV2` |
 | Public exports | `index.ts` |
+
+### 8.1 Forward projection (`projection.ts`) — normative behavior
+
+Chart overlay `zigzagKind: elliott_projection` (ve varsa `elliott_projection_done` / `elliott_projection_c_active`) bu fonksiyondan üretilir. `App.tsx` her TF için `buildElliottProjectionOverlayV2(..., sourceTf)` çağırır.
+
+| Kural | Uygulama |
+|--------|-----------|
+| **Zaman / fiyat çapası** | Başlangıç fiyatı ve zamanı **`out.ohlcByTf[sourceTf]` son mumunun `c` / `t`** değeridir (yoksa `anchorRows` son mumu). Ana grafik interval’i farklı olsa bile projeksiyon ilgili TF serisine hizalanır. |
+| **Dalga adımı seçimi** | `postImpulseAbc` varsa `startStepFromPostAbc`; yoksa P5’e göre `startStepFromCurrentState`. A/B teyidi yoksa düzeltme her zaman **A**’dan (`startStep` ≥ 4 zorlanmaz). |
+| **Büyüklük** | İtkı bacak ortalaması `base`; `buildCalibrationFromPostAbc` ile A/B/C ve 1–5 çarpanları; `stepMagnitudeWithCalibration`. |
+| **Süre (zaman ekseni)** | Her segment için `Δt ≈ \|Δprice\| / stepRate` (itkı veya düzeltme için pivotlardan türetilen fiyat/s), `stepSec` (`barHop` × ortalama mum aralığı) ile üst bant. **Alt sınır:** en az **bir tam mum süresi** (`barPeriodSec`) ve `max(45s, 0.28×stepSec)` — uzun geçmişte grafik ölçeğinde tüm adımların tek dikey çizgide birleşmesini önler. |
+| **Piyasa rejimi** | Son ~40 mumun ortalama fiyat/s hızı, itkı ortalama hızına göre **0.48–2.05** çarpanı (`regimeMul`); volatilite artınca süre kısalır. |
+| **Etiketler** | `SeriesMarker` metni: dalga etiketi + başlangıca göre birikimli süre (`+Nm`, `+Nh`, `+Nd`). |
+
+Ayarlar: `elliottWaveAppConfig` — `show_projection_*`, `projection_bar_hop`, `projection_steps`.
+
+When behavior here changes, update this subsection in the same PR as code changes.
 
 On-chart **hex colors** for macro/intermediate/micro are typically driven by app config (`web/src/lib/elliottWaveAppConfig.ts` and friends), not only this doc — keep **§3** and the config defaults in sync when you change the palette.
 

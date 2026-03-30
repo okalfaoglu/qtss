@@ -101,10 +101,7 @@ mod tests {
     #[test]
     fn tick_secs_from_object_and_scalar() {
         assert_eq!(tick_secs_from_config_value(&json!({"secs": 30})), Some(30));
-        assert_eq!(
-            tick_secs_from_config_value(&json!({"tick_secs": 5})),
-            Some(5)
-        );
+        assert_eq!(tick_secs_from_config_value(&json!({"tick_secs": 5})), Some(5));
         assert_eq!(tick_secs_from_config_value(&json!(15)), Some(15));
         assert_eq!(tick_secs_from_config_value(&json!({})), None);
     }

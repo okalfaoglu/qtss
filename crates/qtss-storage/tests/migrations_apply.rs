@@ -18,11 +18,13 @@ async fn migrations_apply_and_worker_system_config_seeded() {
     let pool = create_pool(&url, 3).await.expect("create_pool");
     run_migrations(&pool).await.expect("run_migrations");
 
-    let n: i64 = sqlx::query_scalar("SELECT COUNT(*)::bigint FROM system_config WHERE module = $1")
-        .bind("worker")
-        .fetch_one(&pool)
-        .await
-        .expect("count worker system_config");
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM system_config WHERE module = $1",
+    )
+    .bind("worker")
+    .fetch_one(&pool)
+    .await
+    .expect("count worker system_config");
 
     assert!(
         n >= 7,

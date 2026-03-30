@@ -1,0 +1,261 @@
+{
+  "common": {
+    "language": "Language"
+  },
+  "apiErrors": {},
+  "aiDecisions": {
+    "loginPrompt": "Sign in to view AI decisions.",
+    "title": "AI decisions",
+    "layerFilter": "Layer",
+    "statusFilter": "Status",
+    "refresh": "Refresh",
+    "colCreated": "Created",
+    "colLayer": "Layer",
+    "colSymbol": "Symbol",
+    "colStatus": "Status",
+    "colConf": "Confidence",
+    "colModel": "Model",
+    "colAction": "Action",
+    "approve": "Approve",
+    "reject": "Reject",
+    "portfolio": "Portfolio directive",
+    "tacticalSection": "Tactical directive",
+    "load": "Load"
+  },
+  "drawer": {
+    "general": "General",
+    "queues": "Queues",
+    "setting": "Settings",
+    "status": "Status",
+    "apiHealth": "API",
+    "sessionConfig": "Session",
+    "sessionHint": "Dev login uses values from web `.env` (VITE_*). Production should use your IdP.",
+    "loginTry": "Dev login",
+    "configLoading": "Loading…",
+    "configRefresh": "Reload config",
+    "logout": "Sign out",
+    "rolesLoading": "Loading roles…",
+    "appearance": "Appearance",
+    "themeToggleDark": "Switch to light theme",
+    "themeToggleLight": "Switch to dark theme"
+  },
+  "elliott": {
+    "summary": "Summary",
+    "impulse": "Impulse",
+    "corrective": "Corrective"
+  },
+  "app": {
+    "channelReject": {
+      "missing": "No rejection detail",
+      "insufficientPivots": "Need {{need}} ZigZag pivots; have {{have}}.",
+      "pivotAlternation": "ZigZag pivots do not alternate high/low.",
+      "barRatioUpper": "Upper channel line bar-ratio check failed.",
+      "barRatioLower": "Lower channel line bar-ratio check failed.",
+      "inspectUpper": "Upper line inspection / touch count failed.",
+      "inspectLower": "Lower line inspection / touch count failed.",
+      "patternNotAllowed": "Pattern not allowed for this scan configuration.",
+      "overlapIgnored": "Overlap with an existing channel was ignored.",
+      "duplicatePivotWindow": "Duplicate pivot window.",
+      "lastPivotDirection": "Last pivot direction incompatible with pattern.",
+      "sizeFilter": "Channel size filter rejected candidate.",
+      "ratioDiff": "Upper/lower line length ratio out of range.",
+      "entryNotInChannel": "Entry bar is not inside the channel."
+    },
+    "channelScan": {
+      "errorInsufficientRepaint": "Not enough bars for channel scan (repaint mode).",
+      "errorInsufficientNoRepaint": "Not enough closed bars for channel scan.",
+      "segmentPivotSkip": " · tail pivot skip {{count}}",
+      "segmentLevel": " · ZigZag level {{level}}",
+      "segmentZg": " · ZigZag len {{len}} depth {{depth}}",
+      "segmentMultiFormations": " · {{count}} matches: {{names}}",
+      "closedBarSuffix": " · closed bars only",
+      "hoverFormations": "Matches: {{names}}",
+      "summaryMatch": "{{name}} · pick U{{pickUpper}} L{{pickLower}} · pivots {{pivots}}{{skipNote}}{{lvlNote}}{{zzNote}}{{multi}}{{closedNote}}",
+      "noMatchLine": "No match — {{reason}} · bars {{bars}} · pivots {{pivots}}{{closedNote}}",
+      "defaultHoverTitle": "Channel scan",
+      "scanning": "Scanning…",
+      "drawerSectionTitle": "Channel six scan",
+      "drawerIntro": "Latest server scan for the current chart window. Open the top-bar summary or expand JSON in Settings.",
+      "drawerFootnote": "Tune ACP / Trendoscope settings on the ACP tab; scan uses the same bar window as the chart toolbar."
+    },
+    "drawings": {
+      "cleared": "Drawings cleared."
+    },
+    "commission": {
+      "symbolRequired": "Enter a symbol to load commission account rates.",
+      "fetchBusy": "Loading…",
+      "fetchLabel": "Load Binance commission account"
+    },
+    "bars": {
+      "databaseRequiresAuth": "Database OHLC requires sign-in."
+    },
+    "backfill": {
+      "done": "Backfill done: {{upserted}} rows ({{source}})."
+    },
+    "config": {
+      "adminOnlyPreview": "Config preview is available to admins only."
+    },
+    "acp": {
+      "dbDescription": "ACP / Trendoscope chart pattern settings (`app_config.chart_patterns`)."
+    },
+    "elliottWave": {
+      "dbDescription": "Elliott wave display and engine settings (`app_config.elliott_wave`)."
+    },
+    "dev": {
+      "missingWebEnv": "Missing web env: set VITE_OAUTH_CLIENT_ID and VITE_OAUTH_CLIENT_SECRET in web/.env (see web/.env.example)."
+    },
+    "chartToolbar": {
+      "menuAria": "Chart tools",
+      "symbolStripAria": "Symbol and timeframe",
+      "symbolAria": "Symbol",
+      "intervalAria": "Interval",
+      "ohlcSourceAria": "OHLC source",
+      "ohlcSourceTitle": "Where chart candles are loaded from",
+      "ohlcAuto": "Auto",
+      "ohlcExchange": "Exchange REST",
+      "ohlcDatabase": "Database",
+      "sourceBinanceLive": "Live Binance klines",
+      "sourceDbLine": "DB {{exchange}}/{{segment}}",
+      "sourceDbNeedLogin": "DB (sign in)",
+      "barCount": "{{count}} bars",
+      "themeLight": "Light",
+      "themeDark": "Dark"
+    },
+    "drawerPanel": {
+      "dialogAria": "Settings",
+      "closeAria": "Close settings",
+      "searchPlaceholder": "Filter settings…",
+      "searchInputAria": "Filter settings",
+      "tablistAria": "Settings sections"
+    },
+    "engineDrawer": {
+      "sectionTitle": "Engine & data",
+      "intro": "Targets drive worker jobs, snapshots, paper trading, and overlays.",
+      "liData": "Bars and snapshots come from the API / worker pipeline.",
+      "liWorker": "Register symbols so the worker can compute engines for your venue.",
+      "liChartMapping": "Chart toolbar exchange / segment / symbol / interval should match a registered target when possible.",
+      "liPaper": "Paper fills and balance use the same symbol keys as live.",
+      "liConfluence": "Confluence and market-context panels aggregate multiple engines.",
+      "chkTradingRange": "Show trading range from DB",
+      "chkSweepMarkers": "Show liquidity sweep markers",
+      "chkRangeSignals": "Show range signal markers",
+      "chkOpenPositionLine": "Show open position line (paper / derived)",
+      "refreshBusy": "Refreshing…",
+      "refreshNow": "Refresh targets",
+      "addTargetLead": "Add target",
+      "addTargetRbacFull": "Requires ops/admin.",
+      "registeredTargets": "Registered targets ({{count}})",
+      "signalModeTitle": "Signal direction mode stored for this target",
+      "optAutoSegment": "Auto (segment)",
+      "optLongOnly": "Long only",
+      "optBoth": "Both",
+      "optShortOnly": "Short only",
+      "toggleDisable": "Disable",
+      "toggleEnable": "Enable",
+      "snapshotSummaryHead": "Latest engine snapshots",
+      "snapshotEmpty": "No snapshots yet.",
+      "confluenceSummaryHead": "Confluence snapshots",
+      "confluenceEmpty": "No confluence rows."
+    },
+    "signalDashboard": {
+      "sectionTitle": "Signal dashboard",
+      "priorityLine": "Fields below prefer `signal_dashboard_v2` when present; legacy Turkish keys are fallback.",
+      "payloadEmpty": "No payload on this snapshot row.",
+      "insufficientBars": "Snapshot skipped: insufficient bars.",
+      "ynYes": "Yes",
+      "ynNo": "No",
+      "systemActive": "Active",
+      "wireSummary": "Raw",
+      "row": {
+        "status": "Status",
+        "statusModelRaw": "Status (model raw)",
+        "directionPolicyDb": "Direction policy (DB)",
+        "directionEffective": "Direction (effective)",
+        "localTrend": "Local trend",
+        "globalTrend": "Global trend",
+        "marketMode": "Market mode",
+        "entryMode": "Entry mode",
+        "volatilityPct": "Volatility %",
+        "momentum1": "Momentum (RSI)",
+        "momentum2": "Momentum (ROC)",
+        "entryActual": "Entry (actual)",
+        "stopInitial": "Stop (initial)",
+        "takeProfitInitial": "Take profit (initial)",
+        "stopTrailActive": "Stop (trail)",
+        "takeProfitDynamic": "Take profit (dynamic)",
+        "signalSource": "Signal source",
+        "trendExhaustion": "Trend exhaustion",
+        "structureShift": "Structure shift",
+        "positionStrength": "Position strength",
+        "system": "System",
+        "rangeHigh": "Range high",
+        "rangeLow": "Range low",
+        "rangeMid": "Range mid",
+        "atr": "ATR",
+        "lastBar": "Last bar"
+      }
+    },
+    "paperDrawer": {
+      "rangePaperHead": "Paper & range context",
+      "topBarLead": "Top bar",
+      "topBarTrail": " — commission and balances use this mapping when available.",
+      "commissionHead": "Binance commission",
+      "commissionIntro": "Default bps from exchange metadata vs signed-in account fraction rates.",
+      "defaultBps": "Default maker/taker (bps)",
+      "accountFraction": "Account fraction rates",
+      "motorDbChain": "Open side (chart / DB chain)",
+      "noOpenSide": "No open side",
+      "recentRangeEvents": "Recent range events",
+      "paperQuote": "Paper quote balance",
+      "paperQuoteEmpty": "— (load fills / balance)",
+      "paperBase": "Paper base positions"
+    },
+    "pnlDashboard": {
+      "rebuildOk": "Rebuild OK: scanned {{scanned}} orders, {{fills}} with fills, {{rows}} rollup rows.",
+      "title": "P&L dashboard",
+      "refresh": "Refresh",
+      "ledger": "Ledger",
+      "paper": "Paper",
+      "live": "Live",
+      "scope": {
+        "instant": "Now",
+        "daily": "Daily",
+        "weekly": "Weekly",
+        "monthly": "Monthly",
+        "yearly": "Yearly"
+      },
+      "kpi": {
+        "quoteBalance": "Quote balance",
+        "cashflow24h": "Cashflow 24h",
+        "trades24h": "Trades 24h"
+      },
+      "rebuildRollups": "Rebuild rollups",
+      "liveRollupHint": "Admin-only: recomputes dashboard rollups from exchange orders.",
+      "paperHint": "Paper: cashflow from dry fills; charts bucket by period.",
+      "liveHint": "Live: uses stored rollups plus recent orders for the drill-down.",
+      "chart": {
+        "pnl": "P&L",
+        "fees": "Fees",
+        "equityPaper": "Equity (paper)",
+        "cumulativePnlRollup": "Cumulative P&L (rollup)"
+      },
+      "drilldownTitle": "Period detail",
+      "clearSelection": "Clear bar selection",
+      "col": {
+        "time": "Time",
+        "symbol": "Symbol",
+        "side": "Side",
+        "qty": "Qty",
+        "price": "Price",
+        "fee": "Fee",
+        "cashflow": "Cashflow",
+        "quoteAfter": "Quote after",
+        "segment": "Segment",
+        "status": "Status",
+        "quoteQty": "Quote qty"
+      },
+      "noTradesInPeriod": "No rows in this period.",
+      "clickBarHint": "Click a bar to filter fills/orders for that period."
+    }
+  }
+}

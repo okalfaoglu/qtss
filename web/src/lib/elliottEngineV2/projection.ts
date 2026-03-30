@@ -119,6 +119,30 @@ function median(nums: number[]): number {
   return (s[m - 1]! + s[m]!) / 2;
 }
 
+/** Son mumların fiyat/s hızını itkı ortalama hızıyla kıyasla; piyasa hızlandıkça projeksiyon süreleri kısalır. */
+function recentVsImpulseVelocityMul(rows: OhlcV2[], refRatePerSec: number): number {
+  const tail = rows.slice(-40);
+  if (tail.length < 4 || refRatePerSec <= 1e-12) return 1;
+  let sumDp = 0;
+  let sumDt = 0;
+  for (let i = 1; i < tail.length; i++) {
+    const dt = tail[i]!.t - tail[i - 1]!.t;
+    if (dt <= 0) continue;
+    sumDp += Math.abs(tail[i]!.c - tail[i - 1]!.c);
+    sumDt += dt;
+  }
+  const recent = sumDt > 0 ? sumDp / sumDt : refRatePerSec;
+  return clamp(recent / refRatePerSec, 0.48, 2.05);
+}
+
+/** Projeksiyon başlangıcından bu segment uca kadar yaklaşık süre (işaret metni). */
+function formatEtaFromStart(deltaSec: number): string {
+  const s = Math.max(0, Math.round(deltaSec));
+  if (s < 3600) return `+${Math.max(1, Math.round(s / 60))}m`;
+  if (s < 172800) return `+${Math.round(s / 3600)}h`;
+  return `+${Math.round(s / 86400)}d`;
+}
+
 /**
  * Post-ABC tespitinden dinamik oran profili uret:
  * - A/B/C carpani gercek segment buyukluklerinden gelir.
@@ -249,8 +273,10 @@ function startStepFromPostAbc(
 
 /**
  * Lightweight V2 forward projection:
- * - `sourceTf` doluysa o TF itkisi ve mum adımı; yoksa eski davranış (micro→intermediate→macro).
- * - projeksiyon segmentleri basit oranlarla alterne itki/düzeltme.
+ * - `sourceTf` doluysa o TF itkisi kullanılır; çizim çapası **aynı TF’in** `ohlcByTf` son mumu olmalı
+ *   (ana grafik farklı intervaldeyse `anchorRows` son mumu itkı ile yanlış hizalanırdı).
+ * - Segment süresi: `Δt ≈ |Δfiyat| / hız` (itkı/düzeltme için ölçülen pivot hızları + güncel mum volatilitesi).
+ * - `barHop`: bir segment için nominal süre ölçeği (`≈ hop × ortalama mum aralığı`); gerçek `Δt` bant içinde kalır.
  */
 export function buildElliottProjectionOverlayV2(
   out: ElliottEngineOutputV2,
@@ -271,7 +297,9 @@ export function buildElliottProjectionOverlayV2(
   const p = imp.pivots;
   const p5 = p[5];
   const isBull = imp.direction === "bull";
-  const stepSec = inferBarStepSec(rowsForStep) * Math.max(1, Math.floor(opt.barHop || 1));
+  const barPeriodSec = inferBarStepSec(rowsForStep);
+  const hop = Math.max(1, Math.floor(opt.barHop || 1));
+  const stepSec = barPeriodSec * hop;
   const maxSteps = Math.min(24, Math.max(1, Math.floor(opt.maxSteps || 12)));
 
   const len1 = Math.abs(p[1].price - p[0].price);
@@ -279,9 +307,9 @@ export function buildElliottProjectionOverlayV2(
   const len5 = Math.abs(p[5].price - p[4].price);
   const base = Math.max(1e-8, (len1 + len3 + len5) / 3);
 
-  const last = anchorRows[anchorRows.length - 1]!;
-  const startPrice = last.c;
-  const startTime = last.t;
+  const anchorLast = rowsForStep.length ? rowsForStep[rowsForStep.length - 1]! : anchorRows[anchorRows.length - 1]!;
+  const startPrice = anchorLast.c;
+  const startTime = anchorLast.t;
   const startStepRaw =
     startStepFromPostAbc(isBull, postAbc, startPrice, base) ??
     startStepFromCurrentState(isBull, p5.price, startPrice, base);
@@ -291,6 +319,8 @@ export function buildElliottProjectionOverlayV2(
   const startStep = !hasObservedAB && startStepRaw < 4 ? 1 : startStepRaw;
   const cal = buildCalibrationFromPostAbc(postAbc, base);
   const rates = buildRateProfile(imp, postAbc);
+  const refBlendRate = (rates.motiveRate + rates.corrRate) * 0.5;
+  const regimeMul = recentVsImpulseVelocityMul(rowsForStep, refBlendRate);
 
   const points: Pt[] = [{ time: startTime as UTCTimestamp, value: startPrice }];
   const markers: SeriesMarker<UTCTimestamp>[] = [];
@@ -304,14 +334,21 @@ export function buildElliottProjectionOverlayV2(
   for (let i = 0; i < maxSteps; i++) {
     const stepNo = startStep + i;
     const magRaw = stepMagnitudeWithCalibration(stepNo, base, cal);
-    const stepRate = stepIsCorrective(stepNo) ? rates.corrRate : rates.motiveRate;
-    const magRate = stepRate * stepSec;
-    // Zamansal egim dogrulugu: mum suresine gore hiz bandi.
-    const mag = clamp(magRaw, magRate * 0.55, magRate * 1.7);
+    const stepRateBase = stepIsCorrective(stepNo) ? rates.corrRate : rates.motiveRate;
+    const stepRate = Math.max(1e-12, stepRateBase * regimeMul);
+    const magNominal = stepRate * stepSec;
+    const mag = clamp(magRaw, magNominal * 0.42, magNominal * 1.88);
     const dir = stepDirection(stepNo);
     const signed = (isBull ? 1 : -1) * dir * mag;
     cur += signed;
-    t += stepSec;
+    const deltaPrice = Math.abs(signed);
+    const dtRaw = deltaPrice / stepRate;
+    // At least one full bar period per leg so the polyline is readable on MTF charts:
+    // sub-bar minDt (e.g. 0.28×15m ≈ 4.2m) collapses all steps into one vertical pixel column
+    // when the visible history spans hundreds of candles (looks like a thick vertical spike).
+    const minDt = Math.max(45, Math.round(stepSec * 0.28), barPeriodSec);
+    const maxDt = Math.max(minDt + 1, Math.round(stepSec * 7.5));
+    t += Math.round(clamp(dtRaw, minDt, maxDt));
     points.push({ time: t as UTCTimestamp, value: cur });
 
     markers.push({
@@ -319,7 +356,7 @@ export function buildElliottProjectionOverlayV2(
       position: signed >= 0 ? "aboveBar" : "belowBar",
       shape: "circle",
       color: markerColor,
-      text: markerLabel(stepNo, tf),
+      text: `${markerLabel(stepNo, tf)} ${formatEtaFromStart(t - startTime)}`,
     });
   }
 

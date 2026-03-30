@@ -15,6 +15,7 @@ type Props = {
 };
 
 export function AiDecisionsPanel({ accessToken, canAdmin }: Props) {
+  const { t } = useTranslation();
   const [rows, setRows] = useState<AiDecisionListRowApi[]>([]);
   const [portfolio, setPortfolio] = useState<unknown>(null);
   const [tacticalSym, setTacticalSym] = useState("BTCUSDT");
@@ -52,8 +53,8 @@ export function AiDecisionsPanel({ accessToken, canAdmin }: Props) {
     if (!accessToken || !tacticalSym.trim()) return;
     setErr("");
     try {
-      const t = await fetchAiTacticalDirective(accessToken, tacticalSym.trim());
-      setTacticalPreview(t);
+      const directive = await fetchAiTacticalDirective(accessToken, tacticalSym.trim());
+      setTacticalPreview(directive);
     } catch (e) {
       setErr(String(e));
     }

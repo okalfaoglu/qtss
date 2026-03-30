@@ -57,13 +57,18 @@ pub trait Loggable {
 
 /// Varsayılan subscriber: düz metin veya `QTSS_LOG_JSON=1` ile JSON satırı.
 pub fn init_logging(default_directive: &str) {
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_directive));
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(default_directive));
 
     if std::env::var("QTSS_LOG_JSON").ok().as_deref() == Some("1") {
         tracing_subscriber::registry()
             .with(filter)
-            .with(fmt::layer().json().with_target(true).with_line_number(true))
+            .with(
+                fmt::layer()
+                    .json()
+                    .with_target(true)
+                    .with_line_number(true),
+            )
             .init();
     } else {
         tracing_subscriber::registry()

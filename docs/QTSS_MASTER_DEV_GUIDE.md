@@ -1,6 +1,6 @@
 # QTSS — Master Geliştirme Rehberi (Cursor için)
 
-> **Tarih:** 2026-03-30  
+> **Tarih:** 2026-03-29  
 > **Amaç:** Projenin tam durum analizi, tespit edilen hatalar/sorunlar, iyileştirme önerileri ve **bulut + on-prem (kurum içi)** çoklu AI sağlayıcı destekli AI katmanı entegrasyon planını **tek çatı** altında birleştirir. Bu doküman Cursor'ın ana referansıdır.  
 > **Önceki dokümanlar:** Eski ayrı rehberler (`QTSS_CURSOR_DEV_GUIDE.md`, `SPEC_ONCHAIN_SIGNALS.md`, `PLAN_CONFLUENCE_AND_MARKET_DATA.md`, `DATA_SOURCES_AND_SOURCE_KEYS.md`, `NANSEN_TOKEN_SCREENER.md`) ve proje dışı `QTSS_AI_ENGINE_GUIDE` içeriği bu dosyada birleştirildi; o dosyalar repo’dan kaldırıldı. Güncel `docs/` envanteri için **Bölüm 11**’e bakın.
 
@@ -8,7 +8,7 @@
 
 ## İçindekiler
 
-**0.** Durum özeti (yönlendirme tabloları) · **1.** Hatalar ve sorunlar · **2.** İyileştirme önerileri · **3.** AI planı (çoklu sağlayıcı) · **4.** FAZ 0–11 görev listesi · **5.** Migration kuralları · **6.** Ortam değişkenleri (AI + bildirim + DB config hedefi) · **7.** Test stratejisi · **8.** Kod kalitesi kuralları (**8.1** log seviyeleri) · **9.** Güvenlik · **10.** Worker spawn sırası · **11.** `docs/` dosya envanteri
+**0.** Durum özeti (**0.1**–**0.4**: kanıtlar, AI durumu, **minimal vs tam checkout**, **Elliott projeksiyon**) · **1.** Hatalar ve sorunlar · **2.** İyileştirme önerileri · **3.** AI planı (çoklu sağlayıcı) · **4.** FAZ 0–11 görev listesi · **5.** Migration kuralları · **6.** Ortam değişkenleri (AI + bildirim + DB config hedefi) · **7.** Test stratejisi · **8.** Kod kalitesi kuralları (**8.1** log seviyeleri) · **9.** Güvenlik · **10.** Worker spawn sırası · **11.** `docs/` dosya envanteri
 
 *Önerilen okuma sırası (ilk oturum):* **0 → 1 → 2 → 4** (FAZ tabloları) → ihtiyaca göre **5–11**. Mimari özet için ayrıca `docs/PROJECT.md`.
 
@@ -18,7 +18,7 @@
 
 **Kısa cevap:** **Evet — 17/17 temel yönlendirme tamam** (`qtss-ai` crate, `0042`–`0047` şeması — `0045`: `users.preferred_locale` + worker `system_config` tohumları; `0046`: paper/live pozisyon bildirim tick; `0047`: kill switch DB senkron + PnL poll tick; çoklu sağlayıcı + on-prem, API + web paneli, `system_config`, kapanışta `ai_decision_outcomes` geri bildirimi). Tasarım tek üreticiye kilitli değildir; **Anthropic**, **OpenAI-uyumlu iç uç**, **Ollama** vb. aynı trait ile seçilir. `ai_approval_requests` genel onay kuyruğu olarak `ai_decisions` zincirinden ayrı kalır.
 
-**FAZ 0–11** (Bölüm 4) izleme tablolarıdır; **FAZ 0–8**, **FAZ 9 çekirdek i18n**, **FAZ 10** ve **FAZ 11** çekirdeği uygulanmıştır. **FAZ 9**’da `App.tsx` operatör metinleri anahtarlanır: çekmece/AI paneli, **üst şerit**, **ACP + kanal taraması**, **motor çekmecesi** (`app.engineDrawer.*` — DB snapshot, sinyal paneli tablosu `app.signalDashboard.*`, Paper/F4–F5 `app.paperDrawer.*`, snapshot/Confluence özetleri), komisyon/backfill/dev-login (`app.chartToolbar.*`, `app.channelReject.*`, `app.channelScan.*`, `app.acp.*`, `app.drawerPanel.*`, …). **Elliott** uzun yardım paragrafları, **bağlam / Nansen** çekmece metinleri ve `matchesSetting` arama anahtar kelimeleri kademeli kalabilir; API **`error_key`** için web istemci kataloğu genişletmesi isteğe bağlıdır. **FAZ 11.7** — outbox, PnL rollup, notify locale, paper/live pozisyon bildirim tick, **kill switch**, **engine analiz**, **on-chain sinyal**, **position manager**, **Nansen token screener + genişletilmiş HTTP döngüleri** (`nansen_extended`) için `system_config` + `resolve_worker_tick_secs` kodda (**`docs/CONFIG_REGISTRY.md`**). **Harici HTTP motorları** (`crates/qtss-worker/src/engines/*`): ortak uyku süresi **`worker.external_fetch_poll_tick_secs`** / env **`QTSS_EXTERNAL_FETCH_POLL_SECS`** (`external_common.rs`). Tam `system_config` hattında bu anahtar için idempotent **0048+** tohumu eklenebilir; yoksa env + varsayılan (30s, min 10s) geçerli. Tamamlanan alt görev **✅ DONE** ile işaretlenir.
+**FAZ 0–11** (Bölüm 4) izleme tablolarıdır; **FAZ 0–8**, **FAZ 9 çekirdek i18n**, **FAZ 10** ve **FAZ 11** çekirdeği uygulanmıştır. **FAZ 9**’da `App.tsx` operatör metinleri anahtarlanır: çekmece/AI paneli, **üst şerit**, **ACP + kanal taraması**, **motor çekmecesi** (`app.engineDrawer.*` — DB snapshot, sinyal paneli tablosu `app.signalDashboard.*`, Paper/F4–F5 `app.paperDrawer.*`, snapshot/Confluence özetleri), komisyon/backfill/dev-login (`app.chartToolbar.*`, `app.channelReject.*`, `app.channelScan.*`, `app.acp.*`, `app.drawerPanel.*`, …). **Elliott** uzun yardım paragrafları, **bağlam / Nansen** çekmece metinleri ve `matchesSetting` arama anahtar kelimeleri kademeli kalabilir; API **`error_key`** için web istemci kataloğu genişletmesi isteğe bağlıdır. **FAZ 11.7** — outbox, PnL rollup, notify locale, paper/live pozisyon bildirim tick, **kill switch**, **engine analiz**, **on-chain sinyal**, **position manager**, **Nansen token screener + genişletilmiş HTTP döngüleri** (`nansen_extended`) için `system_config` + `resolve_worker_tick_secs` kodda (**`docs/CONFIG_REGISTRY.md`**). **Harici HTTP motorları** (`crates/qtss-worker/src/engines/*`): ortak uyku süresi **`worker.external_fetch_poll_tick_secs`** / env **`QTSS_EXTERNAL_FETCH_POLL_SECS`** (`external_common.rs`). Idempotent **0048+** tohumu yalnızca **`0044_system_config`** tablosu uygulanmış tam migration zincirinde anlamlıdır; **minimal checkout** (`0001`–`0012` yalnız) için env + kod varsayılanları (örn. 30s, min 10s) geçerlidir. Tamamlanan alt görev **✅ DONE** ile işaretlenir.
 
 **Çalıştırma (yerel):** HTTP API → `cargo run -p qtss-api`; arka plan worker → `cargo run -p qtss-worker`. İkisi ayrı süreç; **PostgreSQL** ve `DATABASE_URL` zorunlu. İlk kurulumda örnek org/admin için: `cargo run -p qtss-api --bin qtss-seed`. Bağlantı ve gizli anahtarlar için kök `.env` / `.env.example` tek kaynak kabul edilir. Worker üzerinde `/live`, `/ready`, `/metrics` için HTTP dinleyici: `.env.example` içindeki **`QTSS_WORKER_HTTP_BIND`** (ör. `127.0.0.1:9090`). Web arayüzü: `web/` içinde `npm install`, `npm run dev` (geliştirme) / `npm run build` (üretim paketi); API adresi için `web/.env` veya Vite proxy ayarı `.env.example` / proje dokümanı ile uyumlu olmalıdır.
 
@@ -50,6 +50,19 @@
 | # | Yönlendirme | Durum | Kanıt |
 |---|-------------|-------|--------|
 | 17 | **AI katmanı (`qtss-ai` + çoklu sağlayıcı, on-prem dahil)** | ✅ DONE | `crates/qtss-ai/` (`AiRuntime`, `providers/*`, `context_builder`, katman süpürüleri, `feedback`), migration `0042`–`0043`, API `routes/ai_decisions.rs`, `web/…/AiDecisionsPanel.tsx`, worker `ai_engine.rs` + `position_manager` AI SL/TP + `record_decision_outcome` |
+
+### 0.3 Repo checkout türleri (minimal vs tam ürün hattı)
+
+| Tür | Migrasyon kapsamı | Not |
+|-----|-------------------|-----|
+| **Minimal checkout** | Yalnızca `0001_init.sql` … `0012_acp_pattern_groups.sql` (12 dosya) | `system_config`, `ai_decisions`, Nansen genişletilmiş tablolar vb. **yoktur**. MASTER’daki FAZ 11.7 / spawn listesi / kanıt tabloları **tam zincir** ile doğrulanır. Kontrol: `migrations/*.sql` dosya sayısı ve `migrations/README.md`. |
+| **Tam ürün hattı** | `0013`+ … `0047`+ (ve sıradaki `0048`+ tohumlar) | AI (`0042`–`0043`), `system_config` (`0044`), locale ve worker tick tohumları (`0045`–`0047`). **0048+** idempotent seed’ler `0044` DDL’inden sonra eklenir. |
+
+`docs/PROJECT.md` ve `migrations/README.md` bu ayrımı yansıtmalıdır; tek belgede “36 migrasyon” ile “12 dosya” çelişkisi olmamalıdır.
+
+### 0.4 Elliott ileri projeksiyon (web, `elliottEngineV2`)
+
+Grafik üzerindeki **ileri Fib / Elliott projeksiyon** çizgileri `web/src/lib/elliottEngineV2/projection.ts` içindeki `buildElliottProjectionOverlayV2` ile üretilir (`zigzagKind: elliott_projection`). Zaman–fiyat çapası **kaynak zaman diliminin** (`sourceTf`) `ohlcByTf` son mumuna hizalanır; segment süreleri fiyat adımına ve itkı/düzeltme hızına göre ölçeklenir; son ~40 mumun hızına göre rejim çarpanı süreyi kısaltır veya uzatır; işaret metinlerinde birikimli ETA (`+Nm`, `+Nh`, `+Nd`) gösterilir. Normatif tablo ve kurallar: **`docs/ELLIOTT_V2_STANDARDS.md` §8.1**.
 
 ---
 

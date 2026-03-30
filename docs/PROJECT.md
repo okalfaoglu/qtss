@@ -2,7 +2,7 @@
 
 Çok borsalı alım-satım ve analiz platformu. Çekirdek **Rust**; web ve mobil tüketim **HTTP API** üzerinden. Bu belge mimari kararları, klasör yapısını ve yol haritasını özetler.
 
-**Hizalama (kesin kural):** Kod ve şablonlar tek doğrulukla güncellenir — tam madde listesi: [QTSS_CURSOR_DEV_GUIDE.md](./QTSS_CURSOR_DEV_GUIDE.md) §0 (worker `tokio::spawn` + `init_logging` + `run_migrations` bağlamı; API `init_logging` + `run_migrations` bağlamı; `registry.rs`; `qtss-storage`/`pool.rs`; kök `.env.example`; `migrations/README.md`; [SECURITY.md](./SECURITY.md) worker canlı emir notu; bu belge §7).
+**Hizalama (kesin kural):** Kod ve şablonlar tek doğrulukla güncellenir — tam madde listesi: [QTSS_MASTER_DEV_GUIDE.md](./QTSS_MASTER_DEV_GUIDE.md) — worker `tokio::spawn` + `init_logging` + `run_migrations` ([Bölüm 10 — spawn sırası](./QTSS_MASTER_DEV_GUIDE.md#10-spawn-s%C4%B1ras%C4%B1)); API aynı `init_logging` + migrasyon bağlamı; `data_sources/registry.rs`; `qtss-storage` / `pool.rs`; kök `.env.example`; `migrations/README.md` + [Bölüm 5 — migration kuralları](./QTSS_MASTER_DEV_GUIDE.md#5-migration-kurallar%C4%B1); log seviyeleri [§8.1](./QTSS_MASTER_DEV_GUIDE.md#81-loglama--trace--debug--info--warn--error--critical); [SECURITY.md](./SECURITY.md) worker canlı emir notu; bu belge [§7](#7-veritabanı-özet). **Checkout farkı:** Bu depoda migrasyonlar yalnızca `0001`–`0012` olabilir; tam ürün hattı için bkz. MASTER **§0.3** ve `migrations/README.md`.
 
 ---
 
@@ -44,11 +44,10 @@ qtss/
 ├── docs/
 │   └── PROJECT.md             # Bu dosya
 ├── deploy/                    # systemd birim şablonları, worker/API notları
-├── migrations/                # SQLx migrasyonları (PostgreSQL); **tam envanter:** `migrations/README.md` (36× `.sql`)
-│   ├── README.md              # sıralı dosya listesi + sürüm = önek, çift önek yasağı; §6 / PROJECT §7
-│   ├── 0001_init.sql … 0012_acp_pattern_groups.sql  # çekirdek + ACP
-│   ├── 0013_worker_analytics_schema.sql … 0036_bar_intervals_repair_if_missing.sql  # worker, Nansen, snapshots, on-chain, confluence, FK telafisi
-│   └── Sürüm = dosya öneki (örn. 0034 → 34 … 0036 → 36). Aynı numaradan iki dosya yasak — bkz. `docs/QTSS_CURSOR_DEV_GUIDE.md` §6
+├── migrations/                # SQLx migrasyonları (PostgreSQL). **Bu checkout:** 12× `.sql` (`0001`–`0012`); tam envanter: `migrations/README.md`
+│   ├── README.md              # sıralı dosya listesi + sürüm = önek, çift önek yasağı; MASTER §5 / PROJECT §7
+│   ├── 0001_init.sql … 0012_acp_pattern_groups.sql  # bu depoda: çekirdek + ACP
+│   └── Tam ürün hattında: `0013`+ … `0047`+ (worker, Nansen, AI, `system_config`, …) — `migrations/README.md`. Aynı önek iki dosya yasak — [QTSS_MASTER_DEV_GUIDE.md §5](./QTSS_MASTER_DEV_GUIDE.md#5-migration-kurallar%C4%B1)
 ├── web/                     # Vite + React + TS; LWC grafik, Elliott V2, ACP kanal taraması (proxy → API)
 └── crates/
     ├── qtss-common/           # Uygulama modu (live/dry), merkezi loglama
@@ -69,15 +68,15 @@ qtss/
 
 **Migrasyonları çalıştırma:** `qtss-api` veya `qtss-worker` başlarken bekleyen `migrations/*.sql` dosyaları otomatik uygulanır: `cargo run -p qtss-api`. İlk kurulumda örnek org + admin + OAuth istemcisi için: `cargo run -p qtss-api --bin qtss-seed` (binary adı `seed` değil, `qtss-seed`).
 
-**Varsayılan log (API + worker):** Kod içi `init_logging` her iki ikilikte de `sqlx::postgres::notice=warn` içerir (`_sqlx_migrations` Postgres NOTICE’larını INFO’da göstermez) — `docs/QTSS_CURSOR_DEV_GUIDE.md` §2.1.
+**Varsayılan log (API + worker):** Kod içi `init_logging` her iki ikilikte de `sqlx::postgres::notice=warn` içerir (`_sqlx_migrations` Postgres NOTICE’larını INFO’da göstermez) — [QTSS_MASTER_DEV_GUIDE.md §8.1](./QTSS_MASTER_DEV_GUIDE.md#81-loglama--trace--debug--info--warn--error--critical).
 
-**Migrasyon checksum uyarısı:** Uygulanmış bir `migrations/*.sql` dosyasını değiştirirseniz SQLx `migration … was previously applied but has been modified` hatası verir. Önce (repo kökünden, `qtss-api` ile aynı `.env`): `cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums` — ardından `cargo run -p qtss-api`. `sqlx-cli` şart değil. Doğru kalıp: eski migrasyonu ellemeden yeni numaralı `.sql` eklemek — `docs/QTSS_CURSOR_DEV_GUIDE.md` §6.
+**Migrasyon checksum uyarısı:** Uygulanmış bir `migrations/*.sql` dosyasını değiştirirseniz SQLx `migration … was previously applied but has been modified` hatası verir. Önce (repo kökünden, `qtss-api` ile aynı `.env`): `cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums` — ardından `cargo run -p qtss-api`. `sqlx-cli` şart değil. Doğru kalıp: eski migrasyonu ellemeden yeni numaralı `.sql` eklemek — [QTSS_MASTER_DEV_GUIDE.md §5](./QTSS_MASTER_DEV_GUIDE.md#5-migration-kurallar%C4%B1).
 
-**Tekil sürüm numarası:** `0014_a.sql` ve `0014_b.sql` gibi **aynı önek** iki dosya olamaz — `_sqlx_migrations` satır başına tek checksum vardır; senkron aracı da son dosyanın özetini yazar ve `migrate` yine kırılır. `qtss-sync-sqlx-checksums` çift `NNNN_` önekini artık başta reddeder. Yeni dosya eklemeden önce repo kökünde `ls migrations/*.sql | sort | tail` ile son numarayı kontrol edin; bir sonraki boş sürümü kullanın (ör. `0037_...sql` — güncel son dosya dalınıza göre değişir; §6).
+**Tekil sürüm numarası:** `0014_a.sql` ve `0014_b.sql` gibi **aynı önek** iki dosya olamaz — `_sqlx_migrations` satır başına tek checksum vardır; senkron aracı da son dosyanın özetini yazar ve `migrate` yine kırılır. `qtss-sync-sqlx-checksums` çift `NNNN_` önekini artık başta reddeder. Yeni dosya eklemeden önce repo kökünde `ls migrations/*.sql | sort | tail` ile son numarayı kontrol edin; bir sonraki boş öneki kullanın (**bu depoda** örnek `0013_…sql`; tam ürün hattında örnek `0048_…sql` — dalınızdaki son dosyaya göre değişir; MASTER §5).
 
-**Nansen setup scan:** `0020_nansen_setup_scans.sql` — `nansen_setup_runs` / `nansen_setup_rows`; worker `setup_scan_engine` (`QTSS_SETUP_SCAN_SECS`, `QTSS_SETUP_MAX_SNAPSHOT_AGE_SECS`); varsayılan `QTSS_SETUP_SNAPSHOT_ONLY=1` ile setup Nansen’e ikinci HTTP göndermez (kredi yalnız `nansen_engine`); TP1 için 1h OHLC + 6h vol; `meta_json.spec_version` (ör. `nansen_setup_v3`); 5 LONG + 5 SHORT; API `GET /api/v1/analysis/nansen/setups/latest`.
+**Nansen setup scan** (tam ürün migrasyon hattında, örn. `0020_nansen_setup_scans.sql`): `nansen_setup_runs` / `nansen_setup_rows`; worker `setup_scan_engine` (`QTSS_SETUP_SCAN_SECS`, `QTSS_SETUP_MAX_SNAPSHOT_AGE_SECS`); varsayılan `QTSS_SETUP_SNAPSHOT_ONLY=1` ile setup Nansen’e ikinci HTTP göndermez (kredi yalnız `nansen_engine`); TP1 için 1h OHLC + 6h vol; `meta_json.spec_version` (ör. `nansen_setup_v3`); 5 LONG + 5 SHORT; API `GET /api/v1/analysis/nansen/setups/latest`.
 
-**Nansen extended HTTP:** `nansen_extended.rs` + `nansen_engine` re-export; `data_snapshots` anahtarları ve TGM **perp PnL leaderboard** → `app_config.nansen_whale_watchlist` → whale aggregate (`profiler/perp-positions`). Varsayılan leaderboard yolu: `api/v1/tgm/perp-pnl-leaderboard` (`NANSEN_PERP_LEADERBOARD_PATH`). Tam env listesi: kök `.env.example`, özet: `docs/QTSS_CURSOR_DEV_GUIDE.md` §5.
+**Nansen extended HTTP:** `nansen_extended.rs` + `nansen_engine` re-export; `data_snapshots` anahtarları ve TGM **perp PnL leaderboard** → `app_config.nansen_whale_watchlist` → whale aggregate (`profiler/perp-positions`). Varsayılan leaderboard yolu: `api/v1/tgm/perp-pnl-leaderboard` (`NANSEN_PERP_LEADERBOARD_PATH`). Tam env listesi: kök `.env.example`, özet: [QTSS_MASTER_DEV_GUIDE.md §6](./QTSS_MASTER_DEV_GUIDE.md#6-ortam-de%C4%9Fi%C5%9Fkenleri).
 
 **Planlanan genişlemeler** (henüz ayrı crate olarak yok):
 
@@ -87,7 +86,7 @@ qtss/
 Mevcut: `crates/qtss-analysis/` — `engine_symbols` snapshot döngüsü (worker); API `/analysis/*` iskeleti ayrı.
 - `web/` — **Vite + React** (`npm run dev` / `npm run build`). Grafik: Lightweight Charts; Elliott Wave V2 (`web/src/lib/elliottEngineV2/`). Tez §2.5.3–2.5.5 metin kataloğu tek dosyada: `web/src/lib/elliottRulesCatalog.ts` (panel + `public/elliott_dalga_prensipleri.txt` özeti).
 
-Mevcut ayrı crate’ler: `qtss-nansen`, `qtss-notify`, `qtss-strategy`, `qtss-analysis` — bkz. §3 tablo ve `docs/QTSS_CURSOR_DEV_GUIDE.md` §0.
+Mevcut ayrı crate’ler: `qtss-nansen`, `qtss-notify`, `qtss-strategy`, `qtss-analysis` — bkz. §3 tablo ve [QTSS_MASTER_DEV_GUIDE.md](./QTSS_MASTER_DEV_GUIDE.md) (durum özeti §0, FAZ tabloları §4).
 
 ---
 
@@ -156,7 +155,8 @@ Bu ayrım, iş kurallarının tek kaynağının kod kalmasını sağlar; veritab
 - **`0009_acp_pine_indicator_defaults.sql`** — eski 7 Fib veya bozuk ayarlar için aynı hizalamayı tekrar uygular
 - **`0010_acp_abstract_size_filters.sql`** — `ignore_if_entry_crossed` + `size_filters` (abstractchartpatterns) eksikse ekler
 - **`0011_acp_last_pivot_direction.sql`**, **`0012_acp_pattern_groups.sql`** — ACP pivot yönü, pattern grupları
-- **`0013`–`0036`** — `bar_intervals`, `engine_symbols` / analiz snapshot’ları, paper, Nansen, `data_snapshots`, external fetch, confluence, `onchain_signal_scores`, ağırlık seed’leri, `engine_symbols` katalog FK (`0034`/`0035`), **`0036`** ile eksik `bar_intervals` telafisi. **Tam dosya adları ve sıra:** `migrations/README.md` envanteri; numara kuralları: `docs/QTSS_CURSOR_DEV_GUIDE.md` §6.
+
+**Bu checkout:** Yukarıdaki `0001`–`0012` dosyaları mevcuttur; **`0013` ve sonrası bu ağaçta yoktur** — worker analiz döngüleri, Nansen tabloları, `system_config`, AI şeması vb. tam ürün migrasyon zinciri gerektirir. **Tam hatta** (`0013`–`0036` ve ötesi): `bar_intervals`, `engine_symbols`, paper, Nansen, `data_snapshots`, external fetch, confluence, `onchain_signal_scores`, `0042`+ AI, `0044`+ `system_config` — dosya adları ve sıra: `migrations/README.md`. Numara kuralları: [QTSS_MASTER_DEV_GUIDE.md §5](./QTSS_MASTER_DEV_GUIDE.md#5-migration-kurallar%C4%B1).
 
 Ayrıntılı güvenlik hedefleri: [SECURITY.md](SECURITY.md).
 
@@ -225,7 +225,7 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 - `GET /api/v1/notify/outbox?limit=` — org için `notify_outbox` geçmişi
 - `POST /api/v1/notify/outbox` — kuyruğa ekle (`title`, `body`, `channels?`; boşsa `webhook`)
 
-`qtss-worker`: `QTSS_KLINE_SYMBOL` veya `QTSS_KLINE_SYMBOLS` (combined stream), `QTSS_KLINE_INTERVAL`, `QTSS_KLINE_SEGMENT` (`spot` / `futures`). **`DATABASE_URL` doluysa** migrasyon + `market_bars` + analiz / Nansen / on-chain loop’ları; yoksa kline yalnız log. Ortam anahtarları: kök `.env.example`, ayrıntı: `docs/QTSS_CURSOR_DEV_GUIDE.md` §5. Kalıcı çalıştırma: [deploy/README.md](../deploy/README.md).
+`qtss-worker`: `QTSS_KLINE_SYMBOL` veya `QTSS_KLINE_SYMBOLS` (combined stream), `QTSS_KLINE_INTERVAL`, `QTSS_KLINE_SEGMENT` (`spot` / `futures`). **`DATABASE_URL` doluysa** migrasyon + `market_bars` + analiz / Nansen / on-chain loop’ları; yoksa kline yalnız log. Ortam anahtarları: kök `.env.example`, ayrıntı: [QTSS_MASTER_DEV_GUIDE.md §6](./QTSS_MASTER_DEV_GUIDE.md#6-ortam-de%C4%9Fi%C5%9Fkenleri). Kalıcı çalıştırma: [deploy/README.md](../deploy/README.md).
 
 ---
 
@@ -247,7 +247,7 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 ## 10. Yol haritası
 
 **Teknik şartname (işlem modları, range sinyalleri, grafik işaretleri, dashboard):** [SPEC_EXECUTION_RANGE_SIGNALS_UI.md](./SPEC_EXECUTION_RANGE_SIGNALS_UI.md)  
-**F7 — Çok kaynaklı piyasa verisi, confluence, bildirimler, İngilizce alan adları:** [PLAN_CONFLUENCE_AND_MARKET_DATA.md](./PLAN_CONFLUENCE_AND_MARKET_DATA.md)
+**F7 — Çok kaynaklı piyasa verisi, confluence, bildirimler, İngilizce alan adları:** Ayrı `PLAN_CONFLUENCE_AND_MARKET_DATA.md` dosyası kaldırılmıştır; plan ve kaynak özeti [QTSS_MASTER_DEV_GUIDE.md](./QTSS_MASTER_DEV_GUIDE.md) (Bölüm 0–4, FAZ tabloları) ile bu belgenin yol haritası maddelerinde birleştirilmiştir.
 
 1. **Kimlik ve RBAC** — OAuth + JWT + `qtss:audit:read` + `user_permissions` + admin izin CRUD; `GET /api/v1/audit/recent` (admin veya salt okunur denetim izni); `PUT .../permissions` + `audit_log.details` (`QTSS_AUDIT_HTTP=1`) (**kısmen**; kurumlar arası admin, tam olay şeması sonra)  
 2. **Binance spot + futures** — REST + katalog + kline + stream URL + komisyon fallback + kline WS → DB; hesap bazlı fee: `commission-account` (**v1 tamam**)  
@@ -258,13 +258,13 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 7. **Bildirim** — `qtss-notify` + `notify_outbox` worker (**kısmen**; retry/DLQ/çoklu tüketici sonra)  
 8. **Web UI** — grafik/Elliott temel akış + çekmece **Kuyruklar** (notify outbox + AI onay listesi/aksiyonları, `permissions` özeti) (**kısmen**; PnL grafikleri / emir defteri / audit UI sonra)  
 9. **Kurumsal** — API `/live` + `/ready` + `/metrics` + worker `QTSS_WORKER_HTTP_BIND` probe (**kısmen**); çok örnek HA, uyumluluk raporları sonra  
-10. **CI** — `.github/workflows/rust-ci.yml`: `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo audit` (`cargo-audit@0.22.1`), `web` için `npm ci` + `npm run build` (**kısmen**); Postgres’li entegrasyon job’u sonraki iterasyon  
+10. **CI** — Repodaki `.github/workflows/*.yml` (ör. `ci.yml`): workspace `cargo check` / `cargo test`, `web` için `npm ci` + derleme / i18n kontrolleri; tanıma göre Postgres migrasyon job’u (**kısmen**; eksik job’lar sonraki iterasyon)  
 
 ---
 
 ## 11. Ortam değişkenleri
 
-Rust ikilileri (`qtss-api`, `qtss-seed`, `qtss-worker`) proje kökündeki `.env` dosyasını başlangıçta yükler (şablon: kökte `.env.example`). **Web (Vite)** şablonu: `web/.env.example` — yalnız istemci OAuth/grafik; worker/Nansen ile karıştırılmaz (**kesin kural:** [QTSS_CURSOR_DEV_GUIDE.md](./QTSS_CURSOR_DEV_GUIDE.md) §0). Shell’de `export` edilen değerler aynı anahtar için önceliklidir. Üretimde worker/API için systemd `EnvironmentFile` kullanımı: [deploy/README.md](../deploy/README.md). Worker/Nansen/strateji anahtarlarının tam listesi: aynı belge **§5**; migrasyon numaraları **§6**; spawn / varsayılan log **§2.1**; ADIM 1–10 dosya eşlemesi **§4**.
+Rust ikilileri (`qtss-api`, `qtss-seed`, `qtss-worker`) proje kökündeki `.env` dosyasını başlangıçta yükler (şablon: kökte `.env.example`). **Web (Vite)** şablonu: `web/.env.example` — yalnız istemci OAuth/grafik; worker/Nansen ile karıştırılmaz (**kesin kural:** [QTSS_MASTER_DEV_GUIDE.md](./QTSS_MASTER_DEV_GUIDE.md) §0 ve §6). Shell’de `export` edilen değerler aynı anahtar için önceliklidir. Üretimde worker/API için systemd `EnvironmentFile` kullanımı: [deploy/README.md](../deploy/README.md). Worker/Nansen/strateji anahtarlarının tam listesi: aynı belge **[§6](./QTSS_MASTER_DEV_GUIDE.md#6-ortam-de%C4%9Fi%C5%9Fkenleri)**; migrasyon numaraları **[§5](./QTSS_MASTER_DEV_GUIDE.md#5-migration-kurallar%C4%B1)**; spawn sırası **[§10](./QTSS_MASTER_DEV_GUIDE.md#10-spawn-s%C4%B1ras%C4%B1)**; varsayılan log **[§8.1](./QTSS_MASTER_DEV_GUIDE.md#81-loglama--trace--debug--info--warn--error--critical)**; FAZ / dosya eşlemesi **§4**.
 
 | Değişken | Açıklama |
 |----------|-----------|
@@ -275,7 +275,7 @@ Rust ikilileri (`qtss-api`, `qtss-seed`, `qtss-worker`) proje kökündeki `.env`
 | `QTSS_JWT_ISS` | JWT `iss` (varsayılan `qtss`) |
 | `QTSS_ACCESS_TTL_SECS` | Access token ömrü saniye (varsayılan 900) |
 | `QTSS_REFRESH_TTL_SECS` | Refresh token ömrü saniye (varsayılan 30 gün) |
-| `RUST_LOG` / `QTSS_LOG_JSON` | Tanımlıysa kod içi varsayılan log filtresini override eder; varsayılanlar [QTSS_CURSOR_DEV_GUIDE.md](./QTSS_CURSOR_DEV_GUIDE.md) §2.1 — JSON satır log: `QTSS_LOG_JSON=1` (§5) |
+| `RUST_LOG` / `QTSS_LOG_JSON` | Tanımlıysa kod içi varsayılan log filtresini override eder; varsayılanlar [QTSS_MASTER_DEV_GUIDE.md §8.1](./QTSS_MASTER_DEV_GUIDE.md#81-loglama--trace--debug--info--warn--error--critical) — JSON satır log: `QTSS_LOG_JSON=1` ([§6](./QTSS_MASTER_DEV_GUIDE.md#6-ortam-de%C4%9Fi%C5%9Fkenleri)) |
 | `QTSS_KLINE_SYMBOL` | (`qtss-worker`) Doluysa kline WebSocket dinleyicisi açılır |
 | `QTSS_KLINE_INTERVAL` | (`qtss-worker`) Mum aralığı (varsayılan `1m`) |
 | `QTSS_KLINE_SEGMENT` | (`qtss-worker`) `spot` (varsayılan) veya `futures` / `fapi` / `usdt_futures` |
