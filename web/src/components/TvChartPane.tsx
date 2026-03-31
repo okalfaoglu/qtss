@@ -88,7 +88,8 @@ function extendTimeScaleForElliottProjection(
   const lastT = candles[candles.length - 1].time as number;
   let maxProj = lastT;
   for (const L of layers) {
-    if (L.zigzagKind !== "elliott_projection" && L.zigzagKind !== "elliott_projection_alt") continue;
+    const k = L.zigzagKind;
+    if (!k?.startsWith("elliott_projection")) continue;
     for (const p of L.zigzag ?? []) {
       const t = p.time as number;
       if (Number.isFinite(t) && t > maxProj) maxProj = t;

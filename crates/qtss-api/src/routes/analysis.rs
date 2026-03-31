@@ -614,7 +614,14 @@ async fn get_nansen_setups_latest_api(
 ) -> Result<Json<NansenSetupsLatestResponse>, ApiError> {
     let out = fetch_latest_nansen_setup_with_rows(&st.pool)
         .await
-        .map_err(|e| map_analysis_storage_err(e, &loc, "analysis.nansen_setups_load_failed"))?;
+        .map_err(|e| {
+            map_analysis_storage_err(
+                e,
+                &loc,
+                "analysis.nansen_setups_load_failed",
+                "Failed to load Nansen setup scan data.",
+            )
+        })?;
     let resp = match out {
         Some((run, rows)) => NansenSetupsLatestResponse {
             run: Some(run),
@@ -698,7 +705,14 @@ async fn get_chart_patterns_config(
         .config
         .get_by_key(ACP_CHART_PATTERNS_CONFIG_KEY)
         .await
-        .map_err(|e| map_analysis_storage_err(e, &loc, "analysis.chart_patterns_config_load_failed"))?;
+        .map_err(|e| {
+            map_analysis_storage_err(
+                e,
+                &loc,
+                "analysis.chart_patterns_config_load_failed",
+                "Failed to load chart patterns configuration.",
+            )
+        })?;
     Ok(Json(
         row.map(|e| e.value)
             .unwrap_or_else(default_acp_chart_patterns_json),
@@ -812,7 +826,7 @@ fn default_acp_chart_patterns_json() -> serde_json::Value {
         "version": 1,
         "ohlc": { "open": "open", "high": "high", "low": "low", "close": "close" },
         "zigzag": [
-            { "enabled": true, "length": 8, "depth": 55 },
+            { "enabled": true, "length": 8, "depth": 21 },
             { "enabled": false, "length": 13, "depth": 34 },
             { "enabled": false, "length": 21, "depth": 21 },
             { "enabled": false, "length": 34, "depth": 13 }
@@ -827,7 +841,7 @@ fn default_acp_chart_patterns_json() -> serde_json::Value {
             "repaint": false,
             "last_pivot_direction": "both",
             "pivot_tail_skip_max": 0,
-            "max_zigzag_levels": 2,
+            "max_zigzag_levels": 0,
             "upper_direction": 1,
             "lower_direction": -1,
             "ignore_if_entry_crossed": false,

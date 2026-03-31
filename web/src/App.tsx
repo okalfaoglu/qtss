@@ -413,6 +413,8 @@ export default function App() {
   const [channelScanJson, setChannelScanJson] = useState<string>("");
   const [channelScanError, setChannelScanError] = useState<string>("");
   const [lastChannelScan, setLastChannelScan] = useState<ChannelSixResponse | null>(null);
+  /** OHLC window sent to the last successful `scanChannelSix` call — keeps `bar_index` aligned after live poll. */
+  const [lastChannelScanBars, setLastChannelScanBars] = useState<ChartOhlcRow[] | null>(null);
   const [channelScanSummary, setChannelScanSummary] = useState<string>("");
   const [channelScanHoverTitle, setChannelScanHoverTitle] = useState<string>("");
   /** Sembol/interval tam yükleme sonrası artar — TvChartPane yalnızca bu değişince `fitContent`. */
@@ -441,6 +443,7 @@ export default function App() {
               : t("app.channelScan.errorInsufficientNoRepaint"),
           );
           setLastChannelScan(null);
+          setLastChannelScanBars(null);
           setChannelScanJson("");
           setChannelScanSummary("");
           setChannelScanHoverTitle("");
@@ -450,6 +453,7 @@ export default function App() {
         const base = acpConfigToChannelSixOptions(acpConfig, theme);
         const res = await scanChannelSix(token, { bars: payload, ...(base as Record<string, unknown>) });
         setLastChannelScan(res);
+        setLastChannelScanBars(scanWindow.slice());
         setChannelScanJson(JSON.stringify(res, null, 2));
         if (res.matched && res.outcome) {
           const id = res.outcome.scan.pattern_type_id;
@@ -501,18 +505,24 @@ export default function App() {
         } else {
           setChannelScanHoverTitle("");
           const closedBarSuffix = acpConfig.scanning.repaint ? "" : t("app.channelScan.closedBarSuffix");
+          const reason = channelSixRejectMessage(t, res.reject);
+          const insufficientHint =
+            res.reject?.code === "insufficient_pivots"
+              ? ` ${t("app.channelReject.insufficientPivotsHint")}`
+              : "";
           setChannelScanSummary(
             t("app.channelScan.noMatchLine", {
-              reason: channelSixRejectMessage(t, res.reject),
+              reason,
               bars: res.bar_count,
               pivots: res.zigzag_pivot_count,
               closedNote: closedBarSuffix,
-            }),
+            }) + insufficientHint,
           );
         }
       } catch (e) {
         setChannelScanError(String(e));
         setLastChannelScan(null);
+        setLastChannelScanBars(null);
         setChannelScanSummary("");
         setChannelScanHoverTitle("");
       } finally {
@@ -1015,11 +1025,29 @@ export default function App() {
     return buildElliottLegendRows(elliottV2Output, anyElliottProjection);
   }, [anyElliottProjection, elliottV2Output]);
 
+  const channelScanOverlayBars = useMemo((): ChartOhlcRow[] | null => {
+    if (!lastChannelScan?.matched) return null;
+    const windowRows =
+      lastChannelScanBars != null && lastChannelScanBars.length > 0
+        ? lastChannelScanBars
+        : bars?.length
+          ? acpOhlcWindowForScan(bars, acpConfig.calculated_bars, acpConfig.scanning.repaint)
+          : null;
+    if (!windowRows?.length) return null;
+    const scanLen = Math.min(lastChannelScan.bar_count, windowRows.length);
+    return scanLen > 0 ? windowRows.slice(-scanLen) : windowRows;
+  }, [
+    lastChannelScan,
+    bars,
+    lastChannelScanBars,
+    acpConfig.calculated_bars,
+    acpConfig.scanning.repaint,
+  ]);
+
   const multiOverlay = useMemo(() => {
-    if (!lastChannelScan?.matched || !bars?.length) return null;
-    const scanWindow = acpOhlcWindowForScan(bars, acpConfig.calculated_bars, acpConfig.scanning.repaint);
-    const scanLen = Math.min(lastChannelScan.bar_count, scanWindow.length);
-    const scanBars = scanLen > 0 ? scanWindow.slice(-scanLen) : scanWindow;
+    if (!lastChannelScan?.matched) return null;
+    const scanBars = channelScanOverlayBars;
+    if (!scanBars?.length) return null;
     const fromMatches = buildMultiPatternOverlayFromScan(lastChannelScan, scanBars, acpConfig.display);
     if (fromMatches) {
       return fromMatches;
@@ -1036,7 +1064,7 @@ export default function App() {
       }
     }
     return fromMatches;
-  }, [lastChannelScan, bars, acpConfig.display, acpConfig.calculated_bars, acpConfig.scanning.repaint]);
+  }, [lastChannelScan, channelScanOverlayBars, acpConfig.display]);
 
   const dbTradingRangeSnapshot = useMemo(() => {
     if (!engineSnapshots.length) return null;
@@ -1165,16 +1193,16 @@ export default function App() {
   }, [elliottChartBundle?.waveLabels, multiOverlay?.pivotLabels]);
 
   const pivotMarkers = useMemo(() => {
-    if (!lastChannelScan?.matched || !lastChannelScan.outcome || !bars?.length) return [];
+    if (!lastChannelScan?.matched || !lastChannelScan.outcome) return [];
     if ((multiOverlay?.pivotLabels?.length ?? 0) > 0) return [];
-    const scanWindow = acpOhlcWindowForScan(bars, acpConfig.calculated_bars, acpConfig.scanning.repaint);
-    const scanLen = Math.min(lastChannelScan.bar_count, scanWindow.length);
-    const scanBars = scanLen > 0 ? scanWindow.slice(-scanLen) : scanWindow;
+    const scanBars = channelScanOverlayBars;
+    if (!scanBars?.length) return [];
     return buildChannelScanPivotMarkers(scanBars, lastChannelScan.outcome.pivots, theme);
-  }, [lastChannelScan, bars, theme, multiOverlay?.pivotLabels?.length, acpConfig.calculated_bars, acpConfig.scanning.repaint]);
+  }, [lastChannelScan, channelScanOverlayBars, theme, multiOverlay?.pivotLabels?.length]);
 
   const clearChannelScanUi = useCallback(() => {
     setLastChannelScan(null);
+    setLastChannelScanBars(null);
     setChannelScanSummary("");
     setChannelScanHoverTitle("");
     setChannelScanJson("");

@@ -539,37 +539,62 @@ export function mergeLegEndpointsWithMicro(micro: ZigzagPivot[], p0: ZigzagPivot
 }
 
 /**
- * Zincirde ardışık 6 pivotluk tek pencere: tam olarak p0 (w0) ile p1 (w5) — iç itkı dalga 1 ile aynı mumlarda biter.
+ * Bacak içinde ardışık 6 pivotluk tüm pencereleri dener; önce uçları `pa`/`pb` ile **tam** hizalı olanları,
+ * yoksa en yüksek skor + uç sapmasına göre en iyi adayı seçer (Pine/Tez iç itkı için mikro zigzag uçları sık kayar).
  */
-function nestedImpulseExactEndpointsInMerged(
-  merged: ZigzagPivot[],
+function pickBestNestedImpulseInChain(
+  chain: ZigzagPivot[],
   pa: ZigzagPivot,
   pb: ZigzagPivot,
   bull: boolean,
   opts?: ImpulseDetectOptions,
 ): ImpulseCountV2 | null {
-  const i = merged.findIndex((p) => p.index === pa.index);
-  if (i < 0 || merged.length < i + 6) return null;
-  if (merged[i + 5]!.index !== pb.index) return null;
-  const win = merged.slice(i, i + 6) as [
-    ZigzagPivot,
-    ZigzagPivot,
-    ZigzagPivot,
-    ZigzagPivot,
-    ZigzagPivot,
-    ZigzagPivot,
-  ];
-  return bestImpulseForSixPivots(win, bull, opts);
+  if (chain.length < 6) return null;
+  let best: ImpulseCountV2 | null = null;
+  let bestRank = -Infinity;
+  for (let start = 0; start + 6 <= chain.length; start++) {
+    const win = chain.slice(start, start + 6) as [
+      ZigzagPivot,
+      ZigzagPivot,
+      ZigzagPivot,
+      ZigzagPivot,
+      ZigzagPivot,
+      ZigzagPivot,
+    ];
+    const hit = bestImpulseForSixPivots(win, bull, opts);
+    if (!hit) continue;
+    const exact = win[0].index === pa.index && win[5].index === pb.index;
+    const dist = Math.abs(win[0].index - pa.index) + Math.abs(win[5].index - pb.index);
+    const rank = exact ? 1_000_000 + hit.score * 1000 : hit.score * 1000 - 10 * dist;
+    if (rank > bestRank) {
+      bestRank = rank;
+      best = hit;
+    }
+  }
+  return best;
 }
 
-function microDepthCandidatesForNestedLeg(mainDepth: number): number[] {
+/** Dalga 1/3/5 ve 2/4 içi mikro zigzag için denenecek `depth` adayları (ana `depth`’e göre). */
+export function microDepthCandidatesForNestedLeg(mainDepth: number): number[] {
   const mainD = Math.max(2, Math.floor(mainDepth || 0));
   const candDepths: number[] = [];
   for (const div of [2, 3, 4, 5, 6]) {
     const d = Math.max(2, Math.floor(mainD / div));
     if (d < mainD) candDepths.push(d);
   }
-  candDepths.push(Math.max(2, mainD - 4), Math.max(2, mainD - 8), 5, 4, 3, 2);
+  candDepths.push(
+    Math.max(2, mainD - 4),
+    Math.max(2, mainD - 8),
+    Math.max(2, Math.floor(mainD / 2)),
+    5,
+    4,
+    3,
+    2,
+  );
+  if (mainD > 4) {
+    candDepths.push(Math.max(2, mainD - 2));
+    candDepths.push(Math.max(2, mainD - 6));
+  }
   return [...new Set(candDepths)]
     .filter((d) => d >= 2 && d < mainD)
     .sort((a, b) => a - b);
@@ -577,7 +602,7 @@ function microDepthCandidatesForNestedLeg(mainDepth: number): number[] {
 
 /**
  * İtkı bacakları (dalga 1 / 3 / 5): pa→pb arasında alt derece 5’li itkı.
- * Uçlar pa ve pb ile tam hizalı tek 6’lı zincir; mikro zigzag ile aynı kural.
+ * Önce ana zigzag diliminde kaydırmalı 6’lı pencereler; sonra mikro derinlik adaylarıyla birleşik zincir.
  */
 export function detectNestedImpulseInLeg(
   pivots: ZigzagPivot[],
@@ -593,19 +618,8 @@ export function detectNestedImpulseInLeg(
 
   const slice = pivots.filter((p) => p.index >= lo && p.index <= hi);
   if (slice.length >= 6) {
-    for (let start = 0; start + 6 <= slice.length; start++) {
-      const win = slice.slice(start, start + 6) as [
-        ZigzagPivot,
-        ZigzagPivot,
-        ZigzagPivot,
-        ZigzagPivot,
-        ZigzagPivot,
-        ZigzagPivot,
-      ];
-      if (win[0].index !== pa.index || win[5].index !== pb.index) continue;
-      const hit = bestImpulseForSixPivots(win, bull, opts);
-      if (hit) return hit;
-    }
+    const hit = pickBestNestedImpulseInChain(slice, pa, pb, bull, opts);
+    if (hit) return hit;
   }
 
   if (!ohlc?.length || !zigzag) return null;
@@ -620,7 +634,7 @@ export function detectNestedImpulseInLeg(
     if (microLocal.length < 4) continue;
     const micro = microLocal.map((x) => ({ ...x, index: lo + x.index }));
     const merged = mergeLegEndpointsWithMicro(micro, pa, pb);
-    const hit = nestedImpulseExactEndpointsInMerged(merged, pa, pb, bull, opts);
+    const hit = pickBestNestedImpulseInChain(merged, pa, pb, bull, opts);
     if (hit) return hit;
   }
   return null;

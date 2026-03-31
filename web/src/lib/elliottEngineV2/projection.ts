@@ -59,6 +59,41 @@ function inferBarStepSec(rows: OhlcV2[]): number {
   return n ? Math.max(30, Math.round(sum / n)) : 60;
 }
 
+/** Son ~14 mum için ortalama true range — itkı bacak ortalaması ile karıştırılarak projeksiyon genliği ölçeklenir. */
+function inferAtr14(rows: OhlcV2[]): number {
+  if (rows.length < 2) return 0;
+  const period = 14;
+  const start = Math.max(1, rows.length - period);
+  let sum = 0;
+  let n = 0;
+  for (let i = start; i < rows.length; i++) {
+    const row = rows[i]!;
+    const prev = rows[i - 1]!;
+    const h = row.h ?? row.c;
+    const l = row.l ?? row.c;
+    const tr = Math.max(h - l, Math.abs(h - prev.c), Math.abs(l - prev.c));
+    sum += tr;
+    n++;
+  }
+  return n > 0 ? sum / n : 0;
+}
+
+/**
+ * İtkı 1/3/5 ortalama genliği + güncel ATR: son dönem volatilitesi itkıdan yüksekse adımları büyütür (dar / uçuk projeksiyonu azaltır).
+ */
+function blendedProjectionPriceBase(imp: ImpulseCountV2, rows: OhlcV2[]): number {
+  const p = imp.pivots;
+  const len1 = Math.abs(p[1].price - p[0].price);
+  const len3 = Math.abs(p[3].price - p[2].price);
+  const len5 = Math.abs(p[5].price - p[4].price);
+  const legAvg = (len1 + len3 + len5) / 3;
+  const atr = inferAtr14(rows);
+  if (!Number.isFinite(atr) || atr <= 1e-12) return Math.max(1e-8, legAvg);
+  const r = atr / Math.max(legAvg, 1e-12);
+  const boost = clamp((r - 1) * 0.35, 0, 0.95);
+  return Math.max(1e-8, legAvg * (1 + boost));
+}
+
 /**
  * 1-5 kabulünden sonra projeksiyonun "mevcut duruma" hizası:
  * - Son mum p5'e gore nerede? (duzeltme/asiri uzama)
@@ -375,6 +410,8 @@ function buildForwardPolylineLayer(params: {
   startPrice: number;
   maxSteps: number;
   base: number;
+  /** Son mumların ATR tabanı — segment fiyat adımı uç değerlerini volatiliteye göre sıkıştırır. */
+  atrFloor: number;
   cal: ProjectionCalibration;
   rates: RateProfile;
   regimeMul: number;
@@ -403,7 +440,13 @@ function buildForwardPolylineLayer(params: {
     const stepRateBase = stepIsCorrective(stepNo) ? params.rates.corrRate : params.rates.motiveRate;
     const stepRate = Math.max(1e-12, stepRateBase * params.regimeMul);
     const magNominal = stepRate * params.stepSec;
-    const mag = clamp(magRaw, magNominal * 0.42, magNominal * 1.88);
+    const loB = magNominal * 0.42;
+    const hiB = magNominal * 1.88;
+    const af = params.atrFloor;
+    const mag =
+      af > 1e-12
+        ? clamp(magRaw, Math.max(loB, af * 0.1), Math.min(hiB, af * 5.5))
+        : clamp(magRaw, loB, hiB);
     const dir = stepDirection(stepNo);
     const signed = (params.isBull ? 1 : -1) * dir * mag;
     cur += signed;
@@ -440,6 +483,7 @@ function buildForwardPolylineLayer(params: {
  * - `sourceTf` doluysa o TF itkisi kullanılır; çizim çapası **aynı TF’in** `ohlcByTf` son mumu olmalı
  *   (ana grafik farklı intervaldeyse `anchorRows` son mumu itkı ile yanlış hizalanırdı).
  * - Segment süresi: `Δt ≈ |Δfiyat| / hız` (itkı/düzeltme için ölçülen pivot hızları + güncel mum volatilitesi).
+ * - Genlik: itkı 1/3/5 ortalaması + son 14 mum ATR karışımı; segment fiyat adımı ATR ile alt/üst sıkıştırılır.
  * - `barHop`: bir segment için nominal süre ölçeği (`≈ hop × ortalama mum aralığı`); gerçek `Δt` bant içinde kalır.
  */
 export function buildElliottProjectionOverlayV2(
@@ -466,10 +510,8 @@ export function buildElliottProjectionOverlayV2(
   const stepSec = barPeriodSec * hop;
   const maxSteps = Math.min(24, Math.max(1, Math.floor(opt.maxSteps || 12)));
 
-  const len1 = Math.abs(p[1].price - p[0].price);
-  const len3 = Math.abs(p[3].price - p[2].price);
-  const len5 = Math.abs(p[5].price - p[4].price);
-  const base = Math.max(1e-8, (len1 + len3 + len5) / 3);
+  const base = blendedProjectionPriceBase(imp, rowsForStep);
+  const atrFloor = inferAtr14(rowsForStep);
 
   const anchorLast = rowsForStep.length ? rowsForStep[rowsForStep.length - 1]! : anchorRows[anchorRows.length - 1]!;
   const startPrice = anchorLast.c;
@@ -531,6 +573,7 @@ export function buildElliottProjectionOverlayV2(
     startPrice,
     maxSteps,
     base,
+    atrFloor,
     rates,
     regimeMul,
     isBull,

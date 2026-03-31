@@ -331,8 +331,7 @@ pub fn scan_six_alternating_pivots(
         (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
         _ => return None,
     };
-    let pattern_type_id =
-        resolve_pattern_type_id(t1p1, t1p2, t2p1, t2p2, bar_diff, params.flat_ratio);
+    let pattern_type_id = resolve_pattern_type_id(t1p1, t1p2, t2p1, t2p2, bar_diff, params.flat_ratio);
 
     Some(SixPivotScanResult {
         pattern_type_id,
@@ -369,12 +368,7 @@ pub fn last_n_pivots_chrono(zz: &ZigzagLite, n: usize) -> Option<Vec<PivotTriple
         return None;
     }
     let slice = &ch[ch.len() - n..];
-    Some(
-        slice
-            .iter()
-            .map(|p| (p.point.index, p.point.price, p.dir))
-            .collect(),
-    )
+    Some(slice.iter().map(|p| (p.point.index, p.point.price, p.dir)).collect())
 }
 
 /// Zigzag → son 6 pivot → `scan_six_alternating_pivots` (hepsi uyuyorsa).
@@ -505,23 +499,14 @@ pub fn six_pivots_chrono_tail_skip(zz: &ZigzagLite, tail_skip: usize) -> Option<
 }
 
 #[must_use]
-pub fn n_pivots_chrono_tail_skip(
-    zz: &ZigzagLite,
-    n: usize,
-    tail_skip: usize,
-) -> Option<Vec<PivotTriple>> {
+pub fn n_pivots_chrono_tail_skip(zz: &ZigzagLite, n: usize, tail_skip: usize) -> Option<Vec<PivotTriple>> {
     let ch: Vec<&ZigzagPivot> = pivots_chronological(zz);
     if ch.len() < n + tail_skip {
         return None;
     }
     let start = ch.len() - n - tail_skip;
     let end = ch.len() - tail_skip;
-    Some(
-        ch[start..end]
-            .iter()
-            .map(|p| (p.point.index, p.point.price, p.dir))
-            .collect(),
-    )
+    Some(ch[start..end].iter().map(|p| (p.point.index, p.point.price, p.dir)).collect())
 }
 
 fn try_scan_six_window(
@@ -558,28 +543,14 @@ fn try_scan_six_window(
     let (b4, pr4) = (p[4].0, p[4].1);
     let (b5, pr5) = if n == 6 { (p[5].0, p[5].1) } else { (0, 0.0) };
 
-    if !check_bar_ratio(
-        b0,
-        b2,
-        b4,
-        scan_params.bar_ratio_enabled,
-        scan_params.bar_ratio_limit,
-    ) {
+    if !check_bar_ratio(b0, b2, b4, scan_params.bar_ratio_enabled, scan_params.bar_ratio_limit) {
         return Err(ChannelSixReject {
             code: ChannelSixRejectCode::BarRatioUpper,
             have_pivots: None,
             need_pivots: None,
         });
     }
-    if n == 6
-        && !check_bar_ratio(
-            b1,
-            b3,
-            b5,
-            scan_params.bar_ratio_enabled,
-            scan_params.bar_ratio_limit,
-        )
-    {
+    if n == 6 && !check_bar_ratio(b1, b3, b5, scan_params.bar_ratio_enabled, scan_params.bar_ratio_limit) {
         return Err(ChannelSixReject {
             code: ChannelSixRejectCode::BarRatioLower,
             have_pivots: None,
@@ -619,9 +590,7 @@ fn try_scan_six_window(
         }
     }
     if let Some(prefix) = window_filter.duplicate_pivot_bars {
-        if prefix.len() == n.saturating_sub(1)
-            && (0..n.saturating_sub(1)).all(|i| p[i].0 == prefix[i])
-        {
+        if prefix.len() == n.saturating_sub(1) && (0..n.saturating_sub(1)).all(|i| p[i].0 == prefix[i]) {
             return Err(ChannelSixReject {
                 code: ChannelSixRejectCode::DuplicatePivotWindow,
                 have_pivots: None,
@@ -740,20 +709,8 @@ fn try_scan_six_window(
         let u1e = &hints.upper[1];
         let l0 = &hints.lower[0];
         let l1e = &hints.lower[1];
-        let up_at = crate::line_price_at_bar_index(
-            u0.bar_index,
-            u0.price,
-            u1e.bar_index,
-            u1e.price,
-            last_bar,
-        );
-        let lo_at = crate::line_price_at_bar_index(
-            l0.bar_index,
-            l0.price,
-            l1e.bar_index,
-            l1e.price,
-            last_bar,
-        );
+        let up_at = crate::line_price_at_bar_index(u0.bar_index, u0.price, u1e.bar_index, u1e.price, last_bar);
+        let lo_at = crate::line_price_at_bar_index(l0.bar_index, l0.price, l1e.bar_index, l1e.price, last_bar);
         if let (Some(upr), Some(lopr)) = (up_at, lo_at) {
             let band_lo = upr.min(lopr);
             let band_hi = upr.max(lopr);
@@ -887,7 +844,14 @@ pub fn analyze_channel_six_from_bars(
     // Pine `getZigzagAndPattern`: `while(mlzigzag.zigzagPivots.size() >= 6+offset)` — gösterge `ScanProperties` ilk `offset=0`.
     // 5 pivotlu desen seçili olsa bile döngüye girmek için en az **6** zigzag pivotu gerekir (Trendoscope ACP v6).
     let pine_zz_floor: usize = 6;
-    'levels: for _ in 0..=max_zigzag_levels {
+    // Pine parity: `max_zigzag_levels == 0` => unlimited levels (until pivot floor breaks).
+    let unlimited_levels = max_zigzag_levels == 0;
+    let mut level_iter: usize = 0;
+    'levels: loop {
+        if !unlimited_levels && level_iter > max_zigzag_levels {
+            break;
+        }
+        level_iter += 1;
         let ch = pivots_chronological(&zz);
         let need = scan_params.number_of_pivots;
         let min_zz = pine_zz_floor.max(need);
@@ -899,6 +863,7 @@ pub fn analyze_channel_six_from_bars(
             };
         } else {
             let max_skip = pivot_tail_skip_max.min(ch.len().saturating_sub(need));
+            let mut found_any_on_level = false;
             for skip in 0..=max_skip {
                 let Some(six) = n_pivots_chrono_tail_skip(&zz, need, skip) else {
                     break;
@@ -933,6 +898,7 @@ pub fn analyze_channel_six_from_bars(
                             };
                         }
                         outcomes.push(outcome);
+                        found_any_on_level = true;
                         if window_filter.avoid_overlap {
                             let mn = six.iter().map(|(b, _, _)| *b).min().unwrap_or(0);
                             let mx = six.iter().map(|(b, _, _)| *b).max().unwrap_or(0);
@@ -950,6 +916,10 @@ pub fn analyze_channel_six_from_bars(
                         }
                     }
                 }
+            }
+            // Pine parity: once we have a valid match for this zigzag config/level, stop climbing further levels.
+            if found_any_on_level {
+                break 'levels;
             }
         }
         zz = next_level_from_zigzag(&zz);
@@ -1006,27 +976,16 @@ mod tests {
 
     #[test]
     fn scan_six_rejects_bad_input() {
-        assert!(
-            scan_six_alternating_pivots(&[], &BTreeMap::new(), &SixPivotScanParams::default())
-                .is_none()
-        );
+        assert!(scan_six_alternating_pivots(&[], &BTreeMap::new(), &SixPivotScanParams::default()).is_none());
         let p = vec![(0, 1.0, 1), (1, 1.0, 1)]; // aynı yön
-        assert!(
-            scan_six_alternating_pivots(&p, &BTreeMap::new(), &SixPivotScanParams::default())
-                .is_none()
-        );
+        assert!(scan_six_alternating_pivots(&p, &BTreeMap::new(), &SixPivotScanParams::default()).is_none());
     }
 
     #[test]
     fn try_scan_channel_six_empty_map() {
-        assert!(try_scan_channel_six_from_bars(
-            &BTreeMap::new(),
-            3,
-            32,
-            0,
-            &SixPivotScanParams::default()
-        )
-        .is_none());
+        assert!(
+            try_scan_channel_six_from_bars(&BTreeMap::new(), 3, 32, 0, &SixPivotScanParams::default()).is_none()
+        );
     }
 
     #[test]
@@ -1063,18 +1022,10 @@ mod tests {
         for i in 0..=25 {
             let (k, v) = if i % 2 == 0 {
                 // Tepe mumları: çoğu 99 tepede y=100 çizgisi skorlanmaz; pivot barlarda 100.
-                let h = if i == 0 || i == 10 || i == 20 {
-                    100.0
-                } else {
-                    99.0
-                };
+                let h = if i == 0 || i == 10 || i == 20 { 100.0 } else { 99.0 };
                 bar(i, h - 1.0, h, h - 3.0, h - 0.5)
             } else {
-                let lo = if i == 5 || i == 15 || i == 25 {
-                    75.0
-                } else {
-                    76.0
-                };
+                let lo = if i == 5 || i == 15 || i == 25 { 75.0 } else { 76.0 };
                 let hi = lo + 3.0;
                 bar(i, lo + 1.0, hi, lo, lo + 1.2)
             };
@@ -1153,18 +1104,10 @@ mod tests {
         let mut m = BTreeMap::new();
         for i in 0..=25 {
             let (k, v) = if i % 2 == 0 {
-                let h = if i == 0 || i == 10 || i == 20 {
-                    100.0
-                } else {
-                    99.0
-                };
+                let h = if i == 0 || i == 10 || i == 20 { 100.0 } else { 99.0 };
                 bar(i, h - 1.0, h, h - 3.0, h - 0.5)
             } else {
-                let lo = if i == 5 || i == 15 || i == 25 {
-                    75.0
-                } else {
-                    76.0
-                };
+                let lo = if i == 5 || i == 15 || i == 25 { 75.0 } else { 76.0 };
                 let hi = lo + 3.0;
                 bar(i, lo + 1.0, hi, lo, lo + 1.2)
             };
@@ -1188,14 +1131,8 @@ mod tests {
             (20, 100.0, 1),
             (25, 75.0, -1),
         ];
-        let err = try_scan_six_window(
-            &six,
-            &m,
-            &params,
-            Some(&[13]),
-            &ChannelSixWindowFilter::default(),
-        )
-        .expect_err("pattern filter reject");
+        let err = try_scan_six_window(&six, &m, &params, Some(&[13]), &ChannelSixWindowFilter::default())
+            .expect_err("pattern filter reject");
         assert_eq!(err.code, ChannelSixRejectCode::PatternNotAllowed);
     }
 

@@ -53,6 +53,7 @@
     "channelReject": {
       "missing": "Reddetme ayrıntısı yok",
       "insufficientPivots": "{{need}} ZigZag pivot gerekli; şu an {{have}}.",
+      "insufficientPivotsHint": "İpucu: ACP’te ZigZag derinliğini düşürün, mum üst sınırını / araç çubuğu limitini artırın veya max ZigZag seviyesini yükseltin.",
       "pivotAlternation": "ZigZag pivotları yüksek/düşük dönüşümünde değil.",
       "barRatioUpper": "Üst kanal çizgisi bar oranı uygun değil.",
       "barRatioLower": "Alt kanal çizgisi bar oranı uygun değil.",

@@ -128,11 +128,12 @@ export const ACP_PATTERN_ROWS: { id: number; label: string }[] = [
 ];
 
 /**
- * Pine `Auto Chart Patterns [Trendoscope®]` v6 — `useZigzag1..4` fabrika varsayılanı:
- * yalnız zigzag1 açık; length/depth TV ile aynı.
+ * Pine `useZigzag1..4` fabrika varsayılanı — yalnız zigzag1 açık.
+ * `depth: 55` çok seyrek pivot üretip 6’lı pencerede sık `insufficient_pivots` veriyordu;
+ * varsayılan **21** daha fazla pivot = daha fazla aday (derinlik ACP kartından yükseltilebilir).
  */
 const FALLBACK_ZIGZAG: AcpZigzagRow[] = [
-  { enabled: true, length: 8, depth: 55 },
+  { enabled: true, length: 8, depth: 21 },
   { enabled: false, length: 13, depth: 34 },
   { enabled: false, length: 21, depth: 21 },
   { enabled: false, length: 34, depth: 13 },
@@ -177,7 +178,8 @@ export const DEFAULT_ACP_CONFIG: AcpChartPatternsConfig = {
     repaint: false,
     last_pivot_direction: "both",
     pivot_tail_skip_max: 0,
-    max_zigzag_levels: 2,
+    /** Pine parity: 0 = unlimited (until pivot floor breaks). */
+    max_zigzag_levels: 0,
     upper_direction: 1,
     lower_direction: -1,
     ignore_if_entry_crossed: false,
@@ -274,7 +276,12 @@ export function normalizeAcpChartPatternsConfig(raw: unknown): AcpChartPatternsC
     repaint: asBool(scanIn?.repaint, false),
     last_pivot_direction,
     pivot_tail_skip_max: clamp(Math.floor(asNum(scanIn?.pivot_tail_skip_max, 0)), 0, 100),
-    max_zigzag_levels: clamp(Math.floor(asNum(scanIn?.max_zigzag_levels, 2)), 0, 8),
+    // `0` is valid (unlimited in Rust parity mode); UI may still choose a finite value.
+    max_zigzag_levels: clamp(
+      Math.floor(asNum(scanIn?.max_zigzag_levels, DEFAULT_ACP_CONFIG.scanning.max_zigzag_levels)),
+      0,
+      8,
+    ),
     upper_direction: asNum(scanIn?.upper_direction, 1),
     lower_direction: asNum(scanIn?.lower_direction, -1),
     ignore_if_entry_crossed: asBool(scanIn?.ignore_if_entry_crossed, false),

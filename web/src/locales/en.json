@@ -53,6 +53,7 @@
     "channelReject": {
       "missing": "No rejection detail",
       "insufficientPivots": "Need {{need}} ZigZag pivots; have {{have}}.",
+      "insufficientPivotsHint": "Tip: lower ZigZag depth in ACP settings, raise max bars / toolbar limit, or increase max ZigZag levels.",
       "pivotAlternation": "ZigZag pivots do not alternate high/low.",
       "barRatioUpper": "Upper channel line bar-ratio check failed.",
       "barRatioLower": "Lower channel line bar-ratio check failed.",

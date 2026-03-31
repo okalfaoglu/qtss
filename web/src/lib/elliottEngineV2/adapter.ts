@@ -151,8 +151,12 @@ function waveLabels(
 
 /** Aynı saniyede birden fazla etiket (ör. v ile +a) tek satırda birleşsin. */
 function markerMergePriority(text: string): number {
-  if (text.startsWith("+")) return 2;
-  if (text.startsWith("(2)") || text.startsWith("(4)")) return 1;
+  const t = (text ?? "").trim();
+  if (t.startsWith("+")) return 2;
+  if (t.startsWith("(2)") || t.startsWith("(4)")) return 1;
+  /** Ana motive etiketleri (i…v) önce; iç düzeltme `w2·` / iç itkı `n1` sonra — okunabilirlik. */
+  if (t.includes("w2·") || t.includes("w4·")) return 3;
+  if (/^[nuv][1-5]$/.test(t)) return 3;
   return 0;
 }
 

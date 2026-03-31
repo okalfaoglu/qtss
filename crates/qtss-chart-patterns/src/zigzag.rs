@@ -108,8 +108,7 @@ impl ZigzagLite {
             let den_seg = (last_value - llast_value).abs().max(1e-15);
             pivot.ratio = round3((value - last_value).abs() / den_seg);
             let den_bar = (llast.point.index - last.point.index).abs().max(1);
-            pivot.bar_ratio =
-                round3((last.point.index - pivot.point.index).abs() as f64 / den_bar as f64);
+            pivot.bar_ratio = round3((last.point.index - pivot.point.index).abs() as f64 / den_bar as f64);
             if self.pivots.len() >= 3 {
                 let lllast = &self.pivots[2];
                 let den_sz = (llast.point.price - lllast.point.price).abs().max(1e-15);
@@ -125,26 +124,22 @@ impl ZigzagLite {
 
     /// Pine `ta.highest` / `ta.highestbars` benzeri: pencere `[i-(L-1)..=i]`, geri sayım 0 = güncel bar.
     #[must_use]
-    pub fn pivot_candle(
-        length: usize,
-        i: usize,
-        highs: &[f64],
-        lows: &[f64],
-    ) -> (i32, i32, f64, f64) {
+    pub fn pivot_candle(length: usize, i: usize, highs: &[f64], lows: &[f64]) -> (i32, i32, f64, f64) {
         let len = length.max(1);
         let start = i.saturating_sub(len.saturating_sub(1));
         let mut p_high = f64::NEG_INFINITY;
         let mut p_high_back = 0i32;
         let mut p_low = f64::INFINITY;
         let mut p_low_back = 0i32;
+        // Pine `ta.highest` / `ta.lowest`: ties pick the **oldest** bar (first in window), not the newest.
         for j in start..=i {
             let h = highs[j];
-            if h >= p_high {
+            if h > p_high {
                 p_high = h;
                 p_high_back = (i - j) as i32;
             }
             let l = lows[j];
-            if l <= p_low {
+            if l < p_low {
                 p_low = l;
                 p_low_back = (i - j) as i32;
             }
@@ -160,7 +155,7 @@ impl ZigzagLite {
         }
     }
 
-    /// Tek bar güncellemesi — Pine `Zigzag.calculate` ile aynı dallanma sırası (önce aynı yön güncelle, sonra karşı pivot, sonra taşma).
+    /// Tek bar güncellemesi — Pine `Zigzag.calculate`: `forceDoublePivot` (önce), step 1 güncelleme, step 2 karşı pivot, step 3 taşma.
     pub fn calculate_bar(
         &mut self,
         bar_index: i64,
@@ -174,8 +169,7 @@ impl ZigzagLite {
             return;
         }
         let new_bar = bar_index - self.offset as i64;
-        let (p_high_bar, p_low_bar, p_high, p_low) =
-            Self::pivot_candle(self.length, idx, highs, lows);
+        let (p_high_bar, p_low_bar, p_high, p_low) = Self::pivot_candle(self.length, idx, highs, lows);
 
         // İlk pivot: pencerede tepe veya dip teyidi.
         if self.pivots.is_empty() {
@@ -208,7 +202,20 @@ impl ZigzagLite {
         let distance = new_bar - last_ix;
         let overflow = distance >= self.length as i64;
 
-        let mut replaced = false;
+        // Pine: `forceDoublePivot` is read from `zigzagPivots.get(1)` **before** step 1 (same-bar double pivot).
+        let force_double = if self.pivots.len() > 1 {
+            let ll = &self.pivots[1];
+            if p_dir_before == 1 && p_low_bar == 0 {
+                p_low < ll.point.price
+            } else if p_dir_before == -1 && p_high_bar == 0 {
+                p_high > ll.point.price
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
         // 1) Aynı yönde uç güncelle — Pine: `shift` + `Pivot.new` + `addnewpivot` (yerinde atama değil).
         if (p_dir_before == 1 && p_high_bar == 0) || (p_dir_before == -1 && p_low_bar == 0) {
             let lp = self.pivots[0].clone();
@@ -227,29 +234,14 @@ impl ZigzagLite {
                     },
                     base_dir,
                 ));
-                replaced = true;
             }
         }
 
-        // `forceDouble` ve trend yönü (2)–(3) için: (1) uç pivotu değiştiyse eski `pivots[0]` üzerinden
-        // hesaplanan kuvvetli çift / bant koşulu yanlış kalır — güncel liste + `last_trend_dir` kullan.
         let p_dir = Self::last_trend_dir(self.pivots[0].dir);
-        let force_double = if self.pivots.len() > 1 {
-            let ll = &self.pivots[1];
-            if p_dir == 1 && p_low_bar == 0 {
-                p_low < ll.point.price
-            } else if p_dir == -1 && p_high_bar == 0 {
-                p_high > ll.point.price
-            } else {
-                false
-            }
-        } else {
-            false
-        };
 
         // 2) Karşı pivot (Pine: `not newPivot || forceDouble`; burada adım başında newPivot temiz).
         let allow_opp = !self.flags.new_pivot || force_double;
-        if allow_opp && !replaced {
+        if allow_opp {
             // p_dir==1: son tepe tarafındayız → dip ekle; p_dir==-1 → tepe ekle.
             if p_dir == 1 && p_low_bar == 0 {
                 let piv_bar_back = p_low_bar;
@@ -281,8 +273,7 @@ impl ZigzagLite {
         }
 
         // 3) Taşma: uzun süre yeni pivot yoksa zorunlu pivot (Pine `overflow and not newPivot`).
-        // Aynı barda (1) ile güncelleme yapıldıysa taşma tetiklenmesin.
-        if overflow && !self.flags.new_pivot && !replaced {
+        if overflow && !self.flags.new_pivot {
             let (piv_bar_back, price, dir) = if p_dir == 1 {
                 (p_low_bar, p_low, -1)
             } else {
@@ -304,14 +295,7 @@ impl ZigzagLite {
 
     /// Tüm diziyi sırayla işler (`bar_index == i` varsayımı).
     #[must_use]
-    pub fn run_series(
-        highs: &[f64],
-        lows: &[f64],
-        times_ms: &[i64],
-        length: usize,
-        max_pivots: usize,
-        offset: usize,
-    ) -> Self {
+    pub fn run_series(highs: &[f64], lows: &[f64], times_ms: &[i64], length: usize, max_pivots: usize, offset: usize) -> Self {
         let mut z = Self::new(length, max_pivots, offset);
         for i in 0..highs.len().min(lows.len()) {
             z.calculate_bar(i as i64, i, highs, lows, times_ms);
@@ -322,13 +306,7 @@ impl ZigzagLite {
 
 /// Üst seviye zigzag: pivot **fiyat** dizisine aynı `pivot_candle` kuralını uygular (Pine `nextlevel` özü).
 #[must_use]
-pub fn next_level_from_pivot_prices(
-    prices: &[f64],
-    bar_indices: &[i64],
-    times_ms: &[i64],
-    length: usize,
-    max_pivots: usize,
-) -> ZigzagLite {
+pub fn next_level_from_pivot_prices(prices: &[f64], bar_indices: &[i64], times_ms: &[i64], length: usize, max_pivots: usize) -> ZigzagLite {
     let n = prices.len().min(bar_indices.len()).min(times_ms.len());
     if n == 0 {
         return ZigzagLite::new(length, max_pivots, 0);
@@ -338,49 +316,89 @@ pub fn next_level_from_pivot_prices(
     ZigzagLite::run_series(&highs, &lows, &times_ms[..n], length, max_pivots, 0)
 }
 
-/// Pine `nextlevel` için pratik geçiş:
-/// - alt zigzagdan yalnızca `|dir|==2` pivotları aday alır,
-/// - aynı işaretli ardışık adayları (tepe/dip) tek pivotta sıkıştırır (`tempBullishPivot`/`tempBearishPivot` benzeri),
-/// - sonra üst seviyeye `level+1` olarak ekler.
+/// Pine `ZigzagLite.nextlevel` parity:
+/// - kronolojik pivot akışını (eski → yeni) yürütür,
+/// - `|dir|==1` pivotları geçici tamponlarda (`tempBullishPivot`/`tempBearishPivot`) tutar,
+/// - `|dir|==2` pivot geldiğinde son pivota göre gerektiğinde `shift` ve/veya temp geçişi ekler,
+/// - ardından pivotu ekler ve temp’leri temizler.
 #[must_use]
 pub fn next_level_from_zigzag(source: &ZigzagLite) -> ZigzagLite {
-    fn more_extreme_for_sign(sign: i32, a: &ZigzagPivot, b: &ZigzagPivot) -> ZigzagPivot {
-        if sign > 0 {
-            if b.point.price >= a.point.price {
-                b.clone()
-            } else {
-                a.clone()
-            }
-        } else if b.point.price <= a.point.price {
-            b.clone()
-        } else {
-            a.clone()
-        }
-    }
-
     let mut next_level = ZigzagLite::new(source.length, source.number_of_pivots, 0);
     next_level.level = source.level + 1;
     let chrono = pivots_chronological(source);
-    let mut compressed: Vec<ZigzagPivot> = Vec::new();
-    for p in chrono {
-        if p.dir.abs() != 2 {
+    let mut temp_bullish: Option<ZigzagPivot> = None;
+    let mut temp_bearish: Option<ZigzagPivot> = None;
+
+    for p_ref in chrono {
+        let mut lp = p_ref.clone();
+        lp.level += 1;
+        let dir = lp.dir;
+        let new_dir = dir.signum();
+        let value = lp.point.price;
+
+        if next_level.pivots.is_empty() {
+            if dir.abs() == 2 {
+                next_level.add_new_pivot(lp);
+            } else if new_dir > 0 {
+                temp_bullish = Some(lp);
+            } else {
+                temp_bearish = Some(lp);
+            }
             continue;
         }
-        let mut lp = p.clone();
-        lp.level += 1;
-        lp.dir = lp.dir.signum();
-        if let Some(last) = compressed.last_mut() {
-            if last.dir == lp.dir {
-                let chosen = more_extreme_for_sign(lp.dir, last, &lp);
-                *last = chosen;
-                continue;
+
+        let last_dir = next_level.pivots[0].dir.signum();
+        let last_value = next_level.pivots[0].point.price;
+
+        if dir.abs() == 2 {
+            if last_dir == new_dir {
+                // Same direction: keep the more extreme pivot; otherwise try inserting opposite temp as a bridge.
+                if (dir as f64) * last_value < (dir as f64) * value {
+                    next_level.pivots.remove(0);
+                } else {
+                    let temp = if new_dir > 0 { &temp_bearish } else { &temp_bullish };
+                    if let Some(tp) = temp {
+                        next_level.add_new_pivot(tp.clone());
+                    } else {
+                        continue;
+                    }
+                }
+            } else {
+                // Direction change: optional temp-first + temp-second bridge insertion.
+                let temp_first = if new_dir > 0 { &temp_bullish } else { &temp_bearish };
+                let temp_second = if new_dir > 0 { &temp_bearish } else { &temp_bullish };
+                if let (Some(tf), Some(ts)) = (temp_first, temp_second) {
+                    let temp_val = tf.point.price;
+                    if (new_dir as f64) * temp_val > (new_dir as f64) * value {
+                        next_level.add_new_pivot(tf.clone());
+                        next_level.add_new_pivot(ts.clone());
+                    }
+                }
+            }
+
+            next_level.add_new_pivot(lp);
+            temp_bullish = None;
+            temp_bearish = None;
+        } else {
+            // |dir|==1: keep the most extreme candidate in temp buffer.
+            let slot = if new_dir > 0 {
+                &mut temp_bullish
+            } else {
+                &mut temp_bearish
+            };
+            match slot {
+                Some(existing) => {
+                    if (dir as f64) * value > (dir as f64) * existing.point.price {
+                        *slot = Some(lp);
+                    }
+                }
+                None => {
+                    *slot = Some(lp);
+                }
             }
         }
-        compressed.push(lp);
     }
-    for p in compressed {
-        next_level.add_new_pivot(p);
-    }
+
     // Pine'daki güvenlik: üst seviye alt seviyeden anlamsız biçimde yoğunlaşırsa temizle.
     if next_level.pivots.len() >= source.pivots.len() {
         next_level.pivots.clear();
@@ -410,6 +428,15 @@ mod tests {
         assert!((ph - 5.0).abs() < 1e-9);
         assert_eq!(plb, 2);
         assert!((pl - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pivot_candle_equal_highs_keeps_oldest() {
+        let h = [5.0, 5.0, 5.0, 3.0];
+        let l = [1.0, 1.0, 1.0, 1.0];
+        let (phb, _, ph, _) = ZigzagLite::pivot_candle(4, 3, &h, &l);
+        assert_eq!(phb, 3);
+        assert!((ph - 5.0).abs() < 1e-9);
     }
 
     #[test]
@@ -494,8 +521,12 @@ mod tests {
         ];
         let nl = next_level_from_zigzag(&src);
         assert_eq!(nl.level, 1);
-        assert!(nl.pivots.iter().all(|p| p.dir.abs() == 1));
-        assert_eq!(nl.pivots.len(), 2);
+        // Pine parity: nextlevel can carry pivots with |dir|==2 as well; at minimum we expect alternating signs.
+        assert!(nl.pivots.len() >= 2);
+        assert!(nl
+            .pivots
+            .windows(2)
+            .all(|w| w[0].dir.signum() != 0 && w[1].dir.signum() != 0 && w[0].dir.signum() != w[1].dir.signum()));
     }
 
     #[test]

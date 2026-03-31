@@ -6,6 +6,7 @@ import type {
   ZigzagParams,
   ZigzagPivot,
 } from "./types";
+import { microDepthCandidatesForNestedLeg } from "./impulse";
 import { buildZigzagPivotsV2 } from "./zigzag";
 import {
   buildTez254AbcChecks,
@@ -573,19 +574,6 @@ export function detectImpulseCorrectionsV2(
     postImpulseAbc = findCorrectiveBetween(pivots, p5, end, isBull ? "down" : "up", "post", patternToggles);
   }
   return { wave2, wave4, postImpulseAbc };
-}
-
-function microDepthCandidatesForNestedLeg(mainDepth: number): number[] {
-  const mainD = Math.max(2, Math.floor(mainDepth || 0));
-  const candDepths: number[] = [];
-  for (const div of [2, 3, 4, 5, 6]) {
-    const d = Math.max(2, Math.floor(mainD / div));
-    if (d < mainD) candDepths.push(d);
-  }
-  candDepths.push(Math.max(2, mainD - 4), Math.max(2, mainD - 8), 5, 4, 3, 2);
-  return [...new Set(candDepths)]
-    .filter((d) => d >= 2 && d < mainD)
-    .sort((a, b) => a - b);
 }
 
 function mergeLegEndpointsMicro(micro: ZigzagPivot[], a: ZigzagPivot, b: ZigzagPivot): ZigzagPivot[] {

@@ -64,8 +64,8 @@ pub fn get_ratio_diff(p1: (i64, f64), p2: (i64, f64), p3: (i64, f64)) -> Option<
 /// Pine `wr.Line.inspect(...)` — tek trend doğrusu için skor ve geçerlilik.
 /// Dönüş: `(ok, score)` — `ok == valid && score/total < score_ratio_max` (Pine: `errorThresold/100`, varsayılan 0.2).
 ///
-/// `bars` anahtarları Pine’daki gibi ardışık varsayılmaz: `[starting_bar, ending_bar]` içinde yalnızca haritada
-/// bulunan indeksler değerlendirilir (seyrek takvim / atlanan bar_index).
+/// Pine ile aynı: `[starting_bar, ending_bar]` aralığında **tüm** bar indeksleri değerlendirilir (dense loop).
+/// Haritada bar yoksa Pine’da pratikte olmaz; burada `total` sayımına dahil edilir ve bar atlanır.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn trend_line_inspect(
@@ -84,8 +84,11 @@ pub fn trend_line_inspect(
     let mut score = 0.0_f64;
     let mut total = 0.0_f64;
     let mut loop_valid = true;
-    for (&b, ohlc) in bars.range(starting_bar..=ending_bar) {
+    for b in starting_bar..=ending_bar {
         total += 1.0;
+        let Some(ohlc) = bars.get(&b) else {
+            continue;
+        };
         let Some(line_price) = line_price_at_bar_index(p1.0, p1.1, p2.0, p2.1, b) else {
             loop_valid = false;
             break;
@@ -97,9 +100,7 @@ pub fn trend_line_inspect(
             loop_valid = false;
             break;
         }
-        if line_price * direction >= bar_out * direction
-            && line_price * direction <= bar_price * direction
-        {
+        if line_price * direction >= bar_out * direction && line_price * direction <= bar_price * direction {
             score += 1.0;
         } else if b == other_bar {
             loop_valid = false;
@@ -122,36 +123,9 @@ pub fn inspect_pick_best_three_point_line(
 ) -> (bool, u8, f64) {
     let first_index = p0.0.min(p1.0).min(p2.0);
     let last_index = p0.0.max(p1.0).max(p2.0);
-    let (ok1, s1) = trend_line_inspect(
-        p0,
-        p2,
-        first_index,
-        last_index,
-        p1.0,
-        direction,
-        bars,
-        score_ratio_max,
-    );
-    let (ok2, s2) = trend_line_inspect(
-        p0,
-        p1,
-        first_index,
-        last_index,
-        p2.0,
-        direction,
-        bars,
-        score_ratio_max,
-    );
-    let (ok3, s3) = trend_line_inspect(
-        p1,
-        p2,
-        first_index,
-        last_index,
-        p0.0,
-        direction,
-        bars,
-        score_ratio_max,
-    );
+    let (ok1, s1) = trend_line_inspect(p0, p2, first_index, last_index, p1.0, direction, bars, score_ratio_max);
+    let (ok2, s2) = trend_line_inspect(p0, p1, first_index, last_index, p2.0, direction, bars, score_ratio_max);
+    let (ok3, s3) = trend_line_inspect(p1, p2, first_index, last_index, p0.0, direction, bars, score_ratio_max);
     let pick = if ok1 && s1 > s2.max(s3) {
         1_u8
     } else if ok2 && s2 > s1.max(s3) {
@@ -241,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn trend_line_inspect_sparse_bar_index_skips_gaps() {
+    fn trend_line_inspect_sparse_bar_index_counts_gaps() {
         let mut m = BTreeMap::new();
         for i in [1_i64, 4] {
             let (k, v) = bar(i, 85.0, 90.0, 80.0, 85.0);
