@@ -160,6 +160,21 @@ function markerMergePriority(text: string): number {
   return 0;
 }
 
+function isNestedLabel(text: string): boolean {
+  const t = (text ?? "").trim();
+  return t.includes("w2·") || t.includes("w4·") || /^[nuv][1-5]$/.test(t);
+}
+
+function isMainImpulseLabel(text: string): boolean {
+  const t = (text ?? "").trim();
+  // 4h: circled numbers; 1h: (1)..(5); 15m: i..v
+  return (
+    ["①", "②", "③", "④", "⑤"].includes(t) ||
+    /^\([1-5]\)$/.test(t) ||
+    ["i", "ii", "iii", "iv", "v"].includes(t)
+  );
+}
+
 function mergeMarkersAtSameTime(markers: SeriesMarker<UTCTimestamp>[]): SeriesMarker<UTCTimestamp>[] {
   const groups = new Map<number, SeriesMarker<UTCTimestamp>[]>();
   for (const m of markers) {
@@ -172,7 +187,12 @@ function mergeMarkersAtSameTime(markers: SeriesMarker<UTCTimestamp>[]): SeriesMa
   for (const arr of groups.values()) {
     arr.sort((a, b) => markerMergePriority(a.text ?? "") - markerMergePriority(b.text ?? ""));
     const base = arr[0]!;
-    const texts = [...new Set(arr.map((x) => x.text).filter(Boolean))] as string[];
+    let texts = [...new Set(arr.map((x) => x.text).filter(Boolean))] as string[];
+    // If a main impulse label (i..v / ①..⑤ / (1)..(5)) collides with nested labels on the same bar,
+    // drop nested labels to prevent unreadable joins like `ii · w2·c`.
+    if (texts.some(isMainImpulseLabel) && texts.some(isNestedLabel)) {
+      texts = texts.filter((t) => !isNestedLabel(t) || t.trim().startsWith("+"));
+    }
     if (texts.length <= 1) {
       out.push(base);
     } else {

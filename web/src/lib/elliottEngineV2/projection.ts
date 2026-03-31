@@ -16,6 +16,12 @@ export type ElliottProjectionV2Options = {
   barHop: number;
   maxSteps: number;
   /**
+   * Fib time blend weight for measured impulse durations vs fixed defaults.
+   * `0` => only fixed defaults, `1` => only measured ratios.
+   * @default 0.5
+   */
+  fibMeasuredWeight?: number;
+  /**
    * İkinci polyline: uzatılmış 3. dalga senaryosu. `false` veya çıkarılırsa yalnızca birincil yol.
    * @default true
    */
@@ -263,6 +269,7 @@ function projectionFibTimeMultiplier(
   inCycle: number,
   imp: ImpulseCountV2,
   post: CorrectiveCountV2 | null,
+  fibMeasuredWeight: number,
 ): number {
   const p = imp.pivots;
   const d01 = Math.max(1, p[1].time - p[0].time);
@@ -306,7 +313,8 @@ function projectionFibTimeMultiplier(
     8: d45 / Math.max(60, d01),
   };
   const m = clamp(meas[inCycle] ?? 1, 0.22, 2.85);
-  return clamp(0.5 * def + 0.5 * m, 0.28, 2.85);
+  const w = clamp(fibMeasuredWeight, 0, 1);
+  return clamp((1 - w) * def + w * m, 0.28, 2.85);
 }
 
 function stepMagnitudeWithCalibration(step: number, base: number, cal: ProjectionCalibration): number {
@@ -419,6 +427,7 @@ function buildForwardPolylineLayer(params: {
   tf: Timeframe;
   stepSec: number;
   barPeriodSec: number;
+  fibMeasuredWeight: number;
   imp: ImpulseCountV2;
   postAbc: CorrectiveCountV2 | null;
   lineColor: string | undefined;
@@ -453,7 +462,7 @@ function buildForwardPolylineLayer(params: {
     const deltaPrice = Math.abs(signed);
     const dtRaw = deltaPrice / stepRate;
     const inCycle = ((stepNo - 1) % 8) + 1;
-    const fibT = projectionFibTimeMultiplier(inCycle, params.imp, params.postAbc);
+    const fibT = projectionFibTimeMultiplier(inCycle, params.imp, params.postAbc, params.fibMeasuredWeight);
     const minDt = Math.max(45, Math.round(params.stepSec * 0.28), params.barPeriodSec);
     const maxDt = Math.max(minDt + 1, Math.round(params.stepSec * 7.5));
     t += Math.round(clamp(dtRaw * fibT, minDt, maxDt));
@@ -509,6 +518,8 @@ export function buildElliottProjectionOverlayV2(
   const hop = Math.max(1, Math.floor(opt.barHop || 1));
   const stepSec = barPeriodSec * hop;
   const maxSteps = Math.min(24, Math.max(1, Math.floor(opt.maxSteps || 12)));
+  const fibMeasuredWeight =
+    typeof opt.fibMeasuredWeight === "number" && Number.isFinite(opt.fibMeasuredWeight) ? opt.fibMeasuredWeight : 0.5;
 
   const base = blendedProjectionPriceBase(imp, rowsForStep);
   const atrFloor = inferAtr14(rowsForStep);
@@ -580,6 +591,7 @@ export function buildElliottProjectionOverlayV2(
     tf,
     stepSec,
     barPeriodSec,
+    fibMeasuredWeight,
     imp,
     postAbc,
     lineColor,

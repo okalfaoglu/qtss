@@ -1027,22 +1027,11 @@ export default function App() {
 
   const channelScanOverlayBars = useMemo((): ChartOhlcRow[] | null => {
     if (!lastChannelScan?.matched) return null;
-    const windowRows =
-      lastChannelScanBars != null && lastChannelScanBars.length > 0
-        ? lastChannelScanBars
-        : bars?.length
-          ? acpOhlcWindowForScan(bars, acpConfig.calculated_bars, acpConfig.scanning.repaint)
-          : null;
-    if (!windowRows?.length) return null;
-    const scanLen = Math.min(lastChannelScan.bar_count, windowRows.length);
-    return scanLen > 0 ? windowRows.slice(-scanLen) : windowRows;
-  }, [
-    lastChannelScan,
-    bars,
-    lastChannelScanBars,
-    acpConfig.calculated_bars,
-    acpConfig.scanning.repaint,
-  ]);
+    // Avoid bar_index drift after live poll: only draw overlays on the exact OHLC window used for the scan.
+    if (!lastChannelScanBars?.length) return null;
+    const scanLen = Math.min(lastChannelScan.bar_count, lastChannelScanBars.length);
+    return scanLen > 0 ? lastChannelScanBars.slice(-scanLen) : lastChannelScanBars;
+  }, [lastChannelScan, lastChannelScanBars]);
 
   const multiOverlay = useMemo(() => {
     if (!lastChannelScan?.matched) return null;

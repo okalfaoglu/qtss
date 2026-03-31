@@ -168,6 +168,11 @@ impl ZigzagLite {
         if idx >= highs.len() || idx >= lows.len() {
             return;
         }
+        // Pine parity (practical): avoid emitting pivots until the first full pivot window exists.
+        // This reduces early-series drift where Pine scripts often behave as if `ta.highest/lowest(length)` is not yet stable.
+        if idx + 1 < self.length {
+            return;
+        }
         let new_bar = bar_index - self.offset as i64;
         let (p_high_bar, p_low_bar, p_high, p_low) = Self::pivot_candle(self.length, idx, highs, lows);
 
