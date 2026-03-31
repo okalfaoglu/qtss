@@ -101,6 +101,8 @@ export type ZigzagLayerKind =
   | "elliott_v2_hist_micro"
   /** Pine tarzı Fib şeması ileri projeksiyon (tahmin değildir). */
   | "elliott_projection"
+  /** İkinci senaryo — örn. daha uzun 3. dalga hedefi (birincil projeksiyondan daha soluk). */
+  | "elliott_projection_alt"
   /** Projeksiyon: gerçekleşmiş/teyitli bölüm (düz çizgi). */
   | "elliott_projection_done"
   /** Projeksiyon: aktif C bacağı (kesik). */

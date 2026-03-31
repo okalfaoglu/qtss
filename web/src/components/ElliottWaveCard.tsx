@@ -372,6 +372,18 @@ export function ElliottWaveCard({
             <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
               <input
                 type="checkbox"
+                checked={value.show_projection_alt_scenario}
+                disabled={
+                  !value.enabled ||
+                  !(value.show_projection_4h || value.show_projection_1h || value.show_projection_15m)
+                }
+                onChange={(e) => onChange({ ...value, show_projection_alt_scenario: e.target.checked })}
+              />
+              <span>İkinci projeksiyon senaryosu (uzatılmış 3. dalga ※)</span>
+            </label>
+            <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
+              <input
+                type="checkbox"
                 checked={value.show_historical_waves}
                 disabled={!value.enabled}
                 onChange={(e) => onChange({ ...value, show_historical_waves: e.target.checked })}

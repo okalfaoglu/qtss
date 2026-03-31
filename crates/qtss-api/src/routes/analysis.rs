@@ -29,11 +29,24 @@ use qtss_storage::{
 };
 
 use crate::error::ApiError;
+use crate::locale::NegotiatedLocale;
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
 
 const ACP_CHART_PATTERNS_CONFIG_KEY: &str = "acp_chart_patterns";
 const ELLIOTT_WAVE_CONFIG_KEY: &str = "elliott_wave";
+
+fn map_analysis_storage_err(
+    e: qtss_storage::StorageError,
+    loc: &NegotiatedLocale,
+    error_key: &'static str,
+    message_en: &'static str,
+) -> ApiError {
+    tracing::warn!(target: "qtss_api", %error_key, error = %e, "analysis storage");
+    ApiError::internal(message_en.to_string())
+        .with_locale(loc.as_str().to_string())
+        .with_error_key(error_key)
+}
 
 /// Salt okunur / dashboard rolleri (`viewer`+).
 pub fn analysis_read_router() -> Router<SharedState> {
@@ -597,10 +610,11 @@ struct NansenSetupsLatestResponse {
 /// Son başarılı `nansen_setup_scan` koşusu + en fazla 10 sıralı satır (`qtss-worker` + migration 0020).
 async fn get_nansen_setups_latest_api(
     State(st): State<SharedState>,
-) -> Result<Json<NansenSetupsLatestResponse>, String> {
+    Extension(loc): Extension<NegotiatedLocale>,
+) -> Result<Json<NansenSetupsLatestResponse>, ApiError> {
     let out = fetch_latest_nansen_setup_with_rows(&st.pool)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| map_analysis_storage_err(e, &loc, "analysis.nansen_setups_load_failed"))?;
     let resp = match out {
         Some((run, rows)) => NansenSetupsLatestResponse {
             run: Some(run),
@@ -678,12 +692,13 @@ async fn patch_engine_symbol_api(
 /// `app_config.acp_chart_patterns` — DB’de yoksa Pine ACP v6 fabrika varsayılanları (migrations 0007–0009).
 async fn get_chart_patterns_config(
     State(st): State<SharedState>,
-) -> Result<Json<serde_json::Value>, String> {
+    Extension(loc): Extension<NegotiatedLocale>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let row = st
         .config
         .get_by_key(ACP_CHART_PATTERNS_CONFIG_KEY)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| map_analysis_storage_err(e, &loc, "analysis.chart_patterns_config_load_failed"))?;
     Ok(Json(
         row.map(|e| e.value)
             .unwrap_or_else(default_acp_chart_patterns_json),
@@ -721,6 +736,7 @@ fn default_elliott_wave_json() -> serde_json::Value {
         "show_nested_formations": true,
         "projection_bar_hop": 22,
         "projection_steps": 12,
+        "show_projection_alt_scenario": true,
         "use_acp_zigzag_swing": false,
         "acp_zigzag_row_index": 0,
         "pattern_menu": {

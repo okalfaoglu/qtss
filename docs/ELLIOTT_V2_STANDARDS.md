@@ -36,7 +36,7 @@ The chart anchor is `15m`. `1h` and `4h` are rendered as overlays on the same ch
 
 1. Wave 2 cannot retrace beyond the start of Wave 1.
 2. Wave 3 cannot be the shortest among Waves 1, 3, 5.
-3. Wave 4 cannot overlap Wave 1 price territory (diagonal exception is not enabled in V2.0).
+3. **Standard** impulse: wave 4 cannot overlap wave 1 price territory (`impulse.ts` — `w4_no_overlap_w1`). **Diagonal** impulse is a separate variant: overlap allowed; extra rules (`ed_r4_w3_area_gt_w2`, `w5_not_longest_135`, `ld_r3_w5_ge_1382_w4`, `w4_diagonal_mode`). It is **implemented** but **off by default** in the pattern menu (`motive_diagonal: false` in `elliottPatternMenuCatalog.ts`).
 
 ### Corrective scope
 
@@ -44,7 +44,7 @@ The chart anchor is `15m`. `1h` and `4h` are rendered as overlays on the same ch
 - Notes:
   - Triangle detection is constrained to wave-4 / post-impulse corrective context (not standalone wave-2 default).
   - Complex combinations are scored as candidates/confirmed via ratio + connector checks.
-  - Advanced diagonal handling remains optional and is disabled by default in V2.
+  - Diagonal motive is optional (menu); standard motive stays the default.
 
 ## 5) ZigZag Policy
 
@@ -79,25 +79,48 @@ This document is the **normative** label/color/rule set. The running engine live
 | ZigZag-driven pivots | `zigzag.ts` |
 | Chart overlays: labels, line styles, per-TF coloring hooks | `adapter.ts` (label glyphs per TF; colors often supplied via `elliottWaveAppConfig` / chart layer) |
 | Engine orchestration, state merge across TFs | `engine.ts` |
-| **Forward projection (İleri Fib / Elliott projeksiyon)** | `projection.ts` — `buildElliottProjectionOverlayV2` |
+| **Forward projection (İleri Fib / Elliott projeksiyon)** | `projection.ts` — `buildElliottProjectionOverlayV2` — behavior **§8.1**, limits / roadmap **§8.2** |
 | Public exports | `index.ts` |
 
 ### 8.1 Forward projection (`projection.ts`) — normative behavior
 
-Chart overlay `zigzagKind: elliott_projection` (ve varsa `elliott_projection_done` / `elliott_projection_c_active`) bu fonksiyondan üretilir. `App.tsx` her TF için `buildElliottProjectionOverlayV2(..., sourceTf)` çağırır.
+Chart overlay `zigzagKind: elliott_projection` (isteğe bağlı ikinci yol: `elliott_projection_alt`) ve varsa `elliott_projection_done` / `elliott_projection_c_active` bu fonksiyondan üretilir. `App.tsx` her TF için `buildElliottProjectionOverlayV2(..., sourceTf)` çağırır.
 
 | Kural | Uygulama |
 |--------|-----------|
 | **Zaman / fiyat çapası** | Başlangıç fiyatı ve zamanı **`out.ohlcByTf[sourceTf]` son mumunun `c` / `t`** değeridir (yoksa `anchorRows` son mumu). Ana grafik interval’i farklı olsa bile projeksiyon ilgili TF serisine hizalanır. |
 | **Dalga adımı seçimi** | `postImpulseAbc` varsa `startStepFromPostAbc`; yoksa P5’e göre `startStepFromCurrentState`. A/B teyidi yoksa düzeltme her zaman **A**’dan (`startStep` ≥ 4 zorlanmaz). |
-| **Büyüklük** | İtkı bacak ortalaması `base`; `buildCalibrationFromPostAbc` ile A/B/C ve 1–5 çarpanları; `stepMagnitudeWithCalibration`. |
-| **Süre (zaman ekseni)** | Her segment için `Δt ≈ \|Δprice\| / stepRate` (itkı veya düzeltme için pivotlardan türetilen fiyat/s), `stepSec` (`barHop` × ortalama mum aralığı) ile üst bant. **Alt sınır:** en az **bir tam mum süresi** (`barPeriodSec`) ve `max(45s, 0.28×stepSec)` — uzun geçmişte grafik ölçeğinde tüm adımların tek dikey çizgide birleşmesini önler. |
+| **Büyüklük** | İtkı bacak ortalaması `base`; `buildCalibrationFromPostAbc` → `applyFormationCalibrationTweak` (`postImpulseAbc.pattern`: triangle / flat / combination için hafif ölçek). |
+| **Süre (zaman ekseni)** | Taban: `Δt ≈ (\|Δprice\| / stepRate) × fibZamanÇarpanı` — `projectionFibTimeMultiplier` klasik bant (0.382 / 0.618 / 1.618 …) ile ölçülen itkı bacak sürelerinin karışımı. `stepSec` (`barHop` × ortalama mum aralığı) bantları ile `clamp`. **Alt sınır:** en az **bir tam mum süresi** (`barPeriodSec`) ve `max(45s, 0.28×stepSec)`. |
+| **İkinci senaryo** | `includeAltScenario` / `show_projection_alt_scenario`: `extendedThirdWaveCalibration` ile daha yüksek 3. dalga hedefi; `zigzagKind: elliott_projection_alt`, işaret sonu `※`; grafikte soluk renk (`scaleElliottHexColor`). |
 | **Piyasa rejimi** | Son ~40 mumun ortalama fiyat/s hızı, itkı ortalama hızına göre **0.48–2.05** çarpanı (`regimeMul`); volatilite artınca süre kısalır. |
 | **Etiketler** | `SeriesMarker` metni: dalga etiketi + başlangıca göre birikimli süre (`+Nm`, `+Nh`, `+Nd`). |
 
-Ayarlar: `elliottWaveAppConfig` — `show_projection_*`, `projection_bar_hop`, `projection_steps`.
+Ayarlar: `elliottWaveAppConfig` — `show_projection_*`, `show_projection_alt_scenario`, `projection_bar_hop`, `projection_steps`.
 
 When behavior here changes, update this subsection in the same PR as code changes.
+
+### 8.2 Forward projection — known limits and roadmap
+
+Normative **§8.1** describes current behavior. The following gaps are intentional trade-offs or future work (audit alignment: `projection.ts`).
+
+| ID | Limit | Notes |
+|----|--------|--------|
+| **E1** | Geometry | Output is a **polyline** of `{ time, value }` segments. Slope is implicit via `Δprice/Δtime` per leg (`RateProfile` + `stepRate`); there is **no** arc/channel geometry or separate “angular drawing” mode. |
+| **E2** | Fib ratios | `DEFAULT_CALIBRATION` holds fixed multipliers (`aMul`/`bMul`/…); `buildCalibrationFromPostAbc` scales them from observed ABC **magnitudes**, not as explicit horizontal Fib **price levels** on chart. |
+| **E3** | Formation-aware path | After impulse, the engine assumes an **A–B–C style** corrective cycle for step selection when `postImpulseAbc` exists; it does **not** branch on flat vs triangle vs W–X–Y. `startStepFromCurrentState` uses **price distance vs `base` bands**, not labeled wave position (e.g. “only wave 3 done → project 4–5”). |
+| **E4** | Alternatives | **Kısmen:** birincil + `elliott_projection_alt` (uzatılmış 3. dalga); geniş “fan” (3+ senaryo) yok. |
+| **E5** | Time Fib | **Kısmen:** `projectionFibTimeMultiplier` ile klasik oranlar + ölçülen süreler karışımı; tam Fib zaman projeksiyonu literatürü değil. |
+
+**Roadmap (remaining):**
+
+1. **Formation-aware selector** — Use last confirmed structure (impulse leg / corrective type) to choose the next template: e.g. post–wave-5 → ABC vs flat vs triangle priors; mid-impulse → project waves 4–5 only; post–ABC → new impulse.
+2. ~~**Fibonacci time**~~ — İlk sürüm **§8.1** ile uygulandı; ince ayar ve isteğe bağlı kapama anahtarı ileride.
+3. **Slope policy** — Keep polyline but enforce clearer **motive vs corrective** steepness ratio from measured history (beyond current `motiveRate` / `corrRate` median).
+4. ~~**Multi-scenario (2 yol)**~~ — Birincil + alt senaryo **§8.1**; ek varyantlar (ör. kısa 5) isteğe bağlı.
+5. **Horizontal Fib levels** — Optional marker or line layers at 0.382 / 0.618 / 1.0 / 1.618 / 2.618 of a chosen swing for targets, in addition to the projection polyline.
+
+**Corrective ratios (`tezWaveChecks.ts`):** Flat filter uses `TEZ_FLAT_B_VS_A_MIN = 0.382` … `MAX = 2.618` so **expanded** flats are not dropped; `TEZ_CLASSIC_REGULAR_FLAT_B_MIN = 0.618` is documented for scoring/detail only — consistent with a deliberate “wide net” detection policy.
 
 On-chart **hex colors** for macro/intermediate/micro are typically driven by app config (`web/src/lib/elliottWaveAppConfig.ts` and friends), not only this doc — keep **§3** and the config defaults in sync when you change the palette.
 

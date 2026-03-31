@@ -2,7 +2,12 @@
   "common": {
     "language": "Dil"
   },
-  "apiErrors": {},
+  "apiErrors": {
+    "analysis": {
+      "nansen_setups_load_failed": "Nansen kurulum taraması yüklenemedi. Worker ve veritabanını kontrol edin veya yeniden deneyin.",
+      "chart_patterns_config_load_failed": "Grafik formasyonları yapılandırması veritabanından yüklenemedi."
+    }
+  },
   "aiDecisions": {
     "loginPrompt": "Yapay zekâ kararlarını görmek için giriş yapın.",
     "title": "Yapay zekâ kararları",

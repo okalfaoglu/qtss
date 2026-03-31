@@ -15,6 +15,11 @@ type Pt = { time: UTCTimestamp; value: number };
 export type ElliottProjectionV2Options = {
   barHop: number;
   maxSteps: number;
+  /**
+   * İkinci polyline: uzatılmış 3. dalga senaryosu. `false` veya çıkarılırsa yalnızca birincil yol.
+   * @default true
+   */
+  includeAltScenario?: boolean;
 };
 
 function markerLabel(step: number, tf: Timeframe): string {
@@ -176,6 +181,99 @@ function buildCalibrationFromPostAbc(
   return { aMul, bMul, cMul, i1Mul, i2Mul, i3Mul, i4Mul, i5Mul };
 }
 
+/** Tespit edilen düzeltme kalıbına göre projeksiyon büyüklüklerine hafif düzeltme. */
+function applyFormationCalibrationTweak(
+  post: CorrectiveCountV2 | null,
+  cal: ProjectionCalibration,
+): ProjectionCalibration {
+  if (!post) return cal;
+  switch (post.pattern) {
+    case "triangle":
+      return {
+        ...cal,
+        cMul: clamp(cal.cMul * 0.9, 0.2, 2.2),
+        i3Mul: clamp(cal.i3Mul * 0.94, 0.85, 2.45),
+      };
+    case "flat":
+      return {
+        ...cal,
+        bMul: clamp(cal.bMul * 1.06, 0.12, 0.95),
+        aMul: clamp(cal.aMul * 1.03, 0.18, 1.2),
+      };
+    case "combination":
+      return {
+        ...cal,
+        cMul: clamp(cal.cMul * 1.05, 0.28, 2.3),
+      };
+    default:
+      return cal;
+  }
+}
+
+/** Alternatif senaryo: 3. dalga hedefi güçlü, 5. hafif kısılır. */
+function extendedThirdWaveCalibration(cal: ProjectionCalibration): ProjectionCalibration {
+  return {
+    ...cal,
+    i3Mul: clamp(cal.i3Mul * 1.2, 1.05, 2.55),
+    i5Mul: clamp(cal.i5Mul * 0.92, 0.55, 1.55),
+    i2Mul: clamp(cal.i2Mul * 0.95, 0.18, 0.65),
+  };
+}
+
+/**
+ * Elliott tipik süre oranları + ölçülen itkı bacak sürelerinin karışımı.
+ * `dt` çarpanı olarak kullanılır (fiyat hızı ile çarpılmış ham süre üzerine).
+ */
+function projectionFibTimeMultiplier(
+  inCycle: number,
+  imp: ImpulseCountV2,
+  post: CorrectiveCountV2 | null,
+): number {
+  const p = imp.pivots;
+  const d01 = Math.max(1, p[1].time - p[0].time);
+  const d12 = Math.max(1, p[2].time - p[1].time);
+  const d23 = Math.max(1, p[3].time - p[2].time);
+  const d34 = Math.max(1, p[4].time - p[3].time);
+  const d45 = Math.max(1, p[5].time - p[4].time);
+  const w1 = Math.max(60, d01);
+
+  const fibDefaults: Record<number, number> = {
+    1: 1.0,
+    2: 0.618,
+    3: 1.618,
+    4: 1.0,
+    5: 0.5,
+    6: 1.618,
+    7: 0.382,
+    8: 1.0,
+  };
+  const def = fibDefaults[inCycle] ?? 1;
+
+  if (inCycle <= 3) {
+    let corrRef = Math.max(60, (d12 + d34) / 2);
+    const path = post?.path?.length ? post.path : post?.pivots;
+    if (path && path.length >= 2) {
+      const seg: number[] = [];
+      for (let i = 1; i < path.length; i++) {
+        seg.push(Math.max(1, path[i]!.time - path[i - 1]!.time));
+      }
+      if (seg.length) corrRef = Math.max(60, median(seg));
+    }
+    const blend = clamp(corrRef / w1, 0.35, 2.0);
+    return clamp(def * (0.55 + 0.45 * blend) * (1 + (inCycle - 2) * 0.06), 0.32, 2.35);
+  }
+
+  const meas: Record<number, number> = {
+    4: d01 / w1,
+    5: d12 / Math.max(60, d01),
+    6: d23 / Math.max(60, d01),
+    7: d34 / Math.max(60, d23),
+    8: d45 / Math.max(60, d01),
+  };
+  const m = clamp(meas[inCycle] ?? 1, 0.22, 2.85);
+  return clamp(0.5 * def + 0.5 * m, 0.28, 2.85);
+}
+
 function stepMagnitudeWithCalibration(step: number, base: number, cal: ProjectionCalibration): number {
   const inCycle = ((step - 1) % 8) + 1;
   switch (inCycle) {
@@ -271,6 +369,72 @@ function startStepFromPostAbc(
   return 8; // 5
 }
 
+function buildForwardPolylineLayer(params: {
+  startStep: number;
+  startTime: number;
+  startPrice: number;
+  maxSteps: number;
+  base: number;
+  cal: ProjectionCalibration;
+  rates: RateProfile;
+  regimeMul: number;
+  isBull: boolean;
+  tf: Timeframe;
+  stepSec: number;
+  barPeriodSec: number;
+  imp: ImpulseCountV2;
+  postAbc: CorrectiveCountV2 | null;
+  lineColor: string | undefined;
+  zigzagKind: "elliott_projection" | "elliott_projection_alt";
+  markerSuffix: string;
+}): PatternLayerOverlay {
+  const points: Pt[] = [{ time: params.startTime as UTCTimestamp, value: params.startPrice }];
+  const markers: SeriesMarker<UTCTimestamp>[] = [];
+  let cur = params.startPrice;
+  let t = params.startTime as number;
+  const markerColor =
+    params.lineColor && /^#[0-9A-Fa-f]{3,8}$/.test(params.lineColor.trim())
+      ? params.lineColor.trim()
+      : "#64b5f6";
+
+  for (let i = 0; i < params.maxSteps; i++) {
+    const stepNo = params.startStep + i;
+    const magRaw = stepMagnitudeWithCalibration(stepNo, params.base, params.cal);
+    const stepRateBase = stepIsCorrective(stepNo) ? params.rates.corrRate : params.rates.motiveRate;
+    const stepRate = Math.max(1e-12, stepRateBase * params.regimeMul);
+    const magNominal = stepRate * params.stepSec;
+    const mag = clamp(magRaw, magNominal * 0.42, magNominal * 1.88);
+    const dir = stepDirection(stepNo);
+    const signed = (params.isBull ? 1 : -1) * dir * mag;
+    cur += signed;
+    const deltaPrice = Math.abs(signed);
+    const dtRaw = deltaPrice / stepRate;
+    const inCycle = ((stepNo - 1) % 8) + 1;
+    const fibT = projectionFibTimeMultiplier(inCycle, params.imp, params.postAbc);
+    const minDt = Math.max(45, Math.round(params.stepSec * 0.28), params.barPeriodSec);
+    const maxDt = Math.max(minDt + 1, Math.round(params.stepSec * 7.5));
+    t += Math.round(clamp(dtRaw * fibT, minDt, maxDt));
+    points.push({ time: t as UTCTimestamp, value: cur });
+
+    markers.push({
+      time: t as UTCTimestamp,
+      position: signed >= 0 ? "aboveBar" : "belowBar",
+      shape: "circle",
+      color: markerColor,
+      text: `${markerLabel(stepNo, params.tf)} ${formatEtaFromStart(t - params.startTime)}${params.markerSuffix}`,
+    });
+  }
+
+  return {
+    upper: [],
+    lower: [],
+    zigzag: points,
+    zigzagKind: params.zigzagKind,
+    zigzagLineColor: params.lineColor,
+    zigzagMarkers: markers,
+  };
+}
+
 /**
  * Lightweight V2 forward projection:
  * - `sourceTf` doluysa o TF itkisi kullanılır; çizim çapası **aynı TF’in** `ohlcByTf` son mumu olmalı
@@ -317,48 +481,14 @@ export function buildElliottProjectionOverlayV2(
   const hasObservedAB = !!postPath && postPath.length >= 3;
   // A/B teyidi yoksa C'den (veya B'den) başlatma: düzeltme her zaman A'dan başlar.
   const startStep = !hasObservedAB && startStepRaw < 4 ? 1 : startStepRaw;
-  const cal = buildCalibrationFromPostAbc(postAbc, base);
+  const calBase = buildCalibrationFromPostAbc(postAbc, base);
+  const cal0 = applyFormationCalibrationTweak(postAbc, calBase);
   const rates = buildRateProfile(imp, postAbc);
   const refBlendRate = (rates.motiveRate + rates.corrRate) * 0.5;
   const regimeMul = recentVsImpulseVelocityMul(rowsForStep, refBlendRate);
 
-  const points: Pt[] = [{ time: startTime as UTCTimestamp, value: startPrice }];
-  const markers: SeriesMarker<UTCTimestamp>[] = [];
   const layers: PatternLayerOverlay[] = [];
-
-  let cur = startPrice;
-  let t = startTime as number;
-  const markerColor =
-    lineColor && /^#[0-9A-Fa-f]{3,8}$/.test(lineColor.trim()) ? lineColor.trim() : "#64b5f6";
-
-  for (let i = 0; i < maxSteps; i++) {
-    const stepNo = startStep + i;
-    const magRaw = stepMagnitudeWithCalibration(stepNo, base, cal);
-    const stepRateBase = stepIsCorrective(stepNo) ? rates.corrRate : rates.motiveRate;
-    const stepRate = Math.max(1e-12, stepRateBase * regimeMul);
-    const magNominal = stepRate * stepSec;
-    const mag = clamp(magRaw, magNominal * 0.42, magNominal * 1.88);
-    const dir = stepDirection(stepNo);
-    const signed = (isBull ? 1 : -1) * dir * mag;
-    cur += signed;
-    const deltaPrice = Math.abs(signed);
-    const dtRaw = deltaPrice / stepRate;
-    // At least one full bar period per leg so the polyline is readable on MTF charts:
-    // sub-bar minDt (e.g. 0.28×15m ≈ 4.2m) collapses all steps into one vertical pixel column
-    // when the visible history spans hundreds of candles (looks like a thick vertical spike).
-    const minDt = Math.max(45, Math.round(stepSec * 0.28), barPeriodSec);
-    const maxDt = Math.max(minDt + 1, Math.round(stepSec * 7.5));
-    t += Math.round(clamp(dtRaw, minDt, maxDt));
-    points.push({ time: t as UTCTimestamp, value: cur });
-
-    markers.push({
-      time: t as UTCTimestamp,
-      position: signed >= 0 ? "aboveBar" : "belowBar",
-      shape: "circle",
-      color: markerColor,
-      text: `${markerLabel(stepNo, tf)} ${formatEtaFromStart(t - startTime)}`,
-    });
-  }
+  const showAlt = opt.includeAltScenario !== false;
 
   // 1-2-3-4-5 sonrasinda ABC teyit aramasi:
   // A ve B varsa bu kisimlar duz (done), C tamamlanmadiysa B->son fiyat kesik gosterilir.
@@ -395,14 +525,42 @@ export function buildElliottProjectionOverlayV2(
     }
   }
 
-  layers.push({
-    upper: [],
-    lower: [],
-    zigzag: points,
-    zigzagKind: "elliott_projection",
-    zigzagLineColor: lineColor,
-    zigzagMarkers: markers,
-  });
+  const polyShared = {
+    startStep,
+    startTime,
+    startPrice,
+    maxSteps,
+    base,
+    rates,
+    regimeMul,
+    isBull,
+    tf,
+    stepSec,
+    barPeriodSec,
+    imp,
+    postAbc,
+    lineColor,
+  };
+
+  if (showAlt) {
+    layers.push(
+      buildForwardPolylineLayer({
+        ...polyShared,
+        cal: extendedThirdWaveCalibration(cal0),
+        zigzagKind: "elliott_projection_alt",
+        markerSuffix: " \u203b",
+      }),
+    );
+  }
+
+  layers.push(
+    buildForwardPolylineLayer({
+      ...polyShared,
+      cal: cal0,
+      zigzagKind: "elliott_projection",
+      markerSuffix: "",
+    }),
+  );
 
   return {
     layers,

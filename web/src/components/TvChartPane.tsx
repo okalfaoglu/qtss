@@ -88,7 +88,7 @@ function extendTimeScaleForElliottProjection(
   const lastT = candles[candles.length - 1].time as number;
   let maxProj = lastT;
   for (const L of layers) {
-    if (L.zigzagKind !== "elliott_projection") continue;
+    if (L.zigzagKind !== "elliott_projection" && L.zigzagKind !== "elliott_projection_alt") continue;
     for (const p of L.zigzag ?? []) {
       const t = p.time as number;
       if (Number.isFinite(t) && t > maxProj) maxProj = t;
@@ -155,6 +155,8 @@ function zigzagLineOptions(
       return applyOverride({ color: "#FFB74D", lineWidth: 1, lineStyle: LineStyle.Dotted });
     case "elliott_projection":
       return applyOverride({ color: "#2196F3", lineWidth: 2, lineStyle: LineStyle.Dashed });
+    case "elliott_projection_alt":
+      return applyOverride({ color: "#5c9ded", lineWidth: 1, lineStyle: LineStyle.Dotted });
     case "elliott_projection_done":
       return applyOverride({ color: "#42A5F5", lineWidth: 3, lineStyle: LineStyle.Solid });
     case "elliott_projection_c_active":

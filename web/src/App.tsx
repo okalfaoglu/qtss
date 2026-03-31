@@ -78,6 +78,7 @@ import {
   mtfZigzagColorsFromConfig,
   normalizeElliottWaveConfig,
   patternMenuForTf,
+  scaleElliottHexColor,
   type ElliottWaveConfig,
 } from "./lib/elliottWaveAppConfig";
 import {
@@ -910,6 +911,7 @@ export default function App() {
     const opt = {
       barHop: elliottConfig.projection_bar_hop,
       maxSteps: elliottConfig.projection_steps,
+      includeAltScenario: elliottConfig.show_projection_alt_scenario,
     };
     const out: PatternLayerOverlay[] = [];
     const specs: Array<{ tf: "4h" | "1h" | "15m"; on: boolean }> = [
@@ -946,9 +948,14 @@ export default function App() {
         tf,
       );
       if (built?.layers?.length) {
+        const baseColor = wc[tf];
         out.push(
           ...built.layers.map((layer) => ({
             ...layer,
+            zigzagLineColor:
+              layer.zigzagKind === "elliott_projection_alt"
+                ? scaleElliottHexColor(baseColor, 0.58)
+                : (layer.zigzagLineColor ?? baseColor),
             zigzagLineStyle:
               tf === "4h"
                 ? elliottConfig.mtf_line_style_4h
@@ -975,6 +982,7 @@ export default function App() {
     elliottConfig.pattern_menu_by_tf,
     elliottConfig.projection_bar_hop,
     elliottConfig.projection_steps,
+    elliottConfig.show_projection_alt_scenario,
     elliottConfig.show_projection_15m,
     elliottConfig.show_projection_1h,
     elliottConfig.show_projection_4h,

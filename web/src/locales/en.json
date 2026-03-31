@@ -2,7 +2,12 @@
   "common": {
     "language": "Language"
   },
-  "apiErrors": {},
+  "apiErrors": {
+    "analysis": {
+      "nansen_setups_load_failed": "Could not load Nansen setup scan. Try again or check the worker and database.",
+      "chart_patterns_config_load_failed": "Could not load chart patterns configuration from the database."
+    }
+  },
   "aiDecisions": {
     "loginPrompt": "Sign in to view AI decisions.",
     "title": "AI decisions",

@@ -69,6 +69,37 @@ export function sanitizeElliottHexColor(raw: unknown, fallback: string): string 
   return fallback;
 }
 
+/** Projeksiyon ikinci senaryo çizgisi: #RRGGBB kanallarını `factor` ile çarpar (0–1, örn. 0.62). */
+export function scaleElliottHexColor(hex: string, factor: number): string {
+  const t = hex.trim();
+  const m6 = /^#([0-9A-Fa-f]{6})$/i.exec(t);
+  const m3 = /^#([0-9A-Fa-f]{3})$/i.exec(t);
+  const f = clamp(factor, 0.15, 1);
+  const push = (r: number, g: number, b: number) =>
+    `#${Math.min(255, Math.round(r * f))
+      .toString(16)
+      .padStart(2, "0")}${Math.min(255, Math.round(g * f))
+      .toString(16)
+      .padStart(2, "0")}${Math.min(255, Math.round(b * f)).toString(16).padStart(2, "0")}`;
+  if (m6) {
+    const h = m6[1];
+    return push(parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16));
+  }
+  if (m3) {
+    const h = m3[1];
+    return push(
+      parseInt(h[0] + h[0], 16),
+      parseInt(h[1] + h[1], 16),
+      parseInt(h[2] + h[2], 16),
+    );
+  }
+  return t;
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, n));
+}
+
 export type ElliottWaveFormations = {
   /** 1–5 itki çizgisi ve dalga numaraları */
   impulse: boolean;
@@ -95,6 +126,11 @@ export type ElliottWaveConfig = {
   projection_bar_hop: number;
   /** Kaç segment ileri (Pine 12; üst sınır 24). */
   projection_steps: number;
+  /**
+   * İleri projeksiyonda ikinci çizgi: daha uzun 3. dalga hedefi (kalibre çarpanı yükseltilmiş şema).
+   * Kapalıysa yalnızca birincil polyline çizilir.
+   */
+  show_projection_alt_scenario: boolean;
   /**
    * @deprecated ACP zigzag kanal/tarama ayarıdır; Elliott V2 ZigZag artık bunu kullanmaz.
    * Geriye dönük JSON uyumluluğu için saklanır.
@@ -200,6 +236,7 @@ export const DEFAULT_ELLIOTT_WAVE_CONFIG: ElliottWaveConfig = {
   show_nested_formations: true,
   projection_bar_hop: 22,
   projection_steps: 12,
+  show_projection_alt_scenario: true,
   use_acp_zigzag_swing: false,
   acp_zigzag_row_index: 0,
   elliott_zigzag_depth: 21,
@@ -322,6 +359,11 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
       ? Math.min(24, Math.max(1, Math.floor(raw.projection_steps)))
       : base.projection_steps;
 
+  const show_projection_alt_scenario =
+    typeof raw.show_projection_alt_scenario === "boolean"
+      ? raw.show_projection_alt_scenario
+      : base.show_projection_alt_scenario;
+
   const use_acp_zigzag_swing =
     typeof raw.use_acp_zigzag_swing === "boolean" ? raw.use_acp_zigzag_swing : base.use_acp_zigzag_swing;
 
@@ -424,6 +466,7 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
     show_nested_formations,
     projection_bar_hop,
     projection_steps,
+    show_projection_alt_scenario,
     use_acp_zigzag_swing,
     acp_zigzag_row_index,
     elliott_zigzag_depth,
