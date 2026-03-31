@@ -67,6 +67,44 @@ impl BinanceLiveGateway {
         d.normalize().to_string()
     }
 
+    pub async fn cancel_futures_by_client_order_id(
+        &self,
+        symbol: &str,
+        client_order_id: &Uuid,
+    ) -> Result<Value, ExecutionError> {
+        let cid = client_order_id.as_simple().to_string();
+        self.client
+            .fapi_cancel_order(symbol, None, Some(&cid))
+            .await
+            .map_err(|e| ExecutionError::Exchange(e.to_string()))
+    }
+
+    pub async fn futures_open_orders(&self, symbol: &str) -> Result<Value, ExecutionError> {
+        self.client
+            .fapi_open_orders(Some(symbol))
+            .await
+            .map_err(|e| ExecutionError::Exchange(e.to_string()))
+    }
+
+    pub async fn futures_is_open_by_client_order_id(
+        &self,
+        symbol: &str,
+        client_order_id: &Uuid,
+    ) -> Result<bool, ExecutionError> {
+        let cid = client_order_id.as_simple().to_string();
+        let v = self.futures_open_orders(symbol).await?;
+        let Some(arr) = v.as_array() else {
+            return Ok(false);
+        };
+        for o in arr {
+            let coid = o.get("clientOrderId").and_then(|x| x.as_str()).unwrap_or("");
+            if coid == cid {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn map_tif(t: TimeInForce) -> Result<BTif, ExecutionError> {
         match t {
             TimeInForce::Gtc => Ok(BTif::Gtc),
@@ -120,10 +158,7 @@ impl BinanceLiveGateway {
                 let (otype, tif): (SpotOrderType, Option<BTif>) = if *post_only {
                     (SpotOrderType::LimitMaker, None)
                 } else {
-                    (
-                        SpotOrderType::Limit,
-                        Some(Self::map_tif(intent.time_in_force)?),
-                    )
+                    (SpotOrderType::Limit, Some(Self::map_tif(intent.time_in_force)?))
                 };
                 let price_s = Self::dec_str(*price);
                 self.client
@@ -201,6 +236,96 @@ impl BinanceLiveGateway {
                         Some(&price_s),
                         Some(cid),
                         None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                    .map_err(|e| ExecutionError::Exchange(e.to_string()))
+            }
+            OrderType::TrailingStopMarket { callback_rate } => {
+                if *callback_rate <= Decimal::ZERO {
+                    return Err(ExecutionError::Exchange(
+                        "trailing stop callback_rate must be > 0".into(),
+                    ));
+                }
+                let cb = Self::dec_str(*callback_rate);
+                self.client
+                    .fapi_new_order(
+                        symbol,
+                        side,
+                        position_side,
+                        FuturesOrderType::TrailingStopMarket,
+                        None,
+                        Some(&qty),
+                        reduce_only,
+                        None,
+                        Some(cid),
+                        None,
+                        None,
+                        None,
+                        Some(&cb),
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                    .map_err(|e| ExecutionError::Exchange(e.to_string()))
+            }
+            OrderType::StopMarket { stop_price } => {
+                if *stop_price <= Decimal::ZERO {
+                    return Err(ExecutionError::Exchange("stop_price must be > 0".into()));
+                }
+                let sp = Self::dec_str(*stop_price);
+                self.client
+                    .fapi_new_order(
+                        symbol,
+                        side,
+                        position_side,
+                        FuturesOrderType::StopMarket,
+                        None,
+                        Some(&qty),
+                        reduce_only,
+                        None,
+                        Some(cid),
+                        Some(&sp),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                    .map_err(|e| ExecutionError::Exchange(e.to_string()))
+            }
+            OrderType::StopLimit {
+                stop_price,
+                limit_price,
+            } => {
+                if *stop_price <= Decimal::ZERO || *limit_price <= Decimal::ZERO {
+                    return Err(ExecutionError::Exchange(
+                        "stop_price and limit_price must be > 0".into(),
+                    ));
+                }
+                let tif = Self::map_tif(intent.time_in_force)?;
+                let sp = Self::dec_str(*stop_price);
+                let lp = Self::dec_str(*limit_price);
+                self.client
+                    .fapi_new_order(
+                        symbol,
+                        side,
+                        position_side,
+                        FuturesOrderType::Stop,
+                        Some(tif),
+                        Some(&qty),
+                        reduce_only,
+                        Some(&lp),
+                        Some(cid),
+                        Some(&sp),
                         None,
                         None,
                         None,

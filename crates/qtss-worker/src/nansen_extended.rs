@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use qtss_storage::{
-    list_enabled_engine_symbols, resolve_worker_tick_secs, upsert_data_snapshot,
+    list_enabled_engine_symbols, resolve_worker_enabled_flag, resolve_worker_tick_secs, upsert_data_snapshot,
     AppConfigRepository,
 };
 use reqwest::Client;
@@ -240,6 +240,10 @@ pub async fn nansen_netflows_loop(pool: PgPool) {
     let base = nansen_api_base();
     let body = default_netflows_request_body();
     loop {
+        if !resolve_worker_enabled_flag(&pool, "worker", "nansen_enabled", "QTSS_NANSEN_ENABLED", true).await {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
         let tick = resolve_worker_tick_secs(
             &pool,
             "worker",
@@ -283,6 +287,10 @@ pub async fn nansen_holdings_loop(pool: PgPool) {
     let base = nansen_api_base();
     let body = default_holdings_request_body();
     loop {
+        if !resolve_worker_enabled_flag(&pool, "worker", "nansen_enabled", "QTSS_NANSEN_ENABLED", true).await {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
         let tick = resolve_worker_tick_secs(
             &pool,
             "worker",
@@ -326,6 +334,10 @@ pub async fn nansen_perp_trades_loop(pool: PgPool) {
     let base = nansen_api_base();
     let body = default_pagination_body();
     loop {
+        if !resolve_worker_enabled_flag(&pool, "worker", "nansen_enabled", "QTSS_NANSEN_ENABLED", true).await {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
         let tick = resolve_worker_tick_secs(
             &pool,
             "worker",
@@ -374,6 +386,10 @@ pub async fn nansen_who_bought_loop(pool: PgPool) {
     };
     let base = nansen_api_base();
     loop {
+        if !resolve_worker_enabled_flag(&pool, "worker", "nansen_enabled", "QTSS_NANSEN_ENABLED", true).await {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
         let Some(body) = resolve_who_bought_request_body() else {
             if !WHO_BOUGHT_MISSING_CONFIG_LOGGED.swap(true, Ordering::SeqCst) {
                 debug!(
@@ -417,6 +433,10 @@ pub async fn nansen_flow_intel_loop(pool: PgPool) {
     };
     let base = nansen_api_base();
     loop {
+        if !resolve_worker_enabled_flag(&pool, "worker", "nansen_enabled", "QTSS_NANSEN_ENABLED", true).await {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
         let tick = resolve_worker_tick_secs(
             &pool,
             "worker",
@@ -536,6 +556,10 @@ pub async fn nansen_perp_leaderboard_loop(pool: PgPool) {
         .unwrap_or_else(|| "api/v1/tgm/perp-pnl-leaderboard".to_string());
     let repo = AppConfigRepository::new(pool.clone());
     loop {
+        if !resolve_worker_enabled_flag(&pool, "worker", "nansen_enabled", "QTSS_NANSEN_ENABLED", true).await {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
         let tick = resolve_worker_tick_secs(
             &pool,
             "worker",
@@ -594,6 +618,10 @@ pub async fn nansen_whale_perp_aggregate_loop(pool: PgPool) {
     };
     let base = nansen_api_base();
     loop {
+        if !resolve_worker_enabled_flag(&pool, "worker", "nansen_enabled", "QTSS_NANSEN_ENABLED", true).await {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
         let tick = resolve_worker_tick_secs(
             &pool,
             "worker",

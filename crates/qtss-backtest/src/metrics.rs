@@ -1,6 +1,8 @@
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
+use chrono::Duration;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 
 use crate::engine::{ClosedTrade, EquityPoint};
 
@@ -35,10 +37,11 @@ impl PerformanceReport {
         let sortino = sortino_ratio_simple(curve, dec!(0));
 
         let (win_rate, profit_factor, max_cons_loss) = trade_stats(trades);
+        let cagr = cagr_from_curve(curve, initial, last);
 
         Self {
             total_return,
-            cagr: Decimal::ZERO, // tarih aralığından hesaplanacak — MVP placeholder
+            cagr,
             sharpe,
             sortino,
             max_drawdown: max_dd,
@@ -52,6 +55,31 @@ impl PerformanceReport {
             max_consecutive_losses: max_cons_loss,
         }
     }
+}
+
+fn cagr_from_curve(curve: &[EquityPoint], initial: Decimal, last: Decimal) -> Decimal {
+    if curve.len() < 2 {
+        return Decimal::ZERO;
+    }
+    if initial <= Decimal::ZERO || last <= Decimal::ZERO {
+        return Decimal::ZERO;
+    }
+    let start = curve.first().map(|p| p.ts).unwrap_or(curve[0].ts);
+    let end = curve.last().map(|p| p.ts).unwrap_or(curve[curve.len() - 1].ts);
+    let dt = end - start;
+    if dt <= Duration::zero() {
+        return Decimal::ZERO;
+    }
+    let years = (dt.num_seconds() as f64) / (365.25 * 24.0 * 3600.0);
+    if !years.is_finite() || years <= 0.0 {
+        return Decimal::ZERO;
+    }
+    let ratio = (last / initial).to_f64().unwrap_or(0.0);
+    if !ratio.is_finite() || ratio <= 0.0 {
+        return Decimal::ZERO;
+    }
+    let cagr_f = ratio.powf(1.0 / years) - 1.0;
+    Decimal::from_f64(cagr_f).unwrap_or(Decimal::ZERO)
 }
 
 fn max_drawdown(curve: &[EquityPoint]) -> Decimal {

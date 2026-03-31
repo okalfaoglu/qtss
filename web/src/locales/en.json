@@ -29,6 +29,7 @@
   },
   "drawer": {
     "general": "General",
+    "dashboard": "Dashboard",
     "queues": "Queues",
     "setting": "Settings",
     "status": "Status",
@@ -44,6 +45,30 @@
     "themeToggleDark": "Switch to light theme",
     "themeToggleLight": "Switch to dark theme"
   },
+  "dashboard": {
+    "title": "Trade dashboard",
+    "signInPrompt": "Sign in to view trading metrics.",
+    "loading": "Loading…",
+    "rollupHint": "Daily/weekly/monthly/yearly values come from server rollups (pnl_rollups).",
+    "instantHint": "Instant view: last 24h orders sampled to minute buckets ({{n}} orders fetched).",
+    "ledger": "Ledger",
+    "ledgerLive": "Live",
+    "ledgerDry": "Dry",
+    "bucketAria": "Dashboard time bucket",
+    "bucket": {
+      "instant": "Instant",
+      "daily": "Daily",
+      "weekly": "Weekly",
+      "monthly": "Monthly",
+      "yearly": "Yearly"
+    },
+    "metrics": {
+      "tradeCount": "Trade count",
+      "closedTrades": "Closed trades",
+      "netPnl": "Net P&L",
+      "netPnlHint": "Net = realized − fees (fees shown as negative when P&L is unavailable)."
+    }
+  },
   "elliott": {
     "summary": "Summary",
     "impulse": "Impulse",
@@ -57,6 +82,7 @@
       "pivotAlternation": "ZigZag pivots do not alternate high/low.",
       "barRatioUpper": "Upper channel line bar-ratio check failed.",
       "barRatioLower": "Lower channel line bar-ratio check failed.",
+      "barRatioHint": "Tip: relax bar-ratio (try 0.25) or disable it. Current limit {{limit}}.",
       "inspectUpper": "Upper line inspection / touch count failed.",
       "inspectLower": "Lower line inspection / touch count failed.",
       "patternNotAllowed": "Pattern not allowed for this scan configuration.",

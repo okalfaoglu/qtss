@@ -2,7 +2,7 @@ import type { ElliottEngineOutputV2 } from "./elliottEngineV2";
 
 export type ElliottLegendRow = {
   id: string;
-  swatch: "primary" | "sub" | "abc" | "projection";
+  swatch: "primary" | "sub" | "abc" | "projection" | "projection_target";
   title: string;
   detail: string;
 };
@@ -14,6 +14,7 @@ export type ElliottLegendRow = {
 export function buildElliottLegendRows(
   out: ElliottEngineOutputV2 | null,
   showProjection = false,
+  showProjectionTargets = false,
 ): ElliottLegendRow[] {
   const rows: ElliottLegendRow[] = [];
   const m = out?.hierarchy.macro ?? null;
@@ -57,6 +58,14 @@ export function buildElliottLegendRows(
       swatch: "projection",
       title: "İleri projeksiyon (Fib şeması)",
       detail: "Pine benzeri olası hedef şeması. Yatırım tavsiyesi değildir.",
+    });
+  }
+  if (showProjectionTargets) {
+    rows.push({
+      id: "projection_targets",
+      swatch: "projection_target",
+      title: "Projeksiyon hedef seviyeleri",
+      detail: "Formasyon projeksiyonunda (ABC) yatay hedef çizgileri ayrı stil ile gösterilir.",
     });
   }
 

@@ -6,23 +6,44 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use qtss_notify::{resolve_bilingual, Notification, NotificationChannel, NotificationDispatcher};
 use qtss_storage::{
-    resolve_notify_default_locale, resolve_worker_tick_secs, PaperFillRow, PaperLedgerRepository,
+    resolve_notify_default_locale, resolve_system_csv, resolve_worker_enabled_flag,
+    resolve_worker_tick_secs, PaperFillRow, PaperLedgerRepository,
 };
 use sqlx::PgPool;
 use tracing::{info, warn};
 
-fn notify_paper_position_enabled() -> bool {
-    std::env::var("QTSS_NOTIFY_PAPER_POSITION_ENABLED")
-        .or_else(|_| std::env::var("QTSS_NOTIFY_POSITION_ENABLED"))
-        .ok()
-        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
+async fn notify_paper_position_enabled(pool: &PgPool) -> bool {
+    resolve_worker_enabled_flag(
+        pool,
+        "worker",
+        "paper_position_notify_enabled",
+        "QTSS_NOTIFY_PAPER_POSITION_ENABLED",
+        false,
+    )
+    .await
+        || resolve_worker_enabled_flag(
+            pool,
+            "worker",
+            "paper_position_notify_enabled",
+            "QTSS_NOTIFY_POSITION_ENABLED",
+            false,
+        )
+        .await
 }
 
-fn position_notify_channels_from_env() -> Vec<NotificationChannel> {
-    let raw = std::env::var("QTSS_NOTIFY_PAPER_POSITION_CHANNELS")
-        .or_else(|_| std::env::var("QTSS_NOTIFY_POSITION_CHANNELS"))
-        .unwrap_or_else(|_| "telegram".into());
-    raw.split(',')
+async fn position_notify_channels(pool: &PgPool) -> Vec<NotificationChannel> {
+    let raw = resolve_system_csv(
+        pool,
+        "worker",
+        "paper_position_notify_channels_csv",
+        "QTSS_NOTIFY_PAPER_POSITION_CHANNELS",
+        "telegram",
+    )
+    .await;
+    if raw.is_empty() {
+        return vec![];
+    }
+    raw.iter()
         .filter_map(|s| NotificationChannel::parse(s.trim()))
         .collect()
 }
@@ -56,11 +77,12 @@ fn fill_line_en(f: &PaperFillRow) -> String {
 }
 
 pub async fn paper_position_notify_loop(pool: PgPool) {
-    if !notify_paper_position_enabled() {
+    let enabled = notify_paper_position_enabled(&pool).await;
+    if !enabled {
         info!("QTSS_NOTIFY_PAPER_POSITION_ENABLED kapalı — paper dolum bildirimi yok");
         return;
     }
-    let chans = position_notify_channels_from_env();
+    let chans = position_notify_channels(&pool).await;
     if chans.is_empty() {
         warn!("Paper pozisyon bildirimi açık fakat kanal listesi boş (QTSS_NOTIFY_PAPER_POSITION_CHANNELS / QTSS_NOTIFY_POSITION_CHANNELS)");
         return;

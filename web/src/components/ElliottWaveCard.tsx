@@ -514,6 +514,23 @@ export function ElliottWaveCard({
             (value.show_projection_4h || value.show_projection_1h || value.show_projection_15m) ? (
               <>
                 <label className="muted tv-elliott-panel__field">
+                  <span>Projeksiyon modu</span>
+                  <select
+                    className="tv-topstrip__select"
+                    value={value.projection_mode ?? "legacy"}
+                    onChange={(e) =>
+                      onChange({
+                        ...value,
+                        projection_mode: e.target.value === "formation" ? "formation" : "legacy",
+                      })
+                    }
+                    title="Legacy: tek polyline. Formasyon: ABC + yeni 1-5 dalga segmentleri ve hedef seviyeleri."
+                  >
+                    <option value="legacy">Basit polyline (legacy)</option>
+                    <option value="formation">Formasyon projeksiyonu</option>
+                  </select>
+                </label>
+                <label className="muted tv-elliott-panel__field">
                   <span>Projeksiyon: adım (kaç mum süresi)</span>
                   <input
                     type="number"

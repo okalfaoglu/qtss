@@ -1,13 +1,13 @@
 # QTSS — Yapılandırma kayıt defteri (`system_config` / `app_config`)
 
-Bu dosya **tam ürün hattında** (migrations `0044`+ `system_config` tablosu mevcut) FAZ **11.3** ile uyumludur. **Minimal checkout** (yalnızca `0001`–`0012` migrasyonları) bu tabloyu henüz oluşturmayabilir; önce `migrations/README.md` envanterine bakın.
+Bu dosya FAZ **11.3** ile uyumludur. Bu repoda `system_config` şeması migration **`0044_system_config.sql`** ile gelir.
 
 ## `app_config` (mevcut `0001_init`)
 
 - Tek tablo, `key` / `value` (JSONB). Modül kolonu **yok**; anlamsal gruplama anahtar önekleriyle yapılır (`acp_chart_patterns`, `elliott_wave`, `ai_engine_config`, …).
 - Admin UI ve API: `GET/POST/DELETE /api/v1/config` (roller: bkz. `docs/PROJECT.md` §8).
 
-## `system_config` (tam hatta `0044_system_config.sql`)
+## `system_config` (`0044_system_config.sql`)
 
 | Alan | Açıklama |
 |------|-----------|
@@ -18,7 +18,7 @@ Bu dosya **tam ürün hattında** (migrations `0044`+ `system_config` tablosu me
 
 **Çözümleme:** `qtss_storage::resolve_worker_tick_secs` + `QTSS_CONFIG_ENV_OVERRIDES` + ilgili `QTSS_*` yedekleri. Tam anahtar listesi ve worker modülleri için ana referans: **`docs/QTSS_MASTER_DEV_GUIDE.md` FAZ 11.7** ve üretim repodaki `crates/qtss-storage/src/config_tick.rs`.
 
-## Admin API (tam hatta)
+## Admin API
 
 - `GET/POST/DELETE /api/v1/admin/system-config` — `?module=` filtresi; **admin** rolü.
 

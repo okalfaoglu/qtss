@@ -9,6 +9,7 @@ pub mod data_snapshots;
 pub mod engine_analysis;
 pub mod error;
 pub mod exchange_accounts;
+pub mod exchange_fills;
 pub mod exchange_orders;
 pub mod external_fetch;
 pub mod fill_long_estimate;
@@ -36,7 +37,7 @@ pub use catalog::{
 pub use config::{AppConfigEntry, AppConfigRepository};
 pub use config_tick::{
     normalize_notify_locale_code, resolve_notify_default_locale, resolve_worker_tick_secs,
-    tick_secs_from_config_value,
+    resolve_system_csv, resolve_system_string, resolve_worker_enabled_flag, tick_secs_from_config_value,
 };
 pub use copy_trade::{CopySubscriptionRepository, CopySubscriptionRow};
 pub use copy_trade_jobs::{CopyTradeJobRepository, CopyTradeJobRow};
@@ -55,6 +56,7 @@ pub use engine_analysis::{
 };
 pub use error::StorageError;
 pub use exchange_accounts::{ExchangeAccountRepository, ExchangeCredentials};
+pub use exchange_fills::{ExchangeFillRepository, ExchangeFillRow};
 pub use exchange_orders::{ExchangeOrderRepository, ExchangeOrderRow};
 pub use external_fetch::{
     delete_external_source, external_snapshot_age_secs, list_enabled_external_sources,
@@ -62,8 +64,8 @@ pub use external_fetch::{
 };
 pub use fill_long_estimate::{symbols_with_positive_long_from_fills, FillPositionKey};
 pub use market_bars::{
-    fetch_recent_bars_stats, list_recent_bars, upsert_market_bar, MarketBarRow, MarketBarUpsert,
-    RecentBarsStats,
+    fetch_recent_bars_stats, list_bars_in_range, list_recent_bars, upsert_market_bar, MarketBarRow,
+    MarketBarUpsert, RecentBarsStats,
 };
 pub use market_confluence_snapshots::{
     insert_market_confluence_snapshot, list_market_confluence_snapshots_for_symbol,

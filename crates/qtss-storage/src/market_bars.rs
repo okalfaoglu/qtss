@@ -117,6 +117,38 @@ pub async fn list_recent_bars(
     Ok(rows)
 }
 
+pub async fn list_bars_in_range(
+    pool: &PgPool,
+    exchange: &str,
+    segment: &str,
+    symbol: &str,
+    interval: &str,
+    start_time: DateTime<Utc>,
+    end_time: DateTime<Utc>,
+    limit: i64,
+) -> Result<Vec<MarketBarRow>, StorageError> {
+    let rows = sqlx::query_as::<_, MarketBarRow>(
+        r#"SELECT id, exchange, segment, symbol, interval, open_time,
+                  open, high, low, close, volume, quote_volume, trade_count,
+                  instrument_id, bar_interval_id, created_at, updated_at
+           FROM market_bars
+           WHERE exchange = $1 AND segment = $2 AND symbol = $3 AND interval = $4
+             AND open_time >= $5 AND open_time <= $6
+           ORDER BY open_time ASC
+           LIMIT $7"#,
+    )
+    .bind(exchange)
+    .bind(segment)
+    .bind(symbol)
+    .bind(interval)
+    .bind(start_time)
+    .bind(end_time)
+    .bind(limit.clamp(1, 200_000))
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Summary stats over the last `limit` bars (newest first), for AI context / dashboards (FAZ 3.4).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecentBarsStats {

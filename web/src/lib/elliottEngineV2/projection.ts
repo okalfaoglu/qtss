@@ -15,6 +15,8 @@ type Pt = { time: UTCTimestamp; value: number };
 export type ElliottProjectionV2Options = {
   barHop: number;
   maxSteps: number;
+  /** Projection rendering mode. */
+  mode?: "legacy" | "formation";
   /**
    * Fib time blend weight for measured impulse durations vs fixed defaults.
    * `0` => only fixed defaults, `1` => only measured ratios.
@@ -487,6 +489,150 @@ function buildForwardPolylineLayer(params: {
   };
 }
 
+type FormationPoint = { time: UTCTimestamp; value: number };
+
+function seg(a: FormationPoint, b: FormationPoint, kind: "elliott_projection" | "elliott_projection_alt", style: "solid" | "dotted" | "dashed", lineColor?: string): PatternLayerOverlay {
+  return {
+    upper: [],
+    lower: [],
+    zigzag: [a, b],
+    zigzagKind: kind,
+    zigzagLineColor: lineColor,
+    zigzagLineStyle: style,
+  };
+}
+
+function horizLevel(
+  fromT: number,
+  toT: number,
+  price: number,
+  kind: "elliott_projection_target" | "elliott_projection_target_alt",
+  lineColor?: string,
+): PatternLayerOverlay {
+  return {
+    upper: [
+      { time: fromT as UTCTimestamp, value: price },
+      { time: toT as UTCTimestamp, value: price },
+    ],
+    lower: [],
+    zigzag: [],
+    zigzagKind: kind,
+    zigzagLineColor: lineColor,
+    zigzagLineStyle: "dotted",
+    zigzagLineWidth: 1,
+  };
+}
+
+function buildFormationProjection(params: {
+  imp: ImpulseCountV2;
+  postAbc: CorrectiveCountV2 | null;
+  startTime: number;
+  startPrice: number;
+  tf: Timeframe;
+  lineColor?: string;
+  alt: boolean;
+}): { layers: PatternLayerOverlay[] } {
+  const { imp, postAbc, startTime, startPrice, tf, lineColor, alt } = params;
+  const kind = alt ? "elliott_projection_alt" : "elliott_projection";
+  const targetKind = alt ? "elliott_projection_target_alt" : "elliott_projection_target";
+  const layers: PatternLayerOverlay[] = [];
+  const p = imp.pivots;
+  const p0 = p[0], p1 = p[1], p2 = p[2], p3 = p[3], p4 = p[4], p5 = p[5];
+  const isBull = imp.direction === "bull";
+  const dir = isBull ? 1 : -1;
+
+  // Helpers
+  const impulseSize = Math.abs(p5.price - p0.price);
+  const w1Size = Math.abs(p1.price - p0.price);
+  const w1Dur = Math.max(60, p1.time - p0.time);
+  const w2Dur = Math.max(60, p2.time - p1.time);
+  const w3Dur = Math.max(60, p3.time - p2.time);
+
+  const projAVal = isBull ? p5.price - impulseSize * 0.382 : p5.price + impulseSize * 0.382;
+  const abSize = Math.abs(projAVal - p5.price);
+  const projBVal = isBull ? projAVal + abSize * 0.618 : projAVal - abSize * 0.618;
+  const projCVal = isBull ? projBVal - abSize * 1.0 : projBVal + abSize * 1.0;
+
+  const durationA = Math.max(60, Math.round(w1Dur * 0.618));
+  const durationB = Math.max(60, Math.round(w2Dur * 1.0));
+  const durationC = Math.max(60, Math.round(w1Dur * 1.0));
+
+  const tA = (startTime + durationA) as UTCTimestamp;
+  const tB = (startTime + durationA + durationB) as UTCTimestamp;
+  const tC = (startTime + durationA + durationB + durationC) as UTCTimestamp;
+
+  const aPt: FormationPoint = { time: tA, value: projAVal };
+  const bPt: FormationPoint = { time: tB, value: projBVal };
+  const cPt: FormationPoint = { time: tC, value: projCVal };
+
+  // Post-ABC state
+  const postPath = postAbc ? (postAbc.path?.length ? postAbc.path : postAbc.pivots) : null;
+  const hasA = !!postPath && postPath.length >= 2;
+  const hasB = !!postPath && postPath.length >= 3;
+  const hasC = !!postPath && postPath.length >= 4;
+
+  const w5Pt: FormationPoint = { time: p5.time as UTCTimestamp, value: p5.price };
+
+  if (!hasA) {
+    // Impulse done -> project full ABC
+    layers.push(seg(w5Pt, aPt, kind, "dashed", lineColor));
+    layers.push(seg(aPt, bPt, kind, "dotted", lineColor));
+    layers.push(seg(bPt, cPt, kind, "dashed", lineColor));
+  } else if (hasA && !hasB) {
+    // A observed -> project B and C from observed A point
+    const obsA = postPath![1]!;
+    const obsAPt: FormationPoint = { time: obsA.time as UTCTimestamp, value: obsA.price };
+    const abObs = Math.abs(obsAPt.value - p5.price);
+    const projB2 = isBull ? obsAPt.value + abObs * 0.618 : obsAPt.value - abObs * 0.618;
+    const projC2 = isBull ? projB2 - abObs * 1.0 : projB2 + abObs * 1.0;
+    const b2: FormationPoint = { time: tB, value: projB2 };
+    const c2: FormationPoint = { time: tC, value: projC2 };
+    layers.push(seg(obsAPt, b2, kind, "dotted", lineColor));
+    layers.push(seg(b2, c2, kind, "dashed", lineColor));
+  } else if (hasA && hasB && !hasC) {
+    // A and B observed -> project C from observed B
+    const obsB = postPath![2]!;
+    const obsBPt: FormationPoint = { time: obsB.time as UTCTimestamp, value: obsB.price };
+    const aRef = postPath![1]!;
+    const abObs = Math.abs(aRef.price - p5.price);
+    const projC2 = isBull ? obsBPt.value - abObs * 1.0 : obsBPt.value + abObs * 1.0;
+    const c2: FormationPoint = { time: tC, value: projC2 };
+    layers.push(seg(obsBPt, c2, kind, "dashed", lineColor));
+  } else {
+    // ABC completed -> project new impulse 1-2-3-4-5 from C end (observed)
+    const cEnd = postPath![postPath!.length - 1]!;
+    const cEndPt: FormationPoint = { time: cEnd.time as UTCTimestamp, value: cEnd.price };
+    const w3Target = cEndPt.value + dir * w1Size * 1.618;
+    const w4Target = w3Target - dir * Math.abs(w3Target - cEndPt.value) * 0.382;
+    const w5Target = w4Target + dir * w1Size * 1.0;
+    const t1 = (cEndPt.time as number) + Math.max(60, Math.round(w1Dur * 1.0));
+    const t2 = t1 + Math.max(60, Math.round(w2Dur * 1.0));
+    const t3 = t2 + Math.max(60, Math.round(w3Dur * 1.0));
+    const t4 = t3 + Math.max(60, Math.round(w2Dur * 1.0));
+    const t5 = t4 + Math.max(60, Math.round(w1Dur * 1.0));
+    const p1n: FormationPoint = { time: t1 as UTCTimestamp, value: cEndPt.value + dir * w1Size * 1.0 };
+    const p2n: FormationPoint = { time: t2 as UTCTimestamp, value: p1n.value - dir * w1Size * 0.382 };
+    const p3n: FormationPoint = { time: t3 as UTCTimestamp, value: w3Target };
+    const p4n: FormationPoint = { time: t4 as UTCTimestamp, value: w4Target };
+    const p5n: FormationPoint = { time: t5 as UTCTimestamp, value: w5Target };
+    layers.push(seg(cEndPt, p1n, kind, "dashed", lineColor));
+    layers.push(seg(p1n, p2n, kind, "dotted", lineColor));
+    layers.push(seg(p2n, p3n, kind, "dashed", lineColor));
+    layers.push(seg(p3n, p4n, kind, "dotted", lineColor));
+    layers.push(seg(p4n, p5n, kind, "dashed", lineColor));
+  }
+
+  // Target level horizontals + markers for the latest projected points (A/B/C)
+  const toT = ((tC as number) + 3600) as UTCTimestamp;
+  if (!hasC) {
+    layers.push(horizLevel(startTime, toT as number, aPt.value, targetKind, lineColor));
+    layers.push(horizLevel(startTime, toT as number, bPt.value, targetKind, lineColor));
+    layers.push(horizLevel(startTime, toT as number, cPt.value, targetKind, lineColor));
+  }
+
+  return { layers };
+}
+
 /**
  * Lightweight V2 forward projection:
  * - `sourceTf` doluysa o TF itkisi kullanılır; çizim çapası **aynı TF’in** `ohlcByTf` son mumu olmalı
@@ -542,6 +688,7 @@ export function buildElliottProjectionOverlayV2(
 
   const layers: PatternLayerOverlay[] = [];
   const showAlt = opt.includeAltScenario !== false;
+  const mode = opt.mode ?? "legacy";
 
   // 1-2-3-4-5 sonrasinda ABC teyit aramasi:
   // A ve B varsa bu kisimlar duz (done), C tamamlanmadiysa B->son fiyat kesik gosterilir.
@@ -597,25 +744,50 @@ export function buildElliottProjectionOverlayV2(
     lineColor,
   };
 
-  if (showAlt) {
+  if (mode === "formation") {
+    const formed = buildFormationProjection({
+      imp,
+      postAbc,
+      startTime,
+      startPrice,
+      tf,
+      lineColor,
+      alt: false,
+    });
+    layers.push(...formed.layers);
+    if (showAlt) {
+      const formedAlt = buildFormationProjection({
+        imp,
+        postAbc,
+        startTime,
+        startPrice,
+        tf,
+        lineColor,
+        alt: true,
+      });
+      layers.push(...formedAlt.layers);
+    }
+  } else {
+    if (showAlt) {
+      layers.push(
+        buildForwardPolylineLayer({
+          ...polyShared,
+          cal: extendedThirdWaveCalibration(cal0),
+          zigzagKind: "elliott_projection_alt",
+          markerSuffix: " \u203b",
+        }),
+      );
+    }
+
     layers.push(
       buildForwardPolylineLayer({
         ...polyShared,
-        cal: extendedThirdWaveCalibration(cal0),
-        zigzagKind: "elliott_projection_alt",
-        markerSuffix: " \u203b",
+        cal: cal0,
+        zigzagKind: "elliott_projection",
+        markerSuffix: "",
       }),
     );
   }
-
-  layers.push(
-    buildForwardPolylineLayer({
-      ...polyShared,
-      cal: cal0,
-      zigzagKind: "elliott_projection",
-      markerSuffix: "",
-    }),
-  );
 
   return {
     layers,

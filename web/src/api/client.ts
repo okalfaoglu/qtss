@@ -102,6 +102,52 @@ export async function fetchWithBearerRetry(
   return fetch(url, { ...init, headers: h2 });
 }
 
+export type SystemConfigRowApi = {
+  id: string;
+  module: string;
+  config_key: string;
+  value: unknown;
+  schema_version: number;
+  description: string | null;
+  is_secret: boolean;
+  updated_at: string;
+  updated_by_user_id: string | null;
+};
+
+export async function fetchAdminSystemConfig(
+  accessToken: string,
+  q?: { module?: string; limit?: number },
+): Promise<SystemConfigRowApi[]> {
+  const params = new URLSearchParams();
+  if (q?.module?.trim()) params.set("module", q.module.trim());
+  if (q?.limit != null && Number.isFinite(q.limit)) params.set("limit", String(q.limit));
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/admin/system-config?${params}`, accessToken, {});
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("admin/system-config", r, t);
+  return JSON.parse(t) as SystemConfigRowApi[];
+}
+
+export async function upsertAdminSystemConfig(
+  accessToken: string,
+  body: {
+    module: string;
+    config_key: string;
+    value: unknown;
+    schema_version?: number;
+    description?: string;
+    is_secret?: boolean;
+  },
+): Promise<SystemConfigRowApi> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/admin/system-config`, accessToken, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("admin/system-config POST", r, t);
+  return JSON.parse(t) as SystemConfigRowApi;
+}
+
 export async function fetchHealth(): Promise<unknown> {
   const r = await fetch(`${API_BASE}/health`);
   const t = await r.text();
@@ -540,6 +586,66 @@ export async function scanChannelSix(
   return JSON.parse(t) as ChannelSixResponse;
 }
 
+export type BacktestEquityPointApi = {
+  ts: string;
+  equity: string;
+};
+
+export type BacktestClosedTradeApi = {
+  entry_ts: string;
+  exit_ts: string;
+  side: string;
+  qty: string;
+  entry_px: string;
+  exit_px: string;
+  pnl: string;
+  fee: string;
+};
+
+export type BacktestRunResponseApi = {
+  meta: {
+    exchange: string;
+    segment: string;
+    symbol: string;
+    interval: string;
+    start_time: string;
+    end_time: string;
+    bar_count: number;
+    strategy: string;
+    initial_equity: string;
+    sma_fast?: number | null;
+    sma_slow?: number | null;
+  };
+  equity_curve: BacktestEquityPointApi[];
+  trades: BacktestClosedTradeApi[];
+  report: unknown;
+};
+
+export async function postBacktestRun(
+  accessToken: string,
+  body: {
+    strategy: "buy_and_hold" | "sma_cross";
+    exchange: string;
+    segment: string;
+    symbol: string;
+    interval: string;
+    start_time: string;
+    end_time: string;
+    initial_equity: string | number;
+    sma_fast?: number;
+    sma_slow?: number;
+  },
+): Promise<BacktestRunResponseApi> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/backtest/run`, accessToken, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("backtest/run", r, t);
+  return JSON.parse(t) as BacktestRunResponseApi;
+}
+
 export type EngineSymbolApiRow = {
   id: string;
   exchange: string;
@@ -960,6 +1066,36 @@ export type PaperFillRow = {
   created_at: string;
 };
 
+export type ExchangeFillRowApi = {
+  id: string;
+  org_id: string;
+  user_id: string;
+  exchange: string;
+  segment: string;
+  symbol: string;
+  venue_order_id: number;
+  venue_trade_id: number | null;
+  fill_price: string | number | null;
+  fill_quantity: string | number | null;
+  fee: string | number | null;
+  fee_asset: string | null;
+  event_time: string;
+  raw_event: unknown | null;
+  created_at: string;
+};
+
+export async function fetchMyExchangeFills(
+  accessToken: string,
+  opts?: { limit?: number },
+): Promise<ExchangeFillRowApi[]> {
+  const params = new URLSearchParams();
+  params.set("limit", String(opts?.limit ?? 50));
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/fills?${params}`, accessToken, {});
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("fills", r, t);
+  return JSON.parse(t) as ExchangeFillRowApi[];
+}
+
 export async function fetchPaperBalance(accessToken: string): Promise<PaperBalanceRow | null> {
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/orders/dry/balance`, accessToken, {});
   const t = await r.text();
@@ -984,6 +1120,7 @@ export async function fetchPaperFills(
 export type PnlRollupRowApi = {
   org_id: string;
   exchange: string;
+  segment: string;
   symbol: string | null;
   ledger: string;
   bucket: string;
@@ -992,18 +1129,48 @@ export type PnlRollupRowApi = {
   fees: string | number;
   volume: string | number;
   trade_count: number;
+  closed_trade_count: number;
 };
 
 export async function fetchDashboardPnlRollups(
   accessToken: string,
   ledger: string,
   bucket: string,
+  opts?: { exchange?: string; segment?: string; symbol?: string; limit?: number },
 ): Promise<PnlRollupRowApi[]> {
   const params = new URLSearchParams({ ledger, bucket });
+  if (opts?.exchange?.trim()) params.set("exchange", opts.exchange.trim());
+  if (opts?.segment?.trim()) params.set("segment", opts.segment.trim());
+  if (opts?.symbol?.trim()) params.set("symbol", opts.symbol.trim().toUpperCase());
+  if (typeof opts?.limit === "number" && Number.isFinite(opts.limit)) params.set("limit", String(opts.limit));
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/dashboard/pnl?${params}`, accessToken, {});
   const t = await r.text();
   if (!r.ok) throwQtssApiError("dashboard/pnl", r, t);
   return JSON.parse(t) as PnlRollupRowApi[];
+}
+
+export type PnlEquityPointApi = {
+  t: string;
+  equity: string | number;
+  realized_pnl: string | number;
+  fees: string | number;
+};
+
+export async function fetchDashboardPnlEquityCurve(
+  accessToken: string,
+  ledger: string,
+  bucket: string,
+  opts?: { exchange?: string; segment?: string; symbol?: string; limit?: number },
+): Promise<PnlEquityPointApi[]> {
+  const params = new URLSearchParams({ ledger, bucket });
+  if (opts?.exchange?.trim()) params.set("exchange", opts.exchange.trim());
+  if (opts?.segment?.trim()) params.set("segment", opts.segment.trim());
+  if (opts?.symbol?.trim()) params.set("symbol", opts.symbol.trim().toUpperCase());
+  if (typeof opts?.limit === "number" && Number.isFinite(opts.limit)) params.set("limit", String(opts.limit));
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/dashboard/pnl/equity?${params}`, accessToken, {});
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("dashboard/pnl/equity", r, t);
+  return JSON.parse(t) as PnlEquityPointApi[];
 }
 
 export type PnlRebuildStatsApi = {
@@ -1053,6 +1220,80 @@ export async function fetchMyBinanceOrders(
   return JSON.parse(t) as ExchangeOrderRowApi[];
 }
 
+export type ExchangeFillRowApi = {
+  id: string;
+  org_id: string;
+  user_id: string;
+  exchange: string;
+  segment: string;
+  symbol: string;
+  venue_order_id: number;
+  venue_trade_id: number | null;
+  fill_price: string | number | null;
+  fill_quantity: string | number | null;
+  fee: string | number | null;
+  fee_asset: string | null;
+  event_time: string;
+  raw_event: unknown | null;
+  created_at: string;
+};
+
+export async function fetchMyBinanceFills(
+  accessToken: string,
+  limit = 200,
+): Promise<ExchangeFillRowApi[]> {
+  const params = new URLSearchParams({ limit: String(Math.min(500, Math.max(1, limit))) });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/orders/binance/fills?${params}`, accessToken, {});
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("orders/binance/fills", r, t);
+  return JSON.parse(t) as ExchangeFillRowApi[];
+}
+
+export async function postMyBinancePlaceOrder(
+  accessToken: string,
+  intent: unknown,
+): Promise<{ client_order_id: string; status: string }> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/orders/binance/place`, accessToken, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ intent }),
+  });
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("orders/binance/place", r, t);
+  return JSON.parse(t) as { client_order_id: string; status: string };
+}
+
+export type ReconcileReportApi = {
+  venue: string;
+  checked_remote_orders: number;
+  checked_local_orders: number;
+  mismatches: number;
+  local_submitted_not_open_on_venue: number;
+  remote_open_unknown_locally: number;
+  notes: string;
+  status_updates_applied?: number | null;
+};
+
+export async function postReconcileBinanceSpot(accessToken: string): Promise<ReconcileReportApi> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/reconcile/binance`, accessToken, {
+    method: "POST",
+    headers: {},
+  });
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("reconcile/binance", r, t);
+  return JSON.parse(t) as ReconcileReportApi;
+}
+
+export async function postReconcileBinanceFutures(accessToken: string): Promise<ReconcileReportApi> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/reconcile/binance/futures`, accessToken, {
+    method: "POST",
+    headers: {},
+  });
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("reconcile/binance/futures", r, t);
+  return JSON.parse(t) as ReconcileReportApi;
+}
+
 /** SPEC §7.2 / F5 — `exchangeInfo` ipucu veya tier0 fallback (hesap anahtarı gerekmez). */
 export type BinanceCommissionDefaultsApi = {
   segment: string;
@@ -1100,6 +1341,11 @@ export async function fetchBinanceCommissionAccount(
 export type NotifyOutboxRowApi = {
   id: string;
   org_id: string | null;
+  event_key: string | null;
+  severity: string;
+  exchange: string | null;
+  segment: string | null;
+  symbol: string | null;
   title: string;
   body: string;
   channels: string[];
@@ -1112,8 +1358,25 @@ export type NotifyOutboxRowApi = {
   updated_at: string;
 };
 
-export async function fetchNotifyOutbox(accessToken: string, limit = 50): Promise<NotifyOutboxRowApi[]> {
-  const params = new URLSearchParams({ limit: String(limit) });
+export async function fetchNotifyOutbox(
+  accessToken: string,
+  q?: {
+    limit?: number;
+    status?: string;
+    event_key?: string;
+    exchange?: string;
+    segment?: string;
+    symbol?: string;
+    q?: string;
+  },
+): Promise<NotifyOutboxRowApi[]> {
+  const params = new URLSearchParams({ limit: String(q?.limit ?? 50) });
+  if (q?.status?.trim()) params.set("status", q.status.trim());
+  if (q?.event_key?.trim()) params.set("event_key", q.event_key.trim());
+  if (q?.exchange?.trim()) params.set("exchange", q.exchange.trim());
+  if (q?.segment?.trim()) params.set("segment", q.segment.trim());
+  if (q?.symbol?.trim()) params.set("symbol", q.symbol.trim().toUpperCase());
+  if (q?.q?.trim()) params.set("q", q.q.trim());
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/notify/outbox?${params}`, accessToken, {});
   const t = await r.text();
   if (!r.ok) throwQtssApiError("notify/outbox", r, t);
@@ -1122,7 +1385,16 @@ export async function fetchNotifyOutbox(accessToken: string, limit = 50): Promis
 
 export async function postNotifyOutbox(
   accessToken: string,
-  body: { title: string; body: string; channels?: string[] },
+  body: {
+    title: string;
+    body: string;
+    channels?: string[];
+    event_key?: string;
+    severity?: string;
+    exchange?: string;
+    segment?: string;
+    symbol?: string;
+  },
 ): Promise<NotifyOutboxRowApi> {
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/notify/outbox`, accessToken, {
     method: "POST",

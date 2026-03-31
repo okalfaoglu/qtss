@@ -29,6 +29,7 @@
   },
   "drawer": {
     "general": "Genel",
+    "dashboard": "Dashboard",
     "queues": "Kuyruklar",
     "setting": "Ayarlar",
     "status": "Durum",
@@ -44,6 +45,30 @@
     "themeToggleDark": "Açık temaya geç",
     "themeToggleLight": "Koyu temaya geç"
   },
+  "dashboard": {
+    "title": "İşlem dashboard",
+    "signInPrompt": "İşlem metriklerini görmek için giriş yapın.",
+    "loading": "Yükleniyor…",
+    "rollupHint": "Gün/hafta/ay/yıl değerleri sunucu rollup’larından gelir (pnl_rollups).",
+    "instantHint": "Anlık görünüm: son 24 saat emirleri dakika kovalarına örneklenir ({{n}} emir çekildi).",
+    "ledger": "Defter",
+    "ledgerLive": "Canlı",
+    "ledgerDry": "Dry",
+    "bucketAria": "Dashboard zaman kovası",
+    "bucket": {
+      "instant": "Anlık",
+      "daily": "Günlük",
+      "weekly": "Haftalık",
+      "monthly": "Aylık",
+      "yearly": "Yıllık"
+    },
+    "metrics": {
+      "tradeCount": "İşlem sayısı",
+      "closedTrades": "Kapanan işlemler",
+      "netPnl": "Net kâr/zarar",
+      "netPnlHint": "Net = gerçekleşen − ücret (P&L yoksa ücretler negatif gösterilir)."
+    }
+  },
   "elliott": {
     "summary": "Özet",
     "impulse": "İtki",
@@ -57,6 +82,7 @@
       "pivotAlternation": "ZigZag pivotları yüksek/düşük dönüşümünde değil.",
       "barRatioUpper": "Üst kanal çizgisi bar oranı uygun değil.",
       "barRatioLower": "Alt kanal çizgisi bar oranı uygun değil.",
+      "barRatioHint": "İpucu: bar oranını gevşetin (0.25 deneyin) veya kapatın. Mevcut limit {{limit}}.",
       "inspectUpper": "Üst çizgi denetimi / dokunuş sayısı başarısız.",
       "inspectLower": "Alt çizgi denetimi / dokunuş sayısı başarısız.",
       "patternNotAllowed": "Bu tarama yapılandırması için desen izinli değil.",

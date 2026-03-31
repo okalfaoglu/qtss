@@ -158,6 +158,10 @@ function zigzagLineOptions(
       return applyOverride({ color: "#2196F3", lineWidth: 2, lineStyle: LineStyle.Dashed });
     case "elliott_projection_alt":
       return applyOverride({ color: "#5c9ded", lineWidth: 1, lineStyle: LineStyle.Dotted });
+    case "elliott_projection_target":
+      return applyOverride({ color: "#90CAF9", lineWidth: 1, lineStyle: LineStyle.Dotted });
+    case "elliott_projection_target_alt":
+      return applyOverride({ color: "#BBDEFB", lineWidth: 1, lineStyle: LineStyle.Dotted });
     case "elliott_projection_done":
       return applyOverride({ color: "#42A5F5", lineWidth: 3, lineStyle: LineStyle.Solid });
     case "elliott_projection_c_active":

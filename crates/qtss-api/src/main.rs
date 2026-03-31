@@ -11,7 +11,7 @@ use axum::Router;
 use qtss_common::{
     ensure_postgres_scheme, init_logging, load_dotenv, postgres_url_from_env_or_default,
 };
-use qtss_storage::{create_pool, run_migrations};
+use qtss_storage::{create_pool, resolve_system_string, run_migrations};
 use tower_governor::governor::GovernorConfigBuilder;
 use tower_governor::GovernorLayer;
 use tower_http::cors::{Any, CorsLayer};
@@ -51,7 +51,34 @@ async fn main() -> anyhow::Result<()> {
          çift aynı `NNNN_*.sql` öneki. Ayrıntı: docs/QTSS_CURSOR_DEV_GUIDE.md §6.",
     )?;
 
-    let state = Arc::new(AppState::new(pool)?);
+    let replenish_ms: u64 = resolve_system_string(
+        &pool,
+        "api",
+        "rate_limit_replenish_ms",
+        "QTSS_RATE_LIMIT_REPLENISH_MS",
+        "20",
+    )
+    .await
+    .parse()
+    .unwrap_or(20_u64)
+    .max(1);
+    let burst: u32 = resolve_system_string(
+        &pool,
+        "api",
+        "rate_limit_burst",
+        "QTSS_RATE_LIMIT_BURST",
+        "120",
+    )
+    .await
+    .parse()
+    .unwrap_or(120_u32)
+    .max(1);
+    let bind = resolve_system_string(&pool, "api", "bind", "QTSS_BIND", "0.0.0.0:8080").await;
+    let addr: SocketAddr = bind.parse()?;
+
+    let forwarded = ForwardedIpKeyExtractor::from_config(&pool).await;
+
+    let state = Arc::new(AppState::new(pool.clone()).await?);
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -59,20 +86,10 @@ async fn main() -> anyhow::Result<()> {
         .allow_headers(Any);
 
     // `tower-governor`: her `replenish_ms` ms’de kovaya 1 jeton; sürdürülebilir ~1000/replenish_ms RPS (burst sonrası).
-    let replenish_ms = std::env::var("QTSS_RATE_LIMIT_REPLENISH_MS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(20_u64)
-        .max(1);
-    let burst = std::env::var("QTSS_RATE_LIMIT_BURST")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(120_u32)
-        .max(1);
 
     let governor_conf = Arc::new(
         GovernorConfigBuilder::default()
-            .key_extractor(ForwardedIpKeyExtractor::from_env())
+            .key_extractor(forwarded)
             .per_millisecond(replenish_ms)
             .burst_size(burst)
             .finish()
@@ -99,9 +116,6 @@ async fn main() -> anyhow::Result<()> {
         .layer(cors)
         .with_state(state);
 
-    let addr: SocketAddr = std::env::var("QTSS_BIND")
-        .unwrap_or_else(|_| "0.0.0.0:8080".into())
-        .parse()?;
     info!("QTSS API dinleniyor: {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

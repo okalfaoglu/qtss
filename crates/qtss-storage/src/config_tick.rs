@@ -14,8 +14,25 @@ pub fn tick_secs_from_config_value(value: &JsonValue) -> Option<u64> {
         .or_else(|| value.as_u64())
 }
 
+fn bool_from_config_value(value: &JsonValue) -> Option<bool> {
+    value
+        .get("enabled")
+        .and_then(|x| x.as_bool())
+        .or_else(|| value.as_bool())
+}
+
 fn clamp_tick(raw: u64, min_secs: u64) -> u64 {
     raw.max(min_secs)
+}
+
+fn string_from_config_value(value: &JsonValue) -> Option<String> {
+    value
+        .get("value")
+        .and_then(|x| x.as_str())
+        .or_else(|| value.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
 }
 
 /// Resolution order: if `QTSS_CONFIG_ENV_OVERRIDES=1`, matching `env_key` wins; else `system_config`; else `env_key`; else `default_secs`.
@@ -50,6 +67,92 @@ pub async fn resolve_worker_tick_secs(
         .and_then(|s| s.parse::<u64>().ok())
         .map(|u| clamp_tick(u, min_secs))
         .unwrap_or_else(|| clamp_tick(default_secs, min_secs))
+}
+
+/// Resolution order: if `QTSS_CONFIG_ENV_OVERRIDES=1`, matching `env_key` wins; else `system_config`; else `env_key`; else `default_enabled`.
+pub async fn resolve_worker_enabled_flag(
+    pool: &PgPool,
+    module: &str,
+    config_key: &str,
+    env_key: &str,
+    default_enabled: bool,
+) -> bool {
+    if qtss_common::env_overrides_enabled() {
+        if let Ok(s) = std::env::var(env_key) {
+            let t = s.trim().to_lowercase();
+            if matches!(t.as_str(), "1" | "true" | "yes" | "on") {
+                return true;
+            }
+            if matches!(t.as_str(), "0" | "false" | "no" | "off") {
+                return false;
+            }
+        }
+    }
+
+    let repo = SystemConfigRepository::new(pool.clone());
+    if let Ok(Some(row)) = repo.get(module, config_key).await {
+        if let Some(b) = bool_from_config_value(&row.value) {
+            return b;
+        }
+    }
+
+    if let Ok(s) = std::env::var(env_key) {
+        let t = s.trim().to_lowercase();
+        if matches!(t.as_str(), "1" | "true" | "yes" | "on") {
+            return true;
+        }
+        if matches!(t.as_str(), "0" | "false" | "no" | "off") {
+            return false;
+        }
+    }
+
+    default_enabled
+}
+
+/// Resolution order: if `QTSS_CONFIG_ENV_OVERRIDES=1`, matching `env_key` wins; else `system_config`; else `env_key`; else `default_value`.
+pub async fn resolve_system_string(
+    pool: &PgPool,
+    module: &str,
+    config_key: &str,
+    env_key: &str,
+    default_value: &str,
+) -> String {
+    if qtss_common::env_overrides_enabled() {
+        if let Ok(s) = std::env::var(env_key) {
+            let t = s.trim();
+            if !t.is_empty() {
+                return t.to_string();
+            }
+        }
+    }
+
+    let repo = SystemConfigRepository::new(pool.clone());
+    if let Ok(Some(row)) = repo.get(module, config_key).await {
+        if let Some(s) = string_from_config_value(&row.value) {
+            return s;
+        }
+    }
+
+    std::env::var(env_key)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| default_value.to_string())
+}
+
+/// Resolution order: if `QTSS_CONFIG_ENV_OVERRIDES=1`, matching `env_key` wins; else `system_config`; else `env_key`; else `default_values_csv`.
+pub async fn resolve_system_csv(
+    pool: &PgPool,
+    module: &str,
+    config_key: &str,
+    env_key: &str,
+    default_values_csv: &str,
+) -> Vec<String> {
+    let raw = resolve_system_string(pool, module, config_key, env_key, default_values_csv).await;
+    raw.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// Normalizes user-facing locale hints to `en` or `tr` (worker notify default).

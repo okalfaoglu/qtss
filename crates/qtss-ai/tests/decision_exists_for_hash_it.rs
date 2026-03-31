@@ -5,6 +5,8 @@
 use qtss_ai::storage::{decision_exists_for_hash, insert_ai_decision};
 use qtss_storage::{create_pool, run_migrations};
 use serde_json::json;
+use sqlx::postgres::PgConnectOptions;
+use std::str::FromStr;
 use uuid::Uuid;
 
 #[tokio::test]
@@ -16,6 +18,11 @@ async fn decision_exists_for_hash_respects_created_at_ttl() {
             return;
         }
     };
+
+    if PgConnectOptions::from_str(url.trim()).is_err() {
+        eprintln!("decision_exists_for_hash_it: skip (DATABASE_URL invalid)");
+        return;
+    }
 
     let pool = create_pool(&url, 3).await.expect("create_pool");
     run_migrations(&pool).await.expect("run_migrations");

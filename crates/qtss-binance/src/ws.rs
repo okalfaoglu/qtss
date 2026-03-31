@@ -4,8 +4,23 @@ use tokio_tungstenite::connect_async;
 
 use crate::error::BinanceError;
 
-pub type WsStream =
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+pub type WsStream = tokio_tungstenite::WebSocketStream<
+    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+>;
+
+/// Spot user data stream (listen key): `wss://stream.binance.com:9443/ws/{listen_key}`
+#[must_use]
+pub fn spot_user_data_stream_url(listen_key: &str) -> String {
+    let k = listen_key.trim();
+    format!("wss://stream.binance.com:9443/ws/{k}")
+}
+
+/// USDT-M futures user data stream (listen key): `wss://fstream.binance.com/ws/{listen_key}`
+#[must_use]
+pub fn usdm_user_data_stream_url(listen_key: &str) -> String {
+    let k = listen_key.trim();
+    format!("wss://fstream.binance.com/ws/{k}")
+}
 
 /// Spot: `wss://stream.binance.com:9443/ws/{symbol_lower}@kline_{interval}`
 pub fn public_spot_kline_url(symbol: &str, interval: &str) -> String {
@@ -68,7 +83,10 @@ mod combined_url_tests {
 
     #[test]
     fn spot_combined_streams_joined() {
-        let u = public_spot_combined_kline_url(&["BTCUSDT".into(), "ETHUSDT".into()], "1m");
+        let u = public_spot_combined_kline_url(
+            &["BTCUSDT".into(), "ETHUSDT".into()],
+            "1m",
+        );
         assert!(u.contains("btcusdt@kline_1m"));
         assert!(u.contains("ethusdt@kline_1m"));
         assert!(u.contains("/stream?streams="));

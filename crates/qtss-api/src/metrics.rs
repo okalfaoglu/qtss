@@ -2,13 +2,15 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use axum::extract::Query;
-use axum::extract::Request;
+use axum::extract::{Query, Request, State};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
+
+use crate::state::SharedState;
+use qtss_storage::resolve_system_string;
 
 static HTTP_REQUESTS: AtomicU64 = AtomicU64::new(0);
 
@@ -82,10 +84,7 @@ pub fn prometheus_text() -> String {
 
 pub async fn prometheus_metrics() -> impl IntoResponse {
     (
-        [(
-            axum::http::header::CONTENT_TYPE,
-            "text/plain; charset=utf-8",
-        )],
+        [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
         prometheus_text(),
     )
 }
@@ -97,21 +96,21 @@ pub struct MetricsQuery {
 
 /// `QTSS_METRICS_TOKEN` doluys Bearer veya `?token=` zorunlu.
 pub async fn prometheus_metrics_gate(
+    State(st): axum::extract::State<SharedState>,
     headers: HeaderMap,
     Query(q): Query<MetricsQuery>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    if let Ok(tok) = std::env::var("QTSS_METRICS_TOKEN") {
-        if !tok.is_empty() {
-            let bearer_ok = headers
-                .get(AUTHORIZATION)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.strip_prefix("Bearer "))
-                .map(|t| t == tok.as_str())
-                .unwrap_or(false);
-            let query_ok = q.token.as_deref() == Some(tok.as_str());
-            if !bearer_ok && !query_ok {
-                return Err(StatusCode::UNAUTHORIZED);
-            }
+    let tok = resolve_system_string(&st.pool, "api", "metrics_token", "QTSS_METRICS_TOKEN", "").await;
+    if !tok.trim().is_empty() {
+        let bearer_ok = headers
+            .get(AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(|t| t == tok.as_str())
+            .unwrap_or(false);
+        let query_ok = q.token.as_deref() == Some(tok.as_str());
+        if !bearer_ok && !query_ok {
+            return Err(StatusCode::UNAUTHORIZED);
         }
     }
     Ok(prometheus_metrics().await)

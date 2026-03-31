@@ -750,6 +750,7 @@ fn default_elliott_wave_json() -> serde_json::Value {
         "show_nested_formations": true,
         "projection_bar_hop": 22,
         "projection_steps": 12,
+        "projection_mode": "legacy",
         "show_projection_alt_scenario": true,
         "use_acp_zigzag_swing": false,
         "acp_zigzag_row_index": 0,
@@ -836,7 +837,7 @@ fn default_acp_chart_patterns_json() -> serde_json::Value {
             "error_threshold_percent": 20,
             "flat_threshold_percent": 20,
             "verify_bar_ratio": true,
-            "bar_ratio_limit": 0.382,
+            "bar_ratio_limit": 0.25,
             "avoid_overlap": true,
             "repaint": false,
             "last_pivot_direction": "both",
@@ -1006,7 +1007,7 @@ fn default_true() -> bool {
     true
 }
 fn default_bar_ratio_limit() -> f64 {
-    0.382
+    0.25
 }
 fn default_flat_ratio() -> f64 {
     0.2

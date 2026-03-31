@@ -31,6 +31,9 @@ import {
   fetchNansenSetupsLatest,
   fetchPaperBalance,
   fetchPaperFills,
+  fetchMyExchangeFills,
+  fetchAdminSystemConfig,
+  upsertAdminSystemConfig,
   fetchBinanceCommissionDefaults,
   fetchBinanceCommissionAccount,
   postEngineSymbol,
@@ -43,6 +46,8 @@ import {
   type NansenSnapshotApiRow,
   type PaperBalanceRow,
   type PaperFillRow,
+  type ExchangeFillRowApi,
+  type SystemConfigRowApi,
   type BinanceCommissionDefaultsApi,
   type BinanceCommissionAccountApi,
   type RangeSignalEventApiRow,
@@ -70,6 +75,7 @@ import { MultiTimeframeLiveStrip } from "./components/MultiTimeframeLiveStrip";
 import { ElliottWaveLegend } from "./components/ElliottWaveLegend";
 import { ElliottWaveCard } from "./components/ElliottWaveCard";
 import { TvChartPane } from "./components/TvChartPane";
+import { TradeDashboardPanel } from "./components/TradeDashboardPanel";
 import {
   DEFAULT_ELLIOTT_WAVE_CONFIG,
   ELLIOTT_WAVE_CONFIG_KEY,
@@ -124,18 +130,25 @@ import {
 } from "./lib/signalDashboardPayload";
 import { canAdmin, canOps, type AuthSession } from "./lib/rbac";
 import type { SeriesMarker, UTCTimestamp } from "lightweight-charts";
+import { BacktestRunCard } from "./components/BacktestRunCard";
+import { OrdersAndFillsCard } from "./components/OrdersAndFillsCard";
+import { NotifyOutboxCard } from "./components/NotifyOutboxCard";
 
 type Theme = "dark" | "light";
 type SettingsTab =
   | "general"
+  | "dashboard"
   | "elliott"
   | "elliott_impulse"
   | "elliott_corrective"
   | "acp"
+  | "backtest"
+  | "orders"
   | "engine"
   | "market_context"
   | "nansen"
   | "queues"
+  | "notify"
   | "setting";
 
 type ElliottLineStyle = "solid" | "dotted" | "dashed";
@@ -424,6 +437,18 @@ export default function App() {
   const chartLoadSeqRef = useRef(0);
   const livePollEpochRef = useRef(0);
 
+  type ProjectionGuardState = {
+    anchorTimeSec: number;
+    anchorBarCount: number;
+    invalidReason?: string;
+    impulseKey?: string;
+  };
+  const projectionGuardRef = useRef<Record<"4h" | "1h" | "15m", ProjectionGuardState>>({
+    "4h": { anchorTimeSec: 0, anchorBarCount: 0 },
+    "1h": { anchorTimeSec: 0, anchorBarCount: 0 },
+    "15m": { anchorTimeSec: 0, anchorBarCount: 0 },
+  });
+
   const runChannelSixScanWithBars = useCallback(
     async (barsInput: ChartOhlcRow[]) => {
       if (!token || !barsInput.length) return;
@@ -488,6 +513,13 @@ export default function App() {
             res.pattern_matches?.map((m) => m.pattern_name ?? `id ${m.outcome.scan.pattern_type_id}`).join(" · ") ??
             name;
           const closedBarSuffix = acpConfig.scanning.repaint ? "" : t("app.channelScan.closedBarSuffix");
+          const barRatioNote = !acpConfig.scanning.verify_bar_ratio
+            ? "BR:Off"
+            : Math.abs(acpConfig.scanning.bar_ratio_limit - 0.382) < 1e-6
+              ? "BR:Strict"
+              : Math.abs(acpConfig.scanning.bar_ratio_limit - 0.25) < 1e-6
+                ? "BR:Relaxed"
+                : `BR:${acpConfig.scanning.bar_ratio_limit.toFixed(3)}`;
           setChannelScanHoverTitle(t("app.channelScan.hoverFormations", { names: hoverNames }));
           setChannelScanSummary(
             t("app.channelScan.summaryMatch", {
@@ -500,12 +532,16 @@ export default function App() {
               zzNote,
               multi,
               closedNote: closedBarSuffix,
-            }),
+            }) + ` · ${barRatioNote}`,
           );
         } else {
           setChannelScanHoverTitle("");
           const closedBarSuffix = acpConfig.scanning.repaint ? "" : t("app.channelScan.closedBarSuffix");
           const reason = channelSixRejectMessage(t, res.reject);
+          const barRatioHint =
+            (res.reject?.code === "bar_ratio_upper" || res.reject?.code === "bar_ratio_lower") && acpConfig.scanning.verify_bar_ratio
+              ? ` ${t("app.channelReject.barRatioHint", { limit: String(acpConfig.scanning.bar_ratio_limit) })}`
+              : "";
           const insufficientHint =
             res.reject?.code === "insufficient_pivots"
               ? ` ${t("app.channelReject.insufficientPivotsHint")}`
@@ -516,7 +552,10 @@ export default function App() {
               bars: res.bar_count,
               pivots: res.zigzag_pivot_count,
               closedNote: closedBarSuffix,
-            }) + insufficientHint,
+            }) +
+              ` · ${!acpConfig.scanning.verify_bar_ratio ? "BR:Off" : `BR:${acpConfig.scanning.bar_ratio_limit.toFixed(3)}`}` +
+              insufficientHint +
+              barRatioHint,
           );
         }
       } catch (e) {
@@ -587,6 +626,11 @@ export default function App() {
   const [nansenRefreshing, setNansenRefreshing] = useState(false);
   const [paperBalance, setPaperBalance] = useState<PaperBalanceRow | null>(null);
   const [paperFills, setPaperFills] = useState<PaperFillRow[]>([]);
+  const [exchangeFills, setExchangeFills] = useState<ExchangeFillRowApi[]>([]);
+  const [workerFlags, setWorkerFlags] = useState<{
+    nansenEnabled: boolean;
+    externalFetchEnabled: boolean;
+  }>({ nansenEnabled: true, externalFetchEnabled: true });
   const [commissionDefaults, setCommissionDefaults] = useState<BinanceCommissionDefaultsApi | null>(null);
   const [commissionAccount, setCommissionAccount] = useState<BinanceCommissionAccountApi | null>(null);
   const [commissionAccountErr, setCommissionAccountErr] = useState("");
@@ -917,11 +961,13 @@ export default function App() {
     }
     const rows = toOhlcV2(bars);
     if (!rows.length) return [];
+    const lastRow = rows[rows.length - 1]!;
     const wc = mtfWaveColorsFromConfig(elliottConfig);
     const opt = {
       barHop: elliottConfig.projection_bar_hop,
       maxSteps: elliottConfig.projection_steps,
       includeAltScenario: elliottConfig.show_projection_alt_scenario,
+      mode: elliottConfig.projection_mode,
     };
     const out: PatternLayerOverlay[] = [];
     const specs: Array<{ tf: "4h" | "1h" | "15m"; on: boolean }> = [
@@ -949,6 +995,39 @@ export default function App() {
     ];
     for (const { tf, on } of specs) {
       if (!on) continue;
+      // Guard: invalidation + timeout tracking per TF (stateful across renders via ref).
+      const s = elliottV2Output.states[tf];
+      const imp = s?.impulse ?? null;
+      const post = s?.postImpulseAbc ?? null;
+      const g = projectionGuardRef.current[tf];
+      if (!imp || s?.decision === "invalid") {
+        g.invalidReason = "invalid";
+        continue;
+      }
+      const key = imp
+        ? `${imp.direction}|${imp.variant ?? "standard"}|${imp.pivots.map((p) => `${p.index}:${p.price.toFixed(4)}`).join(",")}`
+        : "";
+      if (key && g.impulseKey !== key) {
+        g.impulseKey = key;
+        g.anchorTimeSec = lastRow.t;
+        g.anchorBarCount = rows.length;
+        g.invalidReason = undefined;
+      }
+      // Timeout: after 100 bars since projection anchor, stop drawing.
+      const barsSince = g.anchorBarCount > 0 ? Math.max(0, rows.length - g.anchorBarCount) : 0;
+      if (barsSince > 100) {
+        g.invalidReason = "timeout";
+      }
+      // Invalidation: classic wave4-overlap style guard for projections (simple heuristic).
+      if (!g.invalidReason && imp && imp.pivots.length >= 2) {
+        const p1 = imp.pivots[1];
+        if (imp.direction === "bull") {
+          if (lastRow.l <= p1.price) g.invalidReason = "wave4_overlap_like";
+        } else {
+          if (lastRow.h >= p1.price) g.invalidReason = "wave4_overlap_like";
+        }
+      }
+      if (g.invalidReason) continue;
       const built = buildElliottProjectionOverlayV2(
         elliottV2Output,
         rows,
@@ -1009,6 +1088,58 @@ export default function App() {
     toOhlcV2,
   ]);
 
+  const elliottProjectionStatus = useMemo((): string => {
+    if (!elliottConfig.enabled || !bars?.length) return "";
+    const parts: string[] = [];
+    const specs: Array<{ tf: "4h" | "1h" | "15m"; on: boolean }> = [
+      { tf: "4h", on: !!elliottConfig.show_projection_4h },
+      { tf: "1h", on: !!elliottConfig.show_projection_1h },
+      { tf: "15m", on: !!elliottConfig.show_projection_15m },
+    ];
+    for (const { tf, on } of specs) {
+      if (!on) continue;
+      const r = projectionGuardRef.current[tf]?.invalidReason;
+      if (!r) continue;
+      const label = r === "timeout" ? "timeout" : r === "invalid" ? "invalid" : "invalid";
+      parts.push(`${tf}:${label}`);
+    }
+    return parts.length ? `Elliott projection: ${parts.join(" · ")}` : "";
+  }, [
+    bars,
+    elliottConfig.enabled,
+    elliottConfig.show_projection_15m,
+    elliottConfig.show_projection_1h,
+    elliottConfig.show_projection_4h,
+  ]);
+
+  const acpBarRatioModeLabel = useMemo((): "Strict" | "Relaxed" | "Off" | "Custom" => {
+    if (!acpConfig.scanning.verify_bar_ratio) return "Off";
+    const v = acpConfig.scanning.bar_ratio_limit;
+    if (Math.abs(v - 0.382) < 1e-6) return "Strict";
+    if (Math.abs(v - 0.25) < 1e-6) return "Relaxed";
+    return "Custom";
+  }, [acpConfig.scanning.bar_ratio_limit, acpConfig.scanning.verify_bar_ratio]);
+
+  const cycleAcpBarRatioMode = useCallback(() => {
+    setAcpConfig((prev) => {
+      const cur = prev.scanning.verify_bar_ratio
+        ? Math.abs(prev.scanning.bar_ratio_limit - 0.382) < 1e-6
+          ? "Strict"
+          : Math.abs(prev.scanning.bar_ratio_limit - 0.25) < 1e-6
+            ? "Relaxed"
+            : "Custom"
+        : "Off";
+      const next = cur === "Strict" ? "Relaxed" : cur === "Relaxed" ? "Off" : "Strict";
+      const scanning =
+        next === "Off"
+          ? { ...prev.scanning, verify_bar_ratio: false }
+          : next === "Relaxed"
+            ? { ...prev.scanning, verify_bar_ratio: true, bar_ratio_limit: 0.25 }
+            : { ...prev.scanning, verify_bar_ratio: true, bar_ratio_limit: 0.382 };
+      return { ...prev, scanning };
+    });
+  }, [setAcpConfig]);
+
   const anyElliottProjection = useMemo(
     () =>
       elliottConfig.show_projection_4h ||
@@ -1022,8 +1153,12 @@ export default function App() {
   );
 
   const elliottLegendRows = useMemo(() => {
-    return buildElliottLegendRows(elliottV2Output, anyElliottProjection);
-  }, [anyElliottProjection, elliottV2Output]);
+    return buildElliottLegendRows(
+      elliottV2Output,
+      anyElliottProjection,
+      anyElliottProjection && elliottConfig.projection_mode === "formation",
+    );
+  }, [anyElliottProjection, elliottConfig.projection_mode, elliottV2Output]);
 
   const channelScanOverlayBars = useMemo((): ChartOhlcRow[] | null => {
     if (!lastChannelScan?.matched) return null;
@@ -1227,12 +1362,13 @@ export default function App() {
         segment: segLower,
         symbol: symQ.length > 0 ? symQ : undefined,
       }).catch(() => null);
-      const [snaps, syms, sigs, pbal, pfills, ds, mc, commDef] = await Promise.all([
+      const [snaps, syms, sigs, pbal, pfills, liveFills, ds, mc, commDef] = await Promise.all([
         fetchEngineSnapshots(token),
         fetchEngineSymbols(token),
         fetchEngineRangeSignals(token, { limit: 80 }),
         fetchPaperBalance(token).catch(() => null),
         fetchPaperFills(token, 15).catch(() => []),
+        fetchMyExchangeFills(token, { limit: 30 }).catch(() => []),
         fetchDataSnapshots(token).catch(() => []),
         mcPromise,
         commDefPromise,
@@ -1244,14 +1380,32 @@ export default function App() {
       setEngineRangeSignals(sigs);
       setPaperBalance(pbal);
       setPaperFills(pfills);
+      setExchangeFills(liveFills);
       setCommissionDefaults(commDef);
       setCommissionAccount(null);
       setCommissionAccountErr("");
       setEnginePanelErr("");
+
+      if (rbacIsAdmin) {
+        fetchAdminSystemConfig(token, { module: "worker", limit: 200 })
+          .then((rows: SystemConfigRowApi[]) => {
+            const byKey = new Map<string, unknown>();
+            for (const r of rows) byKey.set(`${r.module}.${r.config_key}`, r.value);
+            const nansen = byKey.get("worker.nansen_enabled") as any;
+            const ext = byKey.get("worker.external_fetch_enabled") as any;
+            setWorkerFlags({
+              nansenEnabled: typeof nansen?.enabled === "boolean" ? nansen.enabled : true,
+              externalFetchEnabled: typeof ext?.enabled === "boolean" ? ext.enabled : true,
+            });
+          })
+          .catch(() => {
+            /* ignore */
+          });
+      }
     } catch (e) {
       setEnginePanelErr(String(e));
     }
-  }, [token, barSymbol, barInterval, barExchange, barSegment]);
+  }, [token, barSymbol, barInterval, barExchange, barSegment, rbacIsAdmin]);
 
   const loadCommissionAccount = useCallback(async () => {
     if (!token) return;
@@ -1396,6 +1550,7 @@ export default function App() {
       setEngineSymbols([]);
       setPaperBalance(null);
       setPaperFills([]);
+      setExchangeFills([]);
       setCommissionDefaults(null);
       setCommissionAccount(null);
       setCommissionAccountErr("");
@@ -1804,10 +1959,29 @@ export default function App() {
               {channelScanLoading ? t("app.channelScan.scanning") : channelScanSummary}
             </span>
           ) : null}
+          {elliottProjectionStatus ? (
+            <span
+              className="tv-topstrip__scan"
+              title="Elliott projeksiyon durumu (invalid/timeout)."
+            >
+              {elliottProjectionStatus}
+            </span>
+          ) : null}
           {barsError ? <span className="err tv-topstrip__err" title={barsError}>{barsError.slice(0, 72)}{barsError.length > 72 ? "…" : ""}</span> : null}
           {toolNote ? <span className="muted">{toolNote}</span> : null}
         </div>
         <div className="tv-topstrip__actions">
+          <button
+            type="button"
+            className="theme-toggle"
+            title={`ACP bar-ratio: ${acpBarRatioModeLabel} (click to cycle)`}
+            onClick={() => {
+              cycleAcpBarRatioMode();
+              if (bars?.length) runChannelSixScan();
+            }}
+          >
+            BR: {acpBarRatioModeLabel}
+          </button>
           <button type="button" className="theme-toggle" onClick={toggleTheme}>
             {theme === "dark" ? t("app.chartToolbar.themeLight") : t("app.chartToolbar.themeDark")}
           </button>
@@ -1898,6 +2072,15 @@ export default function App() {
                 <button
                   type="button"
                   role="tab"
+                  aria-selected={drawerTab === "dashboard"}
+                  className={`tv-settings__tab ${drawerTab === "dashboard" ? "is-active" : ""}`}
+                  onClick={() => setDrawerTab("dashboard")}
+                >
+                  {t("drawer.dashboard")}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
                   aria-selected={isElliottDrawerGroup}
                   className={`tv-settings__tab ${isElliottDrawerGroup ? "is-active" : ""}`}
                   onClick={() => setDrawerTab("elliott")}
@@ -1925,6 +2108,24 @@ export default function App() {
                 <button
                   type="button"
                   role="tab"
+                  aria-selected={drawerTab === "orders"}
+                  className={`tv-settings__tab ${drawerTab === "orders" ? "is-active" : ""}`}
+                  onClick={() => setDrawerTab("orders")}
+                >
+                  Emirler
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={drawerTab === "backtest"}
+                  className={`tv-settings__tab ${drawerTab === "backtest" ? "is-active" : ""}`}
+                  onClick={() => setDrawerTab("backtest")}
+                >
+                  Backtest
+                </button>
+                <button
+                  type="button"
+                  role="tab"
                   aria-selected={drawerTab === "market_context"}
                   className={`tv-settings__tab ${drawerTab === "market_context" ? "is-active" : ""}`}
                   onClick={() => setDrawerTab("market_context")}
@@ -1948,6 +2149,15 @@ export default function App() {
                   onClick={() => setDrawerTab("queues")}
                 >
                   {t("drawer.queues")}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={drawerTab === "notify"}
+                  className={`tv-settings__tab ${drawerTab === "notify" ? "is-active" : ""}`}
+                  onClick={() => setDrawerTab("notify")}
+                >
+                  Bildirimler
                 </button>
                 <button
                   type="button"
@@ -2074,6 +2284,21 @@ export default function App() {
                   ) : null}
                 </>
               ) : null}
+
+              {drawerTab === "dashboard" ? <TradeDashboardPanel accessToken={token} /> : null}
+
+              {drawerTab === "backtest" ? (
+                <BacktestRunCard
+                  accessToken={token}
+                  allowBackfill={rbacIsOps}
+                  defaultExchange={barExchange}
+                  defaultSegment={barSegment || "spot"}
+                  defaultSymbol={barSymbol}
+                  defaultInterval={barInterval}
+                />
+              ) : null}
+
+              {drawerTab === "orders" ? <OrdersAndFillsCard accessToken={token} /> : null}
 
               {drawerTab === "elliott" ? (
                 <>
@@ -3126,6 +3351,30 @@ export default function App() {
                               </div>
                             </div>
                           ) : null}
+                          {token && rbacIsOps ? (
+                            <div className="card">
+                              <p className="tv-drawer__section-head">Son canlı dolumlar</p>
+                              <p className="muted" style={{ fontSize: "0.68rem", marginTop: 0, marginBottom: "0.25rem" }}>
+                                API <code>/api/v1/fills</code> (exchange_fills)
+                              </p>
+                              <div style={{ maxHeight: "7rem", overflow: "auto", fontSize: "0.65rem" }} className="mono muted">
+                                {exchangeFills.length === 0 ? (
+                                  <span>—</span>
+                                ) : (
+                                  exchangeFills.slice(0, 8).map((f) => (
+                                    <div key={f.id} style={{ marginBottom: "0.25rem" }}>
+                                      {f.exchange}/{f.segment} {f.symbol} oid {String(f.venue_order_id)}{" "}
+                                      {f.fill_quantity != null ? `qty ${String(f.fill_quantity)}` : ""}{" "}
+                                      {f.fill_price != null ? `@ ${String(f.fill_price)}` : ""}{" "}
+                                      {f.fee != null ? `fee ${String(f.fee)}${f.fee_asset ? ` ${f.fee_asset}` : ""}` : ""}
+                                      <br />
+                                      <span style={{ opacity: 0.85 }}>{f.event_time}</span>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+                            </div>
+                          ) : null}
                           <p className="tv-drawer__section-head" style={{ marginTop: "0.75rem" }}>
                             {t("app.engineDrawer.snapshotSummaryHead")}
                           </p>
@@ -4051,8 +4300,63 @@ export default function App() {
                 </>
               ) : null}
 
+              {drawerTab === "notify" ? (
+                <>
+                  {matchesSetting("notify", "outbox", "bildirim") ? <NotifyOutboxCard accessToken={token} /> : null}
+                </>
+              ) : null}
+
               {drawerTab === "setting" ? (
                 <>
+                  {token && rbacIsAdmin ? (
+                    <div className="card">
+                      <p className="tv-drawer__section-head">Worker data sources</p>
+                      <p className="muted" style={{ marginTop: 0, fontSize: "0.75rem" }}>
+                        Bu anahtarlar <code>system_config</code> üzerinden worker döngülerini aç/kapa yapar. Kapalı iken sistem
+                        çalışmaya devam eder, sadece ilgili kaynak verisi üretilmez.
+                      </p>
+                      <div className="tv-settings__fields">
+                        <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                          <input
+                            type="checkbox"
+                            checked={workerFlags.nansenEnabled}
+                            onChange={(e) => {
+                              const next = e.target.checked;
+                              setWorkerFlags((s) => ({ ...s, nansenEnabled: next }));
+                              if (!token) return;
+                              void upsertAdminSystemConfig(token, {
+                                module: "worker",
+                                config_key: "nansen_enabled",
+                                value: { enabled: next },
+                                description: "Enable Nansen HTTP loops (credit burn control).",
+                                is_secret: false,
+                              }).catch(() => {});
+                            }}
+                          />
+                          <span>Nansen</span>
+                        </label>
+                        <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                          <input
+                            type="checkbox"
+                            checked={workerFlags.externalFetchEnabled}
+                            onChange={(e) => {
+                              const next = e.target.checked;
+                              setWorkerFlags((s) => ({ ...s, externalFetchEnabled: next }));
+                              if (!token) return;
+                              void upsertAdminSystemConfig(token, {
+                                module: "worker",
+                                config_key: "external_fetch_enabled",
+                                value: { enabled: next },
+                                description: "Enable external_data_sources HTTP engines.",
+                                is_secret: false,
+                              }).catch(() => {});
+                            }}
+                          />
+                          <span>External HTTP engines</span>
+                        </label>
+                      </div>
+                    </div>
+                  ) : null}
                   {token && rbacIsOps && matchesSetting("market bars", "backfill", "exchange", "segment", "limit") ? (
                     <div className="card">
                       <p className="tv-drawer__section-head">Market Bars</p>

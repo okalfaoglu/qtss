@@ -4,7 +4,8 @@
 use std::time::Duration;
 
 use qtss_storage::{
-    external_snapshot_age_secs, list_enabled_external_sources, resolve_worker_tick_secs,
+    external_snapshot_age_secs, list_enabled_external_sources, resolve_worker_enabled_flag,
+    resolve_worker_tick_secs,
 };
 use reqwest::Client;
 use sqlx::PgPool;
@@ -13,17 +14,6 @@ use tracing::{info, warn};
 use crate::data_sources::http_generic::HttpGenericProvider;
 use crate::data_sources::persist::persist_fetch_to_data_snapshot;
 use crate::data_sources::provider::DataSourceProvider;
-
-pub fn external_fetch_enabled() -> bool {
-    match std::env::var("QTSS_EXTERNAL_FETCH")
-        .ok()
-        .as_deref()
-        .map(str::trim)
-    {
-        Some("0") | Some("false") | Some("no") | Some("off") => false,
-        _ => true,
-    }
-}
 
 fn tick_floor_secs(s: i32) -> i64 {
     (s as i64).max(30)
@@ -44,14 +34,6 @@ async fn external_fetch_engine_poll(pool: &PgPool) -> Duration {
 
 /// Tek API ailesi: `key_filter` ile satırlar seçilir; hepsi aynı `data_snapshots` tablosuna yazılır.
 pub async fn run_external_sources_engine(pool: PgPool, engine_label: &'static str, key_filter: fn(&str) -> bool) {
-    if !external_fetch_enabled() {
-        info!(
-            engine = engine_label,
-            "QTSS_EXTERNAL_FETCH kapalı — bu motor atlanıyor"
-        );
-        return;
-    }
-
     let initial_poll = external_fetch_engine_poll(&pool).await;
     let client = match Client::builder()
         .timeout(Duration::from_secs(120))
@@ -71,6 +53,31 @@ pub async fn run_external_sources_engine(pool: PgPool, engine_label: &'static st
     );
 
     loop {
+        // Legacy hard-kill switch remains env-only (bootstrapping / emergency).
+        // Everything else is controlled via system_config/DB with env fallback.
+        match std::env::var("QTSS_EXTERNAL_FETCH")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+        {
+            Some("0") | Some("false") | Some("no") | Some("off") => {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                continue;
+            }
+            _ => {}
+        }
+        if !resolve_worker_enabled_flag(
+            &pool,
+            "worker",
+            "external_fetch_enabled",
+            "QTSS_EXTERNAL_FETCH_ENABLED",
+            true,
+        )
+        .await
+        {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
         let poll = external_fetch_engine_poll(&pool).await;
 
         let sources = match list_enabled_external_sources(&pool).await {

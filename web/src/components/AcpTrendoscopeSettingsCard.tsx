@@ -223,8 +223,34 @@ export function AcpTrendoscopeSettingsCard({
               min={0.01}
               max={0.99}
               value={value.scanning.bar_ratio_limit}
-              onChange={(e) => setScan({ bar_ratio_limit: parseFloat(e.target.value) || 0.382 })}
+                  onChange={(e) => setScan({ bar_ratio_limit: parseFloat(e.target.value) || 0.25 })}
             />
+            <div style={{ display: "flex", gap: "0.35rem", marginTop: "0.35rem", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="theme-toggle"
+                onClick={() => setScan({ verify_bar_ratio: true, bar_ratio_limit: 0.382 })}
+                title="Pine default: allow 0.382..2.618 (strict)."
+              >
+                Sıkı (0.382)
+              </button>
+              <button
+                type="button"
+                className="theme-toggle"
+                onClick={() => setScan({ verify_bar_ratio: true, bar_ratio_limit: 0.25 })}
+                title="Relaxed: allow 0.25..4.0. Helps asymmetric pivot spacing."
+              >
+                Gevşek (0.25)
+              </button>
+              <button
+                type="button"
+                className="theme-toggle"
+                onClick={() => setScan({ verify_bar_ratio: false })}
+                title="Disable bar-ratio filter (for troubleshooting)."
+              >
+                Kapalı
+              </button>
+            </div>
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: "0.35rem", marginTop: "1.25rem" }}>
             <input

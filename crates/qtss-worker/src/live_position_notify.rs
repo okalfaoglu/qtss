@@ -8,23 +8,34 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use qtss_notify::{resolve_bilingual, Notification, NotificationChannel, NotificationDispatcher};
 use qtss_storage::{
-    resolve_notify_default_locale, resolve_worker_tick_secs, ExchangeOrderRepository,
-    ExchangeOrderRow,
+    resolve_notify_default_locale, resolve_system_csv, resolve_worker_enabled_flag,
+    resolve_worker_tick_secs, ExchangeOrderRepository, ExchangeOrderRow,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
 use tracing::{info, warn};
 
-fn live_notify_enabled() -> bool {
-    std::env::var("QTSS_NOTIFY_LIVE_POSITION_ENABLED")
-        .ok()
-        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
+async fn live_notify_enabled(pool: &PgPool) -> bool {
+    resolve_worker_enabled_flag(
+        pool,
+        "worker",
+        "live_position_notify_enabled",
+        "QTSS_NOTIFY_LIVE_POSITION_ENABLED",
+        false,
+    )
+    .await
 }
 
-fn live_notify_channels_from_env() -> Vec<NotificationChannel> {
-    let raw =
-        std::env::var("QTSS_NOTIFY_LIVE_POSITION_CHANNELS").unwrap_or_else(|_| "telegram".into());
-    raw.split(',')
+async fn live_notify_channels(pool: &PgPool) -> Vec<NotificationChannel> {
+    let raw = resolve_system_csv(
+        pool,
+        "worker",
+        "live_position_notify_channels_csv",
+        "QTSS_NOTIFY_LIVE_POSITION_CHANNELS",
+        "telegram",
+    )
+    .await;
+    raw.iter()
         .filter_map(|s| NotificationChannel::parse(s.trim()))
         .collect()
 }
@@ -79,11 +90,11 @@ fn order_summary_line_inner(row: &ExchangeOrderRow, english: bool) -> String {
 }
 
 pub async fn live_position_notify_loop(pool: PgPool) {
-    if !live_notify_enabled() {
+    if !live_notify_enabled(&pool).await {
         info!("QTSS_NOTIFY_LIVE_POSITION_ENABLED kapalı — canlı dolum bildirimi yok");
         return;
     }
-    let chans = live_notify_channels_from_env();
+    let chans = live_notify_channels(&pool).await;
     if chans.is_empty() {
         warn!("Canlı pozisyon bildirimi açık fakat QTSS_NOTIFY_LIVE_POSITION_CHANNELS boş veya tanınmadı");
         return;

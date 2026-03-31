@@ -3,8 +3,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::types::Json;
 use sqlx::PgPool;
+use sqlx::types::Json;
 use uuid::Uuid;
 
 use crate::error::StorageError;
@@ -13,6 +13,11 @@ use crate::error::StorageError;
 pub struct NotifyOutboxRow {
     pub id: Uuid,
     pub org_id: Option<Uuid>,
+    pub event_key: Option<String>,
+    pub severity: String,
+    pub exchange: Option<String>,
+    pub segment: Option<String>,
+    pub symbol: Option<String>,
     pub title: String,
     pub body: String,
     pub channels: Json<Vec<String>>,
@@ -41,14 +46,39 @@ impl NotifyOutboxRepository {
         body: &str,
         channels: Vec<String>,
     ) -> Result<NotifyOutboxRow, StorageError> {
+        self.enqueue_with_meta(org_id, None, "info", None, None, None, title, body, channels)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn enqueue_with_meta(
+        &self,
+        org_id: Option<Uuid>,
+        event_key: Option<&str>,
+        severity: &str,
+        exchange: Option<&str>,
+        segment: Option<&str>,
+        symbol: Option<&str>,
+        title: &str,
+        body: &str,
+        channels: Vec<String>,
+    ) -> Result<NotifyOutboxRow, StorageError> {
         let ch_json = Json(channels);
         let row = sqlx::query_as::<_, NotifyOutboxRow>(
-            r#"INSERT INTO notify_outbox (org_id, title, body, channels, status)
-               VALUES ($1, $2, $3, $4, 'pending')
-               RETURNING id, org_id, title, body, channels, status, attempt_count, last_error,
+            r#"INSERT INTO notify_outbox (
+                   org_id, event_key, severity, exchange, segment, symbol,
+                   title, body, channels, status
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
+               RETURNING id, org_id, event_key, severity, exchange, segment, symbol,
+                         title, body, channels, status, attempt_count, last_error,
                          sent_at, delivery_detail, created_at, updated_at"#,
         )
         .bind(org_id)
+        .bind(event_key)
+        .bind(severity)
+        .bind(exchange)
+        .bind(segment)
+        .bind(symbol)
         .bind(title)
         .bind(body)
         .bind(ch_json)
@@ -62,16 +92,51 @@ impl NotifyOutboxRepository {
         org_id: Uuid,
         limit: i64,
     ) -> Result<Vec<NotifyOutboxRow>, StorageError> {
+        self.list_recent_for_org_filtered(org_id, None, None, None, None, None, None, limit)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn list_recent_for_org_filtered(
+        &self,
+        org_id: Uuid,
+        status: Option<&str>,
+        event_key: Option<&str>,
+        exchange: Option<&str>,
+        segment: Option<&str>,
+        symbol: Option<&str>,
+        query: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<NotifyOutboxRow>, StorageError> {
         let lim = limit.clamp(1, 200);
         let rows = sqlx::query_as::<_, NotifyOutboxRow>(
-            r#"SELECT id, org_id, title, body, channels, status, attempt_count, last_error,
+            r#"SELECT id, org_id, event_key, severity, exchange, segment, symbol,
+                      title, body, channels, status, attempt_count, last_error,
                       sent_at, delivery_detail, created_at, updated_at
                FROM notify_outbox
                WHERE org_id = $1
+                 AND ($2::text IS NULL OR status = $2)
+                 AND ($3::text IS NULL OR event_key = $3)
+                 AND ($4::text IS NULL OR exchange = $4)
+                 AND ($5::text IS NULL OR segment = $5)
+                 AND ($6::text IS NULL OR symbol = $6)
+                 AND (
+                     $7::text IS NULL
+                     OR title ILIKE ('%' || $7 || '%')
+                     OR body ILIKE ('%' || $7 || '%')
+                     OR COALESCE(last_error, '') ILIKE ('%' || $7 || '%')
+                     OR channels::text ILIKE ('%' || $7 || '%')
+                 )
                ORDER BY created_at DESC
-               LIMIT $2"#,
+               LIMIT $8"#,
         )
         .bind(org_id)
+        .bind(status)
+        .bind(event_key)
+        .bind(exchange)
+        .bind(segment)
+        .bind(symbol)
+        .bind(query)
         .bind(lim)
         .fetch_all(&self.pool)
         .await?;
@@ -99,7 +164,8 @@ impl NotifyOutboxRepository {
                    attempt_count = attempt_count + 1,
                    updated_at = now()
                WHERE id = $1
-               RETURNING id, org_id, title, body, channels, status, attempt_count, last_error,
+               RETURNING id, org_id, event_key, severity, exchange, segment, symbol,
+                         title, body, channels, status, attempt_count, last_error,
                          sent_at, delivery_detail, created_at, updated_at"#,
         )
         .bind(id)

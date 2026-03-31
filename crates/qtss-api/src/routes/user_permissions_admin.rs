@@ -10,9 +10,9 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use qtss_storage::{insert_http_audit, AuditHttpRow};
+use qtss_storage::resolve_worker_enabled_flag;
 
 use crate::audit_event::UserPermissionsReplaceDetailsV1;
-use crate::audit_http::http_audit_enabled;
 use crate::error::ApiError;
 use crate::oauth::rbac::is_known_qtss_permission;
 use crate::oauth::AccessClaims;
@@ -85,7 +85,15 @@ async fn put_user_permissions(
         .replace_for_user(user_id, &unique)
         .await?;
 
-    if http_audit_enabled() {
+    let audit_enabled = resolve_worker_enabled_flag(
+        &st.pool,
+        "api",
+        "audit_http_enabled",
+        "QTSS_AUDIT_HTTP",
+        false,
+    )
+    .await;
+    if audit_enabled {
         let request_id = headers
             .get("x-request-id")
             .and_then(|h| h.to_str().ok())

@@ -34,6 +34,12 @@ pub struct NotifyTestBody {
 #[derive(Deserialize)]
 pub struct ListOutboxQuery {
     pub limit: Option<i64>,
+    pub status: Option<String>,
+    pub event_key: Option<String>,
+    pub exchange: Option<String>,
+    pub segment: Option<String>,
+    pub symbol: Option<String>,
+    pub q: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -41,6 +47,11 @@ pub struct EnqueueOutboxBody {
     pub title: String,
     pub body: String,
     pub channels: Option<Vec<String>>,
+    pub event_key: Option<String>,
+    pub severity: Option<String>,
+    pub exchange: Option<String>,
+    pub segment: Option<String>,
+    pub symbol: Option<String>,
 }
 
 async fn notify_test(
@@ -81,7 +92,24 @@ async fn list_notify_outbox(
 ) -> Result<Json<Vec<NotifyOutboxRow>>, ApiError> {
     let org_id = parse_org(&claims)?;
     let limit = q.limit.unwrap_or(50);
-    let rows = st.notify_outbox.list_recent_for_org(org_id, limit).await?;
+    let rows = st
+        .notify_outbox
+        .list_recent_for_org_filtered(
+            org_id,
+            q.status.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            q.event_key.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            q.exchange.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            q.segment.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            q.symbol
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_uppercase())
+                .as_deref(),
+            q.q.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            limit,
+        )
+        .await?;
     Ok(Json(rows))
 }
 
@@ -101,9 +129,25 @@ async fn enqueue_notify_outbox(
     if channels.is_empty() {
         channels.push("webhook".to_string());
     }
+    let sev = body.severity.as_deref().unwrap_or("info").trim();
     let row = st
         .notify_outbox
-        .enqueue(Some(org_id), &title, &body_text, channels)
+        .enqueue_with_meta(
+            Some(org_id),
+            body.event_key.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            if sev.is_empty() { "info" } else { sev },
+            body.exchange.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            body.segment.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            body.symbol
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_uppercase())
+                .as_deref(),
+            &title,
+            &body_text,
+            channels,
+        )
         .await?;
     Ok(Json(row))
 }

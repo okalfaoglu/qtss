@@ -5,7 +5,7 @@ use std::time::Duration;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use qtss_common::log_critical;
-use qtss_storage::resolve_worker_tick_secs;
+use qtss_storage::{resolve_system_string, resolve_worker_enabled_flag, resolve_worker_tick_secs, SystemConfigRepository};
 use reqwest::Client;
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -30,6 +30,14 @@ pub async fn nansen_token_screener_loop(pool: PgPool) {
     info!("nansen token_screener döngüsü (DataSourceProvider; tick: worker.nansen_token_screener_tick_secs / NANSEN_TICK_SECS)");
 
     loop {
+        let enabled = resolve_worker_enabled_flag(
+            &pool,
+            "worker",
+            "nansen_enabled",
+            "QTSS_NANSEN_ENABLED",
+            true,
+        )
+        .await;
         let secs = resolve_worker_tick_secs(
             &pool,
             "worker",
@@ -39,19 +47,36 @@ pub async fn nansen_token_screener_loop(pool: PgPool) {
             60,
         )
         .await;
-        let insufficient_sleep: u64 = std::env::var("NANSEN_INSUFFICIENT_CREDITS_SLEEP_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(3600)
-            .max(secs);
+        let insufficient_sleep = resolve_worker_tick_secs(
+            &pool,
+            "worker",
+            "nansen_insufficient_credits_sleep_secs",
+            "NANSEN_INSUFFICIENT_CREDITS_SLEEP_SECS",
+            3600,
+            60,
+        )
+        .await
+        .max(secs);
 
         let mut next_sleep = secs;
 
-        if std::env::var("NANSEN_API_KEY")
+        if !enabled {
+            tokio::time::sleep(Duration::from_secs(next_sleep)).await;
+            continue;
+        }
+
+        let sys = SystemConfigRepository::new(pool.clone());
+        let api_key = sys
+            .get("worker", "nansen_api_key")
+            .await
             .ok()
-            .filter(|s| !s.trim().is_empty())
-            .is_none()
-        {
+            .flatten()
+            .and_then(|r| r.value.get("value").and_then(|x| x.as_str()).map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("NANSEN_API_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
+        let api_base = resolve_system_string(&pool, "worker", "nansen_api_base", "NANSEN_API_BASE", "https://api.nansen.ai").await;
+
+        if api_key.is_none() {
             if !LOGGED_MISSING_NANSEN_KEY.swap(true, Ordering::SeqCst) {
                 warn!(
                     "NANSEN_API_KEY tanımsız veya boş — token screener çalışmıyor; \
@@ -60,6 +85,12 @@ pub async fn nansen_token_screener_loop(pool: PgPool) {
             }
             tokio::time::sleep(Duration::from_secs(next_sleep)).await;
             continue;
+        }
+        if !api_base.trim().is_empty() {
+            std::env::set_var("NANSEN_API_BASE", api_base);
+        }
+        if let Some(k) = api_key.as_ref() {
+            std::env::set_var("NANSEN_API_KEY", k);
         }
 
         let out = provider.fetch().await;

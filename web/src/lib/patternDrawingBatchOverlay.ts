@@ -103,6 +103,10 @@ export type ZigzagLayerKind =
   | "elliott_projection"
   /** İkinci senaryo — örn. daha uzun 3. dalga hedefi (birincil projeksiyondan daha soluk). */
   | "elliott_projection_alt"
+  /** Formasyon projeksiyonu hedef yatay seviyeleri (A/B/C gibi) — ayrı stil/legend için. */
+  | "elliott_projection_target"
+  /** İkinci senaryonun hedef yatay seviyeleri. */
+  | "elliott_projection_target_alt"
   /** Projeksiyon: gerçekleşmiş/teyitli bölüm (düz çizgi). */
   | "elliott_projection_done"
   /** Projeksiyon: aktif C bacağı (kesik). */

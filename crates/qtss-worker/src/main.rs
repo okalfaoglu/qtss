@@ -4,6 +4,7 @@
 mod ai_engine;
 mod binance_futures_reconcile;
 mod binance_spot_reconcile;
+mod binance_user_stream;
 mod confluence;
 mod confluence_hook;
 mod copy_trade_follower;
@@ -39,7 +40,7 @@ use qtss_binance::{
 use qtss_common::{init_logging, load_dotenv, postgres_url_from_env_or_default};
 use qtss_storage::{
     create_pool, resolve_worker_tick_secs, run_migrations, upsert_market_bar, MarketBarUpsert,
-    PnlRollupRepository,
+    resolve_system_csv, resolve_system_string, PnlRollupRepository,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -174,67 +175,85 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(copy_trade_queue::copy_trade_queue_loop(ctq_pool));
         strategy_runner::spawn_if_enabled(&pool);
         ai_engine::spawn_ai_background_tasks(&pool);
+        binance_user_stream::spawn_binance_user_stream_tasks(&pool).await;
         Some(pool)
     } else {
         warn!("DATABASE_URL yok — pnl_rollups / market_bars DB yazımı kapalı");
         None
     };
 
-    let interval = std::env::var("QTSS_KLINE_INTERVAL").unwrap_or_else(|_| "1m".into());
-    let segment = std::env::var("QTSS_KLINE_SEGMENT").unwrap_or_else(|_| "spot".into());
-
-    if let Ok(raw) = std::env::var("QTSS_KLINE_SYMBOLS") {
-        let symbols: Vec<String> = raw
-            .split(',')
-            .map(|s| s.trim().to_uppercase())
-            .filter(|s| !s.is_empty())
-            .collect();
-        if !symbols.is_empty() {
-            info!(
-                count = symbols.len(),
-                %interval,
-                %segment,
-                "kline combined WebSocket başlatılıyor (QTSS_KLINE_SYMBOLS)"
-            );
-            match pool_opt.as_ref() {
-                Some(pool) => {
-                    tokio::spawn(multi_kline_ws_loop(
-                        symbols,
-                        interval,
-                        segment,
-                        Some(pool.clone()),
-                    ));
-                }
-                None => {
-                    warn!("DATABASE_URL yok — combined kline yalnızca log");
-                    tokio::spawn(multi_kline_ws_loop(symbols, interval, segment, None));
-                }
-            }
+    let (interval, segment) = match pool_opt.as_ref() {
+        Some(pool) => {
+            let interval = resolve_system_string(pool, "worker", "kline_interval", "QTSS_KLINE_INTERVAL", "1m").await;
+            let segment = resolve_system_string(pool, "worker", "kline_segment", "QTSS_KLINE_SEGMENT", "spot").await;
+            (interval, segment)
         }
-    } else if let Ok(sym) = std::env::var("QTSS_KLINE_SYMBOL") {
+        None => (
+            std::env::var("QTSS_KLINE_INTERVAL").unwrap_or_else(|_| "1m".into()),
+            std::env::var("QTSS_KLINE_SEGMENT").unwrap_or_else(|_| "spot".into()),
+        ),
+    };
+
+    let symbols: Vec<String> = match pool_opt.as_ref() {
+        Some(pool) => resolve_system_csv(pool, "worker", "kline_symbols_csv", "QTSS_KLINE_SYMBOLS", "").await,
+        None => std::env::var("QTSS_KLINE_SYMBOLS").unwrap_or_default().split(',').map(|s| s.trim().to_string()).collect(),
+    }
+    .into_iter()
+    .map(|s| s.trim().to_uppercase())
+    .filter(|s| !s.is_empty())
+    .collect();
+
+    if !symbols.is_empty() {
+        info!(
+            count = symbols.len(),
+            %interval,
+            %segment,
+            "kline combined WebSocket başlatılıyor (QTSS_KLINE_SYMBOLS)"
+        );
+        match pool_opt.as_ref() {
+            Some(pool) => tokio::spawn(multi_kline_ws_loop(
+                symbols,
+                interval,
+                segment,
+                Some(pool.clone()),
+            )),
+            None => {
+                warn!("DATABASE_URL yok — combined kline yalnızca log");
+                tokio::spawn(multi_kline_ws_loop(symbols, interval, segment, None))
+            }
+        };
+    } else {
+        let sym = match pool_opt.as_ref() {
+            Some(pool) => {
+                resolve_system_string(pool, "worker", "kline_symbol", "QTSS_KLINE_SYMBOL", "")
+                    .await
+            }
+            None => std::env::var("QTSS_KLINE_SYMBOL").unwrap_or_default(),
+        };
         let sym = sym.trim().to_string();
         if !sym.is_empty() {
             info!(%sym, %interval, %segment, "kline WebSocket görevi başlatılıyor (QTSS_KLINE_SYMBOL)");
-
             match pool_opt.as_ref() {
-                Some(pool) => {
-                    tokio::spawn(kline_ws_loop(sym, interval, segment, Some(pool.clone())));
-                }
+                Some(pool) => tokio::spawn(kline_ws_loop(sym, interval, segment, Some(pool.clone()))),
                 None => {
                     warn!("DATABASE_URL yok — kline yalnızca log (market_bars yazılmaz)");
-                    tokio::spawn(kline_ws_loop(sym, interval, segment, None));
+                    tokio::spawn(kline_ws_loop(sym, interval, segment, None))
                 }
-            }
+            };
+        } else {
+            warn!(
+                "QTSS_KLINE_SYMBOLS / QTSS_KLINE_SYMBOL tanımsız — kline WebSocket kapalı. \
+                 Örnek: QTSS_KLINE_SYMBOLS=BTCUSDT,ETHUSDT veya QTSS_KLINE_SYMBOL=BTCUSDT"
+            );
         }
-    } else {
-        warn!(
-            "QTSS_KLINE_SYMBOLS / QTSS_KLINE_SYMBOL tanımsız — kline WebSocket kapalı. \
-             Örnek: QTSS_KLINE_SYMBOLS=BTCUSDT,ETHUSDT veya QTSS_KLINE_SYMBOL=BTCUSDT"
-        );
     }
 
-    if let Ok(raw) = std::env::var("QTSS_WORKER_HTTP_BIND") {
-        let t = raw.trim();
+    let bind = match pool_opt.as_ref() {
+        Some(pool) => resolve_system_string(pool, "worker", "http_bind", "QTSS_WORKER_HTTP_BIND", "").await,
+        None => std::env::var("QTSS_WORKER_HTTP_BIND").unwrap_or_default(),
+    };
+    if !bind.trim().is_empty() {
+        let t = bind.trim();
         if !t.is_empty() {
             match t.parse::<std::net::SocketAddr>() {
                 Ok(addr) => {

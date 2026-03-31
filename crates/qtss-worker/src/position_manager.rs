@@ -52,6 +52,49 @@ fn live_close_enabled() -> bool {
         .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
 }
 
+fn trailing_on_directive_enabled() -> bool {
+    std::env::var("QTSS_POSITION_MANAGER_TRAILING_ON_DIRECTIVE")
+        .ok()
+        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
+}
+
+fn managed_trailing_enabled() -> bool {
+    std::env::var("QTSS_POSITION_MANAGER_MANAGED_TRAILING_ENABLED")
+        .ok()
+        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
+}
+
+fn managed_trailing_callback_rate_pct() -> Decimal {
+    std::env::var("QTSS_POSITION_MANAGER_MANAGED_TRAILING_CALLBACK_RATE_PCT")
+        .ok()
+        .and_then(|s| Decimal::from_str(s.trim()).ok())
+        .unwrap_or_else(|| Decimal::new(1, 0)) // 1%
+        .max(Decimal::new(1, 1)) // >= 0.1
+}
+
+fn managed_trailing_limit_offset_pct() -> Decimal {
+    std::env::var("QTSS_POSITION_MANAGER_MANAGED_TRAILING_LIMIT_OFFSET_PCT")
+        .ok()
+        .and_then(|s| Decimal::from_str(s.trim()).ok())
+        .unwrap_or_else(|| Decimal::new(2, 1)) // 0.2%
+        .max(Decimal::new(1, 2)) // >= 0.01
+}
+
+fn managed_trailing_replace_step_pct() -> Decimal {
+    std::env::var("QTSS_POSITION_MANAGER_MANAGED_TRAILING_REPLACE_STEP_PCT")
+        .ok()
+        .and_then(|s| Decimal::from_str(s.trim()).ok())
+        .unwrap_or_else(|| Decimal::new(1, 1)) // 0.1%
+        .max(Decimal::new(1, 2))
+}
+
+#[derive(Clone, Default)]
+struct ManagedTrailingState {
+    peak: Decimal,
+    active_cid: Option<Uuid>,
+    active_stop: Decimal,
+}
+
 fn sl_pct() -> Decimal {
     std::env::var("QTSS_DEFAULT_STOP_LOSS_PCT")
         .ok()
@@ -113,6 +156,37 @@ fn market_reduce_long_intent(key: &PosKey, qty: Decimal) -> OrderIntent {
         side: OrderSide::Sell,
         quantity: qty,
         order_type: OrderType::Market,
+        time_in_force: TimeInForce::Gtc,
+        requires_human_approval: false,
+        futures,
+    }
+}
+
+fn trailing_stop_reduce_long_intent(key: &PosKey, qty: Decimal, callback_rate_pct: Decimal) -> OrderIntent {
+    let instrument = InstrumentId {
+        exchange: ExchangeId::Binance,
+        segment: if key.segment.eq_ignore_ascii_case("futures") {
+            MarketSegment::Futures
+        } else {
+            MarketSegment::Spot
+        },
+        symbol: key.symbol.clone(),
+    };
+    let futures = if key.segment.eq_ignore_ascii_case("futures") {
+        Some(FuturesExecutionExtras {
+            position_side: None,
+            reduce_only: Some(true),
+        })
+    } else {
+        None
+    };
+    OrderIntent {
+        instrument,
+        side: OrderSide::Sell,
+        quantity: qty,
+        order_type: OrderType::TrailingStopMarket {
+            callback_rate: callback_rate_pct,
+        },
         time_in_force: TimeInForce::Gtc,
         requires_human_approval: false,
         futures,
@@ -240,9 +314,16 @@ pub async fn position_manager_loop(pool: PgPool) {
     let sl = sl_pct() / Decimal::from(100u32);
     let tp = tp_pct() / Decimal::from(100u32);
     let min_q = min_qty_filter();
+    let trailing_on_dir = trailing_on_directive_enabled();
+    let managed_trailing = managed_trailing_enabled();
+    let managed_cb_pct = managed_trailing_callback_rate_pct();
+    let managed_limit_offset_pct = managed_trailing_limit_offset_pct();
+    let managed_replace_step_pct = managed_trailing_replace_step_pct();
     let acct_repo = ExchangeAccountRepository::new(pool.clone());
     let live_gateway_cache: Mutex<HashMap<(Uuid, String), Arc<BinanceLiveGateway>>> =
         Mutex::new(HashMap::new());
+    let managed_trailing_state: Arc<Mutex<HashMap<PosKey, ManagedTrailingState>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     loop {
         let tick_secs = resolve_worker_tick_secs(
             &pool,
@@ -289,6 +370,7 @@ pub async fn position_manager_loop(pool: PgPool) {
             let mut tactical_applied_id: Option<Uuid> = None;
             let mut directive_applied_id: Option<Uuid> = None;
             let mut ai_outcome_decision_id: Option<Uuid> = None;
+            let mut directive_requested_trailing = false;
             if let Ok(Some(td)) = fetch_latest_approved_tactical(&pool, &key.symbol).await {
                 ai_outcome_decision_id = Some(td.decision_id);
                 if let Some(p) = td.stop_loss_pct {
@@ -309,6 +391,7 @@ pub async fn position_manager_loop(pool: PgPool) {
                 }
                 match dir.action.as_str() {
                     "tighten_stop" => {
+                        directive_requested_trailing = true;
                         if let Some(p) = dir.new_stop_loss_pct {
                             if let Some(d) = Decimal::from_f64(p) {
                                 sl_frac = d / Decimal::from(100u32);
@@ -318,6 +401,7 @@ pub async fn position_manager_loop(pool: PgPool) {
                         }
                     }
                     "widen_stop" => {
+                        directive_requested_trailing = true;
                         if let Some(p) = dir.new_stop_loss_pct {
                             if let Some(d) = Decimal::from_f64(p) {
                                 sl_frac = d / Decimal::from(100u32);
@@ -330,6 +414,252 @@ pub async fn position_manager_loop(pool: PgPool) {
                 }
                 directive_applied_id = Some(dir.id);
             }
+
+            // Managed trailing-stop-limit like behavior (futures only):
+            // Keep a reduce-only STOP (limit) order whose stop moves up with peak price.
+            if managed_trailing && live_on && key.segment.eq_ignore_ascii_case("futures") {
+                let (stop_price, should_replace, start_ok) = {
+                    let mut st_guard = managed_trailing_state.lock().unwrap();
+                    let state = st_guard.entry(key.clone()).or_default();
+                    if state.peak <= Decimal::ZERO || mark > state.peak {
+                        state.peak = mark;
+                    }
+                    let stop_price =
+                        state.peak * (Decimal::ONE - managed_cb_pct / Decimal::from(100u32));
+                    let should_replace = state.active_cid.is_none()
+                        || (stop_price
+                            > state.active_stop
+                                * (Decimal::ONE
+                                    + managed_replace_step_pct / Decimal::from(100u32)));
+                    let start_ok = trailing_on_dir && directive_requested_trailing;
+                    (stop_price, should_replace, start_ok)
+                };
+                if start_ok && should_replace {
+                    if is_trading_halted() {
+                        warn!(user_id=%key.user_id, symbol=%key.symbol, "managed trailing: skipped — trading halted");
+                    } else if let Some(org_id) = agg.org_id {
+                        let creds = acct_repo
+                            .binance_for_user(key.user_id, key.segment.trim())
+                            .await
+                            .ok()
+                            .flatten();
+                        if let Some(creds) = creds {
+                            let seg_norm = key.segment.trim().to_lowercase();
+                            let gw_cache_key = (key.user_id, seg_norm);
+                            let gw = {
+                                let mut guard = live_gateway_cache.lock().unwrap();
+                                if let Some(g) = guard.get(&gw_cache_key) {
+                                    g.clone()
+                                } else {
+                                    let cfg = BinanceClientConfig::mainnet_with_keys(
+                                        creds.api_key,
+                                        creds.api_secret,
+                                    );
+                                    let client = match BinanceClient::new(cfg) {
+                                        Ok(c) => Arc::new(c),
+                                        Err(e) => {
+                                            warn!(%e, "managed trailing: BinanceClient oluşturulamadı");
+                                            continue;
+                                        }
+                                    };
+                                    let g = Arc::new(BinanceLiveGateway::new(client));
+                                    guard.insert(gw_cache_key, g.clone());
+                                    g
+                                }
+                            };
+
+                            // Open-order tracking: if we had an active_cid, verify it's still open; if open, cancel it.
+                            let cur = {
+                                let mut guard = managed_trailing_state.lock().unwrap();
+                                guard.entry(key.clone()).or_default().clone()
+                            };
+
+                            if let Some(cid) = cur.active_cid {
+                                match gw
+                                    .futures_is_open_by_client_order_id(&key.symbol, &cid)
+                                    .await
+                                {
+                                    Ok(true) => {
+                                        // best-effort cancel; if cancel fails, re-check to avoid duplicate new order.
+                                        if gw
+                                            .cancel_futures_by_client_order_id(&key.symbol, &cid)
+                                            .await
+                                            .is_err()
+                                        {
+                                            if gw
+                                                .futures_is_open_by_client_order_id(&key.symbol, &cid)
+                                                .await
+                                                .unwrap_or(false)
+                                            {
+                                                warn!(
+                                                    symbol=%key.symbol,
+                                                    %cid,
+                                                    "managed trailing: cancel failed and order still open; skip replace"
+                                                );
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    Ok(false) => {
+                                        // Not open anymore: clear local state to prevent noisy cancel/replace.
+                                        let mut st_guard3 = managed_trailing_state.lock().unwrap();
+                                        let e = st_guard3.entry(key.clone()).or_default();
+                                        e.active_cid = None;
+                                        e.active_stop = Decimal::ZERO;
+                                    }
+                                    Err(e) => {
+                                        warn!(%e, symbol=%key.symbol, "managed trailing: openOrders check failed; skip replace");
+                                        continue;
+                                    }
+                                }
+                            }
+
+                            let limit_price = stop_price
+                                * (Decimal::ONE - managed_limit_offset_pct / Decimal::from(100u32));
+                            let intent = OrderIntent {
+                                instrument: InstrumentId {
+                                    exchange: ExchangeId::Binance,
+                                    segment: MarketSegment::Futures,
+                                    symbol: key.symbol.clone(),
+                                },
+                                side: OrderSide::Sell,
+                                quantity: book.qty,
+                                order_type: OrderType::StopLimit {
+                                    stop_price,
+                                    limit_price,
+                                },
+                                time_in_force: TimeInForce::Gtc,
+                                requires_human_approval: false,
+                                futures: Some(FuturesExecutionExtras {
+                                    position_side: None,
+                                    reduce_only: Some(true),
+                                }),
+                            };
+                            let intent_record = intent.clone();
+                            match gw.place_with_venue_response(intent).await {
+                                Ok((cid, venue_json)) => {
+                                    let venue_oid = venue_order_id_from_binance_order_response(&venue_json);
+                                    let _ = repo
+                                        .insert_submitted(
+                                            org_id,
+                                            key.user_id,
+                                            "binance",
+                                            key.segment.trim(),
+                                            &key.symbol,
+                                            cid,
+                                            &intent_record,
+                                            venue_oid,
+                                            Some(venue_json),
+                                        )
+                                        .await;
+                                    let mut st_guard3 = managed_trailing_state.lock().unwrap();
+                                    let e = st_guard3.entry(key.clone()).or_default();
+                                    e.active_cid = Some(cid);
+                                    e.active_stop = stop_price;
+                                    if mark > e.peak {
+                                        e.peak = mark;
+                                    }
+                                    info!(
+                                        %cid,
+                                        symbol=%key.symbol,
+                                        stop=%stop_price,
+                                        limit=%limit_price,
+                                        peak=%e.peak,
+                                        "managed trailing: placed stop-limit"
+                                    );
+                                }
+                                Err(e) => warn!(%e, symbol=%key.symbol, "managed trailing: place stop-limit failed"),
+                            }
+                        }
+                    }
+                }
+
+                if let Some(id) = directive_applied_id {
+                    let _ = mark_applied(&pool, AiRecordTable::PositionDirectiveChild, id).await;
+                }
+                // Managed trailing has priority over SL/TP close for futures.
+                continue;
+            }
+
+            // AI directive integration for trailing stop (Binance futures):
+            // if directive adjusts stop, place a reduce-only trailing-stop-market instead of waiting for SL/TP hit.
+            if trailing_on_dir
+                && directive_requested_trailing
+                && live_on
+                && key.segment.eq_ignore_ascii_case("futures")
+            {
+                if is_trading_halted() {
+                    warn!(
+                        user_id = %key.user_id,
+                        symbol = %key.symbol,
+                        "position_manager: trailing stop skipped — trading halted"
+                    );
+                } else if let Some(org_id) = agg.org_id {
+                    let creds = acct_repo
+                        .binance_for_user(key.user_id, key.segment.trim())
+                        .await
+                        .ok()
+                        .flatten();
+                    if let Some(creds) = creds {
+                        let seg_norm = key.segment.trim().to_lowercase();
+                        let gw_cache_key = (key.user_id, seg_norm);
+                        let gw = {
+                            let mut guard = live_gateway_cache.lock().unwrap();
+                            if let Some(g) = guard.get(&gw_cache_key) {
+                                g.clone()
+                            } else {
+                                let cfg = BinanceClientConfig::mainnet_with_keys(
+                                    creds.api_key,
+                                    creds.api_secret,
+                                );
+                                let client = match BinanceClient::new(cfg) {
+                                    Ok(c) => Arc::new(c),
+                                    Err(e) => {
+                                        warn!(%e, "position_manager: BinanceClient oluşturulamadı (trailing)");
+                                        continue;
+                                    }
+                                };
+                                let g = Arc::new(BinanceLiveGateway::new(client));
+                                guard.insert(gw_cache_key, g.clone());
+                                g
+                            }
+                        };
+
+                        // Map stop-loss fraction to callbackRate percent (best-effort).
+                        let cb_pct = (sl_frac * Decimal::from(100u32))
+                            .max(Decimal::new(1, 1)); // >= 0.1
+                        let intent = trailing_stop_reduce_long_intent(&key, book.qty, cb_pct);
+                        let intent_record = intent.clone();
+                        match gw.place_with_venue_response(intent).await {
+                            Ok((cid, venue_json)) => {
+                                let venue_oid = venue_order_id_from_binance_order_response(&venue_json);
+                                let _ = repo
+                                    .insert_submitted(
+                                        org_id,
+                                        key.user_id,
+                                        "binance",
+                                        key.segment.trim(),
+                                        &key.symbol,
+                                        cid,
+                                        &intent_record,
+                                        venue_oid,
+                                        Some(venue_json),
+                                    )
+                                    .await;
+                                info!(%cid, symbol = %key.symbol, callback_rate_pct=%cb_pct, "position_manager: trailing stop placed (directive)");
+                            }
+                            Err(e) => warn!(%e, symbol=%key.symbol, "position_manager: trailing stop place failed (directive)"),
+                        }
+                    }
+                }
+
+                if let Some(id) = directive_applied_id {
+                    let _ = mark_applied(&pool, AiRecordTable::PositionDirectiveChild, id).await;
+                }
+                // Do not do SL/TP close this tick when a trailing stop was requested/placed.
+                continue;
+            }
+
             let sl_price = entry * (Decimal::ONE - sl_frac);
             let tp_price = entry * (Decimal::ONE + tp_frac);
             let hit_sl = mark <= sl_price;

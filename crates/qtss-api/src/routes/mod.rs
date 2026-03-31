@@ -2,12 +2,14 @@ mod ai_approval;
 mod ai_decisions;
 mod analysis;
 mod audit_admin;
+mod backtest;
 mod catalog_admin;
 mod catalog_sync;
 mod config_admin;
 mod copy_trade;
 mod dashboard;
 mod external_fetch;
+mod fills;
 mod health;
 mod kill_switch_admin;
 pub mod locales;
@@ -40,6 +42,7 @@ use crate::oauth::rbac::{
 use crate::state::SharedState;
 
 use catalog_admin::{catalog_read_router, catalog_write_router};
+use backtest::backtest_router;
 
 /// `/api/v1` altında: korumalı uçlar (Bearer + rol).
 pub fn api_router(state: SharedState) -> Router<SharedState> {
@@ -70,6 +73,8 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(orders_binance::orders_binance_write_router().layer(from_fn(require_ops_roles)))
         .merge(orders_dry::orders_dry_read_router().layer(from_fn(require_dashboard_roles)))
         .merge(orders_dry::orders_dry_write_router().layer(from_fn(require_ops_roles)))
+        .merge(fills::fills_router().layer(from_fn(require_dashboard_roles)))
+        .merge(backtest_router().layer(from_fn(require_dashboard_roles)))
         .merge(copy_trade::copy_trade_read_router().layer(from_fn(require_dashboard_roles)))
         .merge(copy_trade::copy_trade_write_router().layer(from_fn(require_ops_roles)))
         .merge(notify::notify_outbox_write_router().layer(from_fn(require_ops_roles)))

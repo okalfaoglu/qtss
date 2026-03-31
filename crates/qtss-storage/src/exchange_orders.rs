@@ -171,6 +171,81 @@ impl ExchangeOrderRepository {
         Ok(res.rows_affected())
     }
 
+    /// WebSocket / user stream gibi hızlı güncellemeler: terminal olmayan durumda ilerlet.
+    ///
+    /// `status` terminal bir değere ulaştığında (`filled`, `canceled`, `rejected`, `expired`)
+    /// sonraki güncellemeler görmezden gelinebilir (idempotent best-effort).
+    pub async fn update_status_and_venue_response_if_not_terminal(
+        &self,
+        user_id: Uuid,
+        exchange: &str,
+        segment: &str,
+        venue_order_id: i64,
+        status: &str,
+        venue_response: &serde_json::Value,
+    ) -> Result<u64, StorageError> {
+        let res = sqlx::query(
+            r#"UPDATE exchange_orders
+               SET status = $5, venue_response = $6, updated_at = now()
+               WHERE user_id = $1 AND exchange = $2 AND segment = $3
+                 AND venue_order_id = $4
+                 AND status NOT IN ('filled', 'canceled', 'rejected', 'expired')"#,
+        )
+        .bind(user_id)
+        .bind(exchange)
+        .bind(segment)
+        .bind(venue_order_id)
+        .bind(status)
+        .bind(venue_response)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
+    pub async fn fetch_org_id_for_venue_order(
+        &self,
+        user_id: Uuid,
+        exchange: &str,
+        segment: &str,
+        venue_order_id: i64,
+    ) -> Result<Option<Uuid>, StorageError> {
+        let row: Option<(Uuid,)> = sqlx::query_as(
+            r#"SELECT org_id FROM exchange_orders
+               WHERE user_id = $1 AND exchange = $2 AND segment = $3
+                 AND venue_order_id = $4
+               LIMIT 1"#,
+        )
+        .bind(user_id)
+        .bind(exchange)
+        .bind(segment)
+        .bind(venue_order_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(id,)| id))
+    }
+
+    pub async fn fetch_symbol_for_venue_order(
+        &self,
+        user_id: Uuid,
+        exchange: &str,
+        segment: &str,
+        venue_order_id: i64,
+    ) -> Result<Option<String>, StorageError> {
+        let row: Option<(String,)> = sqlx::query_as(
+            r#"SELECT symbol FROM exchange_orders
+               WHERE user_id = $1 AND exchange = $2 AND segment = $3
+                 AND venue_order_id = $4
+               LIMIT 1"#,
+        )
+        .bind(user_id)
+        .bind(exchange)
+        .bind(segment)
+        .bind(venue_order_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(s,)| s))
+    }
+
     pub async fn list_for_user(
         &self,
         user_id: Uuid,

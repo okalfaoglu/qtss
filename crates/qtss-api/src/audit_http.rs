@@ -8,19 +8,17 @@ use axum::middleware::Next;
 use axum::response::Response;
 use uuid::Uuid;
 
-use qtss_storage::{insert_http_audit, AuditHttpRow};
+use qtss_storage::{insert_http_audit, resolve_worker_enabled_flag, AuditHttpRow};
 
 use crate::audit_event::HttpMutationDetailsV1;
 use crate::oauth::AccessClaims;
 use crate::state::SharedState;
 
-pub fn http_audit_enabled() -> bool {
-    matches!(std::env::var("QTSS_AUDIT_HTTP").ok().as_deref(), Some("1"))
-}
-
 /// `PUT .../users/{id}/permissions` için ayrıntılı satır handler yazar; çift kayıt önlenir.
 fn skip_generic_http_audit(method: &Method, path: &str) -> bool {
-    method == Method::PUT && path.starts_with("/api/v1/users/") && path.ends_with("/permissions")
+    method == Method::PUT
+        && path.starts_with("/api/v1/users/")
+        && path.ends_with("/permissions")
 }
 
 pub async fn audit_http_middleware(
@@ -28,7 +26,15 @@ pub async fn audit_http_middleware(
     req: Request,
     next: Next,
 ) -> Response {
-    if !http_audit_enabled() {
+    let enabled = resolve_worker_enabled_flag(
+        &st.pool,
+        "api",
+        "audit_http_enabled",
+        "QTSS_AUDIT_HTTP",
+        false,
+    )
+    .await;
+    if !enabled {
         return next.run(req).await;
     }
 
@@ -62,7 +68,9 @@ pub async fn audit_http_middleware(
         let org_id = Uuid::parse_str(&c.org_id).ok();
         let roles = c.roles.clone();
         let pool = st.pool.clone();
-        let details = Some(HttpMutationDetailsV1::new(method.as_str(), &path, status).to_value());
+        let details = Some(
+            HttpMutationDetailsV1::new(method.as_str(), &path, status).to_value(),
+        );
         let row = AuditHttpRow {
             request_id,
             user_id,

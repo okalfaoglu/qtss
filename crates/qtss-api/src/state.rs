@@ -1,6 +1,6 @@
 use qtss_storage::{
     AiApprovalRepository, AppConfigRepository, CopySubscriptionRepository,
-    ExchangeAccountRepository, ExchangeOrderRepository, NotifyOutboxRepository,
+    ExchangeAccountRepository, ExchangeFillRepository, ExchangeOrderRepository, NotifyOutboxRepository,
     PaperLedgerRepository, PnlRollupRepository, SystemConfigRepository, UserPermissionRepository,
     UserRepository,
 };
@@ -15,6 +15,7 @@ pub struct AppState {
     pub pnl: PnlRollupRepository,
     pub exchange_accounts: ExchangeAccountRepository,
     pub exchange_orders: ExchangeOrderRepository,
+    pub exchange_fills: ExchangeFillRepository,
     pub paper: PaperLedgerRepository,
     pub copy: CopySubscriptionRepository,
     pub ai_approval: AiApprovalRepository,
@@ -27,19 +28,81 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(pool: PgPool) -> anyhow::Result<Self> {
-        let jwt_secret = std::env::var("QTSS_JWT_SECRET")
-            .map_err(|_| anyhow::anyhow!("QTSS_JWT_SECRET ortam değişkeni gerekli"))?;
-        let audience = std::env::var("QTSS_JWT_AUD").unwrap_or_else(|_| "qtss-api".into());
-        let issuer = std::env::var("QTSS_JWT_ISS").unwrap_or_else(|_| "qtss".into());
-        let access_ttl = std::env::var("QTSS_ACCESS_TTL_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(900_i64);
-        let refresh_ttl = std::env::var("QTSS_REFRESH_TTL_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(2_592_000_i64);
+    pub async fn new(pool: PgPool) -> anyhow::Result<Self> {
+        let system_config = SystemConfigRepository::new(pool.clone());
+
+        let audience = qtss_storage::resolve_system_string(
+            &pool,
+            "api",
+            "jwt_audience",
+            "QTSS_JWT_AUD",
+            "qtss-api",
+        )
+        .await;
+        let issuer =
+            qtss_storage::resolve_system_string(&pool, "api", "jwt_issuer", "QTSS_JWT_ISS", "qtss")
+                .await;
+        let access_ttl: i64 = qtss_storage::resolve_system_string(
+            &pool,
+            "api",
+            "jwt_access_ttl_secs",
+            "QTSS_ACCESS_TTL_SECS",
+            "900",
+        )
+        .await
+        .parse()
+        .unwrap_or(900_i64);
+        let refresh_ttl: i64 = qtss_storage::resolve_system_string(
+            &pool,
+            "api",
+            "jwt_refresh_ttl_secs",
+            "QTSS_REFRESH_TTL_SECS",
+            "2592000",
+        )
+        .await
+        .parse()
+        .unwrap_or(2_592_000_i64);
+
+        let jwt_secret = match system_config.get("api", "jwt_secret").await? {
+            Some(row) => row
+                .value
+                .get("value")
+                .and_then(|x| x.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
+            None => String::new(),
+        };
+        let jwt_secret = if !jwt_secret.is_empty() {
+            jwt_secret
+        } else {
+            // No secret in DB (first run). Generate and persist; avoids env dependency.
+            let mut bytes = [0u8; 48];
+            rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut bytes);
+            let generated = hex::encode(bytes);
+            let _ = system_config
+                .upsert(
+                    "api",
+                    "jwt_secret",
+                    serde_json::json!({ "value": generated }),
+                    Some(1),
+                    Some("JWT HMAC secret (generated on first run)."),
+                    Some(true),
+                    None,
+                )
+                .await;
+            // Use the plain generated value (the returned row is masked when is_secret=true).
+            match system_config.get("api", "jwt_secret").await? {
+                Some(row) => row
+                    .value
+                    .get("value")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+                None => return Err(anyhow::anyhow!("failed to persist api.jwt_secret")),
+            }
+        };
 
         let jwt = JwtIssuer::from_secret(jwt_secret.as_bytes(), audience, issuer, access_ttl)
             .map_err(|e| anyhow::anyhow!(e))?;
@@ -47,19 +110,20 @@ impl AppState {
         let pnl = PnlRollupRepository::new(pool.clone());
         let exchange_accounts = ExchangeAccountRepository::new(pool.clone());
         let exchange_orders = ExchangeOrderRepository::new(pool.clone());
+        let exchange_fills = ExchangeFillRepository::new(pool.clone());
         let paper = PaperLedgerRepository::new(pool.clone());
         let copy = CopySubscriptionRepository::new(pool.clone());
         let ai_approval = AiApprovalRepository::new(pool.clone());
         let notify_outbox = NotifyOutboxRepository::new(pool.clone());
         let user_permissions = UserPermissionRepository::new(pool.clone());
         let users = UserRepository::new(pool.clone());
-        let system_config = SystemConfigRepository::new(pool.clone());
         Ok(Self {
             pool,
             config,
             pnl,
             exchange_accounts,
             exchange_orders,
+            exchange_fills,
             paper,
             copy,
             ai_approval,

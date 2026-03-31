@@ -12,7 +12,10 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use qtss_common::{halt_trading, is_trading_halted};
-use qtss_storage::{resolve_worker_tick_secs, sum_today_daily_realized_pnl, AppConfigRepository};
+use qtss_storage::{
+    resolve_worker_enabled_flag, resolve_worker_tick_secs, sum_today_daily_realized_pnl,
+    AppConfigRepository, SystemConfigRepository,
+};
 use rust_decimal::Decimal;
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -20,12 +23,26 @@ use tracing::{info, warn};
 pub const KILL_SWITCH_APP_CONFIG_KEY: &str = "kill_switch_trading_halted";
 
 fn enabled() -> bool {
+    // Legacy env-only gate (bootstrapping / emergency).
     std::env::var("QTSS_KILL_SWITCH_ENABLED")
         .ok()
         .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
 }
 
-fn reference_equity_usdt() -> Decimal {
+fn decimal_from_json_value(v: &serde_json::Value) -> Option<Decimal> {
+    v.get("value")
+        .and_then(|x| x.as_str())
+        .or_else(|| v.as_str())
+        .and_then(|s| Decimal::from_str(s.trim()).ok())
+}
+
+async fn reference_equity_usdt(pool: &PgPool) -> Decimal {
+    let repo = SystemConfigRepository::new(pool.clone());
+    if let Ok(Some(row)) = repo.get("worker", "kill_switch_reference_equity_usdt").await {
+        if let Some(d) = decimal_from_json_value(&row.value) {
+            return d;
+        }
+    }
     std::env::var("QTSS_KILL_SWITCH_REFERENCE_EQUITY_USDT")
         .ok()
         .and_then(|s| Decimal::from_str(s.trim()).ok())
@@ -33,18 +50,35 @@ fn reference_equity_usdt() -> Decimal {
 }
 
 /// `QTSS_MAX_DRAWDOWN_PCT` (örn. 5.0 = %5) ile günlük kayıp limiti (USDT, negatif eşik).
-fn trigger_from_drawdown_pct() -> Option<Decimal> {
-    let raw = std::env::var("QTSS_MAX_DRAWDOWN_PCT").ok()?;
-    let pct = Decimal::from_str(raw.trim()).ok()?;
+async fn max_drawdown_pct(pool: &PgPool) -> Option<Decimal> {
+    let repo = SystemConfigRepository::new(pool.clone());
+    if let Ok(Some(row)) = repo.get("worker", "max_drawdown_pct").await {
+        if let Some(d) = decimal_from_json_value(&row.value) {
+            return Some(d);
+        }
+    }
+    std::env::var("QTSS_MAX_DRAWDOWN_PCT")
+        .ok()
+        .and_then(|s| Decimal::from_str(s.trim()).ok())
+}
+
+async fn trigger_from_drawdown_pct(pool: &PgPool) -> Option<Decimal> {
+    let pct = max_drawdown_pct(pool).await?;
     if pct <= Decimal::ZERO {
         return None;
     }
-    let eq = reference_equity_usdt();
+    let eq = reference_equity_usdt(pool).await;
     let loss = eq * pct / Decimal::from(100u32);
     Some(loss.neg())
 }
 
-fn trigger_from_daily_loss_env() -> Decimal {
+async fn trigger_from_daily_loss(pool: &PgPool) -> Decimal {
+    let repo = SystemConfigRepository::new(pool.clone());
+    if let Ok(Some(row)) = repo.get("worker", "kill_switch_daily_loss_usdt").await {
+        if let Some(d) = decimal_from_json_value(&row.value) {
+            return d.neg();
+        }
+    }
     std::env::var("QTSS_KILL_SWITCH_DAILY_LOSS_USDT")
         .ok()
         .and_then(|s| Decimal::from_str(s.trim()).ok())
@@ -52,8 +86,12 @@ fn trigger_from_daily_loss_env() -> Decimal {
         .neg()
 }
 
-fn effective_trigger_neg() -> Decimal {
-    trigger_from_drawdown_pct().unwrap_or_else(trigger_from_daily_loss_env)
+async fn effective_trigger_neg(pool: &PgPool) -> Decimal {
+    if let Some(d) = trigger_from_drawdown_pct(pool).await {
+        d
+    } else {
+        trigger_from_daily_loss(pool).await
+    }
 }
 
 async fn persist_halt_flag(pool: &PgPool, halted: bool) {
@@ -121,12 +159,20 @@ pub async fn kill_switch_db_sync_loop(pool: PgPool) {
 }
 
 pub async fn kill_switch_loop(pool: PgPool) {
-    if !enabled() {
+    let enabled_db = resolve_worker_enabled_flag(
+        &pool,
+        "worker",
+        "kill_switch_enabled",
+        "QTSS_KILL_SWITCH_ENABLED",
+        false,
+    )
+    .await;
+    if !enabled() && !enabled_db {
         info!("QTSS_KILL_SWITCH_ENABLED kapalı — kill_switch_loop çıkıyor");
         return;
     }
     let pool_tick = pool.clone();
-    let trigger_neg = effective_trigger_neg();
+    let trigger_neg = effective_trigger_neg(&pool).await;
     info!(
         %trigger_neg,
         "kill_switch_loop: günlük realized P&L < eşik ise halt (poll from system_config / env; QTSS_MAX_DRAWDOWN_PCT veya QTSS_KILL_SWITCH_DAILY_LOSS_USDT)"

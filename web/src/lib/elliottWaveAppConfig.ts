@@ -126,6 +126,8 @@ export type ElliottWaveConfig = {
   projection_bar_hop: number;
   /** Kaç segment ileri (Pine 12; üst sınır 24). */
   projection_steps: number;
+  /** Projeksiyon çizim modu: legacy polyline veya formasyon bazlı şema. */
+  projection_mode: "legacy" | "formation";
   /**
    * İleri projeksiyonda ikinci çizgi: daha uzun 3. dalga hedefi (kalibre çarpanı yükseltilmiş şema).
    * Kapalıysa yalnızca birincil polyline çizilir.
@@ -236,6 +238,7 @@ export const DEFAULT_ELLIOTT_WAVE_CONFIG: ElliottWaveConfig = {
   show_nested_formations: true,
   projection_bar_hop: 22,
   projection_steps: 12,
+  projection_mode: "legacy",
   show_projection_alt_scenario: true,
   use_acp_zigzag_swing: false,
   acp_zigzag_row_index: 0,
@@ -359,6 +362,13 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
       ? Math.min(24, Math.max(1, Math.floor(raw.projection_steps)))
       : base.projection_steps;
 
+  const projection_mode_raw =
+    raw && typeof raw === "object" ? (raw as Record<string, unknown>).projection_mode : undefined;
+  const projection_mode: "legacy" | "formation" =
+    projection_mode_raw === "formation" || projection_mode_raw === "legacy"
+      ? projection_mode_raw
+      : base.projection_mode;
+
   const show_projection_alt_scenario =
     typeof raw.show_projection_alt_scenario === "boolean"
       ? raw.show_projection_alt_scenario
@@ -466,6 +476,7 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
     show_nested_formations,
     projection_bar_hop,
     projection_steps,
+    projection_mode,
     show_projection_alt_scenario,
     use_acp_zigzag_swing,
     acp_zigzag_row_index,
