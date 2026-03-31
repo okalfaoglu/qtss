@@ -30,6 +30,7 @@ function elliottHexForColorInput(hex: string): string {
 }
 import { chartOhlcRowsSortedChrono } from "../lib/chartRowsToOhlcBars";
 import type { ElliottEngineOutputV2 } from "../lib/elliottEngineV2";
+import { ElliottTheoryCodeWidget } from "./ElliottTheoryCodeWidget";
 
 function TezExtendedBlock({ section }: { section: ElliottTezSection }) {
   return (
@@ -173,6 +174,48 @@ export function ElliottWaveCard({
         return "Trend şekli zayıf / teyitsiz";
       case "extension_w5_vs_w3":
         return "Dalga 5 / Dalga 3 uzantısı (✓ = aştı; ○ = kısaltılmış beşinci olası)";
+      case "zz_a_motive5":
+        return "Zigzag: A içi 5’li itkı kanıtı (alt derece)";
+      case "zz_c_motive5":
+        return "Zigzag: C içi 5’li itkı kanıtı (alt derece)";
+      case "flat_a_corrective3":
+        return "Yassı: A içi düzeltme (3) kanıtı (alt derece)";
+      case "flat_b_corrective3":
+        return "Yassı: B içi düzeltme (3) kanıtı (alt derece)";
+      case "flat_c_motive5":
+        return "Yassı: C içi 5’li itkı kanıtı (alt derece)";
+      case "diag_1_corrective3":
+        return "Diyagonal: 1 içi düzeltme (3) kanıtı (alt derece)";
+      case "diag_2_corrective3":
+        return "Diyagonal: 2 içi düzeltme (3) kanıtı (alt derece)";
+      case "diag_3_corrective3":
+        return "Diyagonal: 3 içi düzeltme (3) kanıtı (alt derece)";
+      case "diag_4_corrective3":
+        return "Diyagonal: 4 içi düzeltme (3) kanıtı (alt derece)";
+      case "diag_5_corrective3":
+        return "Diyagonal: 5 içi düzeltme (3) kanıtı (alt derece)";
+      case "diag_ld_1_motive5":
+        return "Diyagonal (leading): 1 bacak içi itkı (5) kanıtı (alt derece)";
+      case "diag_ld_2_corr3":
+        return "Diyagonal (leading): 2 bacak içi düzeltme (3) kanıtı (alt derece)";
+      case "diag_ld_3_motive5":
+        return "Diyagonal (leading): 3 bacak içi itkı (5) kanıtı (alt derece)";
+      case "diag_ld_4_corr3":
+        return "Diyagonal (leading): 4 bacak içi düzeltme (3) kanıtı (alt derece)";
+      case "diag_ld_5_motive5":
+        return "Diyagonal (leading): 5 bacak içi itkı (5) kanıtı (alt derece)";
+      case "diagonal_role_hint":
+        return "Diyagonal: leading/ending tahmini (zigzag penceresi veya MTF üst itkı W1/W5 zaman örtüşmesi — ayrıntı metinde)";
+      case "tri_a_corrective3":
+        return "Üçgen: A bacak içi düzeltme (3) kanıtı (alt derece)";
+      case "tri_b_corrective3":
+        return "Üçgen: B bacak içi düzeltme (3) kanıtı (alt derece)";
+      case "tri_c_corrective3":
+        return "Üçgen: C bacak içi düzeltme (3) kanıtı (alt derece)";
+      case "tri_d_corrective3":
+        return "Üçgen: D bacak içi düzeltme (3) kanıtı (alt derece)";
+      case "tri_e_corrective3":
+        return "Üçgen: E bacak içi düzeltme (3) kanıtı (alt derece)";
       case "triangle_alt":
         return "Üçgen: a-b-c-d-e alternasyonu bozuk";
       case "triangle_tightening":
@@ -183,6 +226,18 @@ export function ElliottWaveCard({
         return "Üçgen: zarf daralması yetersiz";
       case "triangle_expanding":
         return "Üçgen: genişleyen zarf (daralan değil)";
+      case "triangle_chain_contract":
+        return "Üçgen: daralan bacak uzunluk zinciri (A→E)";
+      case "triangle_chain_expand":
+        return "Üçgen: genişleyen bacak uzunluk zinciri (A→E)";
+      case "diagonal_interpret_ending":
+        return "Diyagonal: tek pencerede ending yorumu (leading çıkarılmaz)";
+      case "ld_r3_w5_ge_1382_w4":
+        return "Diyagonal (ld_r3): |5| ≥ 1,382×|4| — yalnızca leading rolde skorlanır (ending/unknown atlanır)";
+      case "flat_ba_label_floor":
+        return "Yassı: B/A ≥ 0,9 (flat vs zigzag etiketi)";
+      case "flat_ba_variant_expanded":
+        return "Yassı: genişletilmiş (B/A ≥ 1,0) / düzenli band bilgisi";
       case "tri_r2_channel":
         return "Üçgen (tri_r2): A–C / B–D şeridi dışında tepe/dip";
       case "tri_r2_e_deviation_15":
@@ -194,7 +249,7 @@ export function ElliottWaveCard({
       case "tri_r7_expanding_shortest_ab":
         return "Üçgen (tri_r7): genişleyende en kısa dalga A/B değil";
       case "tri_r1_substructure_note":
-        return "Üçgen: alt derece 3’lü yapı zigzag’ta yok (bilgi)";
+        return "Üçgen: A–E iç yapı teyidi `tri_*_corrective3` ile (bilgi)";
       case "triangle_context_wave2_wave4_post":
         return "Üçgen: bağlam (dalga 2 / 4 / post)";
       case "triangle_context_wave4_or_b":
@@ -211,6 +266,10 @@ export function ElliottWaveCard({
         return "Kombinasyon (comb_r3): Y bölümü gelişimi zayıf";
       case "comb_r4":
         return "Kombinasyon (comb_r4): W–Y kontrastı yetersiz";
+      case "comb_r8_y_zigzag_cap":
+        return "Kombinasyon (comb_r8): Y bölümünde birden fazla zigzag (≤1 olmalı)";
+      case "comb_r9_y_triangle_last":
+        return "Kombinasyon (comb_r9): Y’de üçgen yalnızca sonda (erken üçgen + sonda yok → red)";
       case "comb_r5":
         return "Kombinasyon (comb_r5): WXYXZ oranları ayrı motor";
       case "comb_r6":
@@ -817,6 +876,15 @@ export function ElliottWaveCard({
           {ELLIOTT_TEZ_EXTENDED_SECTIONS.map((s) => (
             <TezExtendedBlock key={s.id} section={s} />
           ))}
+
+          <details className="tv-collapsible" style={{ marginTop: "0.65rem" }}>
+            <summary className="muted" style={{ fontSize: "0.8rem", fontWeight: 600 }}>
+              Teori ↔ Kod drift (interaktif)
+            </summary>
+            <div style={{ marginTop: "0.45rem" }}>
+              <ElliottTheoryCodeWidget />
+            </div>
+          </details>
         </div>
       ) : null}
         </>

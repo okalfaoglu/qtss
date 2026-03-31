@@ -35,6 +35,12 @@ export type ElliottRuleCheckV2 = {
 
 export type ImpulseDirectionV2 = "bull" | "bear";
 
+/** Chart-window heuristic for diagonal subtype; not a higher-timeframe wave-degree label. */
+export type DiagonalRoleV2 = "leading" | "ending" | "unknown";
+
+/** How `diagonalRole` was chosen when `variant: diagonal`. */
+export type DiagonalRoleSourceV2 = "chart_window" | "mtf_parent";
+
 export type ImpulseCountV2 = {
   direction: ImpulseDirectionV2;
   pivots: [ZigzagPivot, ZigzagPivot, ZigzagPivot, ZigzagPivot, ZigzagPivot, ZigzagPivot];
@@ -42,6 +48,13 @@ export type ImpulseCountV2 = {
   score: number;
   /** Standart: w4–w1 bindirme yok. Diyagonal: bindirme serbest (§ sonlanan/ilerleyen diyagonal). */
   variant?: "standard" | "diagonal";
+  /**
+   * Diyagonal: uçların zigzag dizisindeki konumuna göre leading vs ending tahmini.
+   * `unknown` → alt-dalga kanıtı ending (3-3-3-3-3) varsayımı ile yapılır.
+   */
+  diagonalRole?: DiagonalRoleV2;
+  /** Set when `variant: diagonal` after role resolution (chart heuristic and/or MTF parent overlap). */
+  diagonalRoleSource?: DiagonalRoleSourceV2;
 };
 
 export type CorrectivePatternV2 = "zigzag" | "flat" | "triangle" | "combination" | "abc";

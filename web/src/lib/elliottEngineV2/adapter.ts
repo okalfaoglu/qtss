@@ -46,6 +46,18 @@ function toPts(p: ZigzagPivot[]): Pt[] {
   return p.map((x) => ({ time: x.time as UTCTimestamp, value: x.price }));
 }
 
+/**
+ * Post-impulse ABC (+a/+b/+c): engine bazen mikro zigzag için `path` üretir; çizgi iç içe ve okunaksız olur.
+ * Köşe sayısı yeterliyse ve path daha uzunsa, görüntü için yalnızca `pivots` (A–B–C köşeleri) kullanılır.
+ */
+function postImpulseAbcLinePivots(c: CorrectiveCountV2): ZigzagPivot[] {
+  const path = c.path?.length ? c.path : c.pivots;
+  if (c.pivots.length >= 4 && path.length > c.pivots.length) {
+    return [...c.pivots];
+  }
+  return path;
+}
+
 function impulseLabelsByTf(tf: "4h" | "1h" | "15m"): string[] {
   if (tf === "4h") return ["①", "②", "③", "④", "⑤"];
   if (tf === "1h") return ["(1)", "(2)", "(3)", "(4)", "(5)"];
@@ -396,15 +408,15 @@ export function v2ToChartOverlays(
     }
     pushNestedImpulse(s.wave5NestedImpulse, ["v1", "v2", "v3", "v4", "v5"]);
     if (showLines[tf] && s.postImpulseAbc && showCorrectiveOverlay(m, s.postImpulseAbc)) {
-      const p = s.postImpulseAbc.path?.length ? s.postImpulseAbc.path : s.postImpulseAbc.pivots;
+      const linePivots = postImpulseAbcLinePivots(s.postImpulseAbc);
       layers.push({
         upper: [],
         lower: [],
-        zigzag: toPts(p),
-        zigzagKind: kind,
+        zigzag: toPts(linePivots),
+        zigzagKind: "elliott_v2_post_abc",
         zigzagLineColor: wc[tf],
-        zigzagLineStyle: lineStyles[tf],
-        zigzagLineWidth: lineWidths[tf],
+        zigzagLineStyle: "dashed",
+        zigzagLineWidth: Math.max(1, lineWidths[tf] - 1),
       });
       if (showLabels[tf]) labels.push(...correctiveLabels(s.postImpulseAbc, "post", tf, wc, labelColors));
     }

@@ -17,6 +17,12 @@ export const TEZ_FLAT_B_VS_A_MAX = 2.618;
 /** Klasik düzenli yassı için tipik B/A tabanı (referans; `flat_r4` ile karıştırma). */
 export const TEZ_CLASSIC_REGULAR_FLAT_B_MIN = 0.618;
 
+/**
+ * Flat vs zigzag etiketi (`classifyFlatVsZigzag` ile aynı taban).
+ * Düşük B/A yassı adayı olarak seçilmez; `flat_ba_label_floor` ile check katmanında da görünür.
+ */
+export const TEZ_FLAT_LABEL_MIN_RETR_B = 0.9;
+
 /** Tez §2.5.4.1 flat_g7 — C en az A dalgasının 0.382 katı kadar olmalıdır. */
 export const TEZ_FLAT_C_VS_A_MIN = 0.382;
 
@@ -53,6 +59,19 @@ export function buildTez254AbcChecks(
       id: "flat_g7",
       passed: cVsA >= TEZ_FLAT_C_VS_A_MIN - 1e-12,
       detail: `C/A=${cVsA.toFixed(3)} ≥ ${TEZ_FLAT_C_VS_A_MIN}`,
+    });
+    checks.push({
+      id: "flat_ba_label_floor",
+      passed: retrB >= TEZ_FLAT_LABEL_MIN_RETR_B - 1e-12,
+      detail: `B/A=${retrB.toFixed(3)} ≥ ${TEZ_FLAT_LABEL_MIN_RETR_B} (flat vs zigzag label)`,
+    });
+    checks.push({
+      id: "flat_ba_variant_expanded",
+      passed: retrB >= 1.0 - 1e-12,
+      detail:
+        retrB >= 1.0 - 1e-12
+          ? "expanded flat: B reaches or exceeds A origin (B/A ≥ 1.0)"
+          : "regular flat band (B/A ≥ 0.9, not expanded by B/A alone)",
     });
   } else {
     checks.push({

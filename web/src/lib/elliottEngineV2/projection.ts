@@ -553,9 +553,10 @@ function buildFormationProjection(params: {
   const projBVal = isBull ? projAVal + abSize * 0.618 : projAVal - abSize * 0.618;
   const projCVal = isBull ? projBVal - abSize * 1.0 : projBVal + abSize * 1.0;
 
-  const durationA = Math.max(60, Math.round(w1Dur * 0.618));
-  const durationB = Math.max(60, Math.round(w2Dur * 1.0));
-  const durationC = Math.max(60, Math.round(w1Dur * 1.0));
+  const minSegDur = Math.max(120, Math.round(w1Dur * 0.35));
+  const durationA = Math.max(minSegDur, Math.round(w1Dur * 0.618));
+  const durationB = Math.max(minSegDur, Math.round(w2Dur * 1.0));
+  const durationC = Math.max(minSegDur, Math.round(w1Dur * 1.0));
 
   const tA = (startTime + durationA) as UTCTimestamp;
   const tB = (startTime + durationA + durationB) as UTCTimestamp;
@@ -587,7 +588,7 @@ function buildFormationProjection(params: {
     const projC2 = isBull ? projB2 - abObs * 1.0 : projB2 + abObs * 1.0;
     const b2: FormationPoint = { time: tB, value: projB2 };
     const c2: FormationPoint = { time: tC, value: projC2 };
-    layers.push(seg(obsAPt, b2, kind, "dotted", lineColor));
+    layers.push(seg(obsAPt, b2, kind, "dashed", lineColor));
     layers.push(seg(b2, c2, kind, "dashed", lineColor));
   } else if (hasA && hasB && !hasC) {
     // A and B observed -> project C from observed B
@@ -616,9 +617,9 @@ function buildFormationProjection(params: {
     const p4n: FormationPoint = { time: t4 as UTCTimestamp, value: w4Target };
     const p5n: FormationPoint = { time: t5 as UTCTimestamp, value: w5Target };
     layers.push(seg(cEndPt, p1n, kind, "dashed", lineColor));
-    layers.push(seg(p1n, p2n, kind, "dotted", lineColor));
+    layers.push(seg(p1n, p2n, kind, "dashed", lineColor));
     layers.push(seg(p2n, p3n, kind, "dashed", lineColor));
-    layers.push(seg(p3n, p4n, kind, "dotted", lineColor));
+    layers.push(seg(p3n, p4n, kind, "dashed", lineColor));
     layers.push(seg(p4n, p5n, kind, "dashed", lineColor));
   }
 

@@ -12,6 +12,7 @@ import {
   buildTez254AbcChecks,
   TEZ_FLAT_B_VS_A_MAX,
   TEZ_FLAT_B_VS_A_MIN,
+  TEZ_FLAT_LABEL_MIN_RETR_B,
   TEZ_ZIGZAG_B_VS_A_MAX,
 } from "./tezWaveChecks";
 import { DEFAULT_ELLIOTT_PATTERN_MENU, type ElliottPatternMenuToggles } from "../elliottPatternMenuCatalog";
@@ -123,7 +124,7 @@ function classifyFlatVsZigzag(retrB: number): "flat" | "zigzag" {
 function abcRetrBPassesPrefilter(retrB: number): boolean {
   if (retrB < TEZ_FLAT_B_VS_A_MIN - 1e-12) return false;
   if (retrB > TEZ_FLAT_B_VS_A_MAX + 1e-9) return false;
-  if (retrB > TEZ_ZIGZAG_B_VS_A_MAX + 1e-12 && retrB < FLAT_LABEL_MIN_RETR_B - 1e-12) return false;
+  if (retrB > TEZ_ZIGZAG_B_VS_A_MAX + 1e-12 && retrB < TEZ_FLAT_LABEL_MIN_RETR_B - 1e-12) return false;
   return true;
 }
 
@@ -322,6 +323,20 @@ function findTriangleBetween(
   if (!Number.isFinite(width) || width <= EPS) return null;
   const tightening = span4 <= span1 * 0.85 || span4 <= span2 * 0.85;
 
+  /** Contracting: successive legs shrink (B<A, C<B, D<C, E<D) in price extent. Expanding: the reverse. */
+  const chainContract =
+    span1 > EPS &&
+    span2 + EPS < span1 &&
+    span3 + EPS < span2 &&
+    span4 + EPS < span3 &&
+    span5 + EPS < span4;
+  const chainExpand =
+    span1 > EPS &&
+    span2 > span1 + EPS &&
+    span3 > span2 + EPS &&
+    span4 > span3 + EPS &&
+    span5 > span4 + EPS;
+
   const hSlope = highs[highs.length - 1].price - highs[0].price;
   const lSlope = lows[lows.length - 1].price - lows[0].price;
   const converging = hSlope <= EPS && lSlope >= -EPS;
@@ -375,17 +390,29 @@ function findTriangleBetween(
     {
       id: "tri_r1_substructure_note",
       passed: true,
-      detail: "§2.5.4.3 3-3-3-3-3 alt dalga sayımı zigzag pivotlarında yok",
+      detail: "A–E iç yapı: `engine.ts` mikro zigzag ile `tri_*_corrective3` (teyit için bakın)",
     },
     {
       id: "triangle_context_wave2_wave4_post",
       passed: true,
       detail: context,
     },
+    {
+      id: "triangle_chain_contract",
+      passed: !kindContract || chainContract,
+      detail: `A..E spans: ${span1.toFixed(3)} ${span2.toFixed(3)} ${span3.toFixed(3)} ${span4.toFixed(3)} ${span5.toFixed(3)}`,
+    },
+    {
+      id: "triangle_chain_expand",
+      passed: !kindExpand || chainExpand,
+      detail: `expand spans monotone: ${chainExpand}`,
+    },
   ];
   const score = checks.filter((x) => x.passed).length + 0.2;
 
   if (!triR2 || !triR3 || !triR4 || !triR5) return null;
+  if (kindContract && !chainContract) return null;
+  if (kindExpand && !chainExpand) return null;
   if (kindContract) {
     return {
       pivots: [pts[0], pts[1], pts[2], pts[5]],
@@ -407,6 +434,87 @@ function findTriangleBetween(
     };
   }
   return null;
+}
+
+/**
+ * Motive bacaklarında (örn. diyagonal alt-dalga kanıtı): mikro zigzag ile yalnız ABC düzeltme araması.
+ * `context` tabanlı triangle/combination kapıları uygulanmaz.
+ */
+export function detectNestedAbcCorrectiveInLeg(
+  start: ZigzagPivot,
+  end: ZigzagPivot,
+  direction: "down" | "up",
+  ohlc: OhlcV2[] | undefined,
+  zigzag: ZigzagParams | undefined,
+): CorrectiveCountV2 | null {
+  if (!ohlc?.length || !zigzag) return null;
+  const lo = Math.min(start.index, end.index);
+  const hi = Math.max(start.index, end.index);
+  const sub = ohlc.slice(lo, hi + 1);
+  if (sub.length < 7) return null;
+
+  const mainDepth = Math.max(2, Math.floor(zigzag.depth || 0));
+  for (const depth of microDepthCandidatesForNestedLeg(mainDepth)) {
+    if (sub.length < depth * 2 + 1) continue;
+    const microLocal = buildZigzagPivotsV2(sub, { ...zigzag, depth });
+    if (microLocal.length < 4) continue;
+    const micro = microLocal.map((x) => ({ ...x, index: lo + x.index }));
+    const inner = micro.filter((p) => p.index > start.index && p.index < end.index);
+    const collect = direction === "down" ? collectAbcCorrectiveDown : collectAbcCorrectiveUp;
+    const hit = collect(start, end, inner);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * Y bölümünde (W–X’ten sonra) ardışık, çakışmayan kaç “zigzag” ABC’si çıkarılabilir.
+ * Kombinasyonda tez olarak en fazla bir zigzag segmenti beklenir (§2.5.4.4).
+ */
+function countDisjointZigzagsInY(
+  ySeq: ZigzagPivot[],
+  direction: "down" | "up",
+): number {
+  if (ySeq.length < 4) return 0;
+  const collect = direction === "down" ? collectAbcCorrectiveDown : collectAbcCorrectiveUp;
+  let count = 0;
+  let pos = 0;
+  while (pos < ySeq.length - 3) {
+    let nextEnd: number | null = null;
+    for (let j = pos + 3; j < ySeq.length; j++) {
+      const start = ySeq[pos];
+      const end = ySeq[j];
+      const inner = ySeq.slice(pos + 1, j);
+      if (inner.length < 2) continue;
+      const c = collect(start, end, inner);
+      if (c?.pattern === "zigzag") {
+        nextEnd = j;
+        break;
+      }
+    }
+    if (nextEnd === null) {
+      pos++;
+      continue;
+    }
+    count++;
+    if (count > 1) return count;
+    pos = nextEnd + 1;
+  }
+  return count;
+}
+
+/**
+ * Kombinasyon Y bölümünde: üçgen benzeri yapı yalnızca **son** segmentte olmalı (tez).
+ * Y’nin ilk 6 ucu üçgen geometrisine uyuyor ama son 6 uç uyumuyorsa adayı reddet.
+ */
+function combinationTriangleLastInYSegmentOk(ySeq: ZigzagPivot[], context: CorrectiveContext): boolean {
+  if (ySeq.length < 7) return true;
+  const head = ySeq.slice(0, 6);
+  const tail = ySeq.slice(-6);
+  const triHead = findTriangleBetween(head[0]!, head[5]!, head.slice(1, 5), context);
+  const triTail = findTriangleBetween(tail[0]!, tail[5]!, tail.slice(1, 5), context);
+  if (triHead && !triTail) return false;
+  return true;
 }
 
 /**
@@ -451,7 +559,14 @@ function findCombinationBetween(
   const contrast = maxWY > EPS ? Math.abs(legW - maxYLeg) / maxWY : 0;
   const combR4 = contrast >= 0.12 - EPS;
 
-  if (!combR1 || !combR2 || !combR3 || !combR4) return null;
+  const ySeq = seq.slice(2);
+  const zigzagCountY = countDisjointZigzagsInY(ySeq, direction);
+  /** comb_r8 — Y içinde en fazla bir zigzag (çakışmasız ABC zigzag sayımı) */
+  const combR8 = zigzagCountY <= 1;
+  /** comb_r9 — Y’de üçgen yalnızca sonda (ilk 6 üçgen + son 6 değilse red) */
+  const combR9 = combinationTriangleLastInYSegmentOk(ySeq, context);
+
+  if (!combR1 || !combR2 || !combR3 || !combR4 || !combR8 || !combR9) return null;
 
   const checks: ElliottRuleCheckV2[] = [
     { id: "comb_alt", passed: alternating },
@@ -460,6 +575,16 @@ function findCombinationBetween(
     { id: "comb_r2", passed: combR2, detail: `X≤0.95·W` },
     { id: "comb_r3", passed: combR3, detail: `pathY/X=${legX > EPS ? (pathY / legX).toFixed(3) : "—"}` },
     { id: "comb_r4", passed: combR4, detail: `kontrast(W,maxY)=${contrast.toFixed(3)}` },
+    {
+      id: "comb_r8_y_zigzag_cap",
+      passed: combR8,
+      detail: `Y zigzag sayısı=${zigzagCountY} (≤1)`,
+    },
+    {
+      id: "comb_r9_y_triangle_last",
+      passed: combR9,
+      detail: "Y: reject if first-6 triangle-like but last-6 not (triangle last in Y)",
+    },
     {
       id: "comb_r5",
       passed: true,
@@ -471,7 +596,7 @@ function findCombinationBetween(
       detail: `bağlam=${context}; WXYXZ post-B: wxyxz_post_b_context`,
     },
   ];
-  const combConfirmed = true;
+  const combConfirmed = combR1 && combR2 && combR3 && combR4 && combR8 && combR9;
   checks.push({ id: "comb_confirmed", passed: combConfirmed, detail: "W–X–Y teyit" });
   const score = checks.filter((x) => x.passed).length * 0.1 + 0.28;
 
@@ -594,7 +719,7 @@ export function detectNestedCorrectiveInLeg(
   start: ZigzagPivot,
   end: ZigzagPivot,
   direction: "down" | "up",
-  context: "wave2" | "wave4",
+  context: CorrectiveContext,
   toggles: ElliottPatternMenuToggles | undefined,
   ohlc: OhlcV2[] | undefined,
   zigzag: ZigzagParams | undefined,

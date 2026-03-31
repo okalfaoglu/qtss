@@ -46,15 +46,28 @@ Notes:
 
 1. Wave 2 cannot retrace beyond the start of Wave 1.
 2. Wave 3 cannot be the shortest among Waves 1, 3, 5.
-3. **Standard** impulse: wave 4 cannot overlap wave 1 price territory (`impulse.ts` — `w4_no_overlap_w1`). **Diagonal** impulse is a separate variant: overlap allowed; extra rules (`ed_r4_w3_area_gt_w2`, `w5_not_longest_135`, `ld_r3_w5_ge_1382_w4`, `w4_diagonal_mode`). It is **implemented** but **off by default** in the pattern menu (`motive_diagonal: false` in `elliottPatternMenuCatalog.ts`).
+3. **Standard** impulse: wave 4 cannot overlap wave 1 price territory (`impulse.ts` — `w4_no_overlap_w1`). **Diagonal** impulse is a separate variant: overlap allowed; extra rules (`ed_r4_w3_area_gt_w2`, `w5_not_longest_135`, `ld_r3_w5_ge_1382_w4` — **ld_r3 is applied only when `diagonalRole` is `leading`** after `mapLdR3ByDiagonalRole` in `engine.ts`, `w4_diagonal_mode`). Diagonal motive is **on by default** in the pattern menu (`motive_diagonal: true` in `elliottPatternMenuCatalog.ts`); users may disable it.
+
+### Diagonal engine behavior (V2)
+
+`ImpulseCountV2.diagonalRole` (`leading` | `ending` | `unknown`) is chosen from (1) a **chart-window heuristic** (`inferDiagonalRoleFromChart` — early vs late placement on the zigzag pivot list), and/or (2) **MTF parent overlap** when the second pass applies (see below). `ImpulseCountV2.diagonalRoleSource` is `chart_window` or `mtf_parent`. **`unknown` uses the same nested proof path as ending** (3-3-3-3-3-style nested ABC checks per leg). **Leading** uses a 5-3-5-3-5-style path (nested motive on legs 1/3/5, nested corrective on 2/4). Informational check ids: `diagonal_interpret_ending` (`impulse.ts`), `diagonal_role_hint` (`engine.ts`).
+
+### MTF-based `diagonalRole` — v1 (implemented)
+
+**Goal:** Classify a **micro-TF diagonal** (`15m` or `1h`) as **leading** vs **ending** using **parent motive wave-1 vs wave-5** time overlap (first scope: **W1 vs W5** only, not corrective **C**).
+
+**Mechanism:** After all TFs are computed, `applyMtfDiagonalRefinement` (`engine.ts`) runs. It compares the diagonal’s pivot **epoch** span `[min(p0.time,p5.time), max(...)]` to the parent impulse’s **W1** (`p0–p1`) and **W5** (`p4–p5`) spans. Overlap fractions use constants in `diagonalMtf.ts` (`MIN_COVERAGE`, `MARGIN`). **Precedence:** for `15m`, try **`1h`** parent first, then **`4h`**; for `1h`, use **`4h`** only. Parent states with `decision === invalid`** are skipped (no MTF opinion). When MTF yields a clear **leading** or **ending**, the engine **rebuilds** nested diagonal checks via `buildDiagonalSubwaveProof` with `diagonalRoleSource: mtf_parent` and refreshes `decision`.
+
+**Limits:** Wrong parent impulse → wrong role (still a heuristic). **Wave 3** / complex contexts → often **no** MTF hit (chart-only role). **Ending diagonal in C** (not W5) is **not** in v1.
 
 ### Corrective scope
 
 - Enabled: `ABC`, `zigzag (5-3-5)`, `flat (3-3-5)`, `triangle (3-3-3-3-3)`, `W-X-Y / W-X-Y-X-Z`.
 - Notes:
   - Triangle detection is constrained to wave-4 / post-impulse corrective context (not standalone wave-2 default).
-  - Complex combinations are scored as candidates/confirmed via ratio + connector checks.
-  - Diagonal motive is optional (menu); standard motive stays the default.
+  - Complex combinations are scored as candidates/confirmed via ratio + connector checks; **W–X–Y** candidates also require **`comb_r8`** (at most one zigzag-like segment in the **Y** portion) and **`comb_r9`** (if **Y** is long enough, do not accept a triangle-like fit on the **first** six Y pivots when the **last** six Y pivots do not fit the same triangle geometry — triangle expected toward the end of **Y**).
+  - Diagonal motive is optional (menu toggle); both standard and diagonal can be enabled together.
+  - **Chart overlay:** post-impulse ABC (`+…`) uses dedicated `zigzagKind` **`elliott_v2_post_abc`** so **Dashed** is enforced in `TvChartPane` (not overridden by micro impulse styling). If the engine stores a long micro `path`, the **line** uses **corner `pivots` only** when shorter (`adapter.ts`).
 
 ## 5) ZigZag Policy
 
@@ -77,6 +90,8 @@ Notes:
   - structure completeness,
   - ratio proximity (soft scoring).
 
+**`confirmed` (per timeframe state)** — in addition to impulse hard rules, the engine requires **both** wave 2 and wave 4 correctives to satisfy `correctiveIsConfirmed` when those legs are present (`engine.ts`). That includes nested-structure checks where implemented (e.g. zigzag `zz_*_motive5`, flat `flat_*`, triangle `tri_*_corrective3`, combination `comb_confirmed` / `wxyxz_confirmed`). **Diagonal** impulses additionally require the nested diagonal leg checks (`diag_*_corrective3` or `diag_ld_*` by role). A **failed fifth** caps **`confirmed`** unless nested wave-5 **standard** motive evidence exists (`wave5NestedImpulse` with `variant: standard`; inner diagonal does not qualify). Optional nested overlays (`wave1NestedImpulse`, …) remain **informational** for UI and do not by themselves gate `confirmed`.
+
 ## 8) Implementation map (web — drift control)
 
 This document is the **normative** label/color/rule set. The running engine lives under `web/src/lib/elliottEngineV2/`:
@@ -88,7 +103,7 @@ This document is the **normative** label/color/rule set. The running engine live
 | Hard checks (compression, overlap-style guards) | `tezWaveChecks.ts`, `engine.ts` |
 | ZigZag-driven pivots | `zigzag.ts` |
 | Chart overlays: labels, line styles, per-TF coloring hooks | `adapter.ts` (label glyphs per TF; colors often supplied via `elliottWaveAppConfig` / chart layer) |
-| Engine orchestration, state merge across TFs | `engine.ts` |
+| Engine orchestration, state merge across TFs, `confirmed` gates, diagonal role + nested proofs | `engine.ts`, `diagonalMtf.ts` — MTF `diagonalRole` refinement **§4** |
 | **Forward projection (İleri Fib / Elliott projeksiyon)** | `projection.ts` — `buildElliottProjectionOverlayV2` — behavior **§8.1**, limits / roadmap **§8.2** |
 | Public exports | `index.ts` |
 

@@ -142,6 +142,8 @@ function zigzagLineOptions(
       return applyOverride({ color: "#43A047", lineWidth: 3, lineStyle: LineStyle.Dashed });
     case "elliott_v2_micro":
       return applyOverride({ color: "#FB8C00", lineWidth: 2, lineStyle: LineStyle.Dotted });
+    case "elliott_v2_post_abc":
+      return applyOverride({ color: "#FB8C00", lineWidth: 2, lineStyle: LineStyle.Dashed });
     case "elliott_v2_zigzag_macro":
       return applyOverride({ color: "#90CAF9", lineWidth: 2, lineStyle: LineStyle.Dashed });
     case "elliott_v2_zigzag_intermediate":

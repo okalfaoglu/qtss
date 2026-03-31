@@ -93,6 +93,8 @@ export type ZigzagLayerKind =
   | "elliott_v2_macro"
   | "elliott_v2_intermediate"
   | "elliott_v2_micro"
+  /** Post–P5 düzeltme (+a/+b/+c); grafikte her zaman kesik çizgi (tamamlanmamış öngörü). */
+  | "elliott_v2_post_abc"
   | "elliott_v2_zigzag_macro"
   | "elliott_v2_zigzag_intermediate"
   | "elliott_v2_zigzag_micro"

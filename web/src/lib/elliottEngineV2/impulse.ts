@@ -161,6 +161,13 @@ function checksBullDiagonal(
     detail: "w4, w1 bölgesine girebilir (standart bindirme yasağı uygulanmaz)",
   });
 
+  checks.push({
+    id: "diagonal_interpret_ending",
+    passed: true,
+    detail:
+      "Single 5-wave diagonal window is interpreted as ending diagonal; leading diagonal is not inferred without parent context.",
+  });
+
   const trendShape = p3.price > p1.price && p5.price >= p3.price - EPS;
   checks.push({ id: "trend_shape", passed: trendShape });
 
@@ -173,6 +180,7 @@ function checksBullDiagonal(
       : `kısaltılmış beşinci olası (P5≤P3)`,
   });
 
+  /** `ld_r3` is leading-diagonal guidance; generic diagonal includes ending diagonals where this ratio may not apply. */
   const hardFail = checks.some(
     (c) =>
       !c.passed &&
@@ -180,8 +188,7 @@ function checksBullDiagonal(
         c.id.startsWith("w2_") ||
         c.id.startsWith("w3_") ||
         c.id.startsWith("w5_") ||
-        c.id === "ed_r4_w3_area_gt_w2" ||
-        c.id === "ld_r3_w5_ge_1382_w4"),
+        c.id === "ed_r4_w3_area_gt_w2"),
   );
   const score = checks.filter((c) => c.passed).length;
   return { checks, hardFail, score };
@@ -335,6 +342,13 @@ function checksBearDiagonal(
     detail: "w4, w1 bölgesine girebilir (standart bindirme yasağı uygulanmaz)",
   });
 
+  checks.push({
+    id: "diagonal_interpret_ending",
+    passed: true,
+    detail:
+      "Single 5-wave diagonal window is interpreted as ending diagonal; leading diagonal is not inferred without parent context.",
+  });
+
   const trendShape = p3.price < p1.price && p5.price <= p3.price + EPS;
   checks.push({ id: "trend_shape", passed: trendShape });
 
@@ -347,6 +361,7 @@ function checksBearDiagonal(
       : `kısaltılmış beşinci olası (P5≥P3)`,
   });
 
+  /** `ld_r3` is leading-diagonal guidance; do not hard-invalidate generic diagonal candidates. */
   const hardFail = checks.some(
     (c) =>
       !c.passed &&
@@ -354,8 +369,7 @@ function checksBearDiagonal(
         c.id.startsWith("w2_") ||
         c.id.startsWith("w3_") ||
         c.id.startsWith("w5_") ||
-        c.id === "ed_r4_w3_area_gt_w2" ||
-        c.id === "ld_r3_w5_ge_1382_w4"),
+        c.id === "ed_r4_w3_area_gt_w2"),
   );
   const score = checks.filter((c) => c.passed).length;
   return { checks, hardFail, score };

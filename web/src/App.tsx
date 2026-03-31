@@ -10,6 +10,7 @@ import {
   fetchHealth,
   fetchMarketBarsRecent,
   oauthTokenPassword,
+  oauthTokenRefresh,
   scanChannelSix,
   upsertAppConfig,
   type ChannelSixRejectJson,
@@ -317,6 +318,7 @@ function readEnvHint(): { clientId: string; clientSecret: string; email: string;
 
 /** OAuth access token — Ctrl+F5 / tam yenilemede oturum kalsın diye `localStorage` (Çıkış ile silinir). */
 const ACCESS_TOKEN_STORAGE_KEY = "qtss_access_token";
+const ACCESS_TOKEN_EXP_MS_STORAGE_KEY = "qtss_access_token_exp_ms";
 
 function readStoredAccessToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -333,6 +335,17 @@ function readStoredRefreshToken(): string | null {
   try {
     const t = localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
     return t != null && t.trim() !== "" ? t.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function readStoredAccessExpMs(): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(ACCESS_TOKEN_EXP_MS_STORAGE_KEY);
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : null;
   } catch {
     return null;
   }
@@ -371,6 +384,7 @@ export default function App() {
         localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, token);
       } else {
         localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+        localStorage.removeItem(ACCESS_TOKEN_EXP_MS_STORAGE_KEY);
         localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
       }
     } catch {
@@ -401,6 +415,49 @@ export default function App() {
       configureApiAuth(null);
     };
   }, []);
+
+  // Proactive refresh: refresh access_token shortly before expiry.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!token) return;
+    let cancelled = false;
+    let to: number | null = null;
+    async function arm() {
+      const expMs = readStoredAccessExpMs();
+      const rt = readStoredRefreshToken();
+      const clientId = import.meta.env.VITE_OAUTH_CLIENT_ID ?? "";
+      const clientSecret = import.meta.env.VITE_OAUTH_CLIENT_SECRET ?? "";
+      if (!expMs || !rt || !clientId || !clientSecret) return;
+      const now = Date.now();
+      const refreshAt = expMs - 30_000; // 30s early
+      const delay = Math.max(1000, refreshAt - now);
+      to = window.setTimeout(async () => {
+        try {
+          const tr = await oauthTokenRefresh({ refreshToken: rt, clientId, clientSecret });
+          if (cancelled) return;
+          setToken(tr.access_token);
+          try {
+            const nextRt = tr.refresh_token?.trim() ? tr.refresh_token.trim() : rt.trim();
+            localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, nextRt);
+            localStorage.setItem(
+              ACCESS_TOKEN_EXP_MS_STORAGE_KEY,
+              String(Date.now() + Math.max(0, (tr.expires_in ?? 0) * 1000)),
+            );
+          } catch {
+            /* ignore */
+          }
+        } catch {
+          // If refresh fails, force logout so UI doesn't spam 401 forever.
+          if (!cancelled) setToken(null);
+        }
+      }, delay);
+    }
+    void arm();
+    return () => {
+      cancelled = true;
+      if (to != null) window.clearTimeout(to);
+    };
+  }, [token]);
   const [authSession, setAuthSession] = useState<AuthSession | null>(null);
   const [authMeErr, setAuthMeErr] = useState("");
   const [authMeLoading, setAuthMeLoading] = useState(false);
@@ -1853,6 +1910,10 @@ export default function App() {
           const rt = tok.refresh_token?.trim() ?? "";
           if (rt) localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, rt);
           else localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+          localStorage.setItem(
+            ACCESS_TOKEN_EXP_MS_STORAGE_KEY,
+            String(Date.now() + Math.max(0, (tok.expires_in ?? 0) * 1000)),
+          );
         }
       } catch {
         /* private mode, quota */
