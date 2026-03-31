@@ -12,9 +12,9 @@ The chart anchor is `15m`. `1h` and `4h` are rendered as overlays on the same ch
 
 ## 2) Naming and Labeling
 
-- `4h` labels:
-  - Impulse: `1 2 3 4 5`
-  - Corrective: `A B C`
+- `4h` labels (default glyphs in `adapter.ts`):
+  - Impulse: `① ② ③ ④ ⑤`
+  - Corrective: `Ⓐ Ⓑ Ⓒ`
 - `1h` labels:
   - Impulse: `(1) (2) (3) (4) (5)`
   - Corrective: `(A) (B) (C)`
@@ -22,13 +22,23 @@ The chart anchor is `15m`. `1h` and `4h` are rendered as overlays on the same ch
   - Impulse: `i ii iii iv v`
   - Corrective: `a b c`
 
+Nested formations (optional, `show_nested_formations`):
+
+- Nested impulse legs (wave 1/3/5 internals): `n1..n5`, `u1..u5`, `v1..v5`
+- Nested corrective inside wave 2/4: `w2·a w2·b w2·c`, `w4·a w4·b w4·c` (marker text uses the same glyph mapping per TF)
+
 ## 3) Color Standard
 
-- Macro `4h`: `#1E88E5` (blue)
-- Intermediate `1h`: `#43A047` (green)
-- Micro `15m`: `#FB8C00` (orange)
-- Invalidation markers: `#E53935` (red)
-- Neutral/assistive hints: `#B0BEC5`
+Default colors (see `web/src/lib/elliottWaveAppConfig.ts` → `DEFAULT_ELLIOTT_MTF_WAVE_COLORS`):
+
+- Macro `4h`: `#e53935` (red)
+- Intermediate `1h`: `#43a047` (green)
+- Micro `15m`: `#fb8c00` (orange)
+
+Notes:
+
+- Projection layers (`elliott_projection*`) typically reuse the TF base color but with dashed/dotted styles; active-C highlight uses the chart layer palette (`TvChartPane.tsx`).
+- Colors are configurable via `ElliottWaveCard` settings (MTF wave/label/zigzag colors). Keep this section in sync with config defaults when changing palette.
 
 ## 4) Elliott Rule Scope (V2.0)
 
@@ -90,7 +100,7 @@ Chart overlay `zigzagKind: elliott_projection` (isteğe bağlı ikinci yol: `ell
 |--------|-----------|
 | **Zaman / fiyat çapası** | Başlangıç fiyatı ve zamanı **`out.ohlcByTf[sourceTf]` son mumunun `c` / `t`** değeridir (yoksa `anchorRows` son mumu). Ana grafik interval’i farklı olsa bile projeksiyon ilgili TF serisine hizalanır. |
 | **Dalga adımı seçimi** | `postImpulseAbc` varsa `startStepFromPostAbc`; yoksa P5’e göre `startStepFromCurrentState`. A/B teyidi yoksa düzeltme her zaman **A**’dan (`startStep` ≥ 4 zorlanmaz). |
-| **Büyüklük** | İtkı bacak ortalaması `base`; `buildCalibrationFromPostAbc` → `applyFormationCalibrationTweak` (`postImpulseAbc.pattern`: triangle / flat / combination için hafif ölçek). |
+| **Büyüklük** | `base`: itkı 1/3/5 ortalaması + son 14 mum ATR karışımı (`blendedProjectionPriceBase`). `buildCalibrationFromPostAbc` → `applyFormationCalibrationTweak`. Segment fiyat adımı ayrıca ATR tabanlı alt/üst sınırlarla sıkıştırılır (`atrFloor` clamp). |
 | **Süre (zaman ekseni)** | Taban: `Δt ≈ (\|Δprice\| / stepRate) × fibZamanÇarpanı` — `projectionFibTimeMultiplier` klasik bant (0.382 / 0.618 / 1.618 …) ile ölçülen itkı bacak sürelerinin karışımı. `stepSec` (`barHop` × ortalama mum aralığı) bantları ile `clamp`. **Alt sınır:** en az **bir tam mum süresi** (`barPeriodSec`) ve `max(45s, 0.28×stepSec)`. |
 | **İkinci senaryo** | `includeAltScenario` / `show_projection_alt_scenario`: `extendedThirdWaveCalibration` ile daha yüksek 3. dalga hedefi; `zigzagKind: elliott_projection_alt`, işaret sonu `※`; grafikte soluk renk (`scaleElliottHexColor`). |
 | **Piyasa rejimi** | Son ~40 mumun ortalama fiyat/s hızı, itkı ortalama hızına göre **0.48–2.05** çarpanı (`regimeMul`); volatilite artınca süre kısalır. |
