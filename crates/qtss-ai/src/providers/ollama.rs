@@ -47,10 +47,20 @@ impl OllamaProvider {
 }
 
 #[derive(Serialize)]
+struct OllamaOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    num_predict: Option<u32>,
+}
+
+#[derive(Serialize)]
 struct OllamaReq<'a> {
     model: &'a str,
     messages: Vec<OllamaMsg<'a>>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    options: Option<OllamaOptions>,
 }
 
 #[derive(Serialize)]
@@ -93,6 +103,10 @@ impl AiCompletionProvider for OllamaProvider {
             model: req.model.as_str(),
             messages,
             stream: false,
+            options: Some(OllamaOptions {
+                temperature: Some(req.temperature),
+                num_predict: Some(req.max_tokens),
+            }),
         };
         let res = self
             .client

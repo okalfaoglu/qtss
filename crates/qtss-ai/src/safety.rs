@@ -175,6 +175,87 @@ mod tests {
     }
 
     #[test]
+    fn operational_risky_action_requires_reasoning() {
+        let _g = SAFETY_TEST_LOCK.lock().expect("safety test lock");
+        qtss_common::clear_trading_halt();
+        let cfg = SafetyConfig { max_size_multiplier: 2.0 };
+        let no_reason = json!({"action": "full_close"});
+        assert!(validate_operational_decision_safety(&no_reason, &cfg).is_err());
+        let with_reason = json!({"action": "full_close", "reasoning": "stop hit"});
+        assert!(validate_operational_decision_safety(&with_reason, &cfg).is_ok());
+    }
+
+    #[test]
+    fn operational_partial_close_requires_valid_pct() {
+        let _g = SAFETY_TEST_LOCK.lock().expect("safety test lock");
+        qtss_common::clear_trading_halt();
+        let cfg = SafetyConfig { max_size_multiplier: 2.0 };
+        let missing = json!({"action": "partial_close", "reasoning": "x"});
+        assert!(validate_operational_decision_safety(&missing, &cfg).is_err());
+        let zero = json!({"action": "partial_close", "partial_close_pct": 0.0, "reasoning": "x"});
+        assert!(validate_operational_decision_safety(&zero, &cfg).is_err());
+        let ok = json!({"action": "partial_close", "partial_close_pct": 50.0, "reasoning": "x"});
+        assert!(validate_operational_decision_safety(&ok, &cfg).is_ok());
+    }
+
+    #[test]
+    fn operational_trailing_requires_callback() {
+        let _g = SAFETY_TEST_LOCK.lock().expect("safety test lock");
+        qtss_common::clear_trading_halt();
+        let cfg = SafetyConfig { max_size_multiplier: 2.0 };
+        let no_cb = json!({"action": "activate_trailing"});
+        assert!(validate_operational_decision_safety(&no_cb, &cfg).is_err());
+        let ok = json!({"action": "activate_trailing", "trailing_callback_pct": 1.0});
+        assert!(validate_operational_decision_safety(&ok, &cfg).is_ok());
+    }
+
+    #[test]
+    fn operational_safe_action_no_reasoning_ok() {
+        let _g = SAFETY_TEST_LOCK.lock().expect("safety test lock");
+        qtss_common::clear_trading_halt();
+        let cfg = SafetyConfig { max_size_multiplier: 2.0 };
+        let v = json!({"action": "keep"});
+        assert!(validate_operational_decision_safety(&v, &cfg).is_ok());
+        let v2 = json!({"action": "tighten_stop"});
+        assert!(validate_operational_decision_safety(&v2, &cfg).is_ok());
+    }
+
+    #[test]
+    fn strategic_risk_budget_bounds() {
+        let _g = SAFETY_TEST_LOCK.lock().expect("safety test lock");
+        qtss_common::clear_trading_halt();
+        let cfg = SafetyConfig { max_size_multiplier: 2.0 };
+        let bad = json!({"risk_budget_pct": 150.0});
+        assert!(validate_strategic_decision_safety(&bad, &cfg).is_err());
+        let neg = json!({"risk_budget_pct": -5.0});
+        assert!(validate_strategic_decision_safety(&neg, &cfg).is_err());
+        let ok = json!({"risk_budget_pct": 25.0, "max_open_positions": 10});
+        assert!(validate_strategic_decision_safety(&ok, &cfg).is_ok());
+    }
+
+    #[test]
+    fn strategic_max_positions_bounds() {
+        let _g = SAFETY_TEST_LOCK.lock().expect("safety test lock");
+        qtss_common::clear_trading_halt();
+        let cfg = SafetyConfig { max_size_multiplier: 2.0 };
+        let too_high = json!({"max_open_positions": 500});
+        assert!(validate_strategic_decision_safety(&too_high, &cfg).is_err());
+        let neg = json!({"max_open_positions": -1});
+        assert!(validate_strategic_decision_safety(&neg, &cfg).is_err());
+    }
+
+    #[test]
+    fn strategic_symbol_scores_validation() {
+        let _g = SAFETY_TEST_LOCK.lock().expect("safety test lock");
+        qtss_common::clear_trading_halt();
+        let cfg = SafetyConfig { max_size_multiplier: 2.0 };
+        let bad_weight = json!({"symbol_scores": {"BTCUSDT": 1.5}});
+        assert!(validate_strategic_decision_safety(&bad_weight, &cfg).is_err());
+        let ok = json!({"symbol_scores": {"BTCUSDT": 0.8, "ETHUSDT": 0.5}});
+        assert!(validate_strategic_decision_safety(&ok, &cfg).is_ok());
+    }
+
+    #[test]
     fn rejects_when_trading_halted() {
         let _g = SAFETY_TEST_LOCK.lock().expect("safety test lock");
         qtss_common::set_trading_halted(true);

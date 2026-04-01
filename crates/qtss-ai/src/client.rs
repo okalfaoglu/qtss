@@ -12,7 +12,7 @@ use crate::error::AiResult;
 use crate::parser::{parse_operational_decision, parse_portfolio_decision, parse_tactical_decision};
 use crate::providers::{AiCompletionProvider, AiRequest, LayerKind};
 use crate::providers;
-use crate::safety::{SafetyConfig, validate_ai_decision_safety};
+use crate::safety::{SafetyConfig, validate_ai_decision_safety, validate_operational_decision_safety, validate_strategic_decision_safety};
 use crate::storage::{
     decision_exists_for_hash, expire_stale_decisions, insert_ai_decision, insert_ai_decision_error,
     insert_portfolio_directive, insert_position_directive, insert_tactical_decision,
@@ -22,6 +22,49 @@ use qtss_storage::{
     list_enabled_engine_symbols, symbols_with_positive_long_from_fills, AppConfigRepository,
     ExchangeOrderRepository,
 };
+
+/// Provider call with exponential backoff retry (max 3 attempts).
+/// Retries on transient HTTP errors (timeout, 429, 5xx); non-retryable errors propagate immediately.
+async fn complete_with_retry(
+    provider: &dyn AiCompletionProvider,
+    req: &AiRequest,
+) -> crate::error::AiResult<AiResponse> {
+    const MAX_ATTEMPTS: u32 = 3;
+    const BASE_DELAY_MS: u64 = 1000;
+
+    let mut last_err = None;
+    for attempt in 0..MAX_ATTEMPTS {
+        match provider.complete(req).await {
+            Ok(resp) => return Ok(resp),
+            Err(e) => {
+                let retryable = matches!(&e, crate::error::AiError::Http(msg) if
+                    msg.contains("429") ||
+                    msg.contains("500") ||
+                    msg.contains("502") ||
+                    msg.contains("503") ||
+                    msg.contains("504") ||
+                    msg.contains("timeout") ||
+                    msg.contains("timed out") ||
+                    msg.contains("connection")
+                );
+                if !retryable || attempt + 1 == MAX_ATTEMPTS {
+                    return Err(e);
+                }
+                let delay = BASE_DELAY_MS * 2_u64.pow(attempt);
+                tracing::warn!(
+                    provider = provider.provider_id(),
+                    attempt = attempt + 1,
+                    delay_ms = delay,
+                    error = %e,
+                    "retryable LLM error, backing off"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap())
+}
 
 /// Scales `position_size_multiplier` by strategic `portfolio_directive.symbol_weight_0_1` when present (`QTSS_MASTER_DEV_GUIDE` FAZ 6.2).
 fn apply_strategic_portfolio_weight(ctx: &Value, parsed: &mut Value) {
@@ -236,7 +279,7 @@ pub async fn run_tactical_sweep(rt: &AiRuntime) -> AiResult<()> {
             temperature: 0.3,
             model: rt.config().model_tactical.clone(),
         };
-        let resp = match provider.complete(&req).await {
+        let resp = match complete_with_retry(provider.as_ref(), &req).await {
             Ok(r) => r,
             Err(err) => {
                 tracing::warn!(?err, %sym, "tactical LLM call failed");
@@ -375,10 +418,19 @@ pub async fn run_operational_sweep(rt: &AiRuntime) -> AiResult<()> {
             temperature: 0.2,
             model: rt.config().model_operational.clone(),
         };
-        let resp = match provider.complete(&req).await {
+        let resp = match complete_with_retry(provider.as_ref(), &req).await {
             Ok(r) => r,
             Err(err) => {
                 tracing::warn!(?err, %sym, "operational LLM failed");
+                let _ = insert_ai_decision_error(
+                    rt.pool(),
+                    "operational",
+                    Some(&sym),
+                    &ctx,
+                    &format!("provider_error: {err}"),
+                    &json!({ "provider": provider.provider_id() }),
+                )
+                .await;
                 continue;
             }
         };
@@ -386,9 +438,32 @@ pub async fn run_operational_sweep(rt: &AiRuntime) -> AiResult<()> {
             Ok(p) => p,
             Err(err) => {
                 tracing::warn!(%sym, ?err, "operational parse failed");
+                let _ = insert_ai_decision_error(
+                    rt.pool(),
+                    "operational",
+                    Some(&sym),
+                    &ctx,
+                    &format!("parse_error: {err}; raw_head={}", &resp.text.chars().take(400).collect::<String>()),
+                    &json!({ "provider": resp.provider_id, "model": resp.model }),
+                )
+                .await;
                 continue;
             }
         };
+        let safety = SafetyConfig::from_ai_engine_config(rt.config());
+        if let Err(e) = validate_operational_decision_safety(&parsed, &safety) {
+            tracing::warn!(%sym, err = e, "operational decision failed safety");
+            let _ = insert_ai_decision_error(
+                rt.pool(),
+                "operational",
+                Some(&sym),
+                &ctx,
+                &format!("safety: {e}"),
+                &json!({ "parsed": parsed }),
+            )
+            .await;
+            continue;
+        }
         let confidence = parsed.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.75);
         let meta = json!({ "provider": resp.provider_id, "model": resp.model });
         let decision_id = insert_ai_decision(
@@ -444,14 +519,37 @@ pub async fn run_strategic_sweep(rt: &AiRuntime) -> AiResult<()> {
         temperature: 0.35,
         model: rt.config().model_strategic.clone(),
     };
-    let resp = provider.complete(&req).await?;
+    let resp = complete_with_retry(provider.as_ref(), &req).await?;
     let parsed = match parse_portfolio_decision(&resp.text) {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(%e, "strategic portfolio JSON parse failed");
+            let _ = insert_ai_decision_error(
+                rt.pool(),
+                "strategic",
+                None,
+                &ctx,
+                &format!("parse_error: {e}; raw_head={}", &resp.text.chars().take(400).collect::<String>()),
+                &json!({ "provider": resp.provider_id, "model": resp.model }),
+            )
+            .await;
             return Ok(());
         }
     };
+    let safety = SafetyConfig::from_ai_engine_config(rt.config());
+    if let Err(e) = validate_strategic_decision_safety(&parsed, &safety) {
+        tracing::warn!(err = e, "strategic decision failed safety");
+        let _ = insert_ai_decision_error(
+            rt.pool(),
+            "strategic",
+            None,
+            &ctx,
+            &format!("safety: {e}"),
+            &json!({ "parsed": parsed }),
+        )
+        .await;
+        return Ok(());
+    }
     let confidence = parsed.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.7);
     let meta = json!({ "provider": resp.provider_id, "model": resp.model });
     let valid_until = chrono::Utc::now() + chrono::Duration::hours(24 * 7);

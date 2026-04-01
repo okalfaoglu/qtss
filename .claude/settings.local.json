@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo check:*)",
+      "Read(//c/Users/oguzk/.cargo/**)",
+      "Read(//c/Users/oguzk/**)"
+    ]
+  }
+}
