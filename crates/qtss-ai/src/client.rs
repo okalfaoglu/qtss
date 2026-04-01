@@ -174,7 +174,7 @@ fn tactical_system_prompt(cfg: &AiEngineConfig) -> String {
         r#"Rules: aggregate_score > 0.6 without conflict → buy bias; < -0.6 without conflict → sell bias; on conflict → multiplier ≤ 0.5 or no_trade; existing position same direction → prefer no_trade; confidence < 0.5 → no_trade."#
     };
     format!(
-        r#"You are a tactical trading advisor for QTTS. Reply with a single JSON object only (no markdown fences).
+        r#"You are a tactical trading advisor for QTSS. Reply with a single JSON object only (no markdown fences).
 Locale: {locale}. {reasoning_lang}
 Required keys: "direction" (strong_buy|buy|neutral|sell|strong_sell|no_trade), "confidence" (0.0-1.0).
 Directional trades (not neutral/no_trade) MUST include positive "stop_loss_pct" (percent, > 0).

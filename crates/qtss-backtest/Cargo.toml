@@ -14,4 +14,4 @@ thiserror.workspace = true
 tracing.workspace = true
 rust_decimal = { version = "1.36", features = ["serde"] }
 uuid.workspace = true
-rust_decimal_macros = "1.36"
+rust_decimal_macros.workspace = true

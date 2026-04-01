@@ -12,6 +12,7 @@ pub mod feedback;
 pub mod layers;
 pub mod notify_telegram_config;
 pub mod parser;
+/// Binance / provider secret resolution — crate-private; use `providers` and `config` entry points.
 mod provider_secrets;
 pub mod providers;
 pub mod safety;
@@ -20,6 +21,7 @@ pub mod storage;
 pub use client::{
     hash_context, run_operational_sweep, run_strategic_sweep, run_tactical_sweep, AiRuntime,
 };
+pub use feedback::{outcome_stats_for_prompt, record_decision_outcome};
 pub use storage::mirror_approval_request_outcome_to_linked_ai_decisions;
 pub use config::AiEngineConfig;
 pub use error::{AiError, AiResult};

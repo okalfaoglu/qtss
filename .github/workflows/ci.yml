@@ -61,4 +61,5 @@ jobs:
           node-version: "20"
       - run: npm ci
       - run: npm run i18n:check
+      - run: npm test
       - run: npm run build
