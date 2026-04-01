@@ -7,10 +7,11 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
 use crate::approval::maybe_auto_approve;
+use crate::circuit_breaker::CircuitBreaker;
 use crate::config::AiEngineConfig;
 use crate::error::AiResult;
 use crate::parser::{parse_operational_decision, parse_portfolio_decision, parse_tactical_decision};
-use crate::providers::{AiCompletionProvider, AiRequest, LayerKind};
+use crate::providers::{AiCompletionProvider, AiRequest, AiResponse, LayerKind};
 use crate::providers;
 use crate::safety::{SafetyConfig, validate_ai_decision_safety, validate_operational_decision_safety, validate_strategic_decision_safety};
 use crate::storage::{
@@ -23,19 +24,31 @@ use qtss_storage::{
     ExchangeOrderRepository,
 };
 
-/// Provider call with exponential backoff retry (max 3 attempts).
+/// Provider call with exponential backoff retry (max 3 attempts) and circuit breaker.
 /// Retries on transient HTTP errors (timeout, 429, 5xx); non-retryable errors propagate immediately.
 async fn complete_with_retry(
     provider: &dyn AiCompletionProvider,
     req: &AiRequest,
+    breaker: &CircuitBreaker,
 ) -> crate::error::AiResult<AiResponse> {
+    if !breaker.allow() {
+        return Err(crate::error::AiError::http(format!(
+            "circuit breaker open for provider {} ({} consecutive failures)",
+            provider.provider_id(),
+            breaker.consecutive_failures(),
+        )));
+    }
+
     const MAX_ATTEMPTS: u32 = 3;
     const BASE_DELAY_MS: u64 = 1000;
 
     let mut last_err = None;
     for attempt in 0..MAX_ATTEMPTS {
         match provider.complete(req).await {
-            Ok(resp) => return Ok(resp),
+            Ok(resp) => {
+                breaker.record_success();
+                return Ok(resp);
+            }
             Err(e) => {
                 let retryable = matches!(&e, crate::error::AiError::Http(msg) if
                     msg.contains("429") ||
@@ -48,6 +61,7 @@ async fn complete_with_retry(
                     msg.contains("connection")
                 );
                 if !retryable || attempt + 1 == MAX_ATTEMPTS {
+                    breaker.record_failure();
                     return Err(e);
                 }
                 let delay = BASE_DELAY_MS * 2_u64.pow(attempt);
@@ -63,6 +77,7 @@ async fn complete_with_retry(
             }
         }
     }
+    breaker.record_failure();
     Err(last_err.unwrap())
 }
 
@@ -119,6 +134,9 @@ pub struct AiRuntime {
     tactical_provider: Option<Arc<dyn AiCompletionProvider>>,
     operational_provider: Option<Arc<dyn AiCompletionProvider>>,
     strategic_provider: Option<Arc<dyn AiCompletionProvider>>,
+    tactical_breaker: Arc<CircuitBreaker>,
+    operational_breaker: Arc<CircuitBreaker>,
+    strategic_breaker: Arc<CircuitBreaker>,
     notify: Option<NotificationDispatcher>,
 }
 
@@ -162,6 +180,9 @@ impl AiRuntime {
             tactical_provider,
             operational_provider,
             strategic_provider,
+            tactical_breaker: Arc::new(CircuitBreaker::new(5, 120)),
+            operational_breaker: Arc::new(CircuitBreaker::new(5, 120)),
+            strategic_breaker: Arc::new(CircuitBreaker::new(3, 300)),
             notify,
         })
     }
@@ -195,6 +216,21 @@ impl AiRuntime {
     pub fn notify_dispatcher(&self) -> Option<&NotificationDispatcher> {
         self.notify.as_ref()
     }
+
+    #[inline]
+    pub fn tactical_breaker(&self) -> &CircuitBreaker {
+        &self.tactical_breaker
+    }
+
+    #[inline]
+    pub fn operational_breaker(&self) -> &CircuitBreaker {
+        &self.operational_breaker
+    }
+
+    #[inline]
+    pub fn strategic_breaker(&self) -> &CircuitBreaker {
+        &self.strategic_breaker
+    }
 }
 
 /// Stable hash for deduplicating identical contexts (SHA‑256 hex).
@@ -204,7 +240,29 @@ pub fn hash_context(snapshot: &Value) -> String {
     hex::encode(out)
 }
 
-fn tactical_system_prompt(cfg: &AiEngineConfig) -> String {
+/// Resolve system prompt: DB override (`app_config` key) → hardcoded default.
+async fn resolve_system_prompt(pool: &PgPool, config_key: &str, default_fn: impl FnOnce() -> String) -> String {
+    let repo = AppConfigRepository::new(pool.clone());
+    match repo.get_by_key(config_key).await {
+        Ok(Some(row)) => {
+            if let Some(s) = row.value.as_str() {
+                if !s.trim().is_empty() {
+                    return s.to_string();
+                }
+            }
+            // value might be {"prompt": "..."} object
+            if let Some(s) = row.value.get("prompt").and_then(|v| v.as_str()) {
+                if !s.trim().is_empty() {
+                    return s.to_string();
+                }
+            }
+            default_fn()
+        }
+        _ => default_fn(),
+    }
+}
+
+fn tactical_system_prompt_default(cfg: &AiEngineConfig) -> String {
     let locale = cfg.output_locale.as_deref().unwrap_or("en");
     let reasoning_lang = if locale.to_lowercase().starts_with("tr") {
         "`reasoning` alanını Türkçe ve kısa yaz."
@@ -223,22 +281,24 @@ Required keys: "direction" (strong_buy|buy|neutral|sell|strong_sell|no_trade), "
 Directional trades (not neutral/no_trade) MUST include positive "stop_loss_pct" (percent, > 0).
 Optional: "position_size_multiplier" (0.0-2.0), "take_profit_pct", "entry_price_hint", "reasoning".
 Context may include `portfolio_directive` from the strategic layer: honor `symbol_weight_0_1`, `preferred_regime`, and `risk_budget_pct` when deciding direction and size.
+Context may include `ai_feedback` with past decision outcomes (win_rate, avg_pnl_pct): factor these into confidence calibration.
 {criteria}
 Temperature: conservative; output JSON only."#
     )
 }
 
-fn operational_system_prompt(cfg: &AiEngineConfig) -> String {
+fn operational_system_prompt_default(cfg: &AiEngineConfig) -> String {
     let locale = cfg.output_locale.as_deref().unwrap_or("en");
     format!(
         r#"You manage open positions for QTSS (operational layer). Reply JSON only, locale {locale}.
 Required: "action" one of: keep, tighten_stop, widen_stop, activate_trailing, deactivate_trailing, partial_close, full_close, add_to_position.
 Optional: new_stop_loss_pct, new_take_profit_pct, trailing_callback_pct, partial_close_pct, reasoning.
+Context may include `ai_feedback` with past decision outcomes for this symbol: use win_rate and avg_pnl_pct to calibrate risk.
 Never loosen stops without justification; prefer protecting capital."#
     )
 }
 
-fn strategic_system_prompt(cfg: &AiEngineConfig) -> String {
+fn strategic_system_prompt_default(cfg: &AiEngineConfig) -> String {
     let locale = cfg.output_locale.as_deref().unwrap_or("en");
     format!(
         r#"You are the strategic portfolio advisor for QTSS. Reply JSON only, locale {locale}.
@@ -247,7 +307,16 @@ No prose outside JSON."#
     )
 }
 
+/// `app_config` keys for prompt overrides.
+const PROMPT_KEY_TACTICAL: &str = "ai_prompt_tactical";
+const PROMPT_KEY_OPERATIONAL: &str = "ai_prompt_operational";
+const PROMPT_KEY_STRATEGIC: &str = "ai_prompt_strategic";
+
+/// Max concurrent tactical LLM calls per sweep.
+const TACTICAL_MAX_CONCURRENCY: usize = 6;
+
 /// One full tactical sweep over enabled engine symbols (FAZ 4.2 / 5).
+/// Symbols are processed concurrently up to [`TACTICAL_MAX_CONCURRENCY`].
 pub async fn run_tactical_sweep(rt: &AiRuntime) -> AiResult<()> {
     expire_stale_decisions(rt.pool()).await?;
     if !rt.config().enabled || !rt.config().tactical_layer_enabled {
@@ -256,131 +325,179 @@ pub async fn run_tactical_sweep(rt: &AiRuntime) -> AiResult<()> {
     let Some(provider) = rt.tactical_provider() else {
         return Ok(());
     };
-    let safety = SafetyConfig::from_ai_engine_config(rt.config());
     let symbols = list_enabled_engine_symbols(rt.pool()).await?;
+
+    // Resolve prompt once (DB override or default).
+    let cfg_clone = rt.config().clone();
+    let system_prompt: Arc<str> = Arc::from(
+        resolve_system_prompt(rt.pool(), PROMPT_KEY_TACTICAL, || tactical_system_prompt_default(&cfg_clone)).await,
+    );
+
+    // Shared references for spawned tasks.
+    let pool = rt.pool().clone();
+    let config = rt.config().clone();
+    let provider = Arc::clone(provider);
+    let breaker = Arc::clone(&rt.tactical_breaker);
+    let notify = rt.notify_dispatcher().cloned();
+
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(TACTICAL_MAX_CONCURRENCY));
+    let mut handles = Vec::with_capacity(symbols.len());
+
     for e in symbols {
         let sym = e.symbol.clone();
-        let ctx = match crate::context_builder::build_tactical_context(rt.pool(), &sym).await {
-            Ok(c) => c,
-            Err(err) => {
-                tracing::warn!(?err, %sym, "tactical context build failed");
-                continue;
+        let pool = pool.clone();
+        let config = config.clone();
+        let provider = Arc::clone(&provider);
+        let breaker = Arc::clone(&breaker);
+        let notify = notify.clone();
+        let sem = Arc::clone(&semaphore);
+        let prompt = Arc::clone(&system_prompt);
+
+        let handle = tokio::spawn(async move {
+            let _permit = sem.acquire().await;
+            if let Err(err) = run_tactical_single(
+                &pool, &config, provider.as_ref(), &breaker, notify.as_ref(), &sym, &prompt,
+            )
+            .await
+            {
+                tracing::warn!(%sym, ?err, "tactical sweep symbol error");
             }
-        };
-        let h = hash_context(&ctx);
-        if decision_exists_for_hash(rt.pool(), &h, 30).await? {
-            continue;
-        }
-        let user = serde_json::to_string_pretty(&ctx).unwrap_or_else(|_| "{}".to_string());
-        let req = AiRequest {
-            system: Some(tactical_system_prompt(rt.config())),
-            user,
-            max_tokens: rt.config().max_tokens_tactical,
-            temperature: 0.3,
-            model: rt.config().model_tactical.clone(),
-        };
-        let resp = match complete_with_retry(provider.as_ref(), &req).await {
-            Ok(r) => r,
-            Err(err) => {
-                tracing::warn!(?err, %sym, "tactical LLM call failed");
-                let _ = insert_ai_decision_error(
-                    rt.pool(),
-                    "tactical",
-                    Some(&sym),
-                    &ctx,
-                    &format!("provider_error: {err}"),
-                    &json!({ "provider": provider.provider_id() }),
-                )
-                .await;
-                continue;
-            }
-        };
-        let mut parsed = match parse_tactical_decision(&resp.text) {
-            Ok(p) => p,
-            Err(err) => {
-                let _ = insert_ai_decision_error(
-                    rt.pool(),
-                    "tactical",
-                    Some(&sym),
-                    &ctx,
-                    &format!("parse_error: {err}; raw_head={}", &resp.text.chars().take(400).collect::<String>()),
-                    &json!({
-                        "provider": resp.provider_id,
-                        "model": resp.model,
-                    }),
-                )
-                .await;
-                continue;
-            }
-        };
-        apply_strategic_portfolio_weight(&ctx, &mut parsed);
-        let direction = parsed
-            .get("direction")
-            .and_then(|x| x.as_str())
-            .unwrap_or("");
-        if direction == "no_trade" {
-            tracing::info!(%sym, "tactical LLM returned no_trade; skipping persistence");
-            continue;
-        }
-        let confidence = parsed.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.0);
-        if confidence + f64::EPSILON < rt.config().require_min_confidence {
-            tracing::info!(
-                %sym,
-                confidence,
-                min = rt.config().require_min_confidence,
-                "below minimum confidence; skipping persistence"
-            );
-            continue;
-        }
-        if let Err(e) = validate_ai_decision_safety(&parsed, &safety) {
-            tracing::warn!(%sym, err = e, "tactical decision failed safety");
+        });
+        handles.push(handle);
+    }
+
+    for h in handles {
+        let _ = h.await;
+    }
+    Ok(())
+}
+
+/// Process a single symbol in the tactical sweep.
+async fn run_tactical_single(
+    pool: &PgPool,
+    config: &AiEngineConfig,
+    provider: &dyn AiCompletionProvider,
+    breaker: &CircuitBreaker,
+    notify: Option<&NotificationDispatcher>,
+    sym: &str,
+    system_prompt: &str,
+) -> AiResult<()> {
+    let safety = SafetyConfig::from_ai_engine_config(config);
+    let ctx = crate::context_builder::build_tactical_context(pool, sym).await?;
+    let h = hash_context(&ctx);
+    if decision_exists_for_hash(pool, &h, 30).await? {
+        return Ok(());
+    }
+    let user = serde_json::to_string_pretty(&ctx).unwrap_or_else(|_| "{}".to_string());
+    let req = AiRequest {
+        system: Some(system_prompt.to_string()),
+        user,
+        max_tokens: config.max_tokens_tactical,
+        temperature: 0.3,
+        model: config.model_tactical.clone(),
+    };
+    let resp = match complete_with_retry(provider, &req, breaker).await {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::warn!(?err, %sym, "tactical LLM call failed");
             let _ = insert_ai_decision_error(
-                rt.pool(),
+                pool,
                 "tactical",
-                Some(&sym),
+                Some(sym),
                 &ctx,
-                &format!("safety: {e}"),
-                &json!({ "parsed": parsed }),
+                &format!("provider_error: {err}"),
+                &json!({ "provider": provider.provider_id() }),
             )
             .await;
-            continue;
+            return Ok(());
         }
-        let valid_until = chrono::Utc::now()
-            + chrono::Duration::seconds(rt.config().decision_ttl_secs as i64);
-        let meta = json!({
-            "provider": resp.provider_id,
-            "model": resp.model,
-            "endpoint_host_hint": std::env::var("QTSS_AI_OPENAI_COMPAT_BASE_URL").ok().as_deref()
-                .map(|s| s.split("//").nth(1).unwrap_or(s).split('/').next().unwrap_or("")),
-        });
-        let decision_id = insert_ai_decision(
-            rt.pool(),
-            "tactical",
-            Some(&sym),
-            Some(&resp.model),
-            Some(&h),
-            &ctx,
-            Some(&resp.text),
-            Some(&parsed),
-            Some(confidence),
-            rt.config().decision_ttl_secs,
-            None,
-            &meta,
-        )
-        .await?;
-        insert_tactical_decision(rt.pool(), decision_id, &sym, &parsed, valid_until).await?;
-        maybe_auto_approve(
-            rt.pool(),
-            decision_id,
-            confidence,
-            rt.config(),
-            rt.notify_dispatcher(),
-            Some(&sym),
-            Some(direction),
-            parsed.get("reasoning").and_then(|x| x.as_str()),
-        )
-        .await?;
+    };
+    let mut parsed = match parse_tactical_decision(&resp.text) {
+        Ok(p) => p,
+        Err(err) => {
+            let _ = insert_ai_decision_error(
+                pool,
+                "tactical",
+                Some(sym),
+                &ctx,
+                &format!("parse_error: {err}; raw_head={}", &resp.text.chars().take(400).collect::<String>()),
+                &json!({
+                    "provider": resp.provider_id,
+                    "model": resp.model,
+                }),
+            )
+            .await;
+            return Ok(());
+        }
+    };
+    apply_strategic_portfolio_weight(&ctx, &mut parsed);
+    let direction = parsed
+        .get("direction")
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    if direction == "no_trade" {
+        tracing::info!(%sym, "tactical LLM returned no_trade; skipping persistence");
+        return Ok(());
     }
+    let confidence = parsed.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.0);
+    if confidence + f64::EPSILON < config.require_min_confidence {
+        tracing::info!(
+            %sym,
+            confidence,
+            min = config.require_min_confidence,
+            "below minimum confidence; skipping persistence"
+        );
+        return Ok(());
+    }
+    if let Err(e) = validate_ai_decision_safety(&parsed, &safety) {
+        tracing::warn!(%sym, err = e, "tactical decision failed safety");
+        let _ = insert_ai_decision_error(
+            pool,
+            "tactical",
+            Some(sym),
+            &ctx,
+            &format!("safety: {e}"),
+            &json!({ "parsed": parsed }),
+        )
+        .await;
+        return Ok(());
+    }
+    let valid_until = chrono::Utc::now()
+        + chrono::Duration::seconds(config.decision_ttl_secs as i64);
+    let meta = json!({
+        "provider": resp.provider_id,
+        "model": resp.model,
+        "endpoint_host_hint": std::env::var("QTSS_AI_OPENAI_COMPAT_BASE_URL").ok().as_deref()
+            .map(|s| s.split("//").nth(1).unwrap_or(s).split('/').next().unwrap_or("")),
+        "usage": resp.usage,
+    });
+    let decision_id = insert_ai_decision(
+        pool,
+        "tactical",
+        Some(sym),
+        Some(&resp.model),
+        Some(&h),
+        &ctx,
+        Some(&resp.text),
+        Some(&parsed),
+        Some(confidence),
+        config.decision_ttl_secs,
+        None,
+        &meta,
+    )
+    .await?;
+    insert_tactical_decision(pool, decision_id, sym, &parsed, valid_until).await?;
+    maybe_auto_approve(
+        pool,
+        decision_id,
+        confidence,
+        config,
+        notify,
+        Some(sym),
+        Some(direction),
+        parsed.get("reasoning").and_then(|x| x.as_str()),
+    )
+    .await?;
     Ok(())
 }
 
@@ -418,7 +535,7 @@ pub async fn run_operational_sweep(rt: &AiRuntime) -> AiResult<()> {
             temperature: 0.2,
             model: rt.config().model_operational.clone(),
         };
-        let resp = match complete_with_retry(provider.as_ref(), &req).await {
+        let resp = match complete_with_retry(provider.as_ref(), &req, rt.operational_breaker()).await {
             Ok(r) => r,
             Err(err) => {
                 tracing::warn!(?err, %sym, "operational LLM failed");
@@ -465,7 +582,7 @@ pub async fn run_operational_sweep(rt: &AiRuntime) -> AiResult<()> {
             continue;
         }
         let confidence = parsed.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.75);
-        let meta = json!({ "provider": resp.provider_id, "model": resp.model });
+        let meta = json!({ "provider": resp.provider_id, "model": resp.model, "usage": resp.usage });
         let decision_id = insert_ai_decision(
             rt.pool(),
             "operational",
@@ -519,7 +636,7 @@ pub async fn run_strategic_sweep(rt: &AiRuntime) -> AiResult<()> {
         temperature: 0.35,
         model: rt.config().model_strategic.clone(),
     };
-    let resp = complete_with_retry(provider.as_ref(), &req).await?;
+    let resp = complete_with_retry(provider.as_ref(), &req, rt.strategic_breaker()).await?;
     let parsed = match parse_portfolio_decision(&resp.text) {
         Ok(p) => p,
         Err(e) => {
@@ -551,7 +668,7 @@ pub async fn run_strategic_sweep(rt: &AiRuntime) -> AiResult<()> {
         return Ok(());
     }
     let confidence = parsed.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.7);
-    let meta = json!({ "provider": resp.provider_id, "model": resp.model });
+    let meta = json!({ "provider": resp.provider_id, "model": resp.model, "usage": resp.usage });
     let valid_until = chrono::Utc::now() + chrono::Duration::hours(24 * 7);
     let decision_id = insert_ai_decision(
         rt.pool(),

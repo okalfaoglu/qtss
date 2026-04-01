@@ -43,11 +43,19 @@ pub struct AiRequest {
     pub model: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AiUsage {
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiResponse {
     pub text: String,
     pub model: String,
     pub provider_id: String,
+    #[serde(default)]
+    pub usage: Option<AiUsage>,
 }
 
 #[async_trait]

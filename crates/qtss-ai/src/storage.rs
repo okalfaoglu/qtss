@@ -813,6 +813,51 @@ pub async fn insert_ai_decision_outcome(
     Ok(id)
 }
 
+/// Per-symbol outcome stats for tactical/operational feedback (FAZ P2).
+pub async fn fetch_symbol_outcome_stats(pool: &PgPool, symbol: &str, n: i64) -> AiResult<Value> {
+    let sym = symbol.trim().to_uppercase();
+    let lim = n.clamp(1, 100);
+    let rows: Vec<(String, Option<f64>, Option<f64>)> = sqlx::query_as(
+        r#"SELECT o.outcome, o.pnl_pct, o.pnl_usdt
+           FROM ai_decision_outcomes o
+           JOIN ai_decisions d ON d.id = o.decision_id
+           WHERE d.symbol = $1
+           ORDER BY o.recorded_at DESC
+           LIMIT $2"#,
+    )
+    .bind(&sym)
+    .bind(lim)
+    .fetch_all(pool)
+    .await?;
+    if rows.is_empty() {
+        return Ok(Value::Null);
+    }
+    let mut wins = 0_i64;
+    let mut losses = 0_i64;
+    let mut sum_pnl = 0.0_f64;
+    let mut count_pnl = 0_i64;
+    for (outcome, pnl_pct, _) in &rows {
+        match outcome.as_str() {
+            "profit" => wins += 1,
+            "loss" => losses += 1,
+            _ => {}
+        }
+        if let Some(p) = pnl_pct {
+            sum_pnl += p;
+            count_pnl += 1;
+        }
+    }
+    let total = rows.len() as f64;
+    Ok(serde_json::json!({
+        "symbol": sym,
+        "sample_size": rows.len(),
+        "win_rate": if total > 0.0 { wins as f64 / total } else { 0.0 },
+        "avg_pnl_pct": if count_pnl > 0 { sum_pnl / count_pnl as f64 } else { 0.0 },
+        "wins": wins,
+        "losses": losses,
+    }))
+}
+
 /// Aggregate stats over the last `n` outcomes (FAZ 6.3 — strategic context).
 pub async fn fetch_recent_outcome_stats(pool: &PgPool, n: i64) -> AiResult<Value> {
     let lim = n.clamp(1, 500);

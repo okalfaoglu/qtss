@@ -77,9 +77,16 @@ struct Message<'a> {
 }
 
 #[derive(Deserialize)]
+struct AnthropicUsage {
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+}
+
+#[derive(Deserialize)]
 struct MessagesResp {
     content: Vec<ContentBlock>,
     model: Option<String>,
+    usage: Option<AnthropicUsage>,
 }
 
 #[derive(Deserialize)]
@@ -150,10 +157,15 @@ impl AiCompletionProvider for AnthropicProvider {
                 v.as_object().map(|m| m.keys().collect::<Vec<_>>())
             )));
         }
+        let usage = parsed.usage.map(|u| super::AiUsage {
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+        });
         Ok(AiResponse {
             text: out,
             model: parsed.model.unwrap_or_else(|| req.model.clone()),
             provider_id: self.provider_id().to_string(),
+            usage,
         })
     }
 }

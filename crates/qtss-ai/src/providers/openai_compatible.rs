@@ -129,9 +129,16 @@ struct ChatMsg<'a> {
 }
 
 #[derive(Deserialize)]
+struct OpenAiUsage {
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+}
+
+#[derive(Deserialize)]
 struct ChatResp {
     choices: Vec<Choice>,
     model: Option<String>,
+    usage: Option<OpenAiUsage>,
 }
 
 #[derive(Deserialize)]
@@ -215,10 +222,15 @@ impl OpenAiCompatibleProvider {
                 "openai_compat empty choices[0].message.content",
             ));
         }
+        let usage = parsed.usage.map(|u| super::AiUsage {
+            input_tokens: u.prompt_tokens,
+            output_tokens: u.completion_tokens,
+        });
         Ok(AiResponse {
             text,
             model: parsed.model.unwrap_or_else(|| req.model.clone()),
             provider_id: self.provider_id().to_string(),
+            usage,
         })
     }
 }

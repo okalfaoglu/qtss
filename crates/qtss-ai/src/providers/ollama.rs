@@ -137,6 +137,7 @@ impl AiCompletionProvider for OllamaProvider {
             text,
             model: req.model.clone(),
             provider_id: self.provider_id().to_string(),
+            usage: None,
         })
     }
 }

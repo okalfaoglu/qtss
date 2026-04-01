@@ -11,7 +11,7 @@ use qtss_storage::{
 };
 
 use crate::error::{AiError, AiResult};
-use crate::storage::{fetch_active_portfolio_directive, fetch_last_ai_decision_recent};
+use crate::storage::{fetch_active_portfolio_directive, fetch_last_ai_decision_recent, fetch_symbol_outcome_stats};
 
 const BAR_LIMIT: i64 = 20;
 
@@ -121,6 +121,8 @@ pub async fn build_tactical_context(pool: &PgPool, symbol: &str) -> AiResult<Val
         })
         .unwrap_or(Value::Null);
 
+    let ai_feedback = fetch_symbol_outcome_stats(pool, sym, 20).await.unwrap_or(Value::Null);
+
     let portfolio_directive = match fetch_active_portfolio_directive(pool).await? {
         Some(row) => {
             let stale = row
@@ -143,6 +145,7 @@ pub async fn build_tactical_context(pool: &PgPool, symbol: &str) -> AiResult<Val
         "price_context": price_context,
         "open_position": open_position,
         "last_ai_decision": last_ai_decision,
+        "ai_feedback": ai_feedback,
         "portfolio_directive": portfolio_directive,
     }))
 }
@@ -232,11 +235,13 @@ pub async fn build_operational_context(pool: &PgPool, symbol: &str) -> AiResult<
     } else {
         Value::Null
     };
+    let ai_feedback = fetch_symbol_outcome_stats(pool, sym, 20).await.unwrap_or(Value::Null);
     Ok(json!({
         "symbol": sym.to_uppercase(),
         "timestamp_utc": Utc::now(),
         "onchain_signals": onchain,
         "recent_price_stats": recent_price_stats,
+        "ai_feedback": ai_feedback,
         "funding_snapshot": Value::Null,
     }))
 }
