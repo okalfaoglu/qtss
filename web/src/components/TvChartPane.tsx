@@ -48,8 +48,8 @@ type LinePoint = { time: UTCTimestamp; value: number };
 
 type Theme = "dark" | "light";
 
-/** API `max_matches` üst sınırı (32) ile hizalı — TV’deki gibi çoklu formasyon katmanı. */
-const MAX_PATTERN_LAYERS = 32;
+/** Çoklu Elliott + ACP + Fib projeksiyon katmanları (Rust `max_matches` ayrı). */
+const MAX_PATTERN_LAYERS = 40;
 
 const UPPER_PALETTE_DARK = ["#5c8bd6", "#7e57c2", "#26a69a", "#ff9800", "#ec407a", "#42a5f5"];
 const LOWER_PALETTE_DARK = ["#d4a574", "#ba68c8", "#66bb6a", "#ffb74d", "#f48fb1", "#66bb6a"];
@@ -78,35 +78,42 @@ function lineSeriesDataStrictAsc(points: LinePoint[]): LinePoint[] {
   return out;
 }
 
-/** Mum verisi olmayan gelecek zamanlarda projeksiyon çizgisini göstermek için sağ ucu genişlet. */
+/**
+ * Projeksiyon çizgileri son mumdan ileri zaman taşıyor. `setVisibleRange` ile `to`’yu uzatmak
+ * tüm geçmişi aynı piksele sığdırıp zigzag/itkiyi “bozuyor”. Bunun yerine LWC `rightOffset`
+ * ile sağda boş çubuk alanı açılır; mum genişliği korunur.
+ */
 function extendTimeScaleForElliottProjection(
   chart: IChartApi,
   candles: CandlestickData<UTCTimestamp>[],
   layers: PatternLayerOverlay[] | null | undefined,
 ): void {
-  if (!candles.length || !layers?.length) return;
-  const lastT = candles[candles.length - 1].time as number;
+  const ts = chart.timeScale();
+  if (!candles.length) {
+    ts.applyOptions({ rightOffset: 0 });
+    return;
+  }
+  const lastT = candles[candles.length - 1]!.time as number;
   let maxProj = lastT;
-  for (const L of layers) {
-    const k = L.zigzagKind;
-    if (!k?.startsWith("elliott_projection")) continue;
-    for (const p of L.zigzag ?? []) {
-      const t = p.time as number;
-      if (Number.isFinite(t) && t > maxProj) maxProj = t;
+  if (layers?.length) {
+    for (const L of layers) {
+      const k = L.zigzagKind;
+      if (!k?.startsWith("elliott_projection")) continue;
+      for (const p of L.zigzag ?? []) {
+        const t = p.time as number;
+        if (Number.isFinite(t) && t > maxProj) maxProj = t;
+      }
     }
   }
-  if (maxProj <= lastT) return;
-  const pad = Math.max(Math.floor((maxProj - lastT) * 0.08), 86_400);
-  const toT = (maxProj + pad) as UTCTimestamp;
-  let vr = chart.timeScale().getVisibleRange();
-  if (!vr) {
-    chart.timeScale().fitContent();
-    vr = chart.timeScale().getVisibleRange();
+  if (maxProj <= lastT) {
+    ts.applyOptions({ rightOffset: 0 });
+    return;
   }
-  if (!vr) return;
-  if ((vr.to as number) < toT) {
-    chart.timeScale().setVisibleRange({ from: vr.from, to: toT });
-  }
+  const tail = Math.min(8, Math.max(2, candles.length));
+  const t0 = candles[candles.length - tail]!.time as number;
+  const avgBarSec = Math.max(60, (lastT - t0) / Math.max(1, tail - 1));
+  const extraBars = Math.min(240, Math.max(2, Math.ceil((maxProj - lastT) / avgBarSec) + 2));
+  ts.applyOptions({ rightOffset: extraBars });
 }
 
 function zigzagLineOptions(
@@ -537,12 +544,15 @@ export function TvChartPane({
     const syncData = () => {
       const data = marketBarsToCandles(barsRef.current);
       series.setData(data);
+      applyPatternLayers(uppers, lowers, zigs, layersRef.current ?? []);
+      applyUserDrawings(chart, data, theme);
       series.setMarkers(
         mergeAndSortMarkers(markersRef.current, pivotLabelMarkersRef.current, patternLabelMarkersRef.current),
       );
-      applyPatternLayers(uppers, lowers, zigs, layersRef.current ?? []);
-      applyUserDrawings(chart, data, theme);
-      if (data.length > 0) chart.timeScale().fitContent();
+      if (data.length > 0) {
+        chart.timeScale().fitContent();
+        extendTimeScaleForElliottProjection(chart, data, layersRef.current ?? null);
+      }
     };
     syncData();
 
@@ -603,9 +613,9 @@ export function TvChartPane({
     if (!series || !chart) return;
     const data = marketBarsToCandles(bars);
     series.setData(data);
-    series.setMarkers(mergeAndSortMarkers(pivotMarkers, pivotLabelMarkers, patternLabelMarkers));
     applyPatternLayers(upperRefs.current, lowerRefs.current, zigRefs.current, patternLayers, theme);
     applyUserDrawings(chart, data, theme);
+    series.setMarkers(mergeAndSortMarkers(pivotMarkers, pivotLabelMarkers, patternLabelMarkers));
     if (data.length === 0) return;
     if (fitSessionKey !== lastFitSessionKeyRef.current) {
       lastFitSessionKeyRef.current = fitSessionKey;

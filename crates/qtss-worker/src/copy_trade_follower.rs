@@ -1,9 +1,9 @@
 //! Aktif copy abonelikleri + Nansen perp yönü → isteğe bağlı paper emir (dev guide §3.4).
 //!
 //! - `CopyRule.max_latency_ms`: Nansen `data_snapshots` paketinin en eski satırına göre gecikme.
-//! - `QTSS_COPY_TRADE_FOLLOWER_AUTO_PLACE=1` → [`strategy_runner::dry_gateway_from_env`] ile market emri (dry defter).
+//! - `QTSS_COPY_TRADE_FOLLOWER_AUTO_PLACE=1` → [`strategy_runner::dry_gateway_from_pool`] ile market emri (dry defter).
+//! - `QTSS_BINANCE_USER_STREAM_ENABLED=1` iken tick üst sınırı 120s (`min(config, 120)`) — dolumlar WS ile DB’ye düştüğünde daha sık kontrol.
 
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,10 +15,12 @@ use qtss_domain::orders::{OrderIntent, OrderSide, OrderType, TimeInForce};
 use qtss_domain::symbol::InstrumentId;
 use qtss_execution::ExecutionGateway;
 use qtss_storage::{
-    data_snapshot_age_secs, fetch_data_snapshot, list_recent_bars, CopySubscriptionRepository,
-    CopySubscriptionRow,
+    data_snapshot_age_secs, fetch_data_snapshot, list_recent_bars, resolve_system_decimal,
+    resolve_system_f64, resolve_worker_enabled_flag, CopySubscriptionRepository, CopySubscriptionRow,
 };
-use qtss_strategy::risk::{apply_kelly_scale_to_qty, clamp_qty_by_max_notional_usdt};
+use qtss_strategy::risk::{
+    apply_kelly_scale_to_qty, clamp_qty_by_max_notional_usdt, kelly_qty_scale,
+};
 use rust_decimal::Decimal;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -26,7 +28,7 @@ use tracing::{info, warn};
 
 use crate::data_sources::registry::REGISTERED_NANSEN_HTTP_KEYS;
 use crate::signal_scorer::score_nansen_perp_direction;
-use crate::strategy_runner::dry_gateway_from_env;
+use crate::strategy_runner::dry_gateway_from_pool;
 
 const NANSEN_PERP_TRADES_KEY: &str = "nansen_perp_trades";
 
@@ -42,12 +44,24 @@ fn auto_place() -> bool {
         .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
 }
 
+fn binance_user_stream_enabled() -> bool {
+    std::env::var("QTSS_BINANCE_USER_STREAM_ENABLED")
+        .ok()
+        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
+}
+
+/// Base poll interval; capped lower when Binance user stream is on so follower reacts soon after WS fills land in DB.
 fn tick_secs() -> u64 {
-    std::env::var("QTSS_COPY_TRADE_FOLLOWER_TICK_SECS")
+    let raw = std::env::var("QTSS_COPY_TRADE_FOLLOWER_TICK_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(300)
-        .max(30)
+        .max(30);
+    if binance_user_stream_enabled() {
+        raw.min(120)
+    } else {
+        raw
+    }
 }
 
 fn direction_threshold() -> f64 {
@@ -57,17 +71,53 @@ fn direction_threshold() -> f64 {
         .unwrap_or(0.25)
 }
 
-fn base_order_qty() -> Decimal {
-    let base = std::env::var("QTSS_COPY_TRADE_BASE_QTY")
-        .ok()
-        .and_then(|s| Decimal::from_str(s.trim()).ok())
-        .or_else(|| {
-            std::env::var("QTSS_STRATEGY_ORDER_QTY")
-                .ok()
-                .and_then(|s| s.parse().ok())
-        })
-        .unwrap_or_else(|| Decimal::new(1, 3));
-    apply_kelly_scale_to_qty(base)
+async fn base_order_qty(pool: &PgPool) -> Decimal {
+    let kelly_apply = resolve_worker_enabled_flag(
+        pool,
+        "strategy",
+        "kelly_apply",
+        "QTSS_KELLY_APPLY",
+        false,
+    )
+    .await;
+    let kelly_win =
+        resolve_system_f64(pool, "strategy", "kelly_win_rate", "QTSS_KELLY_WIN_RATE", 0.55).await;
+    let kelly_wl = resolve_system_f64(
+        pool,
+        "strategy",
+        "kelly_avg_win_loss_ratio",
+        "QTSS_KELLY_AVG_WIN_LOSS_RATIO",
+        1.5,
+    )
+    .await;
+    let kelly_cap = resolve_system_f64(
+        pool,
+        "strategy",
+        "kelly_max_fraction",
+        "QTSS_KELLY_MAX_FRACTION",
+        0.25,
+    )
+    .await;
+    let kelly_scale = kelly_qty_scale(kelly_apply, kelly_win, kelly_wl, kelly_cap);
+    let mut base = resolve_system_decimal(
+        pool,
+        "strategy",
+        "copy_trade_base_qty",
+        "QTSS_COPY_TRADE_BASE_QTY",
+        Decimal::ZERO,
+    )
+    .await;
+    if base <= Decimal::ZERO {
+        base = resolve_system_decimal(
+            pool,
+            "strategy",
+            "strategy_order_qty",
+            "QTSS_STRATEGY_ORDER_QTY",
+            Decimal::new(1, 3),
+        )
+        .await;
+    }
+    apply_kelly_scale_to_qty(base, kelly_scale)
 }
 
 fn default_symbol() -> String {
@@ -185,6 +235,15 @@ async fn place_for_subscriptions(
     bar_seg: &str,
     bar_iv: &str,
 ) {
+    let base_qty = base_order_qty(pool).await;
+    let max_notional = resolve_system_decimal(
+        pool,
+        "strategy",
+        "max_position_notional_usdt",
+        "QTSS_MAX_POSITION_NOTIONAL_USDT",
+        Decimal::new(10_000, 0),
+    )
+    .await;
     let score = score_nansen_perp_direction(perp_json);
     let th = direction_threshold();
     for sub in rows {
@@ -207,11 +266,11 @@ async fn place_for_subscriptions(
             tracing::debug!(%sym, "copy_trade_follower: mark yok");
             continue;
         };
-        let qty = base_order_qty() * rule.size_multiplier;
+        let qty = base_qty * rule.size_multiplier;
         let Some(qty) = apply_notional_bounds(&rule, qty, mark) else {
             continue;
         };
-        let qty = clamp_qty_by_max_notional_usdt(qty, mark);
+        let qty = clamp_qty_by_max_notional_usdt(qty, mark, max_notional);
         if qty <= Decimal::ZERO {
             continue;
         }
@@ -256,7 +315,7 @@ pub async fn copy_trade_follower_loop(pool: PgPool) {
     let tick = Duration::from_secs(tick_secs());
     let repo = CopySubscriptionRepository::new(pool.clone());
     let gw: Option<Arc<dyn ExecutionGateway>> = if auto_place() {
-        Some(dry_gateway_from_env() as Arc<dyn ExecutionGateway>)
+        Some(dry_gateway_from_pool(&pool).await as Arc<dyn ExecutionGateway>)
     } else {
         None
     };
@@ -280,8 +339,16 @@ pub async fn copy_trade_follower_loop(pool: PgPool) {
                 }
                 if let Some(ref g) = gw {
                     if let Some(j) = perp_snapshot_json(&pool).await {
-                        place_for_subscriptions(&pool, g, &j, &rows, &bar_ex, &bar_seg, &bar_iv)
-                            .await;
+                        place_for_subscriptions(
+                            &pool,
+                            g,
+                            &j,
+                            &rows,
+                            &bar_ex,
+                            &bar_seg,
+                            &bar_iv,
+                        )
+                        .await;
                     }
                 } else {
                     for sub in &rows {

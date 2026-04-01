@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+/** Trading Range çekmecesi: grafik katmanı açıkken motor anlık görüntüsü ve olay listesi için yoklama aralığı (ms). */
+const TRADING_RANGE_DRAWER_REFRESH_MS = 20_000;
+/** Sinyal panosu çekmecesi: otomatik yenileme açıkken motor anlık görüntüsü yoklama aralığı (ms). */
+const SIGNAL_DASHBOARD_DRAWER_REFRESH_MS = 20_000;
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { fetchBinanceKlinesAsChartRows } from "./api/binanceKlines";
+import { binanceKlinesUsesQtssApi, fetchBinanceKlinesAsChartRows } from "./api/binanceKlines";
 import {
   backfillMarketBarsFromRest,
   fetchChartPatternsConfig,
@@ -27,6 +32,8 @@ import {
   fetchOnchainSignalsBreakdown,
   fetchConfluenceSnapshotsLatest,
   fetchEngineRangeSignals,
+  fetchRangeEngineConfig,
+  patchRangeEngineConfig,
   fetchEngineSymbols,
   fetchNansenSnapshot,
   fetchNansenSetupsLatest,
@@ -37,6 +44,8 @@ import {
   upsertAdminSystemConfig,
   fetchBinanceCommissionDefaults,
   fetchBinanceCommissionAccount,
+  fetchCatalogExchanges,
+  fetchInstrumentSuggestions,
   postEngineSymbol,
   patchEngineSymbol,
   type EngineSnapshotJoinedApiRow,
@@ -51,8 +60,10 @@ import {
   type SystemConfigRowApi,
   type BinanceCommissionDefaultsApi,
   type BinanceCommissionAccountApi,
+  type CatalogExchangeRowApi,
   type RangeSignalEventApiRow,
   type OnchainSignalsBreakdownApi,
+  type RangeEngineConfigApi,
 } from "./api/client";
 import { channelDrawingToOverlay } from "./lib/channelOverlayFromDrawing";
 import { buildChannelScanPivotMarkers } from "./lib/channelScanMarkers";
@@ -76,6 +87,7 @@ import { MultiTimeframeLiveStrip } from "./components/MultiTimeframeLiveStrip";
 import { ElliottWaveLegend } from "./components/ElliottWaveLegend";
 import { ElliottWaveCard } from "./components/ElliottWaveCard";
 import { TvChartPane } from "./components/TvChartPane";
+import { SignalDashboardDrawerPanel } from "./components/SignalDashboardDrawerPanel";
 import { TradeDashboardPanel } from "./components/TradeDashboardPanel";
 import {
   DEFAULT_ELLIOTT_WAVE_CONFIG,
@@ -89,10 +101,11 @@ import {
   type ElliottWaveConfig,
 } from "./lib/elliottWaveAppConfig";
 import {
-  ELLIOTT_PATTERN_MENU_GROUPS,
+  ELLIOTT_PATTERN_MENU_ROWS,
   type ElliottPatternMenuToggles,
 } from "./lib/elliottPatternMenuCatalog";
 import { buildElliottLegendRows } from "./lib/elliottWaveLegend";
+import { buildSwingPivots } from "./lib/elliottImpulseDetect";
 import {
   buildElliottProjectionOverlayV2,
   buildMtfFramesV2,
@@ -119,8 +132,9 @@ import {
   deriveOpenPositionFromRangeEvents,
   openPositionLayerFromRangeEvents,
 } from "./lib/rangeOpenPositionLayer";
+import { rangeSetupsFromEvents } from "./lib/rangeSetupsFromEvents";
 import { rangeSignalMarkersFromEvents } from "./lib/rangeSignalMarkers";
-import { patternLayerFromDbTradingRange, sweepMarkersFromDbTradingRange } from "./lib/tradingRangeDbOverlay";
+import { patternLayerFromDbTradingRange, sweepMarkersFromDbTradingRange, type TradingRangeDbPayload } from "./lib/tradingRangeDbOverlay";
 import {
   formatDashboardNumber,
   parseSignalDashboardV2,
@@ -133,7 +147,14 @@ import { canAdmin, canOps, type AuthSession } from "./lib/rbac";
 import type { SeriesMarker, UTCTimestamp } from "lightweight-charts";
 import { BacktestRunCard } from "./components/BacktestRunCard";
 import { OrdersAndFillsCard } from "./components/OrdersAndFillsCard";
-import { NotifyOutboxCard } from "./components/NotifyOutboxCard";
+import { TradingRangeSetupTable } from "./components/TradingRangeSetupTable";
+import { TradingRangeTradeSummary } from "./components/TradingRangeTradeSummary";
+import { TradingRangeFuturesQuickTrade } from "./components/TradingRangeFuturesQuickTrade";
+import { TradingRangeDataEntryPanel } from "./components/TradingRangeDataEntryPanel";
+import { NotificationDrawerPanel } from "./components/NotificationDrawerPanel";
+import { ServerRegistryPanel } from "./components/ServerRegistryPanel";
+import { HelpCrossLink } from "./help/HelpCrossLink";
+import { HelpPanel } from "./help/HelpPanel";
 
 type Theme = "dark" | "light";
 type SettingsTab =
@@ -145,12 +166,18 @@ type SettingsTab =
   | "acp"
   | "backtest"
   | "orders"
+  | "commission"
   | "engine"
+  | "trading_range"
+  | "signal_dashboard"
   | "market_context"
   | "nansen"
   | "queues"
   | "notify"
+  | "help"
   | "setting";
+
+type TradingRangeDrawerSubtab = "main" | "data_entry" | "setup" | "trade_summary";
 
 type ElliottLineStyle = "solid" | "dotted" | "dashed";
 
@@ -170,6 +197,11 @@ function normalizeMarketSegment(segment: string): string {
   const s = segment.trim().toLowerCase();
   if (s === "futures" || s === "usdt_futures" || s === "fapi") return "futures";
   return s || "spot";
+}
+
+/** Üst çubuk segment `<select>` değeri (`usdt_futures` / `fapi` → futures). */
+function chartToolbarSegmentSelectValue(segment: string): "spot" | "futures" {
+  return normalizeMarketSegment(segment) === "futures" ? "futures" : "spot";
 }
 
 /** V2 ham ZigZag çizgisi (itki/düzeltme katmanları değil). Elliott panel kapalıyken yalnız bunlar çizilir. */
@@ -362,7 +394,9 @@ export default function App() {
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<SettingsTab>("general");
+  const [tradingRangeSubtab, setTradingRangeSubtab] = useState<TradingRangeDrawerSubtab>("main");
   const [drawerSearch, setDrawerSearch] = useState("");
+  const [helpFocusId, setHelpFocusId] = useState<string | null>(null);
   const isElliottDrawerGroup =
     drawerTab === "elliott" || drawerTab === "elliott_impulse" || drawerTab === "elliott_corrective";
   useEffect(() => {
@@ -474,6 +508,8 @@ export default function App() {
   const [barSymbol, setBarSymbol] = useState(defaults.symbol);
   const [barInterval, setBarInterval] = useState(defaults.interval);
   const [barLimit, setBarLimit] = useState(defaults.limit);
+  const [catalogExchanges, setCatalogExchanges] = useState<CatalogExchangeRowApi[]>([]);
+  const [symbolDatalist, setSymbolDatalist] = useState<string[]>([]);
   const [chartOhlcMode, setChartOhlcMode] = useState<ChartOhlcMode>(() => readChartOhlcMode());
   const [acpConfig, setAcpConfig] = useState<AcpChartPatternsConfig>(() => ({ ...DEFAULT_ACP_CONFIG }));
   const [acpConfigLoadErr, setAcpConfigLoadErr] = useState("");
@@ -493,6 +529,7 @@ export default function App() {
   /** Aynı anda birden fazla yükleme: yalnızca son isteğin cevabı `setBars` uygular (BTC→ETH yarışı). */
   const chartLoadSeqRef = useRef(0);
   const livePollEpochRef = useRef(0);
+  const symbolSuggestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   type ProjectionGuardState = {
     anchorTimeSec: number;
@@ -673,6 +710,14 @@ export default function App() {
   const [engineFormInterval, setEngineFormInterval] = useState("4h");
   const [engineFormBusy, setEngineFormBusy] = useState(false);
   const [engineListRefreshing, setEngineListRefreshing] = useState(false);
+  const [rangeEngineConfig, setRangeEngineConfig] = useState<RangeEngineConfigApi | null>(null);
+  const [rangeEnginePatchBusy, setRangeEnginePatchBusy] = useState(false);
+  const [trParamsDraft, setTrParamsDraft] = useState({
+    lookback: "",
+    atr_period: "",
+    atr_sma_period: "",
+    require_range_regime: false,
+  });
   const [nansenSnapshot, setNansenSnapshot] = useState<NansenSnapshotApiRow | null>(null);
   const [nansenSetupsLatest, setNansenSetupsLatest] = useState<NansenSetupsLatestApiResponse>({
     run: null,
@@ -696,6 +741,8 @@ export default function App() {
   const [showDbSweepMarkers, setShowDbSweepMarkers] = useState(true);
   const [showDbRangeSignalMarkers, setShowDbRangeSignalMarkers] = useState(true);
   const [showDbOpenPositionLine, setShowDbOpenPositionLine] = useState(true);
+  const [signalDashboardAutoRefresh, setSignalDashboardAutoRefresh] = useState(false);
+  const [tradingRangeAutoRefresh, setTradingRangeAutoRefresh] = useState(false);
   const [elliottV2Frames, setElliottV2Frames] = useState<
     Partial<Record<"15m" | "1h" | "4h", OhlcV2[]>> | null
   >(null);
@@ -711,10 +758,23 @@ export default function App() {
   const rbacIsOps = useMemo(() => (authSession ? canOps(authSession.roles) : false), [authSession]);
 
   useEffect(() => {
+    if (!rangeEngineConfig?.trading_range_params) return;
+    const p = rangeEngineConfig.trading_range_params;
+    setTrParamsDraft({
+      lookback: p.lookback != null && Number.isFinite(p.lookback) ? String(p.lookback) : "",
+      atr_period: p.atr_period != null && Number.isFinite(p.atr_period) ? String(p.atr_period) : "",
+      atr_sma_period:
+        p.atr_sma_period != null && Number.isFinite(p.atr_sma_period) ? String(p.atr_sma_period) : "",
+      require_range_regime: p.require_range_regime === true,
+    });
+  }, [rangeEngineConfig]);
+
+  useEffect(() => {
     if (!token) {
       setAuthSession(null);
       setAuthMeErr("");
       setAuthMeLoading(false);
+      setRangeEngineConfig(null);
       return;
     }
     let cancelled = false;
@@ -745,6 +805,51 @@ export default function App() {
     }
   }, [authSession?.preferredLocale]);
 
+  useEffect(() => {
+    if (!token?.trim()) {
+      setCatalogExchanges([]);
+      return;
+    }
+    let cancelled = false;
+    void fetchCatalogExchanges(token)
+      .then((rows) => {
+        if (!cancelled) setCatalogExchanges(rows.filter((e) => e.is_active));
+      })
+      .catch(() => {
+        if (!cancelled) setCatalogExchanges([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  useEffect(() => {
+    if (!token?.trim()) {
+      setSymbolDatalist([]);
+      return;
+    }
+    const raw = barSymbol.trim();
+    const alnum = raw.replace(/[^A-Za-z0-9]/g, "");
+    if (alnum.length < 1) {
+      setSymbolDatalist([]);
+      return;
+    }
+    if (symbolSuggestTimerRef.current != null) window.clearTimeout(symbolSuggestTimerRef.current);
+    symbolSuggestTimerRef.current = window.setTimeout(() => {
+      void fetchInstrumentSuggestions(token, {
+        exchangeCode: barExchange.trim() || "binance",
+        segment: barSegment.trim() || "spot",
+        query: alnum,
+        limit: 40,
+      })
+        .then((rows) => setSymbolDatalist(rows.map((r) => r.native_symbol)))
+        .catch(() => setSymbolDatalist([]));
+    }, 250);
+    return () => {
+      if (symbolSuggestTimerRef.current != null) window.clearTimeout(symbolSuggestTimerRef.current);
+    };
+  }, [token, barSymbol, barExchange, barSegment]);
+
   const lastBarClose = useMemo(() => {
     if (!bars?.length) return null;
     const chrono = chartOhlcRowsSortedChrono(bars);
@@ -769,6 +874,11 @@ export default function App() {
     elliottConfig.elliott_zigzag_depth_1h,
     elliottConfig.elliott_zigzag_depth_15m,
   ]);
+
+  const elliottPanelSwingPivotCount = useMemo(() => {
+    if (!elliottConfig.enabled || !bars?.length) return 0;
+    return buildSwingPivots(chartOhlcRowsSortedChrono(bars), chartElliottZigzagDepth).length;
+  }, [elliottConfig.enabled, bars, chartElliottZigzagDepth]);
 
   const toOhlcV2 = useCallback((src: ChartOhlcRow[]): OhlcV2[] => {
     return chartOhlcRowsSortedChrono(src)
@@ -1021,12 +1131,12 @@ export default function App() {
     const lastRow = rows[rows.length - 1]!;
     const wc = mtfWaveColorsFromConfig(elliottConfig);
     const opt = {
-      barHop: elliottConfig.projection_bar_hop,
-      maxSteps: elliottConfig.projection_steps,
       includeAltScenario: elliottConfig.show_projection_alt_scenario,
-      mode: elliottConfig.projection_mode,
+      multiCorrectiveScenarios: elliottConfig.projection_multi_corrective_scenarios,
     };
     const out: PatternLayerOverlay[] = [];
+    const chartProjectionTf: "4h" | "1h" | "15m" =
+      barInterval.trim() === "4h" ? "4h" : barInterval.trim() === "1h" ? "1h" : "15m";
     const specs: Array<{ tf: "4h" | "1h" | "15m"; on: boolean }> = [
       {
         tf: "4h",
@@ -1051,13 +1161,13 @@ export default function App() {
       },
     ];
     for (const { tf, on } of specs) {
-      if (!on) continue;
+      if (!on || tf !== chartProjectionTf) continue;
       // Guard: invalidation + timeout tracking per TF (stateful across renders via ref).
       const s = elliottV2Output.states[tf];
       const imp = s?.impulse ?? null;
-      const post = s?.postImpulseAbc ?? null;
       const g = projectionGuardRef.current[tf];
-      if (!imp || s?.decision === "invalid") {
+      // Match wave overlay: adapter draws `s.impulse` without requiring `decision !== "invalid"`.
+      if (!imp) {
         g.invalidReason = "invalid";
         continue;
       }
@@ -1103,17 +1213,20 @@ export default function App() {
                 ? scaleElliottHexColor(baseColor, 0.58)
                 : (layer.zigzagLineColor ?? baseColor),
             zigzagLineStyle:
-              tf === "4h"
+              layer.zigzagLineStyle ??
+              (tf === "4h"
                 ? elliottConfig.mtf_line_style_4h
                 : tf === "1h"
                   ? elliottConfig.mtf_line_style_1h
-                  : elliottConfig.mtf_line_style_15m,
+                  : elliottConfig.mtf_line_style_15m),
             zigzagLineWidth:
-              tf === "4h"
-                ? elliottConfig.mtf_line_width_4h
-                : tf === "1h"
-                  ? elliottConfig.mtf_line_width_1h
-                  : elliottConfig.mtf_line_width_15m,
+              typeof layer.zigzagLineWidth === "number" && Number.isFinite(layer.zigzagLineWidth)
+                ? layer.zigzagLineWidth
+                : tf === "4h"
+                  ? elliottConfig.mtf_line_width_4h
+                  : tf === "1h"
+                    ? elliottConfig.mtf_line_width_1h
+                    : elliottConfig.mtf_line_width_15m,
           })),
         );
       }
@@ -1126,8 +1239,7 @@ export default function App() {
     elliottConfig.mtf_wave_color_1h,
     elliottConfig.mtf_wave_color_4h,
     elliottConfig.pattern_menu_by_tf,
-    elliottConfig.projection_bar_hop,
-    elliottConfig.projection_steps,
+    elliottConfig.projection_multi_corrective_scenarios,
     elliottConfig.show_projection_alt_scenario,
     elliottConfig.show_projection_15m,
     elliottConfig.show_projection_1h,
@@ -1143,10 +1255,13 @@ export default function App() {
     elliottConfig.mtf_line_width_4h,
     elliottV2Output,
     toOhlcV2,
+    barInterval,
   ]);
 
   const elliottProjectionStatus = useMemo((): string => {
     if (!elliottConfig.enabled || !bars?.length) return "";
+    const chartProjectionTf: "4h" | "1h" | "15m" =
+      barInterval.trim() === "4h" ? "4h" : barInterval.trim() === "1h" ? "1h" : "15m";
     const parts: string[] = [];
     const specs: Array<{ tf: "4h" | "1h" | "15m"; on: boolean }> = [
       { tf: "4h", on: !!elliottConfig.show_projection_4h },
@@ -1154,7 +1269,7 @@ export default function App() {
       { tf: "15m", on: !!elliottConfig.show_projection_15m },
     ];
     for (const { tf, on } of specs) {
-      if (!on) continue;
+      if (!on || tf !== chartProjectionTf) continue;
       const r = projectionGuardRef.current[tf]?.invalidReason;
       if (!r) continue;
       const label = r === "timeout" ? "timeout" : r === "invalid" ? "invalid" : "invalid";
@@ -1163,6 +1278,7 @@ export default function App() {
     return parts.length ? `Elliott projection: ${parts.join(" · ")}` : "";
   }, [
     bars,
+    barInterval,
     elliottConfig.enabled,
     elliottConfig.show_projection_15m,
     elliottConfig.show_projection_1h,
@@ -1213,9 +1329,9 @@ export default function App() {
     return buildElliottLegendRows(
       elliottV2Output,
       anyElliottProjection,
-      anyElliottProjection && elliottConfig.projection_mode === "formation",
+      anyElliottProjection,
     );
-  }, [anyElliottProjection, elliottConfig.projection_mode, elliottV2Output]);
+  }, [anyElliottProjection, elliottV2Output]);
 
   const channelScanOverlayBars = useMemo((): ChartOhlcRow[] | null => {
     if (!lastChannelScan?.matched) return null;
@@ -1288,10 +1404,22 @@ export default function App() {
     );
   }, [engineSnapshots, barExchange, barSegment, barSymbol, barInterval]);
 
+  /** Süpürme okları: öncelik `trading_range` yükü; yoksa `signal_dashboard` (aynı turda yazılan süpürme alanları). */
+  const sweepMarkersPayload = useMemo(
+    () => dbTradingRangeSnapshot?.payload ?? dbSignalDashboardSnapshot?.payload ?? null,
+    [dbTradingRangeSnapshot, dbSignalDashboardSnapshot],
+  );
+
+  const tradingRangeScorePayload = useMemo((): TradingRangeDbPayload | null => {
+    const p = (dbTradingRangeSnapshot?.payload ?? dbSignalDashboardSnapshot?.payload ?? null) as unknown;
+    if (!p || typeof p !== "object") return null;
+    return p as TradingRangeDbPayload;
+  }, [dbTradingRangeSnapshot, dbSignalDashboardSnapshot]);
+
   const dbSweepMarkers = useMemo((): SeriesMarker<UTCTimestamp>[] => {
-    if (!showDbSweepMarkers || !bars?.length || !dbTradingRangeSnapshot) return [];
-    return sweepMarkersFromDbTradingRange(bars, dbTradingRangeSnapshot.payload);
-  }, [showDbSweepMarkers, bars, dbTradingRangeSnapshot]);
+    if (!showDbSweepMarkers || !bars?.length || !sweepMarkersPayload) return [];
+    return sweepMarkersFromDbTradingRange(bars, sweepMarkersPayload);
+  }, [showDbSweepMarkers, bars, sweepMarkersPayload]);
 
   const engineChartRangeSignalEvents = useMemo(() => {
     if (!engineRangeSignals.length) return [];
@@ -1308,10 +1436,46 @@ export default function App() {
     );
   }, [engineRangeSignals, barExchange, barSegment, barSymbol, barInterval]);
 
+  const rangeSignalMarkerLabel = useCallback(
+    (kind: string) => {
+      switch (kind) {
+        case "long_entry":
+          return t("app.rangeSignalMarkers.longEntry");
+        case "long_exit":
+          return t("app.rangeSignalMarkers.longExit");
+        case "short_entry":
+          return t("app.rangeSignalMarkers.shortEntry");
+        case "short_exit":
+          return t("app.rangeSignalMarkers.shortExit");
+        default:
+          return kind;
+      }
+    },
+    [t],
+  );
+
   const dbRangeSignalMarkers = useMemo((): SeriesMarker<UTCTimestamp>[] => {
     if (!showDbRangeSignalMarkers || !bars?.length) return [];
-    return rangeSignalMarkersFromEvents(bars, engineChartRangeSignalEvents);
-  }, [showDbRangeSignalMarkers, bars, engineChartRangeSignalEvents]);
+    return rangeSignalMarkersFromEvents(bars, engineChartRangeSignalEvents, rangeSignalMarkerLabel);
+  }, [showDbRangeSignalMarkers, bars, engineChartRangeSignalEvents, rangeSignalMarkerLabel]);
+
+  const chartRangeSetups = useMemo(
+    () => rangeSetupsFromEvents(engineChartRangeSignalEvents),
+    [engineChartRangeSignalEvents],
+  );
+
+  /** Taker kesiri (giriş+çıkış) — hesap yüklemesi varsa onu, yoksa Binance varsayılan bps. */
+  const tradingRangeTakerFraction = useMemo((): number | null => {
+    if (commissionAccount) {
+      const t = Number(commissionAccount.taker_rate);
+      if (Number.isFinite(t) && t >= 0) return t;
+    }
+    if (commissionDefaults) {
+      const t = commissionDefaults.defaults_bps.taker_bps / 10_000;
+      if (Number.isFinite(t) && t >= 0) return t;
+    }
+    return null;
+  }, [commissionAccount, commissionDefaults]);
 
   const dbOpenPositionLayer = useMemo((): PatternLayerOverlay | null => {
     if (!showDbOpenPositionLine || !bars?.length) return null;
@@ -1339,7 +1503,7 @@ export default function App() {
 
   const mergedPatternLayers = useMemo(() => {
     const acp = multiOverlay?.layers ?? [];
-    const cap = 32;
+    const cap = 40;
     const elayersRaw: PatternLayerOverlay[] = elliottChartBundle?.layers ?? [];
     const elayers = elayersRaw.filter((l) => keepElliottZigzagLayer(l.zigzagKind, elliottConfig));
     const proj = elliottProjectionLayers;
@@ -1419,7 +1583,8 @@ export default function App() {
         segment: segLower,
         symbol: symQ.length > 0 ? symQ : undefined,
       }).catch(() => null);
-      const [snaps, syms, sigs, pbal, pfills, liveFills, ds, mc, commDef] = await Promise.all([
+      const rangeCfgPromise = fetchRangeEngineConfig(token).catch(() => null);
+      const [snaps, syms, sigs, pbal, pfills, liveFills, ds, mc, commDef, rangeCfg] = await Promise.all([
         fetchEngineSnapshots(token),
         fetchEngineSymbols(token),
         fetchEngineRangeSignals(token, { limit: 80 }),
@@ -1429,7 +1594,9 @@ export default function App() {
         fetchDataSnapshots(token).catch(() => []),
         mcPromise,
         commDefPromise,
+        rangeCfgPromise,
       ]);
+      setRangeEngineConfig(rangeCfg);
       setEngineSnapshots(snaps);
       setDataSnapshots(ds);
       setMarketContext(mc);
@@ -1463,6 +1630,39 @@ export default function App() {
       setEnginePanelErr(String(e));
     }
   }, [token, barSymbol, barInterval, barExchange, barSegment, rbacIsAdmin]);
+
+  const patchRangeEnginePartial = useCallback(
+    async (patch: Record<string, unknown>) => {
+      if (!token || !rbacIsOps) return;
+      setRangeEnginePatchBusy(true);
+      try {
+        const next = await patchRangeEngineConfig(token, patch);
+        setRangeEngineConfig(next);
+        setEnginePanelErr("");
+      } catch (e) {
+        setEnginePanelErr(String(e));
+      } finally {
+        setRangeEnginePatchBusy(false);
+      }
+    },
+    [token, rbacIsOps],
+  );
+
+  const saveTradingRangeParamsFromDraft = useCallback(async () => {
+    const tp: Record<string, unknown> = {
+      require_range_regime: trParamsDraft.require_range_regime,
+    };
+    const numOrNull = (s: string): number | null => {
+      const x = s.trim();
+      if (x === "") return null;
+      const n = parseInt(x, 10);
+      return Number.isFinite(n) ? n : null;
+    };
+    tp.lookback = numOrNull(trParamsDraft.lookback);
+    tp.atr_period = numOrNull(trParamsDraft.atr_period);
+    tp.atr_sma_period = numOrNull(trParamsDraft.atr_sma_period);
+    await patchRangeEnginePartial({ trading_range_params: tp });
+  }, [trParamsDraft, patchRangeEnginePartial]);
 
   const loadCommissionAccount = useCallback(async () => {
     if (!token) return;
@@ -1639,9 +1839,29 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [drawerOpen, drawerTab, token, refreshMarketContextPanel]);
 
+  /** Trading Range sekmesi + otomatik yenileme kutusu: motor anlık görüntüleri ve aralık olayları periyodik çekilir. */
+  useEffect(() => {
+    if (!drawerOpen || drawerTab !== "trading_range" || !token || !tradingRangeAutoRefresh) return;
+    void refreshEnginePanel();
+    const id = window.setInterval(() => {
+      void refreshEnginePanel();
+    }, TRADING_RANGE_DRAWER_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [drawerOpen, drawerTab, token, tradingRangeAutoRefresh, refreshEnginePanel]);
+
+  /** Sinyal panosu sekmesi + otomatik yenileme kutusu: `signal_dashboard` anlık görüntüsü periyodik çekilir. */
+  useEffect(() => {
+    if (!drawerOpen || drawerTab !== "signal_dashboard" || !token || !signalDashboardAutoRefresh) return;
+    void refreshEnginePanel();
+    const id = window.setInterval(() => {
+      void refreshEnginePanel();
+    }, SIGNAL_DASHBOARD_DRAWER_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [drawerOpen, drawerTab, token, signalDashboardAutoRefresh, refreshEnginePanel]);
+
   /**
-   * OHLC kaynağı: `ohlcFromBinance` ise Binance spot REST (güncel mum); aksi halde JWT + `market_bars`.
-   * Otomatik modda giriş + binance/spot → REST; diğer borsalar → DB.
+   * OHLC kaynağı: `ohlcFromBinance` ise Binance spot/FAPI REST (güncel mum); aksi halde JWT + `market_bars`.
+   * Otomatik modda giriş + binance + (spot veya futures) → REST; diğer borsalar/segment → DB.
    */
   const loadChartFromToolbar = useCallback(async () => {
     const seq = ++chartLoadSeqRef.current;
@@ -1946,6 +2166,12 @@ export default function App() {
     settingsQuery.length === 0 ||
     terms.some((t) => t.toLocaleLowerCase("tr-TR").includes(settingsQuery));
 
+  const jumpToHelp = useCallback((topicId: string) => {
+    setDrawerOpen(true);
+    setDrawerTab("help");
+    setHelpFocusId(topicId);
+  }, []);
+
   return (
     <div className="tv-root">
       <header className="tv-topstrip">
@@ -1962,13 +2188,20 @@ export default function App() {
           <span className="tv-hamburger__bar" />
         </button>
         <div className="tv-topstrip__controls" aria-label={t("app.chartToolbar.symbolStripAria")}>
+          <datalist id="qtss-chart-symbol-datalist">
+            {symbolDatalist.map((s) => (
+              <option key={s} value={s} />
+            ))}
+          </datalist>
           <input
             className="tv-topstrip__input mono"
             aria-label={t("app.chartToolbar.symbolAria")}
+            list={token?.trim() ? "qtss-chart-symbol-datalist" : undefined}
             value={barSymbol}
             onChange={(e) => setBarSymbol(e.target.value.toUpperCase())}
             placeholder="BTCUSDT"
             maxLength={32}
+            title={token?.trim() ? t("app.chartToolbar.symbolSuggestTitle") : undefined}
           />
           <select
             className="tv-topstrip__select"
@@ -1997,17 +2230,72 @@ export default function App() {
             <option value="exchange">{t("app.chartToolbar.ohlcExchange")}</option>
             <option value="database">{t("app.chartToolbar.ohlcDatabase")}</option>
           </select>
+          {token?.trim() ? (
+            <select
+              className="tv-topstrip__select mono"
+              aria-label={t("app.chartToolbar.exchangeAria")}
+              title={t("app.chartToolbar.exchangeBadgeTitle")}
+              value={(barExchange.trim() || "binance").toLowerCase()}
+              onChange={(e) => setBarExchange(e.target.value.toLowerCase())}
+            >
+              {catalogExchanges.length === 0 ? (
+                <option value={(barExchange.trim() || "binance").toLowerCase()}>
+                  {barExchange.trim() || "binance"}
+                </option>
+              ) : (
+                <>
+                  {catalogExchanges.map((ex) => (
+                    <option key={ex.id} value={ex.code.trim().toLowerCase()}>
+                      {ex.display_name?.trim() || ex.code}
+                    </option>
+                  ))}
+                  {!catalogExchanges.some(
+                    (ex) => ex.code.trim().toLowerCase() === (barExchange.trim() || "binance").toLowerCase(),
+                  ) ? (
+                    <option value={(barExchange.trim() || "binance").toLowerCase()}>
+                      {barExchange.trim() || "binance"}
+                    </option>
+                  ) : null}
+                </>
+              )}
+            </select>
+          ) : (
+            <span className="tv-topstrip__exchange-tag mono muted" title={t("app.chartToolbar.exchangeBadgeTitle")}>
+              {(barExchange.trim() || "binance").toLowerCase()}
+            </span>
+          )}
+          <select
+            className="tv-topstrip__select"
+            aria-label={t("app.chartToolbar.marketAria")}
+            title={t("app.chartToolbar.marketTitle")}
+            value={chartToolbarSegmentSelectValue(barSegment)}
+            onChange={(e) => setBarSegment(e.target.value === "futures" ? "futures" : "spot")}
+          >
+            <option value="spot">{t("app.chartToolbar.marketSpot")}</option>
+            <option value="futures">{t("app.chartToolbar.marketUsdm")}</option>
+          </select>
         </div>
         <div className="tv-topstrip__symbol">
           <span className="muted">
-            {ohlcFromBinance
-              ? t("app.chartToolbar.sourceBinanceLive")
-              : token
-                ? t("app.chartToolbar.sourceDbLine", {
-                    exchange: barExchange,
-                    segment: barSegment || "spot",
-                  })
-                : t("app.chartToolbar.sourceDbNeedLogin")}
+            {ohlcFromBinance ? (
+              <>
+                {t("app.chartToolbar.sourceBinanceLive")}
+                {" · "}
+                {normalizeMarketSegment(barSegment) === "futures"
+                  ? t("app.chartToolbar.marketUsdm")
+                  : t("app.chartToolbar.marketSpot")}
+                {binanceKlinesUsesQtssApi(token)
+                  ? ` · ${t("app.chartToolbar.sourceBinanceViaBackend")}`
+                  : null}
+              </>
+            ) : token ? (
+              t("app.chartToolbar.sourceDbLine", {
+                exchange: barExchange,
+                segment: barSegment || "spot",
+              })
+            ) : (
+              t("app.chartToolbar.sourceDbNeedLogin")
+            )}
           </span>
           {bars && bars.length > 0 ? (
             <span className="muted">{t("app.chartToolbar.barCount", { count: bars.length })}</span>
@@ -2169,11 +2457,41 @@ export default function App() {
                 <button
                   type="button"
                   role="tab"
+                  aria-selected={drawerTab === "trading_range"}
+                  className={`tv-settings__tab ${drawerTab === "trading_range" ? "is-active" : ""}`}
+                  onClick={() => {
+                    setDrawerTab("trading_range");
+                    setTradingRangeSubtab("main");
+                  }}
+                >
+                  {t("drawer.tradingRange")}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={drawerTab === "signal_dashboard"}
+                  className={`tv-settings__tab ${drawerTab === "signal_dashboard" ? "is-active" : ""}`}
+                  onClick={() => setDrawerTab("signal_dashboard")}
+                >
+                  {t("drawer.signalDashboard")}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
                   aria-selected={drawerTab === "orders"}
                   className={`tv-settings__tab ${drawerTab === "orders" ? "is-active" : ""}`}
                   onClick={() => setDrawerTab("orders")}
                 >
                   Emirler
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={drawerTab === "commission"}
+                  className={`tv-settings__tab ${drawerTab === "commission" ? "is-active" : ""}`}
+                  onClick={() => setDrawerTab("commission")}
+                >
+                  {t("drawer.commission")}
                 </button>
                 <button
                   type="button"
@@ -2361,6 +2679,127 @@ export default function App() {
 
               {drawerTab === "orders" ? <OrdersAndFillsCard accessToken={token} /> : null}
 
+              {drawerTab === "commission" ? (
+                <>
+                  {matchesSetting(
+                    "komisyon",
+                    "commission",
+                    "ücret",
+                    "fee",
+                    "maker",
+                    "taker",
+                    "bps",
+                    "binance",
+                    "borsa",
+                    "oran",
+                  ) ? (
+                    token ? (
+                      <div className="card">
+                        <p className="tv-drawer__section-head">{t("app.commissionDrawer.multiExchangeHead")}</p>
+                        <p className="muted" style={{ fontSize: "0.78rem", marginBottom: "0.5rem" }}>
+                          {t("app.commissionDrawer.scopeIntro")}
+                        </p>
+                        <p className="tv-drawer__section-head" style={{ marginBottom: "0.35rem" }}>
+                          {t("app.commissionDrawer.contextHead")}
+                        </p>
+                        <p className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.45rem" }}>
+                          {t("app.commissionDrawer.contextLead")}{" "}
+                          <span className="mono">
+                            {barExchange.trim() || "—"}/{normalizeMarketSegment(barSegment)}/{barSymbol.trim() || "—"}/
+                            {barInterval.trim() || "—"}
+                          </span>
+                          {t("app.commissionDrawer.contextTrail")}
+                        </p>
+                        <p className="tv-drawer__section-head" style={{ marginBottom: "0.3rem" }}>
+                          {t("app.commissionDrawer.binanceHead")}
+                        </p>
+                        <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.35rem" }}>
+                          {t("app.commissionDrawer.binanceBody")}
+                        </p>
+                        {barExchange.trim().toLowerCase() !== "binance" ? (
+                          <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.4rem", lineHeight: 1.4 }}>
+                            {t("app.commissionDrawer.binanceMismatch")}
+                          </p>
+                        ) : null}
+                        <table
+                          style={{
+                            width: "100%",
+                            fontSize: "0.72rem",
+                            borderCollapse: "collapse",
+                            marginBottom: "0.35rem",
+                          }}
+                        >
+                          <tbody>
+                            <tr>
+                              <td
+                                className="muted"
+                                style={{ padding: "0.1rem 0.35rem 0.1rem 0", verticalAlign: "top" }}
+                              >
+                                {t("app.paperDrawer.defaultBps")}
+                              </td>
+                              <td className="mono" style={{ padding: "0.1rem 0", wordBreak: "break-all" }}>
+                                {commissionDefaults ? (
+                                  <>
+                                    maker {commissionDefaults.defaults_bps.maker_bps.toFixed(2)} · taker{" "}
+                                    {commissionDefaults.defaults_bps.taker_bps.toFixed(2)}
+                                    <br />
+                                    <span style={{ opacity: 0.88 }}>
+                                      {commissionDefaults.segment}
+                                      {commissionDefaults.query_symbol
+                                        ? ` · ${commissionDefaults.query_symbol}`
+                                        : ""}{" "}
+                                      · {commissionDefaults.source}
+                                    </span>
+                                  </>
+                                ) : (
+                                  "—"
+                                )}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td
+                                className="muted"
+                                style={{ padding: "0.1rem 0.35rem 0.1rem 0", verticalAlign: "top" }}
+                              >
+                                {t("app.paperDrawer.accountFraction")}
+                              </td>
+                              <td className="mono" style={{ padding: "0.1rem 0", wordBreak: "break-all" }}>
+                                {commissionAccount ? (
+                                  <>
+                                    maker {commissionAccount.maker_rate} · taker {commissionAccount.taker_rate}
+                                    <br />
+                                    <span style={{ opacity: 0.88 }}>
+                                      {commissionAccount.segment} · {commissionAccount.source}
+                                    </span>
+                                  </>
+                                ) : commissionAccountErr ? (
+                                  <span className="err">{commissionAccountErr}</span>
+                                ) : (
+                                  <span className="muted">—</span>
+                                )}
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                        <button
+                          type="button"
+                          className="theme-toggle"
+                          style={{ fontSize: "0.74rem" }}
+                          disabled={commissionAccountBusy}
+                          onClick={() => void loadCommissionAccount()}
+                        >
+                          {commissionAccountBusy
+                            ? t("app.commission.fetchBusy")
+                            : t("app.commission.fetchLabel")}
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="muted">{t("app.commissionDrawer.signInPrompt")}</p>
+                    )
+                  ) : null}
+                </>
+              ) : null}
+
               {drawerTab === "elliott" ? (
                 <>
                   {matchesSetting(
@@ -2398,8 +2837,24 @@ export default function App() {
                         <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }}>
                           Sol sütun: dalga / katman türü; üstte timeframe: 4H / 1H / 15M. «ZigZag (depth)» her TF için
                           ZigZag fraktal penceresi (mum). «ZigZag (pivot)» ham pivot hattıdır; «Dalga çizgisi» itki ve
-                          düzeltme segmentleri için geçerlidir.
+                          düzeltme segmentleri için geçerlidir. «Gelecek Dalga (Tahmin)» yalnızca o anki grafik
+                          periyodunun sütunu için çizilir (ör. 1H mumda 1H kutusu).
                         </p>
+                        <div className="tv-elliott-panel__row" style={{ marginBottom: "0.35rem" }}>
+                          <label className="tv-elliott-panel__toggle">
+                            <input
+                              type="checkbox"
+                              checked={elliottConfig.enabled}
+                              onChange={(e) =>
+                                setElliottConfig((c) => ({ ...c, enabled: e.target.checked }))
+                              }
+                            />
+                            <span>Elliott analizi (grafik)</span>
+                          </label>
+                          <span className="muted" style={{ fontSize: "0.75rem" }}>
+                            {elliottConfig.enabled ? `${elliottPanelSwingPivotCount} swing pivot` : ""}
+                          </span>
+                        </div>
                         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
                           <thead>
                             <tr>
@@ -2410,45 +2865,105 @@ export default function App() {
                             </tr>
                           </thead>
                           <tbody>
-                            {ELLIOTT_PATTERN_MENU_GROUPS.flatMap((g) => g.items).map((item) => (
-                              <tr key={item.id}>
-                                <td style={{ padding: "0.2rem" }}>
-                                  <span style={{ fontWeight: 600 }}>{item.titleTr}</span>
-                                  {item.structure ? (
-                                    <span className="mono muted" style={{ fontSize: "0.68rem", marginLeft: "0.25rem" }}>
-                                      {item.structure}
+                            {ELLIOTT_PATTERN_MENU_ROWS.map((row) =>
+                              row.type === "label" ? (
+                                <tr key={row.id}>
+                                  <td
+                                    colSpan={4}
+                                    style={{
+                                      padding: "0.28rem 0.2rem",
+                                      paddingLeft: `${0.35 + row.depth * 0.65}rem`,
+                                      fontWeight: row.depth === 0 ? 700 : 650,
+                                      fontSize: row.depth === 0 ? "0.82rem" : "0.78rem",
+                                    }}
+                                  >
+                                    {row.titleTr}
+                                    <span className="muted" style={{ marginLeft: "0.35rem", fontWeight: 500 }}>
+                                      {row.titleEn}
                                     </span>
-                                  ) : null}
-                                </td>
-                                <td style={{ textAlign: "center" }}>
-                                  <input
-                                    type="checkbox"
-                                    checked={elliottConfig.pattern_menu_by_tf["4h"][item.id]}
-                                    onChange={(e) =>
-                                      setElliottConfig((c) => patchPatternMenuTf(c, "4h", item.id, e.target.checked))
-                                    }
-                                  />
-                                </td>
-                                <td style={{ textAlign: "center" }}>
-                                  <input
-                                    type="checkbox"
-                                    checked={elliottConfig.pattern_menu_by_tf["1h"][item.id]}
-                                    onChange={(e) =>
-                                      setElliottConfig((c) => patchPatternMenuTf(c, "1h", item.id, e.target.checked))
-                                    }
-                                  />
-                                </td>
-                                <td style={{ textAlign: "center" }}>
-                                  <input
-                                    type="checkbox"
-                                    checked={elliottConfig.pattern_menu_by_tf["15m"][item.id]}
-                                    onChange={(e) =>
-                                      setElliottConfig((c) => patchPatternMenuTf(c, "15m", item.id, e.target.checked))
-                                    }
-                                  />
-                                </td>
-                              </tr>
-                            ))}
+                                  </td>
+                                </tr>
+                              ) : (
+                                <tr key={row.id}>
+                                  <td style={{ padding: "0.2rem", paddingLeft: `${0.45 + row.depth * 0.65}rem` }}>
+                                    <span style={{ fontWeight: 600 }}>{row.titleTr}</span>
+                                    {row.structure ? (
+                                      <span
+                                        className="mono muted"
+                                        style={{ fontSize: "0.68rem", marginLeft: "0.25rem" }}
+                                      >
+                                        {row.structure}
+                                      </span>
+                                    ) : null}
+                                  </td>
+                                  <td style={{ textAlign: "center" }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={elliottConfig.pattern_menu_by_tf["4h"][row.id]}
+                                      onChange={(e) =>
+                                        setElliottConfig((c) => patchPatternMenuTf(c, "4h", row.id, e.target.checked))
+                                      }
+                                    />
+                                  </td>
+                                  <td style={{ textAlign: "center" }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={elliottConfig.pattern_menu_by_tf["1h"][row.id]}
+                                      onChange={(e) =>
+                                        setElliottConfig((c) => patchPatternMenuTf(c, "1h", row.id, e.target.checked))
+                                      }
+                                    />
+                                  </td>
+                                  <td style={{ textAlign: "center" }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={elliottConfig.pattern_menu_by_tf["15m"][row.id]}
+                                      onChange={(e) =>
+                                        setElliottConfig((c) => patchPatternMenuTf(c, "15m", row.id, e.target.checked))
+                                      }
+                                    />
+                                  </td>
+                                </tr>
+                              ),
+                            )}
+                            <tr>
+                              <td style={{ padding: "0.2rem" }}>
+                                <span style={{ fontWeight: 600 }}>Gelecek Dalga (Tahmin)</span>
+                                <span className="muted" style={{ marginLeft: "0.35rem" }}>
+                                  — İleri Fib projeksiyon
+                                </span>
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={elliottConfig.show_projection_4h}
+                                  disabled={!elliottConfig.enabled || !elliottConfig.pattern_menu_by_tf["4h"].motive_impulse}
+                                  onChange={(e) =>
+                                    setElliottConfig((c) => ({ ...c, show_projection_4h: e.target.checked }))
+                                  }
+                                />
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={elliottConfig.show_projection_1h}
+                                  disabled={!elliottConfig.enabled || !elliottConfig.pattern_menu_by_tf["1h"].motive_impulse}
+                                  onChange={(e) =>
+                                    setElliottConfig((c) => ({ ...c, show_projection_1h: e.target.checked }))
+                                  }
+                                />
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={elliottConfig.show_projection_15m}
+                                  disabled={!elliottConfig.enabled || !elliottConfig.pattern_menu_by_tf["15m"].motive_impulse}
+                                  onChange={(e) =>
+                                    setElliottConfig((c) => ({ ...c, show_projection_15m: e.target.checked }))
+                                  }
+                                />
+                              </td>
+                            </tr>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>ZigZag (depth)</td>
                               <td style={{ textAlign: "center" }}>
@@ -2534,6 +3049,7 @@ export default function App() {
                               <td style={{ textAlign: "center" }}>
                                 <input
                                   type="color"
+                                  className="tv-elliott-color-swatch"
                                   value={elliottColorInputValue(elliottConfig.mtf_zigzag_color_4h)}
                                   onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_zigzag_color_4h: e.target.value }))}
                                 />
@@ -2541,6 +3057,7 @@ export default function App() {
                               <td style={{ textAlign: "center" }}>
                                 <input
                                   type="color"
+                                  className="tv-elliott-color-swatch"
                                   value={elliottColorInputValue(elliottConfig.mtf_zigzag_color_1h)}
                                   onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_zigzag_color_1h: e.target.value }))}
                                 />
@@ -2548,6 +3065,7 @@ export default function App() {
                               <td style={{ textAlign: "center" }}>
                                 <input
                                   type="color"
+                                  className="tv-elliott-color-swatch"
                                   value={elliottColorInputValue(elliottConfig.mtf_zigzag_color_15m)}
                                   onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_zigzag_color_15m: e.target.value }))}
                                 />
@@ -2663,15 +3181,57 @@ export default function App() {
                             </tr>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>Cizgi renk</td>
-                              <td style={{ textAlign: "center" }}><input type="color" value={elliottColorInputValue(elliottConfig.mtf_wave_color_4h)} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_wave_color_4h: e.target.value }))} /></td>
-                              <td style={{ textAlign: "center" }}><input type="color" value={elliottColorInputValue(elliottConfig.mtf_wave_color_1h)} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_wave_color_1h: e.target.value }))} /></td>
-                              <td style={{ textAlign: "center" }}><input type="color" value={elliottColorInputValue(elliottConfig.mtf_wave_color_15m)} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_wave_color_15m: e.target.value }))} /></td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="color"
+                                  className="tv-elliott-color-swatch"
+                                  value={elliottColorInputValue(elliottConfig.mtf_wave_color_4h)}
+                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_wave_color_4h: e.target.value }))}
+                                />
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="color"
+                                  className="tv-elliott-color-swatch"
+                                  value={elliottColorInputValue(elliottConfig.mtf_wave_color_1h)}
+                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_wave_color_1h: e.target.value }))}
+                                />
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="color"
+                                  className="tv-elliott-color-swatch"
+                                  value={elliottColorInputValue(elliottConfig.mtf_wave_color_15m)}
+                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_wave_color_15m: e.target.value }))}
+                                />
+                              </td>
                             </tr>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>Etiket renk</td>
-                              <td style={{ textAlign: "center" }}><input type="color" value={elliottColorInputValue(elliottConfig.mtf_label_color_4h)} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_label_color_4h: e.target.value }))} /></td>
-                              <td style={{ textAlign: "center" }}><input type="color" value={elliottColorInputValue(elliottConfig.mtf_label_color_1h)} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_label_color_1h: e.target.value }))} /></td>
-                              <td style={{ textAlign: "center" }}><input type="color" value={elliottColorInputValue(elliottConfig.mtf_label_color_15m)} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_label_color_15m: e.target.value }))} /></td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="color"
+                                  className="tv-elliott-color-swatch"
+                                  value={elliottColorInputValue(elliottConfig.mtf_label_color_4h)}
+                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_label_color_4h: e.target.value }))}
+                                />
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="color"
+                                  className="tv-elliott-color-swatch"
+                                  value={elliottColorInputValue(elliottConfig.mtf_label_color_1h)}
+                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_label_color_1h: e.target.value }))}
+                                />
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="color"
+                                  className="tv-elliott-color-swatch"
+                                  value={elliottColorInputValue(elliottConfig.mtf_label_color_15m)}
+                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_label_color_15m: e.target.value }))}
+                                />
+                              </td>
                             </tr>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>Cizgi tipi</td>
@@ -2715,6 +3275,7 @@ export default function App() {
                           }}
                         >
                           <ElliottWaveCard
+                            hideEnabledToggle
                             value={elliottConfig}
                             onChange={setElliottConfig}
                             bars={bars}
@@ -2887,9 +3448,426 @@ export default function App() {
                 </>
               ) : null}
 
+              {drawerTab === "trading_range" ? (
+                <>
+                  {matchesSetting(
+                    "range",
+                    "aralık",
+                    "trading",
+                    "sweep",
+                    "süpürme",
+                    "grafik",
+                    "katman",
+                    "işaret",
+                    "marker",
+                    "pozisyon",
+                    "position",
+                    "olay",
+                    "db",
+                    "likidite",
+                    "liquidity",
+                    "açık",
+                    "open",
+                    "data",
+                    "veri",
+                    "giriş",
+                    "entry",
+                    "backfill",
+                    "limit",
+                    "symbol",
+                    "sembol",
+                    "exchange",
+                    "segment",
+                    "setup",
+                    "özet",
+                    "işlem",
+                    "summary",
+                    "bölüm",
+                  ) ? (
+                    <>
+                      <div
+                        className="tv-settings__tabs tv-settings__subtabs tv-settings__subtabs--cols-4"
+                        role="tablist"
+                        aria-label={t("app.tradingRangeDrawer.subtabListAria")}
+                      >
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={tradingRangeSubtab === "main"}
+                          className={`tv-settings__tab ${tradingRangeSubtab === "main" ? "is-active" : ""}`}
+                          onClick={() => setTradingRangeSubtab("main")}
+                        >
+                          {t("app.tradingRangeDrawer.sectionTitle")}
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={tradingRangeSubtab === "data_entry"}
+                          className={`tv-settings__tab ${tradingRangeSubtab === "data_entry" ? "is-active" : ""}`}
+                          onClick={() => setTradingRangeSubtab("data_entry")}
+                        >
+                          {t("app.tradingRangeDrawer.dataEntryTitle")}
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={tradingRangeSubtab === "setup"}
+                          className={`tv-settings__tab ${tradingRangeSubtab === "setup" ? "is-active" : ""}`}
+                          onClick={() => setTradingRangeSubtab("setup")}
+                        >
+                          {t("app.tradingRangeEventsSetup.sectionTitle")}
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={tradingRangeSubtab === "trade_summary"}
+                          className={`tv-settings__tab ${tradingRangeSubtab === "trade_summary" ? "is-active" : ""}`}
+                          onClick={() => setTradingRangeSubtab("trade_summary")}
+                        >
+                          {t("app.tradingRangeSetup.tableTitle")}
+                        </button>
+                      </div>
+                      {tradingRangeSubtab === "data_entry" ? (
+                        <div className="card">
+                          <TradingRangeDataEntryPanel
+                            accessToken={token}
+                            onEnginesUpdated={() => void refreshEnginePanel()}
+                            isLoggedIn={!!token}
+                            canOps={rbacIsOps}
+                            exchange={barExchange}
+                            segment={barSegment}
+                            symbol={barSymbol}
+                            interval={barInterval}
+                            limit={barLimit}
+                            onExchangeChange={setBarExchange}
+                            onSegmentChange={setBarSegment}
+                            onSymbolChange={setBarSymbol}
+                            onIntervalChange={setBarInterval}
+                            onLimitChange={setBarLimit}
+                            onApplyChart={() => void loadChartFromToolbar()}
+                            applyChartBusy={barsLoading}
+                            onBackfillRest={token && rbacIsOps ? () => void backfillFromRest() : undefined}
+                            backfillDisabled={backfillLoading || barsLoading || !token}
+                            backfillBusy={backfillLoading}
+                            backfillNote={backfillNote}
+                            engineSymbolDraft={engineFormSymbol}
+                            engineIntervalDraft={engineFormInterval}
+                            onEngineSymbolDraftChange={setEngineFormSymbol}
+                            onEngineIntervalDraftChange={setEngineFormInterval}
+                            onSyncScopeToEngineDraft={() => {
+                              setEngineFormSymbol(barSymbol.trim());
+                              setEngineFormInterval(barInterval.trim());
+                            }}
+                            onRegisterEngine={async () => {
+                              if (!token) return;
+                              setEngineFormBusy(true);
+                              try {
+                                await postEngineSymbol(token, {
+                                  symbol: engineFormSymbol.trim(),
+                                  interval: engineFormInterval.trim(),
+                                  exchange: barExchange.trim() || undefined,
+                                  segment: barSegment.trim() || undefined,
+                                });
+                                await refreshEnginePanel();
+                              } catch (e) {
+                                setEnginePanelErr(String(e));
+                              } finally {
+                                setEngineFormBusy(false);
+                              }
+                            }}
+                            engineRegisterBusy={engineFormBusy}
+                          />
+                        </div>
+                      ) : null}
+                      {tradingRangeSubtab === "main" ? (
+                        <div className="card">
+                          <p className="tv-drawer__section-head">{t("app.tradingRangeDrawer.sectionTitle")}</p>
+                      <p className="muted" style={{ fontSize: "0.78rem", marginBottom: "0.5rem" }}>
+                        {t("app.tradingRangeDrawer.intro")}
+                      </p>
+                      {token ? (
+                        <>
+                          <label
+                            className="muted tv-elliott-panel__field tv-elliott-panel__field--check"
+                            style={{ display: "flex", alignItems: "flex-start", gap: "0.45rem", marginBottom: "0.35rem" }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={tradingRangeAutoRefresh}
+                              onChange={(e) => setTradingRangeAutoRefresh(e.target.checked)}
+                            />
+                            <span style={{ fontSize: "0.72rem" }}>{t("app.tradingRangeDrawer.autoRefreshCheckbox")}</span>
+                          </label>
+                          {tradingRangeAutoRefresh ? (
+                            <p className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.4rem" }}>
+                              {t("app.tradingRangeDrawer.autoRefreshActive", {
+                                seconds: TRADING_RANGE_DRAWER_REFRESH_MS / 1000,
+                              })}
+                            </p>
+                          ) : (
+                            <p className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.4rem" }}>
+                              {t("app.tradingRangeDrawer.autoRefreshHint")}
+                            </p>
+                          )}
+                          <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.45rem", lineHeight: 1.45 }}>
+                            {t("app.tradingRangeDrawer.chartScopeHint")}
+                          </p>
+                        </>
+                      ) : null}
+                      <div className="tv-trading-range-checks">
+                        <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
+                          <input
+                            type="checkbox"
+                            checked={showDbTradingRangeLayer}
+                            onChange={(e) => setShowDbTradingRangeLayer(e.target.checked)}
+                          />
+                          <span>{t("app.engineDrawer.chkTradingRange")}</span>
+                        </label>
+                        <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
+                          <input
+                            type="checkbox"
+                            checked={showDbSweepMarkers}
+                            onChange={(e) => setShowDbSweepMarkers(e.target.checked)}
+                          />
+                          <span>{t("app.engineDrawer.chkSweepMarkers")}</span>
+                        </label>
+                        <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
+                          <input
+                            type="checkbox"
+                            checked={showDbRangeSignalMarkers}
+                            onChange={(e) => setShowDbRangeSignalMarkers(e.target.checked)}
+                          />
+                          <span>{t("app.engineDrawer.chkRangeSignals")}</span>
+                        </label>
+                        <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
+                          <input
+                            type="checkbox"
+                            checked={showDbOpenPositionLine}
+                            onChange={(e) => setShowDbOpenPositionLine(e.target.checked)}
+                          />
+                          <span>{t("app.engineDrawer.chkOpenPositionLine")}</span>
+                        </label>
+                      </div>
+                      {tradingRangeScorePayload ? (
+                        <div
+                          style={{
+                            marginTop: "0.45rem",
+                            padding: "0.45rem 0.5rem",
+                            borderRadius: "8px",
+                            border: "1px solid var(--tv-border, rgba(255,255,255,0.08))",
+                            background: "color-mix(in srgb, var(--card) 86%, transparent)",
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "0.5rem" }}>
+                            <p className="muted" style={{ margin: 0, fontSize: "0.78rem", fontWeight: 700 }}>
+                              Score
+                            </p>
+                            <p className="mono" style={{ margin: 0, fontSize: "0.78rem" }}>
+                              {String(tradingRangeScorePayload.setup_side ?? "—")} ·{" "}
+                              {typeof tradingRangeScorePayload.setup_score_best === "number"
+                                ? tradingRangeScorePayload.setup_score_best
+                                : "—"}
+                              /100
+                            </p>
+                          </div>
+                          <p className="muted" style={{ margin: "0.25rem 0 0", fontSize: "0.7rem", lineHeight: 1.45 }}>
+                            Guardrails:{" "}
+                            <span className="mono">
+                              {tradingRangeScorePayload.guardrails_pass ? "PASS" : "REJECT"}
+                            </span>
+                            {" · "}Touches:{" "}
+                            <span className="mono">
+                              {typeof tradingRangeScorePayload.support_touches === "number"
+                                ? tradingRangeScorePayload.support_touches
+                                : "—"}
+                              /
+                              {typeof tradingRangeScorePayload.resistance_touches === "number"
+                                ? tradingRangeScorePayload.resistance_touches
+                                : "—"}
+                            </span>
+                            {" · "}Close breakout:{" "}
+                            <span className="mono">
+                              {tradingRangeScorePayload.close_breakout ? "yes" : "no"}
+                            </span>
+                            {" · "}Zone:{" "}
+                            <span className="mono">{String(tradingRangeScorePayload.range_zone ?? "—")}</span>
+                          </p>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.25rem 0.5rem", marginTop: "0.35rem" }}>
+                            <div className="muted" style={{ fontSize: "0.7rem" }}>
+                              Touch: <span className="mono">{tradingRangeScorePayload.score_touch_long ?? "—"}</span>
+                            </div>
+                            <div className="muted" style={{ fontSize: "0.7rem" }}>
+                              Rejection: <span className="mono">{tradingRangeScorePayload.score_rejection_long ?? "—"}</span>
+                            </div>
+                            <div className="muted" style={{ fontSize: "0.7rem" }}>
+                              Osc: <span className="mono">{tradingRangeScorePayload.score_oscillator_long ?? "—"}</span>
+                            </div>
+                            <div className="muted" style={{ fontSize: "0.7rem" }}>
+                              Breakout: <span className="mono">{tradingRangeScorePayload.score_breakout_long ?? "—"}</span>
+                            </div>
+                          </div>
+                          {tradingRangeScorePayload.volume_unavailable ? (
+                            <p className="muted" style={{ margin: "0.3rem 0 0", fontSize: "0.65rem" }}>
+                              Volume score: N/A (no volume in OHLC feed)
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="theme-toggle"
+                        style={{ marginTop: "0.35rem", fontSize: "0.78rem" }}
+                        disabled={engineListRefreshing}
+                        onClick={async () => {
+                          setEngineListRefreshing(true);
+                          try {
+                            await refreshEnginePanel();
+                          } finally {
+                            setEngineListRefreshing(false);
+                          }
+                        }}
+                      >
+                        {engineListRefreshing
+                          ? t("app.tradingRangeDrawer.refreshBusy")
+                          : t("app.tradingRangeDrawer.refreshNow")}
+                      </button>
+                      {enginePanelErr ? <p className="err">{enginePanelErr}</p> : null}
+                      {token ? (
+                        <TradingRangeFuturesQuickTrade
+                          accessToken={token}
+                          exchange={barExchange}
+                          segment={barSegment}
+                          symbol={barSymbol}
+                        />
+                      ) : null}
+                      {!token ? <p className="muted">{t("app.tradingRangeDrawer.loginHint")}</p> : null}
+                        </div>
+                      ) : null}
+                      {tradingRangeSubtab === "setup" ? (
+                        <div className="card">
+                          <p className="tv-drawer__section-head" style={{ marginBottom: "0.25rem" }}>
+                            {t("app.tradingRangeEventsSetup.sectionTitle")}
+                          </p>
+                          <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.4rem", lineHeight: 1.45 }}>
+                            {t("app.tradingRangeEventsSetup.intro")}{" "}
+                            <HelpCrossLink topicId="engine-range-signals" onOpen={jumpToHelp} label="SSS" />
+                          </p>
+                          {token ? (
+                            <TradingRangeSetupTable events={engineRangeSignals} />
+                          ) : (
+                            <p className="muted">{t("app.tradingRangeDrawer.loginHint")}</p>
+                          )}
+                        </div>
+                      ) : null}
+                      {tradingRangeSubtab === "trade_summary" ? (
+                        <div className="card">
+                          <p className="tv-drawer__section-head" style={{ marginBottom: "0.25rem" }}>
+                            {t("app.tradingRangeSetup.tableTitle")}
+                          </p>
+                          {tradingRangeTakerFraction == null && token ? (
+                            <p className="muted" style={{ fontSize: "0.65rem", marginBottom: "0.35rem" }}>
+                              {t("app.tradingRangeSetup.feesHintLoadCommission")}
+                            </p>
+                          ) : null}
+                          {token ? (
+                            <TradingRangeTradeSummary
+                              setups={chartRangeSetups}
+                              takerFraction={tradingRangeTakerFraction}
+                            />
+                          ) : (
+                            <p className="muted">{t("app.tradingRangeDrawer.loginHint")}</p>
+                          )}
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
+                </>
+              ) : null}
+
+              {drawerTab === "signal_dashboard" ? (
+                <>
+                  {matchesSetting(
+                    "sinyal",
+                    "dashboard",
+                    "panosu",
+                    "durum",
+                    "trend",
+                    "kopu",
+                    "range",
+                    "v2",
+                    "ingilizce",
+                    "signal_dashboard",
+                    "wire",
+                    "ta",
+                    "piyasa",
+                  ) ? (
+                    <div className="card">
+                      <p className="tv-drawer__section-head">{t("app.signalDashboardDrawer.sectionTitle")}</p>
+                      <p className="muted" style={{ fontSize: "0.78rem", marginBottom: "0.5rem" }}>
+                        {t("app.signalDashboardDrawer.intro")}
+                      </p>
+                      {token ? (
+                        <>
+                          <label
+                            className="muted tv-elliott-panel__field tv-elliott-panel__field--check"
+                            style={{ display: "flex", alignItems: "flex-start", gap: "0.45rem", marginBottom: "0.35rem" }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={signalDashboardAutoRefresh}
+                              onChange={(e) => setSignalDashboardAutoRefresh(e.target.checked)}
+                            />
+                            <span style={{ fontSize: "0.72rem" }}>{t("app.signalDashboardDrawer.autoRefreshCheckbox")}</span>
+                          </label>
+                          {signalDashboardAutoRefresh ? (
+                            <p className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.4rem" }}>
+                              {t("app.signalDashboardDrawer.autoRefreshActive", {
+                                seconds: SIGNAL_DASHBOARD_DRAWER_REFRESH_MS / 1000,
+                              })}
+                            </p>
+                          ) : (
+                            <p className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.4rem" }}>
+                              {t("app.signalDashboardDrawer.autoRefreshHint")}
+                            </p>
+                          )}
+                        </>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="theme-toggle"
+                        style={{ marginTop: "0.2rem", fontSize: "0.78rem" }}
+                        disabled={engineListRefreshing}
+                        onClick={async () => {
+                          setEngineListRefreshing(true);
+                          try {
+                            await refreshEnginePanel();
+                          } finally {
+                            setEngineListRefreshing(false);
+                          }
+                        }}
+                      >
+                        {engineListRefreshing
+                          ? t("app.signalDashboardDrawer.refreshBusy")
+                          : t("app.signalDashboardDrawer.refreshNow")}
+                      </button>
+                      {enginePanelErr ? <p className="err">{enginePanelErr}</p> : null}
+                      {token ? (
+                        <div style={{ marginTop: "0.55rem" }}>
+                          <SignalDashboardDrawerPanel snapshot={dbSignalDashboardSnapshot} />
+                        </div>
+                      ) : (
+                        <p className="muted" style={{ marginTop: "0.45rem" }}>
+                          {t("app.signalDashboardDrawer.loginHint")}
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+
               {drawerTab === "engine" ? (
                 <>
-                  {matchesSetting("motor", "engine", "snapshot", "trading", "range", "sembol", "worker") ? (
+                  {matchesSetting("motor", "engine", "snapshot", "sembol", "worker") ? (
                     <div className="card">
                       <p className="tv-drawer__section-head">{t("app.engineDrawer.sectionTitle")}</p>
                       <p className="muted" style={{ fontSize: "0.78rem", marginBottom: "0.5rem" }}>
@@ -2902,38 +3880,165 @@ export default function App() {
                         <li>{t("app.engineDrawer.liPaper")}</li>
                         <li>{t("app.engineDrawer.liConfluence")}</li>
                       </ul>
-                      <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
-                        <input
-                          type="checkbox"
-                          checked={showDbTradingRangeLayer}
-                          onChange={(e) => setShowDbTradingRangeLayer(e.target.checked)}
-                        />
-                        <span>{t("app.engineDrawer.chkTradingRange")}</span>
-                      </label>
-                      <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
-                        <input
-                          type="checkbox"
-                          checked={showDbSweepMarkers}
-                          onChange={(e) => setShowDbSweepMarkers(e.target.checked)}
-                        />
-                        <span>{t("app.engineDrawer.chkSweepMarkers")}</span>
-                      </label>
-                      <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
-                        <input
-                          type="checkbox"
-                          checked={showDbRangeSignalMarkers}
-                          onChange={(e) => setShowDbRangeSignalMarkers(e.target.checked)}
-                        />
-                        <span>{t("app.engineDrawer.chkRangeSignals")}</span>
-                      </label>
-                      <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
-                        <input
-                          type="checkbox"
-                          checked={showDbOpenPositionLine}
-                          onChange={(e) => setShowDbOpenPositionLine(e.target.checked)}
-                        />
-                        <span>{t("app.engineDrawer.chkOpenPositionLine")}</span>
-                      </label>
+                      {token ? (
+                        <div
+                          className="muted"
+                          style={{
+                            marginTop: "0.5rem",
+                            padding: "0.45rem 0.5rem",
+                            border: "1px solid color-mix(in srgb, var(--fg, #ccc) 18%, transparent)",
+                            borderRadius: 6,
+                            fontSize: "0.72rem",
+                          }}
+                        >
+                          <p className="tv-drawer__section-head" style={{ marginBottom: "0.35rem" }}>
+                            {t("app.engineDrawer.rangeConfigHead")}
+                          </p>
+                          <p style={{ marginBottom: "0.45rem", lineHeight: 1.45 }}>
+                            {t("app.engineDrawer.rangeConfigIntro")}
+                          </p>
+                          {rangeEngineConfig?.worker?.refresh_requested ? (
+                            <p style={{ marginBottom: "0.4rem", opacity: 0.95 }}>
+                              {t("app.engineDrawer.workerRefreshPending")}
+                            </p>
+                          ) : null}
+                          {rbacIsOps ? (
+                            <>
+                              <p style={{ marginBottom: "0.3rem", fontWeight: 600 }}>
+                                {t("app.engineDrawer.executionGatesHead")}
+                              </p>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  gap: "0.3rem",
+                                  marginBottom: "0.45rem",
+                                }}
+                              >
+                                <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
+                                  <input
+                                    type="checkbox"
+                                    checked={rangeEngineConfig?.execution_gates?.allow_long_open !== false}
+                                    disabled={rangeEnginePatchBusy}
+                                    onChange={(e) =>
+                                      void patchRangeEnginePartial({
+                                        execution_gates: { allow_long_open: e.target.checked },
+                                      })
+                                    }
+                                  />
+                                  <span>{t("app.engineDrawer.allowLongOpen")}</span>
+                                </label>
+                                <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
+                                  <input
+                                    type="checkbox"
+                                    checked={rangeEngineConfig?.execution_gates?.allow_short_open !== false}
+                                    disabled={rangeEnginePatchBusy}
+                                    onChange={(e) =>
+                                      void patchRangeEnginePartial({
+                                        execution_gates: { allow_short_open: e.target.checked },
+                                      })
+                                    }
+                                  />
+                                  <span>{t("app.engineDrawer.allowShortOpen")}</span>
+                                </label>
+                                <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
+                                  <input
+                                    type="checkbox"
+                                    checked={rangeEngineConfig?.execution_gates?.allow_all_closes !== false}
+                                    disabled={rangeEnginePatchBusy}
+                                    onChange={(e) =>
+                                      void patchRangeEnginePartial({
+                                        execution_gates: { allow_all_closes: e.target.checked },
+                                      })
+                                    }
+                                  />
+                                  <span>{t("app.engineDrawer.allowAllCloses")}</span>
+                                </label>
+                              </div>
+                              <button
+                                type="button"
+                                className="theme-toggle"
+                                style={{ fontSize: "0.75rem", marginBottom: "0.45rem" }}
+                                disabled={rangeEnginePatchBusy}
+                                onClick={() =>
+                                  void patchRangeEnginePartial({ worker: { refresh_requested: true } })
+                                }
+                              >
+                                {rangeEnginePatchBusy
+                                  ? t("app.engineDrawer.workerRefreshBusy")
+                                  : t("app.engineDrawer.workerRefreshRequest")}
+                              </button>
+                              <p className="tv-drawer__section-head" style={{ marginTop: "0.45rem", marginBottom: "0.3rem" }}>
+                                {t("app.engineDrawer.trParamsHead")}
+                              </p>
+                              <p style={{ marginBottom: "0.35rem", lineHeight: 1.45 }}>
+                                {t("app.engineDrawer.trParamsHint")}
+                              </p>
+                              <div className="tv-settings__fields" style={{ marginBottom: "0.35rem" }}>
+                                <label>
+                                  <span className="muted">{t("app.engineDrawer.trLookback")}</span>
+                                  <input
+                                    className="mono"
+                                    value={trParamsDraft.lookback}
+                                    onChange={(e) =>
+                                      setTrParamsDraft((d) => ({ ...d, lookback: e.target.value }))
+                                    }
+                                    placeholder="50"
+                                  />
+                                </label>
+                                <label>
+                                  <span className="muted">{t("app.engineDrawer.trAtrPeriod")}</span>
+                                  <input
+                                    className="mono"
+                                    value={trParamsDraft.atr_period}
+                                    onChange={(e) =>
+                                      setTrParamsDraft((d) => ({ ...d, atr_period: e.target.value }))
+                                    }
+                                    placeholder="14"
+                                  />
+                                </label>
+                                <label>
+                                  <span className="muted">{t("app.engineDrawer.trAtrSmaPeriod")}</span>
+                                  <input
+                                    className="mono"
+                                    value={trParamsDraft.atr_sma_period}
+                                    onChange={(e) =>
+                                      setTrParamsDraft((d) => ({ ...d, atr_sma_period: e.target.value }))
+                                    }
+                                    placeholder="50"
+                                  />
+                                </label>
+                              </div>
+                              <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
+                                <input
+                                  type="checkbox"
+                                  checked={trParamsDraft.require_range_regime}
+                                  onChange={(e) =>
+                                    setTrParamsDraft((d) => ({
+                                      ...d,
+                                      require_range_regime: e.target.checked,
+                                    }))
+                                  }
+                                />
+                                <span>{t("app.engineDrawer.trRequireRangeRegime")}</span>
+                              </label>
+                              <button
+                                type="button"
+                                className="theme-toggle"
+                                style={{ marginTop: "0.35rem", fontSize: "0.75rem" }}
+                                disabled={rangeEnginePatchBusy}
+                                onClick={() => void saveTradingRangeParamsFromDraft()}
+                              >
+                                {rangeEnginePatchBusy
+                                  ? t("app.engineDrawer.saveTrParamsBusy")
+                                  : t("app.engineDrawer.saveTrParams")}
+                              </button>
+                            </>
+                          ) : (
+                            <p style={{ lineHeight: 1.45 }}>{t("app.engineDrawer.rangeConfigReadOnly")}</p>
+                          )}
+                        </div>
+                      ) : null}
                       <button
                         type="button"
                         className="theme-toggle"
@@ -3074,177 +4179,6 @@ export default function App() {
                             ))}
                           </ul>
                           {matchesSetting(
-                            "sinyal",
-                            "dashboard",
-                            "durum",
-                            "trend",
-                            "kopu",
-                            "range",
-                            "v2",
-                            "ingilizce",
-                            "signal_dashboard",
-                            "wire",
-                          ) &&
-                          dbSignalDashboardSnapshot ? (
-                            <div className="card" style={{ marginTop: "0.65rem", padding: "0.55rem" }}>
-                              <p className="tv-drawer__section-head" style={{ marginBottom: "0.35rem" }}>
-                                {t("app.signalDashboard.sectionTitle")}
-                              </p>
-                              <p className="muted" style={{ fontSize: "0.66rem", marginBottom: "0.35rem" }}>
-                                {t("app.signalDashboard.priorityLine")}
-                              </p>
-                              {dbSignalDashboardSnapshot.error ? (
-                                <p className="err" style={{ fontSize: "0.75rem" }}>
-                                  {dbSignalDashboardSnapshot.error}
-                                </p>
-                              ) : null}
-                              {(() => {
-                                const raw = dbSignalDashboardSnapshot.payload;
-                                if (!raw || typeof raw !== "object") {
-                                  return (
-                                    <p className="muted" style={{ fontSize: "0.75rem" }}>
-                                      {t("app.signalDashboard.payloadEmpty")}
-                                    </p>
-                                  );
-                                }
-                                const ins = raw as Record<string, unknown>;
-                                if (ins.reason === "insufficient_bars") {
-                                  return (
-                                    <p className="muted" style={{ fontSize: "0.75rem" }}>
-                                      {t("app.signalDashboard.insufficientBars")}
-                                    </p>
-                                  );
-                                }
-                                const p = raw as SignalDashboardPayload;
-                                const v2 = parseSignalDashboardV2(ins.signal_dashboard_v2);
-                                const rk = (key: string, v: string) => (
-                                  <tr key={key}>
-                                    <td className="muted" style={{ padding: "0.12rem 0.35rem 0.12rem 0", verticalAlign: "top" }}>
-                                      {t(`app.signalDashboard.row.${key}`)}
-                                    </td>
-                                    <td className="mono" style={{ padding: "0.12rem 0", wordBreak: "break-all" }}>
-                                      {v}
-                                    </td>
-                                  </tr>
-                                );
-                                const yn = (b: boolean | undefined) =>
-                                  b ? t("app.signalDashboard.ynYes") : t("app.signalDashboard.ynNo");
-                                const posStr =
-                                  v2?.position_strength_10 != null
-                                    ? `${v2.position_strength_10} / 10`
-                                    : p.pozisyon_gucu_10 != null
-                                      ? `${p.pozisyon_gucu_10} / 10`
-                                      : "—";
-                                const sysStr =
-                                  pickDashboardBool(v2?.system_active, p.sistem_aktif) === true
-                                    ? t("app.signalDashboard.systemActive")
-                                    : "—";
-                                const wireRow = (key: string, val: unknown) => {
-                                  if (val === undefined || val === null) return null;
-                                  const s = typeof val === "boolean" ? (val ? "true" : "false") : String(val);
-                                  return (
-                                    <tr key={key}>
-                                      <td
-                                        className="muted mono"
-                                        style={{ padding: "0.08rem 0.35rem 0.08rem 0", verticalAlign: "top", width: "42%" }}
-                                      >
-                                        {key}
-                                      </td>
-                                      <td className="mono" style={{ padding: "0.08rem 0", wordBreak: "break-all" }}>
-                                        {s}
-                                      </td>
-                                    </tr>
-                                  );
-                                };
-                                return (
-                                  <>
-                                  <table style={{ width: "100%", fontSize: "0.74rem", borderCollapse: "collapse" }}>
-                                    <tbody>
-                                      {rk("status", pickDashboardStr(v2?.status, p.durum))}
-                                      {rk("statusModelRaw", pickDashboardStr(v2?.status_model_raw, p.durum_model_raw))}
-                                      {rk("directionPolicyDb", p.signal_direction_mode ?? "—")}
-                                      {rk("directionEffective", p.signal_direction_effective ?? "—")}
-                                      {rk("localTrend", pickDashboardStr(v2?.local_trend, p.yerel_trend))}
-                                      {rk("globalTrend", pickDashboardStr(v2?.global_trend, p.global_trend))}
-                                      {rk("marketMode", pickDashboardStr(v2?.market_mode, p.piyasa_modu))}
-                                      {rk("entryMode", pickDashboardStr(v2?.entry_mode, p.giris_modu))}
-                                      {rk(
-                                        "volatilityPct",
-                                        v2?.volatility_pct != null && Number.isFinite(v2.volatility_pct)
-                                          ? v2.volatility_pct.toFixed(2)
-                                          : p.oynaklik_pct != null
-                                            ? p.oynaklik_pct.toFixed(2)
-                                            : "—",
-                                      )}
-                                      {rk("momentum1", pickDashboardStr(v2?.momentum_rsi, p.momentum_1))}
-                                      {rk("momentum2", pickDashboardStr(v2?.momentum_roc, p.momentum_2))}
-                                      {rk("entryActual", pickDashboardNum(v2?.entry_price ?? undefined, p.giris_gercek ?? undefined))}
-                                      {rk("stopInitial", pickDashboardNum(v2?.stop_initial ?? undefined, p.stop_ilk ?? undefined))}
-                                      {rk(
-                                        "takeProfitInitial",
-                                        pickDashboardNum(v2?.take_profit_initial ?? undefined, p.kar_al_ilk ?? undefined),
-                                      )}
-                                      {rk(
-                                        "stopTrailActive",
-                                        pickDashboardNum(v2?.stop_trail ?? undefined, p.stop_trail_aktif ?? undefined),
-                                      )}
-                                      {rk(
-                                        "takeProfitDynamic",
-                                        pickDashboardNum(v2?.take_profit_dynamic ?? undefined, p.kar_al_dinamik ?? undefined),
-                                      )}
-                                      {rk("signalSource", pickDashboardStr(v2?.signal_source, p.sinyal_kaynagi))}
-                                      {rk("trendExhaustion", yn(pickDashboardBool(v2?.trend_exhaustion, p.trend_tukenmesi)))}
-                                      {rk("structureShift", yn(pickDashboardBool(v2?.structure_shift, p.yapi_kaymasi)))}
-                                      {rk("positionStrength", posStr)}
-                                      {rk("system", sysStr)}
-                                      {rk("rangeHigh", formatDashboardNumber(p.range_high ?? undefined))}
-                                      {rk("rangeLow", formatDashboardNumber(p.range_low ?? undefined))}
-                                      {rk("rangeMid", formatDashboardNumber(p.range_mid ?? undefined))}
-                                      {rk("atr", formatDashboardNumber(p.atr ?? undefined))}
-                                      {rk("lastBar", p.last_bar_open_time ?? "—")}
-                                    </tbody>
-                                  </table>
-                                  {v2 ? (
-                                    <details style={{ marginTop: "0.45rem" }}>
-                                      <summary className="muted" style={{ fontSize: "0.7rem", cursor: "pointer" }}>
-                                        {t("app.signalDashboard.wireSummary")}{" "}
-                                        <code>signal_dashboard_v2</code>
-                                      </summary>
-                                      <table
-                                        style={{ width: "100%", fontSize: "0.68rem", borderCollapse: "collapse", marginTop: "0.28rem" }}
-                                        className="mono muted"
-                                      >
-                                        <tbody>
-                                          {wireRow("schema_version", v2.schema_version)}
-                                          {wireRow("status", v2.status)}
-                                          {wireRow("status_model_raw", v2.status_model_raw)}
-                                          {wireRow("local_trend", v2.local_trend)}
-                                          {wireRow("global_trend", v2.global_trend)}
-                                          {wireRow("market_mode", v2.market_mode)}
-                                          {wireRow("entry_mode", v2.entry_mode)}
-                                          {wireRow("volatility_pct", v2.volatility_pct)}
-                                          {wireRow("momentum_rsi", v2.momentum_rsi)}
-                                          {wireRow("momentum_roc", v2.momentum_roc)}
-                                          {wireRow("entry_price", v2.entry_price)}
-                                          {wireRow("stop_initial", v2.stop_initial)}
-                                          {wireRow("take_profit_initial", v2.take_profit_initial)}
-                                          {wireRow("stop_trail", v2.stop_trail)}
-                                          {wireRow("take_profit_dynamic", v2.take_profit_dynamic)}
-                                          {wireRow("signal_source", v2.signal_source)}
-                                          {wireRow("trend_exhaustion", v2.trend_exhaustion)}
-                                          {wireRow("structure_shift", v2.structure_shift)}
-                                          {wireRow("position_strength_10", v2.position_strength_10)}
-                                          {wireRow("system_active", v2.system_active)}
-                                        </tbody>
-                                      </table>
-                                    </details>
-                                  ) : null}
-                                  </>
-                                );
-                              })()}
-                            </div>
-                          ) : null}
-                          {matchesSetting(
                             "paper",
                             "dry",
                             "f4",
@@ -3253,12 +4187,6 @@ export default function App() {
                             "işlem",
                             "portfolio",
                             "birleşik",
-                            "komisyon",
-                            "commission",
-                            "fee",
-                            "ücret",
-                            "maker",
-                            "taker",
                             "f5",
                           ) ? (
                             <div className="card" style={{ marginTop: "0.65rem", padding: "0.55rem" }}>
@@ -3272,70 +4200,17 @@ export default function App() {
                                 </span>
                                 {t("app.paperDrawer.topBarTrail")}
                               </p>
-                              <p className="tv-drawer__section-head" style={{ marginBottom: "0.3rem", marginTop: "0.45rem" }}>
-                                {t("app.paperDrawer.commissionHead")}
+                              <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.45rem" }}>
+                                {t("app.paperDrawer.commissionMovedHint")}{" "}
+                                <button
+                                  type="button"
+                                  className="tv-link-btn"
+                                  style={{ fontSize: "inherit" }}
+                                  onClick={() => setDrawerTab("commission")}
+                                >
+                                  {t("drawer.commission")}
+                                </button>
                               </p>
-                              <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.35rem" }}>
-                                {t("app.paperDrawer.commissionIntro")}
-                              </p>
-                              <table
-                                style={{ width: "100%", fontSize: "0.72rem", borderCollapse: "collapse", marginBottom: "0.35rem" }}
-                              >
-                                <tbody>
-                                  <tr>
-                                    <td className="muted" style={{ padding: "0.1rem 0.35rem 0.1rem 0", verticalAlign: "top" }}>
-                                      {t("app.paperDrawer.defaultBps")}
-                                    </td>
-                                    <td className="mono" style={{ padding: "0.1rem 0", wordBreak: "break-all" }}>
-                                      {commissionDefaults ? (
-                                        <>
-                                          maker {commissionDefaults.defaults_bps.maker_bps.toFixed(2)} · taker{" "}
-                                          {commissionDefaults.defaults_bps.taker_bps.toFixed(2)}
-                                          <br />
-                                          <span style={{ opacity: 0.88 }}>
-                                            {commissionDefaults.segment}
-                                            {commissionDefaults.query_symbol ? ` · ${commissionDefaults.query_symbol}` : ""} ·{" "}
-                                            {commissionDefaults.source}
-                                          </span>
-                                        </>
-                                      ) : (
-                                        "—"
-                                      )}
-                                    </td>
-                                  </tr>
-                                  <tr>
-                                    <td className="muted" style={{ padding: "0.1rem 0.35rem 0.1rem 0", verticalAlign: "top" }}>
-                                      {t("app.paperDrawer.accountFraction")}
-                                    </td>
-                                    <td className="mono" style={{ padding: "0.1rem 0", wordBreak: "break-all" }}>
-                                      {commissionAccount ? (
-                                        <>
-                                          maker {commissionAccount.maker_rate} · taker {commissionAccount.taker_rate}
-                                          <br />
-                                          <span style={{ opacity: 0.88 }}>
-                                            {commissionAccount.segment} · {commissionAccount.source}
-                                          </span>
-                                        </>
-                                      ) : commissionAccountErr ? (
-                                        <span className="err">{commissionAccountErr}</span>
-                                      ) : (
-                                        <span className="muted">—</span>
-                                      )}
-                                    </td>
-                                  </tr>
-                                </tbody>
-                              </table>
-                              <button
-                                type="button"
-                                className="theme-toggle"
-                                style={{ fontSize: "0.74rem", marginBottom: "0.45rem" }}
-                                disabled={commissionAccountBusy}
-                                onClick={() => void loadCommissionAccount()}
-                              >
-                                {commissionAccountBusy
-                                  ? t("app.commission.fetchBusy")
-                                  : t("app.commission.fetchLabel")}
-                              </button>
                               <table style={{ width: "100%", fontSize: "0.72rem", borderCollapse: "collapse", marginBottom: "0.45rem" }}>
                                 <tbody>
                                   <tr>
@@ -3526,9 +4401,8 @@ export default function App() {
                             Piyasa bağlamı (üst çubuk)
                           </p>
                           <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.25rem" }}>
-                            <code>GET …/analysis/market-context/latest</code> — tek <code>engine_symbols</code> hedefi
-                            için <code>signal_dashboard</code>, <code>trading_range</code>, <code>confluence</code> ve
-                            Nansen + taker <code>data_snapshots</code>.
+                            <code>GET …/analysis/market-context/latest</code>:{" "}
+                            <HelpCrossLink topicId="engine-market-context-latest" onOpen={jumpToHelp} label="SSS" />
                           </p>
                           <div
                             style={{ maxHeight: "9rem", overflow: "auto", fontSize: "0.7rem" }}
@@ -3613,41 +4487,6 @@ export default function App() {
                               </>
                             )}
                           </div>
-                          <div style={{ marginTop: "0.65rem" }}>
-                            <p className="tv-drawer__section-head" style={{ marginBottom: "0.25rem" }}>
-                              Range sinyal olayları (DB)
-                            </p>
-                            <p className="muted" style={{ fontSize: "0.7rem", marginBottom: "0.35rem" }}>
-                              Worker, <code>signal_dashboard.durum</code> (LONG/SHORT/NOTR){" "}
-                              <strong>önceki geçerli snapshot’a göre değişince</strong> veya ilk kez yönlü bir{" "}
-                              <code>durum</code> oluşunca <code>long_entry</code> / <code>long_exit</code> /{" "}
-                              <code>short_entry</code> / <code>short_exit</code> yazar. Yalnız NOTR kalıyorsa olay
-                              düşmez. Mum üstü marker: F2.
-                            </p>
-                            <div
-                              style={{ maxHeight: "9rem", overflow: "auto", fontSize: "0.68rem" }}
-                              className="mono muted"
-                            >
-                              {engineRangeSignals.length === 0 ? (
-                                <span>
-                                  Henüz olay yok: worker / <code>market_bars</code> / eşleşen hedef kontrol edin; sürekli
-                                  NOTR veya tick bekleniyor olabilir.
-                                </span>
-                              ) : (
-                                engineRangeSignals.map((ev) => (
-                                  <div key={ev.id} style={{ marginBottom: "0.28rem" }}>
-                                    <strong>{ev.event_kind}</strong> {ev.exchange}/{ev.segment} {ev.symbol}{" "}
-                                    {ev.interval}
-                                    <br />
-                                    bar {ev.bar_open_time}
-                                    {ev.reference_price != null && Number.isFinite(ev.reference_price)
-                                      ? ` · px ${ev.reference_price.toFixed(4)}`
-                                      : ""}
-                                  </div>
-                                ))
-                              )}
-                            </div>
-                          </div>
                         </>
                       ) : (
                         <p className="muted">Motor paneli için giriş yap.</p>
@@ -3697,15 +4536,10 @@ export default function App() {
                           {barExchange.trim() || "—"}/{normalizeMarketSegment(barSegment)}/
                           {barSymbol.trim().toUpperCase() || "—"}/{barInterval.trim() || "—"}
                         </span>
-                        . API: <code>market-context/latest</code>, <code>market-context/summary</code>,{" "}
-                        <code>engine/confluence/latest</code>, <code>onchain-signals/breakdown</code>,{" "}
-                        <code>data-snapshots</code>. Worker ortamı (confluence,
-                        Nansen, harici çekim): repo kökü <code>.env.example</code>.{" "}
-                        <code>source_key</code> adları: <code>docs/DATA_SOURCES_AND_SOURCE_KEYS.md</code>. Ayrıntı:{" "}
-                        <code>docs/PLAN_CONFLUENCE_AND_MARKET_DATA.md</code>,{" "}
-                        <code>docs/SPEC_EXECUTION_RANGE_SIGNALS_UI.md</code> (F7),{" "}
-                        <code>docs/SPEC_ONCHAIN_SIGNALS.md</code>. Confluence:{" "}
-                        <code>QTSS_CONFLUENCE_ENGINE</code> (0/kapalı ile kapatılır).
+                        . Uçlar ve worker kurulumu için{" "}
+                        <HelpCrossLink topicId="market-context-overview" onOpen={jumpToHelp} label="Yardım" /> · özet
+                        filtresi:{" "}
+                        <HelpCrossLink topicId="market-context-summary" onOpen={jumpToHelp} label="Özet" />
                       </p>
                       <button
                         type="button"
@@ -3722,9 +4556,8 @@ export default function App() {
                         Motor hedefleri (filtreli özet)
                       </p>
                       <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.25rem" }}>
-                        <code>GET …/market-context/summary</code> — Üst çubukta sembol varken aynı{" "}
-                        <code>exchange</code> / <code>segment</code> / <code>symbol</code> ile süzülür; sembol boşken
-                        tüm <strong>aktif</strong> hedefler (limit).
+                        <code>GET …/market-context/summary</code> süzümü:{" "}
+                        <HelpCrossLink topicId="market-context-summary" onOpen={jumpToHelp} label="SSS" />
                       </p>
                       <div
                         className="mono muted"
@@ -4073,52 +4906,12 @@ export default function App() {
                     <div className="card">
                       <p className="tv-drawer__section-head">Nansen — Token Screener (rehber)</p>
                       <p className="muted" style={{ fontSize: "0.78rem", marginBottom: "0.5rem" }}>
-                        <code>qtss-worker</code> sunucuda <code>NANSEN_API_KEY</code> ile{" "}
-                        <code>POST …/api/v1/token-screener</code> çağrılır; sonuç <code>nansen_snapshots</code> tablosuna
-                        yazılır. Anahtar yalnızca worker ortamında tutulur — tarayıcıya veya repoya koymayın. Resmi doküman:{" "}
+                        Özet ve ortam değişkenleri:{" "}
+                        <HelpCrossLink topicId="nansen-token-screener" onOpen={jumpToHelp} label="Tam rehber" /> · resmi:{" "}
                         <a href="https://docs.nansen.ai/" target="_blank" rel="noreferrer">
                           docs.nansen.ai
                         </a>
-                        .
                       </p>
-                      <ul className="muted" style={{ fontSize: "0.72rem", margin: "0 0 0.55rem 1rem", lineHeight: 1.45 }}>
-                        <li>
-                          <code>NANSEN_TICK_SECS</code> — token screener çağrı aralığı (varsayılan 1800 sn); kredi için
-                          yüksek tutun. Kredi bitince bekleme:{" "}
-                          <code>NANSEN_INSUFFICIENT_CREDITS_SLEEP_SECS</code> (varsayılan 3600).
-                        </li>
-                        <li>
-                          <code>QTSS_SETUP_SNAPSHOT_ONLY</code> — varsayılan <code>1</code>: setup <strong>ikinci</strong>{" "}
-                          Nansen isteği yapmaz, yalnız <code>nansen_snapshots</code> okur (tek kredili çağrı{" "}
-                          <code>nansen_engine</code>). Yedek canlı: <code>0</code>.
-                        </li>
-                        <li>
-                          <code>NANSEN_TOKEN_SCREENER_REQUEST_JSON</code> — isteğe bağlı tam JSON; yoksa kod varsayılanı
-                          (6h, <code>trader_type</code> sm, <code>per_page</code> 100, vb.).
-                        </li>
-                        <li>
-                          <code>NANSEN_API_BASE</code> — varsayılan <code>https://api.nansen.ai</code>.
-                        </li>
-                        <li>
-                          API: <code>GET …/analysis/nansen/snapshot</code> ve{" "}
-                          <code>GET …/analysis/nansen/setups/latest</code> (JWT) — aşağıda özet + setup tablosu.
-                        </li>
-                        <li>
-                          <code>QTSS_SETUP_SCAN_SECS</code> — setup tarama aralığı (varsayılan 900 sn; snapshot-only iken
-                          ek Nansen kredisi tüketmez). <code>QTSS_SETUP_MAX_SNAPSHOT_AGE_SECS</code> yalnız{" "}
-                          <code>QTSS_SETUP_SNAPSHOT_ONLY=0</code> iken canlı yedek kararını etkiler.
-                        </li>
-                        <li>
-                          Nansen <strong>403 Insufficient credits</strong>: hesapta kredi biter; aralığı artırın (
-                          <code>NANSEN_TICK_SECS</code>) veya Nansen planını güncelleyin — snapshot satırındaki{" "}
-                          <code>hata</code> API yanıtıdır.
-                        </li>
-                        <li>
-                          <strong>404</strong> on <code>…/nansen/setups/latest</code>: çoğunlukla sunucudaki{" "}
-                          <code>qtss-api</code> eski sürüm (bu uç yok). Yeni binary + restart; ayrıca{" "}
-                          <code>VITE_API_BASE</code> içine <code>/api/v1</code> eklemeyin (yol çiftlenir).
-                        </li>
-                      </ul>
                       {token ? (
                         <>
                           <button
@@ -4148,9 +4941,8 @@ export default function App() {
                             Setup taraması (son koşu)
                           </p>
                           <p className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.35rem" }}>
-                            Worker <code>setup_scan_engine</code> çıktısı: <code>nansen_setup_runs</code> /{" "}
-                            <code>nansen_setup_rows</code> (migration <code>0020</code>). En iyi{" "}
-                            <strong>5 LONG</strong> + <strong>5 SHORT</strong> (ayrı sıralı; toplam en fazla 10 satır).
+                            Worker <code>setup_scan_engine</code>; tablo yapısı:{" "}
+                            <HelpCrossLink topicId="nansen-token-screener" onOpen={jumpToHelp} label="SSS" />
                           </p>
                           {nansenSetupsLatest.setup_endpoint_missing ? (
                             <p className="err" style={{ marginTop: "0.25rem", fontSize: "0.75rem", lineHeight: 1.45 }}>
@@ -4363,12 +5155,59 @@ export default function App() {
 
               {drawerTab === "notify" ? (
                 <>
-                  {matchesSetting("notify", "outbox", "bildirim") ? <NotifyOutboxCard accessToken={token} /> : null}
+                  {matchesSetting(
+                    "notify",
+                    "outbox",
+                    "bildirim",
+                    "test",
+                    "kanal",
+                    "channel",
+                    "telegram",
+                    "webhook",
+                    "discord",
+                    "email",
+                    "smtp",
+                    "kuyruk",
+                  ) ? (
+                    token ? (
+                      <NotificationDrawerPanel accessToken={token} />
+                    ) : (
+                      <p className="muted card">{t("notifyTest.signInPrompt")}</p>
+                    )
+                  ) : null}
                 </>
               ) : null}
 
+              {drawerTab === "help" ? <HelpPanel query={drawerSearch} focusTopicId={helpFocusId} /> : null}
+
               {drawerTab === "setting" ? (
                 <>
+                  {token &&
+                  rbacIsAdmin &&
+                  matchesSetting(
+                    "sistem",
+                    "system",
+                    "uygulama",
+                    "application",
+                    "parametre",
+                    "parameter",
+                    "sunucu",
+                    "server",
+                    "registry",
+                    "telegram",
+                    "notify",
+                    "veritabanı",
+                    "database",
+                    "app_config",
+                    "system_config",
+                    "yapılandırma",
+                    "configuration",
+                    "credentials",
+                    "bot",
+                    "token",
+                  ) ? (
+                    <ServerRegistryPanel accessToken={token} />
+                  ) : null}
                   {token && rbacIsAdmin ? (
                     <div className="card">
                       <p className="tv-drawer__section-head">Worker data sources</p>

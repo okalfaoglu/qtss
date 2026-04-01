@@ -21,7 +21,9 @@ pub mod notify_outbox;
 pub mod onchain_signal_scores;
 pub mod paper;
 pub mod pnl;
+pub mod range_signal_execution;
 pub mod pool;
+pub mod range_engine;
 pub mod system_config;
 pub mod user_permissions;
 pub mod users;
@@ -31,13 +33,14 @@ pub use audit_log::{
     insert_http_audit, list_recent as audit_list_recent, AuditHttpListRow, AuditHttpRow,
 };
 pub use catalog::{
-    resolve_series_catalog_ids, BarIntervalRow, CatalogRepository, ExchangeRow, InstrumentRow,
-    MarketRow, SeriesCatalogIds,
+    resolve_series_catalog_ids, ui_segment_to_market_keys, BarIntervalRow, CatalogRepository,
+    ExchangeRow, InstrumentRow, MarketRow, SeriesCatalogIds,
 };
 pub use config::{AppConfigEntry, AppConfigRepository};
 pub use config_tick::{
-    normalize_notify_locale_code, resolve_notify_default_locale, resolve_worker_tick_secs,
-    resolve_system_csv, resolve_system_string, resolve_worker_enabled_flag, tick_secs_from_config_value,
+    decimal_from_config_value, normalize_notify_locale_code, resolve_notify_default_locale,
+    resolve_system_csv, resolve_system_decimal, resolve_system_f64, resolve_system_string,
+    resolve_worker_enabled_flag, resolve_worker_tick_secs, tick_secs_from_config_value,
 };
 pub use copy_trade::{CopySubscriptionRepository, CopySubscriptionRow};
 pub use copy_trade_jobs::{CopyTradeJobRepository, CopyTradeJobRow};
@@ -82,11 +85,21 @@ pub use onchain_signal_scores::{
     insert_onchain_signal_score, list_onchain_signal_scores_history, OnchainSignalScoreInsert,
     OnchainSignalScoreRow,
 };
-pub use paper::{PaperBalanceRow, PaperFillRow, PaperLedgerRepository};
+pub use paper::{
+    PaperBalanceRow, PaperFillRow, PaperLedgerRepository, PAPER_LEDGER_DEFAULT_STRATEGY_KEY,
+};
 pub use pnl::{
     sum_today_daily_realized_pnl, PnlBucket, PnlRebuildStats, PnlRollupRepository, PnlRollupRow,
 };
 pub use pool::{create_pool, run_migrations};
+pub use range_engine::{
+    clear_refresh_requested, default_range_engine_json, fetch_range_engine_json, merge_json_deep,
+    upsert_range_engine_json, RANGE_ENGINE_APP_CONFIG_KEY,
+};
+pub use range_signal_execution::{
+    list_range_signal_events_pending_paper_execution, try_claim_range_signal_event_for_paper_execution,
+    update_range_signal_paper_execution_status, RangeSignalEventPendingExecutionRow,
+};
 pub use system_config::{SystemConfigRepository, SystemConfigRow};
 pub use user_permissions::UserPermissionRepository;
 pub use users::UserRepository;

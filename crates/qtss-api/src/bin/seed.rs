@@ -1,5 +1,5 @@
 //! İlk kurulum: migrasyonlar (`migrations/*.sql`), varsayılan org, admin kullanıcı, OAuth istemcisi.
-//! `DATABASE_URL=... QTSS_SEED_ADMIN_PASSWORD=... cargo run -p qtss-api --bin qtss-seed`
+//! `DATABASE_URL=... cargo run -p qtss-api --bin qtss-seed` — admin şifresi `system_config.seed.admin_password`.
 
 use anyhow::Context;
 use qtss_common::{load_dotenv, require_postgres_database_url};
@@ -8,23 +8,29 @@ use argon2::Argon2;
 use qtss_storage::{create_pool, run_migrations, SystemConfigRepository};
 use uuid::Uuid;
 
-fn read_required_env_trimmed(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+async fn read_seed_config_trimmed(
+    sys: &SystemConfigRepository,
+    config_key: &str,
+) -> anyhow::Result<Option<String>> {
+    match sys.get("seed", config_key).await? {
+        Some(row) => Ok(json_string_value(&row.value)),
+        None => Ok(None),
+    }
 }
 
 async fn seed_exchange_account_if_present(
     pool: &sqlx::PgPool,
+    sys: &SystemConfigRepository,
     user_id: Uuid,
     exchange: &str,
     segment: &str,
-    api_key_env: &str,
-    api_secret_env: &str,
+    api_key_config_key: &str,
+    api_secret_config_key: &str,
 ) -> anyhow::Result<()> {
-    let api_key = read_required_env_trimmed(api_key_env);
-    let api_secret = read_required_env_trimmed(api_secret_env);
+    let api_key = read_seed_config_trimmed(sys, api_key_config_key).await?;
+    let api_secret = read_seed_config_trimmed(sys, api_secret_config_key).await?;
+    let api_key = api_key.filter(|s| !s.is_empty());
+    let api_secret = api_secret.filter(|s| !s.is_empty());
     let (Some(api_key), Some(api_secret)) = (api_key, api_secret) else {
         return Ok(());
     };
@@ -152,11 +158,13 @@ async fn main() -> anyhow::Result<()> {
     .execute(&pool)
     .await?;
 
-    let client_secret: String = match sys.get("seed", "oauth_client_secret").await? {
-        Some(row) => json_string_value(&row.value).unwrap_or_else(|| generate_secret_hex(24)),
-        None => std::env::var("QTSS_SEED_CLIENT_SECRET").ok().unwrap_or_else(|| generate_secret_hex(24)),
-    };
-    if sys.get("seed", "oauth_client_secret").await?.is_none() {
+    let oauth_sec_row = sys.get("seed", "oauth_client_secret").await?;
+    let from_db_oauth = oauth_sec_row
+        .as_ref()
+        .and_then(|row| json_string_value(&row.value));
+    let had_oauth_secret = from_db_oauth.is_some();
+    let client_secret = from_db_oauth.unwrap_or_else(|| generate_secret_hex(24));
+    if !had_oauth_secret {
         let _ = sys
             .upsert(
                 "seed",
@@ -200,20 +208,22 @@ async fn main() -> anyhow::Result<()> {
     // Optional: seed Binance credentials into exchange_accounts for the admin user.
     seed_exchange_account_if_present(
         &pool,
+        &sys,
         uid,
         "binance",
         "spot",
-        "QTSS_BINANCE_SPOT_API_KEY",
-        "QTSS_BINANCE_SPOT_API_SECRET",
+        "binance_spot_api_key",
+        "binance_spot_api_secret",
     )
     .await?;
     seed_exchange_account_if_present(
         &pool,
+        &sys,
         uid,
         "binance",
         "futures",
-        "QTSS_BINANCE_FUTURES_API_KEY",
-        "QTSS_BINANCE_FUTURES_API_SECRET",
+        "binance_futures_api_key",
+        "binance_futures_api_secret",
     )
     .await?;
 

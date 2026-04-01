@@ -12,15 +12,15 @@ use qtss_domain::copy_trade::CopyRule;
 use qtss_domain::orders::OrderIntent;
 use qtss_execution::ExecutionGateway;
 use qtss_storage::{
-    CopySubscriptionRepository, CopySubscriptionRow, CopyTradeJobRepository,
-    ExchangeOrderRepository, ExchangeOrderRow,
+    CopySubscriptionRepository, CopySubscriptionRow, CopyTradeJobRepository, ExchangeOrderRepository,
+    ExchangeOrderRow,
 };
 use rust_decimal::Decimal;
 use serde_json::json;
 use sqlx::PgPool;
 use tracing::{info, warn};
 
-use crate::strategy_runner::dry_gateway_from_env;
+use crate::strategy_runner::dry_gateway_from_pool;
 
 fn queue_enabled() -> bool {
     std::env::var("QTSS_COPY_TRADE_QUEUE_ENABLED")
@@ -187,10 +187,7 @@ async fn process_jobs(pool: &PgPool, gw: Option<&Arc<dyn ExecutionGateway>>) {
             continue;
         };
         if is_trading_halted() {
-            if let Err(e) = jobs
-                .mark_skipped(job.id, "trading halted (kill switch)")
-                .await
-            {
+            if let Err(e) = jobs.mark_skipped(job.id, "trading halted (kill switch)").await {
                 warn!(%e, "copy_trade_queue: mark_skipped");
             }
             continue;
@@ -222,7 +219,7 @@ pub async fn copy_trade_queue_loop(pool: PgPool) {
     let subs_repo = CopySubscriptionRepository::new(pool.clone());
     let ord_repo = ExchangeOrderRepository::new(pool.clone());
     let gw: Option<Arc<dyn ExecutionGateway>> = if auto_place() {
-        Some(dry_gateway_from_env() as Arc<dyn ExecutionGateway>)
+        Some(dry_gateway_from_pool(&pool).await as Arc<dyn ExecutionGateway>)
     } else {
         None
     };

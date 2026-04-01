@@ -1,7 +1,8 @@
 import { useCallback } from "react";
 import {
-  ELLIOTT_PATTERN_MENU_GROUPS,
-  type ElliottPatternMenuItem,
+  ELLIOTT_PATTERN_MENU_PANEL_SECTIONS,
+  ELLIOTT_PATTERN_MENU_ROWS,
+  type ElliottPatternMenuRow,
   type ElliottPatternMenuToggles,
 } from "../lib/elliottPatternMenuCatalog";
 import type { ElliottWaveConfig } from "../lib/elliottWaveAppConfig";
@@ -10,6 +11,10 @@ type Props = {
   value: ElliottWaveConfig;
   onChange: (next: ElliottWaveConfig) => void;
 };
+
+function rowsForSection(section: ElliottPatternMenuRow["section"]): readonly ElliottPatternMenuRow[] {
+  return ELLIOTT_PATTERN_MENU_ROWS.filter((r) => r.section === section);
+}
 
 export function ElliottPatternMenuPanel({ value, onChange }: Props) {
   const setMenu = useCallback(
@@ -27,31 +32,34 @@ export function ElliottPatternMenuPanel({ value, onChange }: Props) {
     [onChange, value],
   );
 
-  const toggleGroup = useCallback(
-    (groupId: string, checked: boolean) => {
-      const g = ELLIOTT_PATTERN_MENU_GROUPS.find((x) => x.id === groupId);
-      if (!g) return;
+  const toggleSection = useCallback(
+    (sectionId: string, checked: boolean) => {
+      const sec = ELLIOTT_PATTERN_MENU_PANEL_SECTIONS.find((x) => x.id === sectionId);
+      if (!sec) return;
       const patch: Partial<ElliottPatternMenuToggles> = {};
-      for (const it of g.items) patch[it.id] = checked;
+      for (const id of sec.toggleIds) patch[id] = checked;
       setMenu(patch);
     },
     [setMenu],
   );
 
-  const renderItem = useCallback(
-    (item: ElliottPatternMenuItem) => {
+  const renderToggleRow = useCallback(
+    (item: Extract<ElliottPatternMenuRow, { type: "toggle" }>) => {
       const checked = value.pattern_menu[item.id];
       return (
         <div
           key={item.id}
           className="tv-elliott-pattern-item"
           style={{
-            marginTop: "0.45rem",
-            paddingLeft: "0.35rem",
+            marginTop: "0.35rem",
+            paddingLeft: `${0.25 + item.depth * 0.65}rem`,
             borderLeft: "2px solid var(--tv-border, rgba(255,255,255,0.12))",
           }}
         >
-          <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check" style={{ alignItems: "flex-start" }}>
+          <label
+            className="muted tv-elliott-panel__field tv-elliott-panel__field--check"
+            style={{ alignItems: "flex-start" }}
+          >
             <input
               type="checkbox"
               checked={checked}
@@ -75,24 +83,44 @@ export function ElliottPatternMenuPanel({ value, onChange }: Props) {
 
   return (
     <div className="tv-elliott-pattern-menu" aria-label="Elliott dalga türleri menüsü">
-      {ELLIOTT_PATTERN_MENU_GROUPS.map((g) => {
-        const allOn = g.items.every((it) => value.pattern_menu[it.id]);
+      {ELLIOTT_PATTERN_MENU_PANEL_SECTIONS.map((sec) => {
+        const rows = rowsForSection(sec.id);
+        const allOn = sec.toggleIds.every((id) => value.pattern_menu[id]);
         return (
-          <details key={g.id} className="tv-collapsible" open style={{ marginBottom: "0.45rem" }}>
+          <details key={sec.id} className="tv-collapsible" open style={{ marginBottom: "0.45rem" }}>
             <summary style={{ cursor: "pointer", listStyle: "none" }}>
               <label
                 className="muted tv-elliott-panel__field tv-elliott-panel__field--check"
                 style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}
                 onClick={(e) => e.stopPropagation()}
               >
-                <input type="checkbox" checked={allOn} onChange={(e) => toggleGroup(g.id, e.target.checked)} />
-                <span style={{ fontWeight: 700, fontSize: "0.82rem" }}>{g.titleTr}</span>
+                <input type="checkbox" checked={allOn} onChange={(e) => toggleSection(sec.id, e.target.checked)} />
+                <span style={{ fontWeight: 700, fontSize: "0.82rem" }}>{sec.titleTr}</span>
                 <span className="muted" style={{ fontSize: "0.74rem" }}>
-                  ({g.titleEn})
+                  ({sec.titleEn})
                 </span>
               </label>
             </summary>
-            {g.items.map((it) => renderItem(it))}
+            {rows.map((r) =>
+              r.type === "label" ? (
+                <div
+                  key={r.id}
+                  style={{
+                    marginTop: "0.42rem",
+                    paddingLeft: `${0.2 + r.depth * 0.65}rem`,
+                    fontWeight: r.depth <= 1 ? 650 : 600,
+                    fontSize: r.depth === 0 ? "0.8rem" : "0.76rem",
+                  }}
+                >
+                  {r.titleTr}
+                  <span className="muted" style={{ marginLeft: "0.35rem", fontWeight: 500, fontSize: "0.72rem" }}>
+                    {r.titleEn}
+                  </span>
+                </div>
+              ) : (
+                renderToggleRow(r)
+              ),
+            )}
           </details>
         );
       })}

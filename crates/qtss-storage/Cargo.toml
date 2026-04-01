@@ -22,3 +22,6 @@ thiserror.workspace = true
 anyhow.workspace = true
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
 rust_decimal = { version = "1.36", features = ["serde"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

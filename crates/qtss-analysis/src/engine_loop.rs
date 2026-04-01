@@ -1,6 +1,9 @@
 //! `engine_symbols` rows → `trading_range` + `signal_dashboard` snapshots (see crate root).
 //!
-//! Optional sweep notify: `QTSS_NOTIFY_ON_SWEEP` + `QTSS_NOTIFY_ON_SWEEP_CHANNELS`.
+//! **Multi-symbol:** `run_engines_for_symbol` iterates every **enabled** `engine_symbols` row; each target loads its own
+//! `market_bars` series and upserts both snapshots. Spawned from `qtss-worker` as `engine_analysis_loop` (single task, not one process per symbol).
+//!
+//! Optional sweep notify: `notify.notify_on_sweep` / `QTSS_NOTIFY_ON_SWEEP` + channel list (`notify_on_sweep_channels` / `QTSS_NOTIFY_ON_SWEEP_CHANNELS`). Same for range events: `notify_on_range_events` (+ channels). Credentials: `qtss_ai::load_notify_config_merged` (`dispatcher_config`, `telegram_*` rows, env when overrides on).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,14 +16,19 @@ use qtss_chart_patterns::{
     signal_dashboard_v2_envelope_from_v1, OhlcBar, SignalDirectionPolicy, TradingRangeParams,
     TradingRangeResult,
 };
+use qtss_ai::load_notify_config_merged;
 use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
+use qtss_common::{log_business, QtssLogLevel};
 use qtss_storage::{
-    fetch_analysis_snapshot_payload, fetch_latest_onchain_signal_score, insert_range_signal_event,
-    list_enabled_engine_symbols, list_recent_bars, resolve_worker_tick_secs,
-    upsert_analysis_snapshot, EngineSymbolRow, RangeSignalEventInsert,
+    clear_refresh_requested, default_range_engine_json, fetch_analysis_snapshot_payload,
+    fetch_latest_onchain_signal_score, fetch_range_engine_json, insert_range_signal_event,
+    list_enabled_engine_symbols, list_recent_bars, resolve_system_string,
+    resolve_worker_enabled_flag, resolve_worker_tick_secs, upsert_analysis_snapshot,
+    EngineSymbolRow, RangeSignalEventInsert,
 };
 use rust_decimal::prelude::ToPrimitive;
 use serde_json::json;
+use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -40,29 +48,233 @@ fn attach_engine_context(t: &EngineSymbolRow, v: &mut serde_json::Value) {
     }
 }
 
-fn trading_range_params_from_env() -> TradingRangeParams {
-    let lookback = std::env::var("QTSS_TR_LOOKBACK")
-        .ok()
-        .and_then(|s| s.parse().ok())
+/// `app_config.range_engine.trading_range_params` öncelikli; alan yoksa veya `null` ise `QTSS_TR_*` env.
+fn trading_range_params_from_doc_and_env(doc: &JsonValue) -> TradingRangeParams {
+    let tr = doc.get("trading_range_params");
+    let lookback = tr
+        .and_then(|o| o.get("lookback"))
+        .and_then(|x| x.as_u64())
+        .map(|u| u as usize)
+        .or_else(|| {
+            std::env::var("QTSS_TR_LOOKBACK")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
         .unwrap_or(50);
-    let atr_period = std::env::var("QTSS_TR_ATR_PERIOD")
-        .ok()
-        .and_then(|s| s.parse().ok())
+    let atr_period = tr
+        .and_then(|o| o.get("atr_period"))
+        .and_then(|x| x.as_u64())
+        .map(|u| u as usize)
+        .or_else(|| {
+            std::env::var("QTSS_TR_ATR_PERIOD")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
         .unwrap_or(14);
-    let atr_sma_period = std::env::var("QTSS_TR_ATR_SMA_PERIOD")
-        .ok()
-        .and_then(|s| s.parse().ok())
+    let atr_sma_period = tr
+        .and_then(|o| o.get("atr_sma_period"))
+        .and_then(|x| x.as_u64())
+        .map(|u| u as usize)
+        .or_else(|| {
+            std::env::var("QTSS_TR_ATR_SMA_PERIOD")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
         .unwrap_or(50);
-    let require_range_regime = std::env::var("QTSS_TR_REQUIRE_RANGE_REGIME")
-        .ok()
-        .is_some_and(|s| {
-            s == "1" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes")
+    let require_range_regime = tr
+        .and_then(|o| o.get("require_range_regime"))
+        .and_then(|x| x.as_bool())
+        .unwrap_or_else(|| {
+            std::env::var("QTSS_TR_REQUIRE_RANGE_REGIME")
+                .ok()
+                .is_some_and(|s| {
+                    s == "1" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes")
+                })
+        });
+    let pivot_window = tr
+        .and_then(|o| o.get("pivot_window"))
+        .and_then(|x| x.as_u64())
+        .map(|u| u as usize)
+        .or_else(|| std::env::var("QTSS_TR_PIVOT_WINDOW").ok().and_then(|s| s.parse().ok()))
+        .unwrap_or(3);
+    let min_support_touches = tr
+        .and_then(|o| o.get("min_support_touches"))
+        .and_then(|x| x.as_u64())
+        .map(|u| u as usize)
+        .or_else(|| {
+            std::env::var("QTSS_TR_MIN_SUPPORT_TOUCHES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(2);
+    let min_resistance_touches = tr
+        .and_then(|o| o.get("min_resistance_touches"))
+        .and_then(|x| x.as_u64())
+        .map(|u| u as usize)
+        .or_else(|| {
+            std::env::var("QTSS_TR_MIN_RESISTANCE_TOUCHES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(2);
+    let touch_tolerance_atr_mult = tr
+        .and_then(|o| o.get("touch_tolerance_atr_mult"))
+        .and_then(|x| x.as_f64())
+        .or_else(|| {
+            std::env::var("QTSS_TR_TOUCH_TOLERANCE_ATR_MULT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(0.25);
+    let close_breakout_lookback = tr
+        .and_then(|o| o.get("close_breakout_lookback"))
+        .and_then(|x| x.as_u64())
+        .map(|u| u as usize)
+        .or_else(|| {
+            std::env::var("QTSS_TR_CLOSE_BREAKOUT_LOOKBACK")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(20);
+    let range_width_min_atr_mult = tr
+        .and_then(|o| o.get("range_width_min_atr_mult"))
+        .and_then(|x| x.as_f64())
+        .or_else(|| {
+            std::env::var("QTSS_TR_RANGE_WIDTH_MIN_ATR_MULT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(1.0);
+    let range_width_max_atr_mult = tr
+        .and_then(|o| o.get("range_width_max_atr_mult"))
+        .and_then(|x| x.as_f64())
+        .or_else(|| {
+            std::env::var("QTSS_TR_RANGE_WIDTH_MAX_ATR_MULT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(6.0);
+    let setup_score_threshold = tr
+        .and_then(|o| o.get("setup_score_threshold"))
+        .and_then(|x| x.as_i64())
+        .map(|i| i as i32)
+        .or_else(|| {
+            std::env::var("QTSS_TR_SETUP_SCORE_THRESHOLD")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(60);
+    let setup_score_strong_threshold = tr
+        .and_then(|o| o.get("setup_score_strong_threshold"))
+        .and_then(|x| x.as_i64())
+        .map(|i| i as i32)
+        .or_else(|| {
+            std::env::var("QTSS_TR_SETUP_SCORE_STRONG_THRESHOLD")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(75);
+    let zone_edge_fraction = tr
+        .and_then(|o| o.get("zone_edge_fraction"))
+        .and_then(|x| x.as_f64())
+        .or_else(|| {
+            std::env::var("QTSS_TR_ZONE_EDGE_FRACTION")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(0.25);
+    let enable_range_zone_filter = tr
+        .and_then(|o| o.get("enable_range_zone_filter"))
+        .and_then(|x| x.as_bool())
+        .unwrap_or_else(|| {
+            std::env::var("QTSS_TR_ENABLE_RANGE_ZONE_FILTER")
+                .ok()
+                .map(|s| {
+                    let t = s.trim().to_lowercase();
+                    !(t == "0" || t == "false" || t == "no" || t == "off")
+                })
+                .unwrap_or(true)
+        });
+    let require_edge_reclaim_for_setup = tr
+        .and_then(|o| o.get("require_edge_reclaim_for_setup"))
+        .and_then(|x| x.as_bool())
+        .unwrap_or_else(|| {
+            std::env::var("QTSS_TR_REQUIRE_EDGE_RECLAIM")
+                .ok()
+                .map(|s| {
+                    let t = s.trim().to_lowercase();
+                    !(t == "0" || t == "false" || t == "no" || t == "off")
+                })
+                .unwrap_or(true)
         });
     TradingRangeParams {
         lookback,
         atr_period,
         atr_sma_period,
         require_range_regime,
+        pivot_window,
+        min_support_touches,
+        min_resistance_touches,
+        touch_tolerance_atr_mult,
+        close_breakout_lookback,
+        range_width_min_atr_mult,
+        range_width_max_atr_mult,
+        setup_score_threshold,
+        setup_score_strong_threshold,
+        zone_edge_fraction,
+        enable_range_zone_filter,
+        require_edge_reclaim_for_setup,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ExecutionGates {
+    allow_long_open: bool,
+    allow_short_open: bool,
+    allow_all_closes: bool,
+}
+
+impl Default for ExecutionGates {
+    fn default() -> Self {
+        Self {
+            allow_long_open: true,
+            allow_short_open: true,
+            allow_all_closes: true,
+        }
+    }
+}
+
+fn execution_gates_from_doc(doc: &JsonValue) -> ExecutionGates {
+    let g = doc.get("execution_gates");
+    let b = |key: &str, d: bool| {
+        g.and_then(|o| o.get(key))
+            .and_then(|x| x.as_bool())
+            .unwrap_or(d)
+    };
+    ExecutionGates {
+        allow_long_open: b("allow_long_open", true),
+        allow_short_open: b("allow_short_open", true),
+        allow_all_closes: b("allow_all_closes", true),
+    }
+}
+
+fn log_if_event_gated(kind: &str, gates: ExecutionGates) {
+    let gated = match kind {
+        "long_entry" => !gates.allow_long_open,
+        "short_entry" => !gates.allow_short_open,
+        "long_exit" | "short_exit" => !gates.allow_all_closes,
+        _ => false,
+    };
+    if gated {
+        tracing::debug!(
+            target: "qtss",
+            qtss_module = "qtss_worker::range_execution",
+            event_kind = %kind,
+            allow_long_open = gates.allow_long_open,
+            allow_short_open = gates.allow_short_open,
+            allow_all_closes = gates.allow_all_closes,
+            "execution gate: web/config ile kapatılmış; olaylar DB’de tutulur, otomatik emir katmanı ileride burayı okuyacak"
+        );
     }
 }
 
@@ -90,6 +302,25 @@ fn enrich_tr_payload(
         if let Some(last) = chrono_open_times.last() {
             m.insert("last_bar_open_time".into(), json!(last.to_rfc3339()));
         }
+        // Keep a stable subset of score fields at top-level for web overlay compatibility
+        // even if serde omits future fields (explicit insert guards schema drift).
+        m.insert("guardrails_pass".into(), json!(tr.guardrails_pass));
+        m.insert("setup_side".into(), json!(tr.setup_side));
+        m.insert("range_zone".into(), json!(tr.range_zone));
+        m.insert("setup_score_long".into(), json!(tr.setup_score_long));
+        m.insert("setup_score_short".into(), json!(tr.setup_score_short));
+        m.insert("setup_score_best".into(), json!(tr.setup_score_best));
+        m.insert("score_touch_long".into(), json!(tr.score_touch_long));
+        m.insert("score_touch_short".into(), json!(tr.score_touch_short));
+        m.insert("score_rejection_long".into(), json!(tr.score_rejection_long));
+        m.insert("score_rejection_short".into(), json!(tr.score_rejection_short));
+        m.insert("score_oscillator_long".into(), json!(tr.score_oscillator_long));
+        m.insert("score_oscillator_short".into(), json!(tr.score_oscillator_short));
+        m.insert("score_volume_long".into(), json!(tr.score_volume_long));
+        m.insert("score_volume_short".into(), json!(tr.score_volume_short));
+        m.insert("score_breakout_long".into(), json!(tr.score_breakout_long));
+        m.insert("score_breakout_short".into(), json!(tr.score_breakout_short));
+        m.insert("volume_unavailable".into(), json!(tr.volume_unavailable));
     }
     attach_engine_context(t, &mut v);
     v
@@ -246,6 +477,44 @@ fn enrich_dashboard_payload(
         if let Some(x) = tr.atr {
             m.insert("atr".into(), json!(x));
         }
+        // Grafik likidite süpürme işaretleri: `trading_range` snapshot’ı yoksa bile `signal_dashboard` yükünden okunabilir.
+        m.insert("long_sweep_latent".into(), json!(tr.long_sweep_latent));
+        m.insert("short_sweep_latent".into(), json!(tr.short_sweep_latent));
+        m.insert("long_sweep_signal".into(), json!(tr.long_sweep_signal));
+        m.insert("short_sweep_signal".into(), json!(tr.short_sweep_signal));
+        // Skor tabanlı range setup motoru metrikleri (UI/SSS için).
+        m.insert("support_touches".into(), json!(tr.support_touches));
+        m.insert("resistance_touches".into(), json!(tr.resistance_touches));
+        m.insert("close_breakout".into(), json!(tr.close_breakout));
+        if let Some(x) = tr.range_width {
+            m.insert("range_width".into(), json!(x));
+        }
+        if let Some(x) = tr.range_width_atr {
+            m.insert("range_width_atr".into(), json!(x));
+        }
+        m.insert("range_too_narrow".into(), json!(tr.range_too_narrow));
+        m.insert("range_too_wide".into(), json!(tr.range_too_wide));
+        m.insert("wick_rejection_long".into(), json!(tr.wick_rejection_long));
+        m.insert("wick_rejection_short".into(), json!(tr.wick_rejection_short));
+        m.insert("fake_breakout_long".into(), json!(tr.fake_breakout_long));
+        m.insert("fake_breakout_short".into(), json!(tr.fake_breakout_short));
+        m.insert("setup_score_long".into(), json!(tr.setup_score_long));
+        m.insert("setup_score_short".into(), json!(tr.setup_score_short));
+        m.insert("setup_score_best".into(), json!(tr.setup_score_best));
+        m.insert("guardrails_pass".into(), json!(tr.guardrails_pass));
+        m.insert("setup_side".into(), json!(tr.setup_side));
+        m.insert("range_zone".into(), json!(tr.range_zone));
+        m.insert("score_touch_long".into(), json!(tr.score_touch_long));
+        m.insert("score_touch_short".into(), json!(tr.score_touch_short));
+        m.insert("score_rejection_long".into(), json!(tr.score_rejection_long));
+        m.insert("score_rejection_short".into(), json!(tr.score_rejection_short));
+        m.insert("score_oscillator_long".into(), json!(tr.score_oscillator_long));
+        m.insert("score_oscillator_short".into(), json!(tr.score_oscillator_short));
+        m.insert("score_volume_long".into(), json!(tr.score_volume_long));
+        m.insert("score_volume_short".into(), json!(tr.score_volume_short));
+        m.insert("score_breakout_long".into(), json!(tr.score_breakout_long));
+        m.insert("score_breakout_short".into(), json!(tr.score_breakout_short));
+        m.insert("volume_unavailable".into(), json!(tr.volume_unavailable));
         m.insert(
             "signal_direction_mode".into(),
             json!(t.signal_direction_mode.as_str()),
@@ -262,29 +531,75 @@ fn enrich_dashboard_payload(
     v
 }
 
-fn env_truthy(name: &str) -> bool {
-    std::env::var(name).ok().is_some_and(|s| {
-        s == "1" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes")
-    })
-}
-
-fn sweep_notify_channels_from_env() -> Vec<NotificationChannel> {
-    let raw = std::env::var("QTSS_NOTIFY_ON_SWEEP_CHANNELS").unwrap_or_else(|_| "webhook".into());
-    raw.split(',')
+async fn sweep_notify_bundle(
+    pool: &PgPool,
+) -> Option<(NotificationDispatcher, Vec<NotificationChannel>)> {
+    let enabled = resolve_worker_enabled_flag(
+        pool,
+        "notify",
+        "notify_on_sweep",
+        "QTSS_NOTIFY_ON_SWEEP",
+        false,
+    )
+    .await;
+    if !enabled {
+        return None;
+    }
+    let raw = resolve_system_string(
+        pool,
+        "notify",
+        "notify_on_sweep_channels",
+        "QTSS_NOTIFY_ON_SWEEP_CHANNELS",
+        "webhook",
+    )
+    .await;
+    let chans: Vec<NotificationChannel> = raw
+        .split(',')
         .filter_map(|s| NotificationChannel::parse(s.trim()))
-        .collect()
+        .collect();
+    if chans.is_empty() {
+        warn!("notify_on_sweep enabled but notify_on_sweep_channels is empty or invalid");
+        return None;
+    }
+    let ncfg = load_notify_config_merged(pool).await;
+    Some((NotificationDispatcher::new(ncfg), chans))
 }
 
-fn sweep_notify_bundle() -> Option<(NotificationDispatcher, Vec<NotificationChannel>)> {
-    if !env_truthy("QTSS_NOTIFY_ON_SWEEP") {
+/// Trading Range **setup** (`giris_modu` → DÖNÜŞ) ve **işlem aç/kapa** (`range_signal_events`) için Telegram vb.
+async fn range_events_notify_bundle(
+    pool: &PgPool,
+) -> Option<(NotificationDispatcher, Vec<NotificationChannel>)> {
+    let enabled = resolve_worker_enabled_flag(
+        pool,
+        "notify",
+        "notify_on_range_events",
+        "QTSS_NOTIFY_ON_RANGE_EVENTS",
+        false,
+    )
+    .await;
+    if !enabled {
         return None;
     }
-    let chans = sweep_notify_channels_from_env();
+    let raw = resolve_system_string(
+        pool,
+        "notify",
+        "notify_on_range_events_channels",
+        "QTSS_NOTIFY_ON_RANGE_EVENTS_CHANNELS",
+        "telegram",
+    )
+    .await;
+    let chans: Vec<NotificationChannel> = raw
+        .split(',')
+        .filter_map(|s| NotificationChannel::parse(s.trim()))
+        .collect();
     if chans.is_empty() {
-        warn!("QTSS_NOTIFY_ON_SWEEP açık fakat QTSS_NOTIFY_ON_SWEEP_CHANNELS boş veya tanınmadı");
+        warn!(
+            "notify_on_range_events enabled but notify_on_range_events_channels is empty or invalid"
+        );
         return None;
     }
-    Some((NotificationDispatcher::from_env(), chans))
+    let ncfg = load_notify_config_merged(pool).await;
+    Some((NotificationDispatcher::new(ncfg), chans))
 }
 
 fn sweep_flags_from_payload(v: &serde_json::Value) -> (bool, bool) {
@@ -320,6 +635,162 @@ async fn notify_sweep_edge(
             info!(channel = ?r.channel, symbol = %t.symbol, "sweep bildirimi");
         } else {
             warn!(channel = ?r.channel, detail = ?r.detail, "sweep bildirimi başarısız");
+        }
+    }
+}
+
+/// `signal_dashboard` DONUS kenarı: likidite süpürmesi / dönüş modu (önceki yükte yoksa veya takipteydi).
+async fn maybe_notify_trading_range_setup(
+    bundle: Option<&(NotificationDispatcher, Vec<NotificationChannel>)>,
+    prev_dash: Option<&serde_json::Value>,
+    dash: &qtss_chart_patterns::SignalDashboardV1,
+    tr: &TradingRangeResult,
+    t: &EngineSymbolRow,
+) {
+    let Some((d, chans)) = bundle else {
+        return;
+    };
+    if dash.giris_modu != "DONUS" {
+        return;
+    }
+    let prev_ok = prev_dash.filter(|p| {
+        p.get("reason").and_then(|x| x.as_str()) != Some("insufficient_bars")
+    });
+    let prev_giris = prev_ok.and_then(|p| p.get("giris_modu").and_then(|x| x.as_str()));
+    if prev_giris == Some("DONUS") {
+        return;
+    }
+    let title = format!("Trading Range setup — {} {}", t.symbol, t.interval);
+    let body = format!(
+        "{}/ {}\nGiriş modu: {} (DÖNÜŞ)\nPiyasa modu: {}\nYerel trend: {}\nDurum: {}\nAralık üst/alt: {:?} / {:?}\nSweep sinyal L/S: {} / {}",
+        t.exchange,
+        t.segment,
+        dash.giris_modu,
+        dash.piyasa_modu,
+        dash.yerel_trend,
+        dash.durum,
+        tr.range_high,
+        tr.range_low,
+        tr.long_sweep_signal,
+        tr.short_sweep_signal,
+    );
+    let n = Notification::new(title, body);
+    for r in d.send_all(chans, &n).await {
+        if r.ok {
+            info!(channel = ?r.channel, symbol = %t.symbol, "trading_range_setup bildirimi");
+        } else {
+            warn!(channel = ?r.channel, detail = ?r.detail, "trading_range_setup bildirimi başarısız");
+        }
+    }
+}
+
+async fn notify_range_trade_event(
+    d: &NotificationDispatcher,
+    channels: &[NotificationChannel],
+    t: &EngineSymbolRow,
+    event_kind: &str,
+    bar_open_time: chrono::DateTime<chrono::Utc>,
+    reference_price: f64,
+    prev_durum: Option<&str>,
+    new_durum: &str,
+) {
+    let title_label = match event_kind {
+        "long_entry" => "LONG giriş",
+        "short_entry" => "SHORT giriş",
+        "long_exit" => "LONG kapanış",
+        "short_exit" => "SHORT kapanış",
+        _ => "Range işlem olayı",
+    };
+    let title = format!("{} — {} {}", title_label, t.symbol, t.interval);
+    let prev_s = prev_durum.unwrap_or("—");
+    let body = format!(
+        "{}/ {}\nOlay: {}\nBar: {}\nReferans fiyat: {:.6}\nÖnceki durum: {}\nYeni durum: {}",
+        t.exchange,
+        t.segment,
+        event_kind,
+        bar_open_time.to_rfc3339(),
+        reference_price,
+        prev_s,
+        new_durum,
+    );
+    let n = Notification::new(title, body);
+    for r in d.send_all(channels, &n).await {
+        if r.ok {
+            info!(
+                channel = ?r.channel,
+                symbol = %t.symbol,
+                event_kind = %event_kind,
+                "range_trade_event bildirimi"
+            );
+        } else {
+            warn!(
+                channel = ?r.channel,
+                detail = ?r.detail,
+                event_kind = %event_kind,
+                "range_trade_event bildirimi başarısız"
+            );
+        }
+    }
+}
+
+async fn notify_range_setup_scored(
+    d: &NotificationDispatcher,
+    channels: &[NotificationChannel],
+    t: &EngineSymbolRow,
+    tr: &qtss_chart_patterns::TradingRangeResult,
+    bar_open_time: chrono::DateTime<chrono::Utc>,
+    reference_price: f64,
+) {
+    let side = tr.setup_side.trim().to_uppercase().replace('İ', "I");
+    if side != "LONG" && side != "SHORT" {
+        return;
+    }
+    if !tr.guardrails_pass {
+        return;
+    }
+    let title = format!(
+        "Trading Range setup — {} {} ({})",
+        side,
+        t.symbol,
+        t.interval
+    );
+    let rh = tr.range_high.map(|x| format!("{x:.6}")).unwrap_or_else(|| "—".into());
+    let rl = tr.range_low.map(|x| format!("{x:.6}")).unwrap_or_else(|| "—".into());
+    let mid = tr.mid.map(|x| format!("{x:.6}")).unwrap_or_else(|| "—".into());
+    let w_atr = tr
+        .range_width_atr
+        .map(|x| format!("{x:.2}"))
+        .unwrap_or_else(|| "—".into());
+    let body = format!(
+        "{}/ {}\nBar: {}\nRef px: {:.6}\nBand: low={} · mid={} · high={}\nTouches: sup={} · res={}\nClose breakout: {}\nWidth/ATR: {}\nScore(best): {}\nBreakdown (L): touch={} rej={} osc={} vol={} brk={}\nFlags: wick(L/S)={} / {} · fake(L/S)={} / {}",
+        t.exchange,
+        t.segment,
+        bar_open_time.to_rfc3339(),
+        reference_price,
+        rl,
+        mid,
+        rh,
+        tr.support_touches,
+        tr.resistance_touches,
+        if tr.close_breakout { "yes" } else { "no" },
+        w_atr,
+        tr.setup_score_best,
+        tr.score_touch_long,
+        tr.score_rejection_long,
+        tr.score_oscillator_long,
+        tr.score_volume_long,
+        tr.score_breakout_long,
+        tr.wick_rejection_long,
+        tr.wick_rejection_short,
+        tr.fake_breakout_long,
+        tr.fake_breakout_short,
+    );
+    let n = Notification::new(title, body);
+    for r in d.send_all(channels, &n).await {
+        if r.ok {
+            info!(channel = ?r.channel, symbol = %t.symbol, "trading_range_setup scored bildirimi");
+        } else {
+            warn!(channel = ?r.channel, detail = ?r.detail, "trading_range_setup scored bildirimi başarısız");
         }
     }
 }
@@ -392,10 +863,14 @@ fn reference_price_for_signal(
 async fn record_range_signal_events_on_durum_change(
     pool: &PgPool,
     engine_symbol_id: Uuid,
+    t: &EngineSymbolRow,
+    tr: &qtss_chart_patterns::TradingRangeResult,
     prev_dash: Option<&serde_json::Value>,
     dash: &qtss_chart_patterns::SignalDashboardV1,
     bar_open_time: chrono::DateTime<chrono::Utc>,
     last_close: f64,
+    range_notify: Option<&(NotificationDispatcher, Vec<NotificationChannel>)>,
+    gates: ExecutionGates,
 ) {
     let Some(new_d) = durum_from_dashboard(dash) else {
         return;
@@ -409,26 +884,40 @@ async fn record_range_signal_events_on_durum_change(
     if !px.is_finite() {
         return;
     }
+    let prev_durum_str = prev.map(|d| d.as_str());
+    let new_durum_str = new_d.as_str();
     for kind in kinds {
+        log_if_event_gated(kind, gates);
+        let kind_s = kind.to_string();
         let row = RangeSignalEventInsert {
             engine_symbol_id,
-            event_kind: kind.to_string(),
+            event_kind: kind_s.clone(),
             bar_open_time,
             reference_price: Some(px),
             source: "signal_dashboard_durum".into(),
             payload: json!({
-                "prev_durum": prev.map(|d| d.as_str()),
-                "new_durum": new_d.as_str(),
+                "prev_durum": prev_durum_str,
+                "new_durum": new_durum_str,
                 "piyasa_modu": &dash.piyasa_modu,
                 "yerel_trend": &dash.yerel_trend,
+                "giris_gercek": dash.giris_gercek,
+                "stop_ilk": dash.stop_ilk,
+                "kar_al_ilk": dash.kar_al_ilk,
             }),
         };
         match insert_range_signal_event(pool, &row).await {
             Ok(Some(_)) => {
-                info!(symbol_id = %engine_symbol_id, %kind, "range_signal_event");
+                info!(symbol_id = %engine_symbol_id, kind = %kind_s, "range_signal_event");
+                if let Some((d, ch)) = range_notify {
+                    if kind_s == "long_entry" || kind_s == "short_entry" {
+                        notify_range_setup_scored(d, ch, t, tr, bar_open_time, px).await;
+                    }
+                    notify_range_trade_event(d, ch, t, &kind_s, bar_open_time, px, prev_durum_str, new_durum_str)
+                        .await;
+                }
             }
             Ok(None) => {}
-            Err(e) => warn!(%e, %kind, "range_signal_event insert"),
+            Err(e) => warn!(%e, kind = %kind_s, "range_signal_event insert"),
         }
     }
 }
@@ -461,8 +950,11 @@ async fn run_engines_for_symbol(
     bar_limit: i64,
     params: &TradingRangeParams,
     confluence: &Arc<dyn ConfluencePersist>,
+    range_doc: &JsonValue,
 ) {
-    let sweep_bundle = sweep_notify_bundle();
+    let gates = execution_gates_from_doc(range_doc);
+    let sweep_bundle = sweep_notify_bundle(pool).await;
+    let range_events_bundle = range_events_notify_bundle(pool).await;
     let targets = match list_enabled_engine_symbols(pool).await {
         Ok(t) => t,
         Err(e) => {
@@ -597,6 +1089,14 @@ async fn run_engines_for_symbol(
 
         let direction_policy = signal_direction_policy_for_row(&t);
         let dash = compute_signal_dashboard_v1_with_policy(&bars, &tr, direction_policy);
+        maybe_notify_trading_range_setup(
+            range_events_bundle.as_ref(),
+            prev_dash_payload.as_ref(),
+            &dash,
+            &tr,
+            &t,
+        )
+        .await;
         let mut dash_payload = enrich_dashboard_payload(
             &dash,
             &tr,
@@ -642,10 +1142,14 @@ async fn run_engines_for_symbol(
             record_range_signal_events_on_durum_change(
                 pool,
                 t.id,
+                &t,
+                &tr,
                 prev_dash_payload.as_ref(),
                 &dash,
                 last_bar_ot,
                 last_close,
+                range_events_bundle.as_ref(),
+                gates,
             )
             .await;
         }
@@ -659,10 +1163,67 @@ pub async fn engine_analysis_loop(pool: PgPool, confluence: Arc<dyn ConfluencePe
         .unwrap_or(1_500)
         .clamp(120, 50_000);
 
-    let params = trading_range_params_from_env();
-
     loop {
-        run_engines_for_symbol(&pool, bar_limit, &params, &confluence).await;
+        let range_doc = match fetch_range_engine_json(&pool).await {
+            Ok(d) => d,
+            Err(e) => {
+                warn!(
+                    %e,
+                    qtss_module = "qtss_worker::range_engine",
+                    "range_engine app_config okunamadı; varsayılan iskelet"
+                );
+                default_range_engine_json()
+            }
+        };
+        let params = trading_range_params_from_doc_and_env(&range_doc);
+        let refresh_requested = range_doc
+            .pointer("/worker/refresh_requested")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        if refresh_requested {
+            log_business(
+                QtssLogLevel::Info,
+                "qtss_worker::range_engine",
+                "worker.refresh_requested: motor turu (web/app_config)",
+            );
+        }
+        tracing::debug!(
+            target: "qtss",
+            qtss_module = "qtss_worker::range_engine",
+            lookback = params.lookback,
+            atr_period = params.atr_period,
+            atr_sma_period = params.atr_sma_period,
+            require_range_regime = params.require_range_regime,
+            refresh_requested,
+            "trading_range_params etkin (app_config + env yedek)"
+        );
+
+        run_engines_for_symbol(
+            &pool,
+            bar_limit,
+            &params,
+            &confluence,
+            &range_doc,
+        )
+        .await;
+
+        if refresh_requested {
+            match clear_refresh_requested(&pool).await {
+                Ok(()) => {
+                    log_business(
+                        QtssLogLevel::Info,
+                        "qtss_worker::range_engine",
+                        "worker.refresh_requested temizlendi",
+                    );
+                }
+                Err(e) => warn!(
+                    %e,
+                    qtss_module = "qtss_worker::range_engine",
+                    "refresh_requested sıfırlanamadı"
+                ),
+            }
+        }
+
         let sleep_secs = resolve_worker_tick_secs(
             &pool,
             "worker",

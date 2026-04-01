@@ -13,7 +13,7 @@ use rust_decimal::Decimal;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use qtss_storage::{PaperBalanceRow, PaperFillRow};
+use qtss_storage::{PaperBalanceRow, PaperFillRow, PAPER_LEDGER_DEFAULT_STRATEGY_KEY};
 
 use crate::error::ApiError;
 use crate::oauth::AccessClaims;
@@ -41,6 +41,8 @@ fn segment_db_key(
 fn exchange_db_key(ex: ExchangeId) -> &'static str {
     match ex {
         ExchangeId::Binance => "binance",
+        ExchangeId::Bybit => "bybit",
+        ExchangeId::Okx => "okx",
         ExchangeId::Custom => "custom",
     }
 }
@@ -83,7 +85,7 @@ async fn get_paper_balance(
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| "geçersiz token sub".to_string())?;
     let row = st
         .paper
-        .fetch_balance(user_id)
+        .fetch_balance(user_id, PAPER_LEDGER_DEFAULT_STRATEGY_KEY)
         .await
         .map_err(|e| e.to_string())?;
     Ok(Json(row))
@@ -144,7 +146,7 @@ async fn place_dry_order(
     let mut tx = st.pool.begin().await?;
     let locked = st
         .paper
-        .lock_balance_for_update(&mut tx, user_id)
+        .lock_balance_for_update(&mut tx, user_id, PAPER_LEDGER_DEFAULT_STRATEGY_KEY)
         .await?;
 
     let mut ledger = if let Some(r) = locked {
@@ -155,7 +157,7 @@ async fn place_dry_order(
             .unwrap_or_else(|| Decimal::new(10_000, 0));
         let row = st
             .paper
-            .insert_balance(&mut tx, org_id, user_id, init)
+            .insert_balance(&mut tx, org_id, user_id, PAPER_LEDGER_DEFAULT_STRATEGY_KEY, init)
             .await?;
         ledger_from_row(row)
     };
@@ -174,6 +176,7 @@ async fn place_dry_order(
         .update_balance(
             &mut tx,
             user_id,
+            PAPER_LEDGER_DEFAULT_STRATEGY_KEY,
             out.quote_balance_after,
             &out.base_positions_after,
         )
@@ -189,6 +192,7 @@ async fn place_dry_order(
             &mut tx,
             org_id,
             user_id,
+            PAPER_LEDGER_DEFAULT_STRATEGY_KEY,
             ex,
             seg,
             &symbol,

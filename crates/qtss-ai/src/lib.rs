@@ -10,7 +10,9 @@ pub mod context_builder;
 pub mod error;
 pub mod feedback;
 pub mod layers;
+pub mod notify_telegram_config;
 pub mod parser;
+mod provider_secrets;
 pub mod providers;
 pub mod safety;
 pub mod storage;
@@ -18,8 +20,10 @@ pub mod storage;
 pub use client::{
     hash_context, run_operational_sweep, run_strategic_sweep, run_tactical_sweep, AiRuntime,
 };
+pub use storage::mirror_approval_request_outcome_to_linked_ai_decisions;
 pub use config::AiEngineConfig;
 pub use error::{AiError, AiResult};
+pub use notify_telegram_config::load_notify_config_merged;
 
 use std::time::Duration;
 

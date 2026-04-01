@@ -3,6 +3,8 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use serde_json::json;
+
 use crate::config::AiEngineConfig;
 use crate::error::AiResult;
 use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
@@ -51,6 +53,14 @@ pub async fn maybe_auto_approve(
         .bind(decision_id)
         .execute(pool)
         .await?;
+        crate::storage::sync_linked_approval_request_status(
+            pool,
+            decision_id,
+            "approved",
+            Some("auto"),
+            None,
+        )
+        .await?;
         return Ok(());
     }
 
@@ -72,7 +82,8 @@ pub async fn maybe_auto_approve(
         symbol.unwrap_or("-")
     );
     let body = format!(
-        "symbol={:?} direction={:?} confidence={:.4} (threshold {:.2} auto={})\nreasoning={:?}",
+        "id={}\nsymbol={:?} direction={:?} confidence={:.4} (threshold {:.2} auto={})\nreasoning={:?}",
+        decision_id,
         symbol,
         direction,
         confidence,
@@ -80,7 +91,15 @@ pub async fn maybe_auto_approve(
         cfg.auto_approve_enabled,
         reasoning
     );
-    let n = Notification::new(title, body);
+    let n = if d.config().telegram.is_some() {
+        let markup = json!({"inline_keyboard":[[
+            {"text": "Approve", "callback_data": format!("d:{}:a", decision_id)},
+            {"text": "Reject", "callback_data": format!("d:{}:r", decision_id)},
+        ]]});
+        Notification::new(title, body).with_telegram_reply_markup(markup)
+    } else {
+        Notification::new(title, body)
+    };
     let receipts = d.send_all(&channels, &n).await;
     for r in receipts {
         if !r.ok {

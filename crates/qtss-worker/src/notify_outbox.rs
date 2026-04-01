@@ -3,7 +3,9 @@
 use std::time::Duration;
 
 use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
-use qtss_storage::{resolve_worker_enabled_flag, resolve_worker_tick_secs, NotifyOutboxRepository};
+use qtss_storage::{
+    resolve_worker_enabled_flag, resolve_worker_tick_secs, NotifyOutboxRepository,
+};
 use serde_json::json;
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -17,11 +19,12 @@ fn parse_channels(raw: &[String]) -> Vec<NotificationChannel> {
 pub async fn notify_outbox_loop(pool: PgPool) {
     let pool_tick = pool.clone();
     let repo = NotifyOutboxRepository::new(pool);
-    let dispatcher = NotificationDispatcher::from_env();
     info!(
         "notify_outbox_loop: draining notify_outbox → qtss-notify (poll from system_config / env)"
     );
     loop {
+        let ncfg = qtss_ai::load_notify_config_merged(&pool_tick).await;
+        let dispatcher = NotificationDispatcher::new(ncfg);
         let enabled = resolve_worker_enabled_flag(
             &pool_tick,
             "worker",

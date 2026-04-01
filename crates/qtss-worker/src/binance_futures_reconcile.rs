@@ -8,38 +8,16 @@ use qtss_binance::{BinanceClient, BinanceClientConfig};
 use qtss_execution::{
     reconcile_binance_futures_open_orders, ExchangeOrderVenueSnapshot, ReconcileReport,
 };
-use qtss_reconcile::{apply_binance_futures_open_orders_patch, BinanceOpenOrdersPatchConfig};
-use qtss_storage::{ExchangeAccountRepository, ExchangeOrderRepository, ExchangeOrderRow};
+use qtss_reconcile::{
+    apply_binance_futures_open_orders_patch, BinanceOpenOrdersPatchConfig,
+};
+use qtss_storage::{
+    resolve_system_string, resolve_worker_enabled_flag, resolve_worker_tick_secs,
+    ExchangeAccountRepository, ExchangeOrderRepository, ExchangeOrderRow,
+};
 use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
-
-fn enabled() -> bool {
-    std::env::var("QTSS_RECONCILE_BINANCE_FUTURES_ENABLED")
-        .ok()
-        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
-}
-
-fn tick_secs() -> u64 {
-    std::env::var("QTSS_RECONCILE_BINANCE_FUTURES_TICK_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(3600)
-        .max(120)
-}
-
-fn patch_exchange_order_status_enabled() -> bool {
-    std::env::var("QTSS_RECONCILE_BINANCE_FUTURES_PATCH_STATUS")
-        .ok()
-        .map(|s| {
-            let t = s.trim();
-            !(t == "0"
-                || t.eq_ignore_ascii_case("false")
-                || t.eq_ignore_ascii_case("no")
-                || t.eq_ignore_ascii_case("off"))
-        })
-        .unwrap_or(true)
-}
 
 fn local_snapshots_futures(rows: Vec<ExchangeOrderRow>) -> Vec<ExchangeOrderVenueSnapshot> {
     rows.into_iter()
@@ -76,19 +54,59 @@ fn log_report(user_id: Uuid, report: &ReconcileReport) {
 }
 
 pub async fn binance_futures_reconcile_loop(pool: PgPool) {
-    if !enabled() {
-        info!("QTSS_RECONCILE_BINANCE_FUTURES_ENABLED kapalı — binance_futures_reconcile_loop çıkıyor");
-        return;
-    }
-    let tick = Duration::from_secs(tick_secs());
     let accts = ExchangeAccountRepository::new(pool.clone());
     let orders = ExchangeOrderRepository::new(pool.clone());
-    info!(
-        poll_secs = tick.as_secs(),
-        "binance_futures_reconcile_loop: periodic fapi openOrders vs exchange_orders"
-    );
+    info!("binance_futures_reconcile_loop: periodic fapi openOrders vs exchange_orders (system_config + env yedek)");
     loop {
-        tokio::time::sleep(tick).await;
+        let enabled = resolve_worker_enabled_flag(
+            &pool,
+            "worker",
+            "reconcile_binance_futures_enabled",
+            "QTSS_RECONCILE_BINANCE_FUTURES_ENABLED",
+            false,
+        )
+        .await;
+        if !enabled {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            continue;
+        }
+        let tick_secs = resolve_worker_tick_secs(
+            &pool,
+            "worker",
+            "reconcile_binance_futures_tick_secs",
+            "QTSS_RECONCILE_BINANCE_FUTURES_TICK_SECS",
+            3600,
+            120,
+        )
+        .await;
+        let patch_on = resolve_worker_enabled_flag(
+            &pool,
+            "worker",
+            "reconcile_binance_futures_patch_status",
+            "QTSS_RECONCILE_BINANCE_FUTURES_PATCH_STATUS",
+            true,
+        )
+        .await;
+        let refine_on = resolve_worker_enabled_flag(
+            &pool,
+            "worker",
+            "reconcile_binance_futures_refine_order_status",
+            "QTSS_RECONCILE_BINANCE_FUTURES_REFINE_ORDER_STATUS",
+            false,
+        )
+        .await;
+        let refine_max: usize = resolve_system_string(
+            &pool,
+            "worker",
+            "reconcile_binance_futures_refine_max",
+            "QTSS_RECONCILE_BINANCE_FUTURES_REFINE_MAX",
+            "30",
+        )
+        .await
+        .parse()
+        .unwrap_or(30);
+        let patch_cfg = BinanceOpenOrdersPatchConfig::futures_worker(refine_on, refine_max, patch_on);
+        tokio::time::sleep(Duration::from_secs(tick_secs)).await;
         let user_ids = match accts.list_user_ids_binance_segment("futures").await {
             Ok(u) => u,
             Err(e) => {
@@ -141,12 +159,14 @@ pub async fn binance_futures_reconcile_loop(pool: PgPool) {
                     continue;
                 }
             };
-            let patch_cfg =
-                BinanceOpenOrdersPatchConfig::worker_futures(patch_exchange_order_status_enabled());
-            if patch_cfg.refine_via_order_query || patch_cfg.patch_submitted_to_reconciled_not_open
-            {
+            if patch_cfg.refine_via_order_query || patch_cfg.patch_submitted_to_reconciled_not_open {
                 match apply_binance_futures_open_orders_patch(
-                    &orders, &client, user_id, &remote, &local, &patch_cfg,
+                    &orders,
+                    &client,
+                    user_id,
+                    &remote,
+                    &local,
+                    &patch_cfg,
                 )
                 .await
                 {

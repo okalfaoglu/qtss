@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 #[tokio::test]
 async fn decision_exists_for_hash_respects_created_at_ttl() {
+    qtss_common::load_dotenv();
     let url = match std::env::var("DATABASE_URL") {
         Ok(u) if !u.trim().is_empty() => u,
         _ => {
@@ -48,6 +49,7 @@ async fn decision_exists_for_hash_respects_created_at_ttl() {
         None,
         None,
         3600,
+        None,
         &json!({}),
     )
     .await

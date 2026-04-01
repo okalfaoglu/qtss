@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::gateway::{ExecutionError, ExecutionGateway};
 
-/// Genel canlı gateway yedek iskeleti. Binance için [`crate::BinanceLiveGateway`] kullanın.
+/// Genel canlı gateway yedek iskeleti. Binance: [`crate::BinanceLiveGateway`]. Diğer borsalar için şimdilik [`crate::UnsupportedLiveGateway`].
 pub struct LiveGateway;
 
 impl Loggable for LiveGateway {
@@ -32,10 +32,14 @@ impl ExecutionGateway for LiveGateway {
             Self::MODULE,
             "LiveGateway henüz bağlı değil — adapter eklenince doldurulacak",
         );
-        Err(ExecutionError::Exchange("live adapter not wired".into()))
+        Err(ExecutionError::Exchange(
+            "live adapter not wired".into(),
+        ))
     }
 
     async fn cancel(&self, _client_order_id: Uuid) -> Result<(), ExecutionError> {
-        Err(ExecutionError::Exchange("live adapter not wired".into()))
+        Err(ExecutionError::Exchange(
+            "live adapter not wired".into(),
+        ))
     }
 }

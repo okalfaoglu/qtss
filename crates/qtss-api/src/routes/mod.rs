@@ -17,7 +17,9 @@ mod market_binance;
 mod notify;
 mod onchain_signals;
 mod orders_binance;
+mod orders_bybit;
 mod orders_dry;
+mod orders_okx;
 mod reconcile;
 mod session;
 mod system_config_admin;
@@ -71,6 +73,8 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(reconcile::reconcile_router().layer(from_fn(require_admin)))
         .merge(orders_binance::orders_binance_read_router().layer(from_fn(require_dashboard_roles)))
         .merge(orders_binance::orders_binance_write_router().layer(from_fn(require_ops_roles)))
+        .merge(orders_bybit::orders_bybit_write_router().layer(from_fn(require_ops_roles)))
+        .merge(orders_okx::orders_okx_write_router().layer(from_fn(require_ops_roles)))
         .merge(orders_dry::orders_dry_read_router().layer(from_fn(require_dashboard_roles)))
         .merge(orders_dry::orders_dry_write_router().layer(from_fn(require_ops_roles)))
         .merge(fills::fills_router().layer(from_fn(require_dashboard_roles)))

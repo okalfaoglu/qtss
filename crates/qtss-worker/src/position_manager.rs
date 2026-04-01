@@ -1,10 +1,18 @@
-//! Pozisyon özeti + SL/TP kontrolü (dev guide ADIM 9, §3.5).
+//! Position summary + SL/TP monitoring (`QTSS_MASTER_DEV_GUIDE` FAZ 5.3).
 //!
-//! `exchange_orders` dolumlarından net long tahmini; `market_bars` son kapanış ile eşik.
-//! - `QTSS_POSITION_MANAGER_DRY_CLOSE_ENABLED=1` → [`DryRunGateway`] ile simüle kapatma.
-//! - `QTSS_POSITION_MANAGER_LIVE_CLOSE_ENABLED=1` → Binance **reduce-only** market satışı
-//!   (`exchange_accounts` + `BinanceLiveGateway`); `is_trading_halted()` iken atlanır.
-//!   Dry kapatma açıksa yalnız dry yolu kullanılır (çakışma yok).
+//! Derives net long exposure from `exchange_orders` fills; uses latest `market_bars` close as mark.
+//! - `QTSS_POSITION_MANAGER_DRY_CLOSE_ENABLED=1` → [`DryRunGateway`] simulated exit.
+//! - `QTSS_POSITION_MANAGER_LIVE_CLOSE_ENABLED=1` → Binance reduce-only market sell
+//!   (`exchange_accounts` + `BinanceLiveGateway`); skipped when `is_trading_halted()`.
+//!   Books whose `exchange_orders.exchange` is not Binance still get correct [`ExchangeId`] on
+//!   dry intents. Live: **Binance** (spot/futures), **Bybit** linear, **OKX** USDT SWAP market
+//!   reduce-only for AI directive close and SL/TP (`exchange_accounts.passphrase` required for OKX);
+//!   managed / directive trailing remain Binance-only.
+//!   If dry close is on, only the dry path runs (no conflict).
+//!
+//! Approved `ai_position_directives`: `activate_trailing` / tighten / widen (with optional
+//! `trailing_callback_pct`), `deactivate_trailing` (clears managed trailing state), `partial_close`,
+//! `full_close`; `add_to_position` is logged and not executed here.
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -22,10 +30,13 @@ use qtss_common::is_trading_halted;
 use qtss_domain::exchange::{ExchangeId, MarketSegment};
 use qtss_domain::orders::{FuturesExecutionExtras, OrderIntent, OrderSide, OrderType, TimeInForce};
 use qtss_domain::symbol::InstrumentId;
-use qtss_execution::{BinanceLiveGateway, DryRunGateway, ExecutionGateway};
+use qtss_execution::{
+    venue_order_id_from_bybit_v5_response, venue_order_id_from_okx_v5_response, BinanceLiveGateway,
+    BybitLiveGateway, DryRunGateway, ExecutionGateway, OkxLiveGateway,
+};
 use qtss_storage::{
-    list_recent_bars, resolve_worker_tick_secs, ExchangeAccountRepository, ExchangeOrderRepository,
-    ExchangeOrderRow,
+    list_recent_bars, resolve_system_decimal, resolve_system_string, resolve_worker_enabled_flag,
+    resolve_worker_tick_secs, ExchangeAccountRepository, ExchangeOrderRepository, ExchangeOrderRow,
 };
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
@@ -34,58 +45,126 @@ use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-fn enabled() -> bool {
-    std::env::var("QTSS_POSITION_MANAGER_ENABLED")
-        .ok()
-        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
+#[derive(Clone)]
+struct PmLoopConfig {
+    enabled: bool,
+    dry_close: bool,
+    live_close: bool,
+    bar_interval: String,
+    sl_pct: Decimal,
+    tp_pct: Decimal,
+    trailing_on_directive: bool,
+    managed_trailing: bool,
+    managed_cb_pct: Decimal,
+    managed_limit_offset_pct: Decimal,
+    managed_replace_step_pct: Decimal,
 }
 
-fn dry_close_enabled() -> bool {
-    std::env::var("QTSS_POSITION_MANAGER_DRY_CLOSE_ENABLED")
-        .ok()
-        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
-}
-
-fn live_close_enabled() -> bool {
-    std::env::var("QTSS_POSITION_MANAGER_LIVE_CLOSE_ENABLED")
-        .ok()
-        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
-}
-
-fn trailing_on_directive_enabled() -> bool {
-    std::env::var("QTSS_POSITION_MANAGER_TRAILING_ON_DIRECTIVE")
-        .ok()
-        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
-}
-
-fn managed_trailing_enabled() -> bool {
-    std::env::var("QTSS_POSITION_MANAGER_MANAGED_TRAILING_ENABLED")
-        .ok()
-        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
-}
-
-fn managed_trailing_callback_rate_pct() -> Decimal {
-    std::env::var("QTSS_POSITION_MANAGER_MANAGED_TRAILING_CALLBACK_RATE_PCT")
-        .ok()
-        .and_then(|s| Decimal::from_str(s.trim()).ok())
-        .unwrap_or_else(|| Decimal::new(1, 0)) // 1%
-        .max(Decimal::new(1, 1)) // >= 0.1
-}
-
-fn managed_trailing_limit_offset_pct() -> Decimal {
-    std::env::var("QTSS_POSITION_MANAGER_MANAGED_TRAILING_LIMIT_OFFSET_PCT")
-        .ok()
-        .and_then(|s| Decimal::from_str(s.trim()).ok())
-        .unwrap_or_else(|| Decimal::new(2, 1)) // 0.2%
-        .max(Decimal::new(1, 2)) // >= 0.01
-}
-
-fn managed_trailing_replace_step_pct() -> Decimal {
-    std::env::var("QTSS_POSITION_MANAGER_MANAGED_TRAILING_REPLACE_STEP_PCT")
-        .ok()
-        .and_then(|s| Decimal::from_str(s.trim()).ok())
-        .unwrap_or_else(|| Decimal::new(1, 1)) // 0.1%
-        .max(Decimal::new(1, 2))
+async fn load_pm_loop_config(pool: &PgPool) -> PmLoopConfig {
+    let enabled = resolve_worker_enabled_flag(
+        pool,
+        "worker",
+        "position_manager_enabled",
+        "QTSS_POSITION_MANAGER_ENABLED",
+        false,
+    )
+    .await;
+    let dry_close = resolve_worker_enabled_flag(
+        pool,
+        "worker",
+        "position_manager_dry_close_enabled",
+        "QTSS_POSITION_MANAGER_DRY_CLOSE_ENABLED",
+        false,
+    )
+    .await;
+    let live_close = resolve_worker_enabled_flag(
+        pool,
+        "worker",
+        "position_manager_live_close_enabled",
+        "QTSS_POSITION_MANAGER_LIVE_CLOSE_ENABLED",
+        false,
+    )
+    .await;
+    let bar_interval = resolve_system_string(
+        pool,
+        "worker",
+        "position_manager_bar_interval",
+        "QTSS_POSITION_MANAGER_BAR_INTERVAL",
+        "1m",
+    )
+    .await;
+    let sl_pct = resolve_system_decimal(
+        pool,
+        "worker",
+        "default_stop_loss_pct",
+        "QTSS_DEFAULT_STOP_LOSS_PCT",
+        Decimal::new(2, 0),
+    )
+    .await;
+    let tp_pct = resolve_system_decimal(
+        pool,
+        "worker",
+        "default_take_profit_pct",
+        "QTSS_DEFAULT_TAKE_PROFIT_PCT",
+        Decimal::new(4, 0),
+    )
+    .await;
+    let trailing_on_directive = resolve_worker_enabled_flag(
+        pool,
+        "worker",
+        "position_manager_trailing_on_directive",
+        "QTSS_POSITION_MANAGER_TRAILING_ON_DIRECTIVE",
+        false,
+    )
+    .await;
+    let managed_trailing = resolve_worker_enabled_flag(
+        pool,
+        "worker",
+        "position_manager_managed_trailing_enabled",
+        "QTSS_POSITION_MANAGER_MANAGED_TRAILING_ENABLED",
+        false,
+    )
+    .await;
+    let managed_cb_pct = resolve_system_decimal(
+        pool,
+        "worker",
+        "position_manager_managed_trailing_callback_rate_pct",
+        "QTSS_POSITION_MANAGER_MANAGED_TRAILING_CALLBACK_RATE_PCT",
+        Decimal::new(1, 0),
+    )
+    .await
+        .max(Decimal::new(1, 1));
+    let managed_limit_offset_pct = resolve_system_decimal(
+        pool,
+        "worker",
+        "position_manager_managed_trailing_limit_offset_pct",
+        "QTSS_POSITION_MANAGER_MANAGED_TRAILING_LIMIT_OFFSET_PCT",
+        Decimal::new(2, 1),
+    )
+    .await
+        .max(Decimal::new(1, 2));
+    let managed_replace_step_pct = resolve_system_decimal(
+        pool,
+        "worker",
+        "position_manager_managed_trailing_replace_step_pct",
+        "QTSS_POSITION_MANAGER_MANAGED_TRAILING_REPLACE_STEP_PCT",
+        Decimal::new(1, 1),
+    )
+    .await
+        .max(Decimal::new(1, 2));
+    PmLoopConfig {
+        enabled,
+        dry_close,
+        live_close,
+        bar_interval,
+        sl_pct,
+        tp_pct,
+        trailing_on_directive,
+        managed_trailing,
+        managed_cb_pct,
+        managed_limit_offset_pct,
+        managed_replace_step_pct,
+    }
 }
 
 #[derive(Clone, Default)]
@@ -95,18 +174,11 @@ struct ManagedTrailingState {
     active_stop: Decimal,
 }
 
-fn sl_pct() -> Decimal {
-    std::env::var("QTSS_DEFAULT_STOP_LOSS_PCT")
-        .ok()
-        .and_then(|s| Decimal::from_str(s.trim()).ok())
-        .unwrap_or_else(|| Decimal::new(2, 0))
-}
-
-fn tp_pct() -> Decimal {
-    std::env::var("QTSS_DEFAULT_TAKE_PROFIT_PCT")
-        .ok()
-        .and_then(|s| Decimal::from_str(s.trim()).ok())
-        .unwrap_or_else(|| Decimal::new(4, 0))
+/// AI operational directive close request (immediate reduce-only exit).
+#[derive(Clone, Copy)]
+enum DirectiveCloseKind {
+    Partial(Decimal),
+    Full,
 }
 
 fn min_qty_filter() -> Decimal {
@@ -119,6 +191,24 @@ struct PosKey {
     exchange: String,
     segment: String,
     symbol: String,
+}
+
+/// Parses `exchange_orders.exchange` (snake_case) for [`OrderIntent`] / live gating.
+fn position_book_exchange_id(key: &PosKey) -> ExchangeId {
+    let s = key.exchange.trim().to_lowercase();
+    if s.is_empty() {
+        return ExchangeId::Binance;
+    }
+    match ExchangeId::from_str(&s) {
+        Ok(id) => id,
+        Err(_) => {
+            tracing::debug!(
+                raw = %s,
+                "position_book_exchange_id: unknown exchange label, using binance for intent"
+            );
+            ExchangeId::Binance
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -135,7 +225,7 @@ struct BookWithOrg {
 
 fn market_reduce_long_intent(key: &PosKey, qty: Decimal) -> OrderIntent {
     let instrument = InstrumentId {
-        exchange: ExchangeId::Binance,
+        exchange: position_book_exchange_id(key),
         segment: if key.segment.eq_ignore_ascii_case("futures") {
             MarketSegment::Futures
         } else {
@@ -164,7 +254,7 @@ fn market_reduce_long_intent(key: &PosKey, qty: Decimal) -> OrderIntent {
 
 fn trailing_stop_reduce_long_intent(key: &PosKey, qty: Decimal, callback_rate_pct: Decimal) -> OrderIntent {
     let instrument = InstrumentId {
-        exchange: ExchangeId::Binance,
+        exchange: position_book_exchange_id(key),
         segment: if key.segment.eq_ignore_ascii_case("futures") {
             MarketSegment::Futures
         } else {
@@ -293,34 +383,38 @@ async fn last_close_price(
 }
 
 pub async fn position_manager_loop(pool: PgPool) {
-    if !enabled() {
-        info!("QTSS_POSITION_MANAGER_ENABLED kapalı — position_manager_loop çıkıyor");
+    let pm_cfg = load_pm_loop_config(&pool).await;
+    if !pm_cfg.enabled {
+        info!("worker.position_manager_enabled kapalı — position_manager_loop çıkıyor");
         return;
     }
     let repo = ExchangeOrderRepository::new(pool.clone());
-    let dry_gateway: Option<Arc<DryRunGateway>> = if dry_close_enabled() {
-        Some(crate::strategy_runner::dry_gateway_from_env())
+    let dry_gateway: Option<Arc<DryRunGateway>> = if pm_cfg.dry_close {
+        Some(crate::strategy_runner::dry_gateway_from_pool(&pool).await)
     } else {
         None
     };
-    let live_on = live_close_enabled() && dry_gateway.is_none();
-    let bar_interval =
-        std::env::var("QTSS_POSITION_MANAGER_BAR_INTERVAL").unwrap_or_else(|_| "1m".into());
+    let live_on = pm_cfg.live_close && dry_gateway.is_none();
+    let bar_interval = pm_cfg.bar_interval.clone();
     info!(
         dry_close = dry_gateway.is_some(),
         live_close = live_on,
         "position_manager_loop: SL/TP izleme (poll: worker.position_manager_tick_secs / QTSS_POSITION_MANAGER_TICK_SECS)"
     );
-    let sl = sl_pct() / Decimal::from(100u32);
-    let tp = tp_pct() / Decimal::from(100u32);
+    let sl = pm_cfg.sl_pct / Decimal::from(100u32);
+    let tp = pm_cfg.tp_pct / Decimal::from(100u32);
     let min_q = min_qty_filter();
-    let trailing_on_dir = trailing_on_directive_enabled();
-    let managed_trailing = managed_trailing_enabled();
-    let managed_cb_pct = managed_trailing_callback_rate_pct();
-    let managed_limit_offset_pct = managed_trailing_limit_offset_pct();
-    let managed_replace_step_pct = managed_trailing_replace_step_pct();
+    let trailing_on_dir = pm_cfg.trailing_on_directive;
+    let managed_trailing = pm_cfg.managed_trailing;
+    let managed_cb_pct = pm_cfg.managed_cb_pct;
+    let managed_limit_offset_pct = pm_cfg.managed_limit_offset_pct;
+    let managed_replace_step_pct = pm_cfg.managed_replace_step_pct;
     let acct_repo = ExchangeAccountRepository::new(pool.clone());
     let live_gateway_cache: Mutex<HashMap<(Uuid, String), Arc<BinanceLiveGateway>>> =
+        Mutex::new(HashMap::new());
+    let bybit_live_gateway_cache: Mutex<HashMap<(Uuid, String), Arc<BybitLiveGateway>>> =
+        Mutex::new(HashMap::new());
+    let okx_live_gateway_cache: Mutex<HashMap<(Uuid, String), Arc<OkxLiveGateway>>> =
         Mutex::new(HashMap::new());
     let managed_trailing_state: Arc<Mutex<HashMap<PosKey, ManagedTrailingState>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -344,6 +438,7 @@ pub async fn position_manager_loop(pool: PgPool) {
         };
         let books = aggregate_long_books(&rows);
         for (key, agg) in books {
+            let book_exchange_id = position_book_exchange_id(&key);
             let book = agg.book;
             if book.qty < min_q {
                 continue;
@@ -371,6 +466,8 @@ pub async fn position_manager_loop(pool: PgPool) {
             let mut directive_applied_id: Option<Uuid> = None;
             let mut ai_outcome_decision_id: Option<Uuid> = None;
             let mut directive_requested_trailing = false;
+            let mut directive_close: Option<DirectiveCloseKind> = None;
+            let mut directive_trailing_callback_pct: Option<f64> = None;
             if let Ok(Some(td)) = fetch_latest_approved_tactical(&pool, &key.symbol).await {
                 ai_outcome_decision_id = Some(td.decision_id);
                 if let Some(p) = td.stop_loss_pct {
@@ -389,7 +486,11 @@ pub async fn position_manager_loop(pool: PgPool) {
                 if ai_outcome_decision_id.is_none() {
                     ai_outcome_decision_id = Some(dir.decision_id);
                 }
+                if let Some(p) = dir.trailing_callback_pct.filter(|x| *x > 0.0) {
+                    directive_trailing_callback_pct = Some(p);
+                }
                 match dir.action.as_str() {
+                    "keep" => {}
                     "tighten_stop" => {
                         directive_requested_trailing = true;
                         if let Some(p) = dir.new_stop_loss_pct {
@@ -398,6 +499,11 @@ pub async fn position_manager_loop(pool: PgPool) {
                             }
                         } else {
                             sl_frac = sl_frac * Decimal::new(9, 1) / Decimal::TEN;
+                        }
+                        if let Some(p) = dir.new_take_profit_pct {
+                            if let Some(nt) = Decimal::from_f64(p) {
+                                tp_frac = nt / Decimal::from(100u32);
+                            }
                         }
                     }
                     "widen_stop" => {
@@ -409,15 +515,427 @@ pub async fn position_manager_loop(pool: PgPool) {
                         } else {
                             sl_frac = sl_frac * Decimal::new(11, 1) / Decimal::TEN;
                         }
+                        if let Some(p) = dir.new_take_profit_pct {
+                            if let Some(nt) = Decimal::from_f64(p) {
+                                tp_frac = nt / Decimal::from(100u32);
+                            }
+                        }
                     }
-                    _ => {}
+                    "activate_trailing" => {
+                        directive_requested_trailing = true;
+                        if let Some(p) = dir.new_stop_loss_pct {
+                            if let Some(d) = Decimal::from_f64(p) {
+                                sl_frac = d / Decimal::from(100u32);
+                            }
+                        }
+                        if let Some(p) = dir.new_take_profit_pct {
+                            if let Some(nt) = Decimal::from_f64(p) {
+                                tp_frac = nt / Decimal::from(100u32);
+                            }
+                        }
+                    }
+                    "deactivate_trailing" => {
+                        directive_requested_trailing = false;
+                        managed_trailing_state
+                            .lock()
+                            .unwrap()
+                            .remove(&key);
+                    }
+                    "partial_close" => {
+                        let pct_raw = dir.partial_close_pct.unwrap_or(50.0).clamp(0.0, 100.0);
+                        if pct_raw > 0.0 {
+                            if let Some(ratio) = Decimal::from_f64(pct_raw / 100.0) {
+                                let q = (book.qty * ratio).max(Decimal::ZERO);
+                                if q >= min_q {
+                                    directive_close = Some(DirectiveCloseKind::Partial(q));
+                                }
+                            }
+                        }
+                    }
+                    "full_close" => {
+                        directive_close = Some(DirectiveCloseKind::Full);
+                    }
+                    "add_to_position" => {
+                        tracing::info!(
+                            symbol = %key.symbol,
+                            "position_manager: add_to_position directive ignored (not executed here)"
+                        );
+                    }
+                    _ => {
+                        tracing::warn!(
+                            symbol = %key.symbol,
+                            action = %dir.action,
+                            "position_manager: unknown ai_position_directives.action"
+                        );
+                    }
                 }
                 directive_applied_id = Some(dir.id);
             }
 
+            // AI directive: partial or full reduce-only close (before managed trailing / SL-TP path).
+            if let Some(close_kind) = directive_close {
+                let is_ai_full_close = matches!(close_kind, DirectiveCloseKind::Full);
+                let qty_to_close = match close_kind {
+                    DirectiveCloseKind::Partial(q) => q,
+                    DirectiveCloseKind::Full => book.qty,
+                };
+                if qty_to_close < min_q {
+                    if let Some(id) = directive_applied_id {
+                        let _ = mark_applied(&pool, AiRecordTable::PositionDirectiveChild, id).await;
+                    }
+                    continue;
+                }
+                let intent = market_reduce_long_intent(&key, qty_to_close);
+                let outcome_label = if mark > entry {
+                    "profit"
+                } else if (mark - entry).abs() < entry * Decimal::new(1, 4) {
+                    "breakeven"
+                } else {
+                    "loss"
+                };
+                let outcome_db: &str = if outcome_label == "breakeven" {
+                    "breakeven"
+                } else {
+                    outcome_label
+                };
+                let pnl_note = if is_ai_full_close {
+                    "ai_directive_full_close"
+                } else {
+                    "ai_directive_partial_close"
+                };
+                let mut close_executed = false;
+                if let Some(ref gw) = dry_gateway {
+                    if let Err(e) = gw.set_reference_price(&intent.instrument, mark) {
+                        warn!(%e, symbol = %key.symbol, "position_manager dry set_reference_price (directive close)");
+                    } else if let Err(e) = gw.place(intent).await {
+                        warn!(%e, symbol = %key.symbol, "position_manager: dry directive close place failed");
+                    } else {
+                        close_executed = true;
+                        if let Some(did) = ai_outcome_decision_id {
+                            let pnl_pct = entry.to_f64().and_then(|e| {
+                                mark.to_f64()
+                                    .and_then(|m| (e > 0.0).then_some((m - e) / e * 100.0))
+                            });
+                            if let Err(e) = record_decision_outcome(
+                                &pool,
+                                did,
+                                pnl_pct,
+                                None,
+                                outcome_db,
+                                None,
+                                Some(pnl_note),
+                            )
+                            .await
+                            {
+                                warn!(%e, symbol = %key.symbol, "record_decision_outcome (directive dry)");
+                            }
+                        }
+                    }
+                } else if live_on {
+                    if is_trading_halted() {
+                        warn!(
+                            user_id = %key.user_id,
+                            symbol = %key.symbol,
+                            "position_manager: directive close skipped — trading halted"
+                        );
+                    } else if let Some(org_id) = agg.org_id {
+                        if book_exchange_id == ExchangeId::Binance {
+                            let creds = match acct_repo
+                                .binance_for_user(key.user_id, key.segment.trim())
+                                .await
+                            {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    warn!(%e, "position_manager: exchange_accounts (directive close)");
+                                    None
+                                }
+                            };
+                            if let Some(creds) = creds {
+                                let seg_norm = key.segment.trim().to_lowercase();
+                                let gw_cache_key = (key.user_id, seg_norm);
+                                let gw = {
+                                    let mut guard = live_gateway_cache.lock().unwrap();
+                                    if let Some(g) = guard.get(&gw_cache_key) {
+                                        g.clone()
+                                    } else {
+                                        let cfg = BinanceClientConfig::mainnet_with_keys(
+                                            creds.api_key,
+                                            creds.api_secret,
+                                        );
+                                        let client = match BinanceClient::new(cfg) {
+                                            Ok(c) => Arc::new(c),
+                                            Err(e) => {
+                                                warn!(%e, "position_manager: BinanceClient (directive close)");
+                                                continue;
+                                            }
+                                        };
+                                        let g = Arc::new(BinanceLiveGateway::new(client));
+                                        guard.insert(gw_cache_key, g.clone());
+                                        g
+                                    }
+                                };
+                                let intent_record = intent.clone();
+                                if let Ok((cid, venue_json)) =
+                                    gw.place_with_venue_response(intent).await
+                                {
+                                    let venue_oid =
+                                        venue_order_id_from_binance_order_response(&venue_json);
+                                    match repo
+                                        .insert_submitted(
+                                            org_id,
+                                            key.user_id,
+                                            key.exchange.trim(),
+                                            key.segment.trim(),
+                                            &key.symbol,
+                                            cid,
+                                            &intent_record,
+                                            venue_oid,
+                                            Some(venue_json),
+                                        )
+                                        .await
+                                    {
+                                        Ok(_) => {
+                                            close_executed = true;
+                                            if let Some(did) = ai_outcome_decision_id {
+                                                let pnl_pct = entry.to_f64().and_then(|e| {
+                                                    mark.to_f64().and_then(|m| {
+                                                        (e > 0.0).then_some((m - e) / e * 100.0)
+                                                    })
+                                                });
+                                                if let Err(e) = record_decision_outcome(
+                                                    &pool,
+                                                    did,
+                                                    pnl_pct,
+                                                    None,
+                                                    outcome_db,
+                                                    None,
+                                                    Some(pnl_note),
+                                                )
+                                                .await
+                                                {
+                                                    warn!(%e, symbol = %key.symbol, "record_decision_outcome (directive live)");
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            warn!(%e, %cid, "position_manager: directive close DB insert failed");
+                                        }
+                                    }
+                                } else {
+                                    warn!(symbol = %key.symbol, "position_manager: live directive close place failed");
+                                }
+                            }
+                        } else if book_exchange_id == ExchangeId::Bybit
+                            && key.segment.eq_ignore_ascii_case("futures")
+                        {
+                            let creds = match acct_repo
+                                .credentials_for_user(
+                                    key.user_id,
+                                    "bybit",
+                                    key.segment.trim(),
+                                )
+                                .await
+                            {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    warn!(%e, "position_manager: exchange_accounts bybit (directive close)");
+                                    None
+                                }
+                            };
+                            if let Some(creds) = creds {
+                                let seg_norm = key.segment.trim().to_lowercase();
+                                let gw_cache_key = (key.user_id, seg_norm.clone());
+                                let gw = {
+                                    let mut guard = bybit_live_gateway_cache.lock().unwrap();
+                                    if let Some(g) = guard.get(&gw_cache_key) {
+                                        g.clone()
+                                    } else {
+                                        let g = Arc::new(BybitLiveGateway::mainnet(
+                                            creds.api_key,
+                                            creds.api_secret,
+                                        ));
+                                        guard.insert(gw_cache_key, g.clone());
+                                        g
+                                    }
+                                };
+                                let intent_record = intent.clone();
+                                if let Ok((cid, venue_json)) =
+                                    gw.place_with_venue_response(intent).await
+                                {
+                                    let venue_oid =
+                                        venue_order_id_from_bybit_v5_response(&venue_json);
+                                    match repo
+                                        .insert_submitted(
+                                            org_id,
+                                            key.user_id,
+                                            key.exchange.trim(),
+                                            key.segment.trim(),
+                                            &key.symbol,
+                                            cid,
+                                            &intent_record,
+                                            venue_oid,
+                                            Some(venue_json),
+                                        )
+                                        .await
+                                    {
+                                        Ok(_) => {
+                                            close_executed = true;
+                                            if let Some(did) = ai_outcome_decision_id {
+                                                let pnl_pct = entry.to_f64().and_then(|e| {
+                                                    mark.to_f64().and_then(|m| {
+                                                        (e > 0.0).then_some((m - e) / e * 100.0)
+                                                    })
+                                                });
+                                                if let Err(e) = record_decision_outcome(
+                                                    &pool,
+                                                    did,
+                                                    pnl_pct,
+                                                    None,
+                                                    outcome_db,
+                                                    None,
+                                                    Some(pnl_note),
+                                                )
+                                                .await
+                                                {
+                                                    warn!(%e, symbol = %key.symbol, "record_decision_outcome (directive live bybit)");
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            warn!(%e, %cid, "position_manager: directive close DB insert failed (bybit)");
+                                        }
+                                    }
+                                } else {
+                                    warn!(
+                                        symbol = %key.symbol,
+                                        "position_manager: live directive close place failed (bybit)"
+                                    );
+                                }
+                            }
+                        } else if book_exchange_id == ExchangeId::Okx
+                            && key.segment.eq_ignore_ascii_case("futures")
+                        {
+                            let creds =
+                                match acct_repo
+                                    .credentials_for_user(
+                                        key.user_id,
+                                        "okx",
+                                        key.segment.trim(),
+                                    )
+                                    .await
+                                {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        warn!(%e, "position_manager: exchange_accounts okx (directive close)");
+                                        None
+                                    }
+                                };
+                            if let Some(creds) = creds {
+                                let passphrase = creds.passphrase.clone().unwrap_or_default();
+                                if passphrase.trim().is_empty() {
+                                    warn!(
+                                        user_id = %key.user_id,
+                                        symbol = %key.symbol,
+                                        "position_manager: OKX passphrase missing (exchange_accounts.passphrase)",
+                                    );
+                                } else {
+                                    let seg_norm = key.segment.trim().to_lowercase();
+                                    let gw_cache_key = (key.user_id, seg_norm.clone());
+                                    let gw = {
+                                        let mut guard = okx_live_gateway_cache.lock().unwrap();
+                                        if let Some(g) = guard.get(&gw_cache_key) {
+                                            g.clone()
+                                        } else {
+                                            let g = Arc::new(OkxLiveGateway::mainnet(
+                                                creds.api_key,
+                                                creds.api_secret,
+                                                passphrase,
+                                            ));
+                                            guard.insert(gw_cache_key, g.clone());
+                                            g
+                                        }
+                                    };
+                                    let intent_record = intent.clone();
+                                    if let Ok((cid, venue_json)) =
+                                        gw.place_with_venue_response(intent).await
+                                    {
+                                        let venue_oid =
+                                            venue_order_id_from_okx_v5_response(&venue_json);
+                                        match repo
+                                            .insert_submitted(
+                                                org_id,
+                                                key.user_id,
+                                                key.exchange.trim(),
+                                                key.segment.trim(),
+                                                &key.symbol,
+                                                cid,
+                                                &intent_record,
+                                                venue_oid,
+                                                Some(venue_json),
+                                            )
+                                            .await
+                                        {
+                                            Ok(_) => {
+                                                close_executed = true;
+                                                if let Some(did) = ai_outcome_decision_id {
+                                                    let pnl_pct = entry.to_f64().and_then(|e| {
+                                                        mark.to_f64().and_then(|m| {
+                                                            (e > 0.0).then_some((m - e) / e * 100.0)
+                                                        })
+                                                    });
+                                                    if let Err(e) = record_decision_outcome(
+                                                        &pool,
+                                                        did,
+                                                        pnl_pct,
+                                                        None,
+                                                        outcome_db,
+                                                        None,
+                                                        Some(pnl_note),
+                                                    )
+                                                    .await
+                                                    {
+                                                        warn!(%e, symbol = %key.symbol, "record_decision_outcome (directive live okx)");
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                warn!(%e, %cid, "position_manager: directive close DB insert failed (okx)");
+                                            }
+                                        }
+                                    } else {
+                                        warn!(
+                                            symbol = %key.symbol,
+                                            "position_manager: live directive close place failed (okx)"
+                                        );
+                                    }
+                                }
+                            }
+                        } else {
+                            warn!(
+                                user_id = %key.user_id,
+                                symbol = %key.symbol,
+                                exchange = %key.exchange,
+                                ?book_exchange_id,
+                                "position_manager: live directive close skipped — Binance, Bybit, or OKX USDT futures only",
+                            );
+                        }
+                    }
+                }
+                if close_executed {
+                    if let Some(id) = directive_applied_id {
+                        let _ = mark_applied(&pool, AiRecordTable::PositionDirectiveChild, id).await;
+                    }
+                }
+                continue;
+            }
+
             // Managed trailing-stop-limit like behavior (futures only):
             // Keep a reduce-only STOP (limit) order whose stop moves up with peak price.
-            if managed_trailing && live_on && key.segment.eq_ignore_ascii_case("futures") {
+            if managed_trailing
+                && live_on
+                && book_exchange_id == ExchangeId::Binance
+                && key.segment.eq_ignore_ascii_case("futures")
+            {
                 let (stop_price, should_replace, start_ok) = {
                     let mut st_guard = managed_trailing_state.lock().unwrap();
                     let state = st_guard.entry(key.clone()).or_default();
@@ -518,7 +1036,7 @@ pub async fn position_manager_loop(pool: PgPool) {
                                 * (Decimal::ONE - managed_limit_offset_pct / Decimal::from(100u32));
                             let intent = OrderIntent {
                                 instrument: InstrumentId {
-                                    exchange: ExchangeId::Binance,
+                                    exchange: book_exchange_id,
                                     segment: MarketSegment::Futures,
                                     symbol: key.symbol.clone(),
                                 },
@@ -543,7 +1061,7 @@ pub async fn position_manager_loop(pool: PgPool) {
                                         .insert_submitted(
                                             org_id,
                                             key.user_id,
-                                            "binance",
+                                            key.exchange.trim(),
                                             key.segment.trim(),
                                             &key.symbol,
                                             cid,
@@ -586,6 +1104,7 @@ pub async fn position_manager_loop(pool: PgPool) {
             if trailing_on_dir
                 && directive_requested_trailing
                 && live_on
+                && book_exchange_id == ExchangeId::Binance
                 && key.segment.eq_ignore_ascii_case("futures")
             {
                 if is_trading_halted() {
@@ -625,9 +1144,13 @@ pub async fn position_manager_loop(pool: PgPool) {
                             }
                         };
 
-                        // Map stop-loss fraction to callbackRate percent (best-effort).
-                        let cb_pct = (sl_frac * Decimal::from(100u32))
-                            .max(Decimal::new(1, 1)); // >= 0.1
+                        // Binance TRAILING_STOP_MARKET: callbackRate percent (AI `trailing_callback_pct` or SL-derived).
+                        let cb_pct = directive_trailing_callback_pct
+                            .and_then(Decimal::from_f64)
+                            .filter(|d| *d >= Decimal::new(1, 1))
+                            .unwrap_or_else(|| {
+                                (sl_frac * Decimal::from(100u32)).max(Decimal::new(1, 1))
+                            });
                         let intent = trailing_stop_reduce_long_intent(&key, book.qty, cb_pct);
                         let intent_record = intent.clone();
                         match gw.place_with_venue_response(intent).await {
@@ -637,7 +1160,7 @@ pub async fn position_manager_loop(pool: PgPool) {
                                     .insert_submitted(
                                         org_id,
                                         key.user_id,
-                                        "binance",
+                                        key.exchange.trim(),
                                         key.segment.trim(),
                                         &key.symbol,
                                         cid,
@@ -694,8 +1217,8 @@ pub async fn position_manager_loop(pool: PgPool) {
             );
             let intent = market_reduce_long_intent(&key, book.qty);
             if let Some(ref gw) = dry_gateway {
-                if let Err(e) = gw.set_mark(&intent.instrument, mark) {
-                    warn!(%e, "position_manager dry set_mark");
+                if let Err(e) = gw.set_reference_price(&intent.instrument, mark) {
+                    warn!(%e, "position_manager dry set_reference_price");
                     continue;
                 }
                 match gw.place(intent).await {
@@ -743,55 +1266,163 @@ pub async fn position_manager_loop(pool: PgPool) {
                     );
                     continue;
                 };
-                let creds = match acct_repo
-                    .binance_for_user(key.user_id, key.segment.trim())
-                    .await
+
+                let sltp_place_outcome = if book_exchange_id == ExchangeId::Binance {
+                    let creds = match acct_repo
+                        .binance_for_user(key.user_id, key.segment.trim())
+                        .await
+                    {
+                        Ok(c) => c,
+                        Err(e) => {
+                            warn!(%e, "position_manager: exchange_accounts okunamadı");
+                            continue;
+                        }
+                    };
+                    let Some(creds) = creds else {
+                        warn!(
+                            user_id = %key.user_id,
+                            symbol = %key.symbol,
+                            segment = %key.segment,
+                            "position_manager: exchange_accounts yok — live close atlandı"
+                        );
+                        continue;
+                    };
+                    let seg_norm = key.segment.trim().to_lowercase();
+                    let gw_cache_key = (key.user_id, seg_norm);
+                    let gw = {
+                        let mut guard = live_gateway_cache.lock().unwrap();
+                        if let Some(g) = guard.get(&gw_cache_key) {
+                            g.clone()
+                        } else {
+                            let cfg = BinanceClientConfig::mainnet_with_keys(
+                                creds.api_key,
+                                creds.api_secret,
+                            );
+                            let client = match BinanceClient::new(cfg) {
+                                Ok(c) => Arc::new(c),
+                                Err(e) => {
+                                    warn!(%e, "position_manager: BinanceClient oluşturulamadı");
+                                    continue;
+                                }
+                            };
+                            let g = Arc::new(BinanceLiveGateway::new(client));
+                            guard.insert(gw_cache_key, g.clone());
+                            g
+                        }
+                    };
+                    gw.place_with_venue_response(intent).await
+                } else if book_exchange_id == ExchangeId::Bybit
+                    && key.segment.eq_ignore_ascii_case("futures")
                 {
-                    Ok(c) => c,
-                    Err(e) => {
-                        warn!(%e, "position_manager: exchange_accounts okunamadı");
+                    let creds = match acct_repo
+                        .credentials_for_user(key.user_id, "bybit", key.segment.trim())
+                        .await
+                    {
+                        Ok(c) => c,
+                        Err(e) => {
+                            warn!(%e, "position_manager: exchange_accounts bybit okunamadı");
+                            continue;
+                        }
+                    };
+                    let Some(creds) = creds else {
+                        warn!(
+                            user_id = %key.user_id,
+                            symbol = %key.symbol,
+                            segment = %key.segment,
+                            "position_manager: Bybit exchange_accounts missing — live close skipped"
+                        );
+                        continue;
+                    };
+                    let seg_norm = key.segment.trim().to_lowercase();
+                    let gw_cache_key = (key.user_id, seg_norm.clone());
+                    let gw = {
+                        let mut guard = bybit_live_gateway_cache.lock().unwrap();
+                        if let Some(g) = guard.get(&gw_cache_key) {
+                            g.clone()
+                        } else {
+                            let g = Arc::new(BybitLiveGateway::mainnet(
+                                creds.api_key,
+                                creds.api_secret,
+                            ));
+                            guard.insert(gw_cache_key, g.clone());
+                            g
+                        }
+                    };
+                    gw.place_with_venue_response(intent).await
+                } else if book_exchange_id == ExchangeId::Okx
+                    && key.segment.eq_ignore_ascii_case("futures")
+                {
+                    let creds = match acct_repo
+                        .credentials_for_user(key.user_id, "okx", key.segment.trim())
+                        .await
+                    {
+                        Ok(c) => c,
+                        Err(e) => {
+                            warn!(%e, "position_manager: exchange_accounts okx okunamadı");
+                            continue;
+                        }
+                    };
+                    let Some(creds) = creds else {
+                        warn!(
+                            user_id = %key.user_id,
+                            symbol = %key.symbol,
+                            segment = %key.segment,
+                            "position_manager: OKX exchange_accounts missing — live close skipped"
+                        );
+                        continue;
+                    };
+                    let passphrase = creds.passphrase.clone().unwrap_or_default();
+                    if passphrase.trim().is_empty() {
+                        warn!(
+                            user_id = %key.user_id,
+                            symbol = %key.symbol,
+                            "position_manager: OKX passphrase missing — live close skipped",
+                        );
                         continue;
                     }
-                };
-                let Some(creds) = creds else {
+                    let seg_norm = key.segment.trim().to_lowercase();
+                    let gw_cache_key = (key.user_id, seg_norm.clone());
+                    let gw = {
+                        let mut guard = okx_live_gateway_cache.lock().unwrap();
+                        if let Some(g) = guard.get(&gw_cache_key) {
+                            g.clone()
+                        } else {
+                            let g = Arc::new(OkxLiveGateway::mainnet(
+                                creds.api_key,
+                                creds.api_secret,
+                                passphrase,
+                            ));
+                            guard.insert(gw_cache_key, g.clone());
+                            g
+                        }
+                    };
+                    gw.place_with_venue_response(intent).await
+                } else {
                     warn!(
                         user_id = %key.user_id,
                         symbol = %key.symbol,
-                        segment = %key.segment,
-                        "position_manager: exchange_accounts yok — live close atlandı"
+                        exchange = %key.exchange,
+                        ?book_exchange_id,
+                        "position_manager: live SL/TP close skipped — Binance, Bybit, or OKX USDT futures only",
                     );
                     continue;
                 };
-                let seg_norm = key.segment.trim().to_lowercase();
-                let gw_cache_key = (key.user_id, seg_norm);
-                let gw = {
-                    let mut guard = live_gateway_cache.lock().unwrap();
-                    if let Some(g) = guard.get(&gw_cache_key) {
-                        g.clone()
-                    } else {
-                        let cfg =
-                            BinanceClientConfig::mainnet_with_keys(creds.api_key, creds.api_secret);
-                        let client = match BinanceClient::new(cfg) {
-                            Ok(c) => Arc::new(c),
-                            Err(e) => {
-                                warn!(%e, "position_manager: BinanceClient oluşturulamadı");
-                                continue;
-                            }
-                        };
-                        let g = Arc::new(BinanceLiveGateway::new(client));
-                        guard.insert(gw_cache_key, g.clone());
-                        g
-                    }
-                };
-                let intent_record = intent.clone();
-                match gw.place_with_venue_response(intent).await {
+
+                let intent_record = market_reduce_long_intent(&key, book.qty);
+                match sltp_place_outcome {
                     Ok((cid, venue_json)) => {
-                        let venue_oid = venue_order_id_from_binance_order_response(&venue_json);
+                        let venue_oid = if book_exchange_id == ExchangeId::Binance {
+                            venue_order_id_from_binance_order_response(&venue_json)
+                        } else if book_exchange_id == ExchangeId::Bybit {
+                            venue_order_id_from_bybit_v5_response(&venue_json)
+                        } else {
+                            venue_order_id_from_okx_v5_response(&venue_json)
+                        };
                         match repo
                             .insert_submitted(
                                 org_id,
                                 key.user_id,
-                                "binance",
+                                key.exchange.trim(),
                                 key.segment.trim(),
                                 &key.symbol,
                                 cid,
@@ -904,5 +1535,21 @@ mod tests {
         let sell = json!({"side": "SELL"});
         assert_eq!(intent_side(&buy), Some(OrderSide::Buy));
         assert_eq!(intent_side(&sell), Some(OrderSide::Sell));
+    }
+
+    #[test]
+    fn position_book_exchange_id_parses_snake_case() {
+        let uid = Uuid::new_v4();
+        let key = |ex: &str| PosKey {
+            user_id: uid,
+            exchange: ex.into(),
+            segment: "futures".into(),
+            symbol: "BTCUSDT".into(),
+        };
+        assert_eq!(position_book_exchange_id(&key("binance")), ExchangeId::Binance);
+        assert_eq!(position_book_exchange_id(&key("BYBIT")), ExchangeId::Bybit);
+        assert_eq!(position_book_exchange_id(&key("okx")), ExchangeId::Okx);
+        assert_eq!(position_book_exchange_id(&key("custom")), ExchangeId::Custom);
+        assert_eq!(position_book_exchange_id(&key("")), ExchangeId::Binance);
     }
 }

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
-use qtss_storage::{CatalogRepository, ExchangeRow};
+use qtss_storage::{ui_segment_to_market_keys, CatalogRepository, ExchangeRow};
 
 use crate::error::ApiError;
 use crate::oauth::AccessClaims;
@@ -31,6 +31,41 @@ pub struct InstrumentsListQuery {
     pub market_id: Uuid,
     #[serde(default = "default_limit")]
     pub limit: i64,
+}
+
+#[derive(Deserialize)]
+pub struct InstrumentSuggestQuery {
+    pub exchange_code: String,
+    /// Toolbar: `spot` | `futures` | `fapi` | `usdt_futures`
+    pub segment: String,
+    pub query: String,
+    #[serde(default = "default_suggest_limit")]
+    pub limit: i64,
+}
+
+fn default_suggest_limit() -> i64 {
+    40
+}
+
+#[derive(Serialize)]
+pub struct InstrumentSuggestionRow {
+    pub native_symbol: String,
+    pub base_asset: String,
+    pub quote_asset: String,
+    pub status: String,
+}
+
+fn sanitize_instrument_prefix(raw: &str) -> Option<String> {
+    let u: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(32)
+        .collect();
+    if u.is_empty() {
+        None
+    } else {
+        Some(u.to_uppercase())
+    }
 }
 
 #[derive(Deserialize)]
@@ -180,6 +215,36 @@ async fn list_instruments_api(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
         .map(Json)
+}
+
+async fn instrument_suggestions_api(
+    Extension(_claims): Extension<AccessClaims>,
+    State(st): State<SharedState>,
+    Query(q): Query<InstrumentSuggestQuery>,
+) -> Result<Json<Vec<InstrumentSuggestionRow>>, ApiError> {
+    let ex = q.exchange_code.trim();
+    if ex.is_empty() {
+        return Err(ApiError::bad_request("exchange_code gerekli"));
+    }
+    let Some(prefix) = sanitize_instrument_prefix(&q.query) else {
+        return Ok(Json(vec![]));
+    };
+    let (m_seg, m_ck) = ui_segment_to_market_keys(&q.segment);
+    let cat = CatalogRepository::new(st.pool.clone());
+    let lim = q.limit.clamp(1, 200);
+    let rows = cat
+        .search_tradable_instruments_prefix(ex, m_seg, m_ck, &prefix, lim)
+        .await?;
+    let out: Vec<InstrumentSuggestionRow> = rows
+        .into_iter()
+        .map(|r| InstrumentSuggestionRow {
+            native_symbol: r.native_symbol,
+            base_asset: r.base_asset,
+            quote_asset: r.quote_asset,
+            status: r.status,
+        })
+        .collect();
+    Ok(Json(out))
 }
 
 async fn list_bar_intervals_api(
@@ -419,6 +484,10 @@ pub fn catalog_read_router() -> Router<SharedState> {
         .route("/catalog/exchanges", get(list_exchanges_api))
         .route("/catalog/markets", get(list_markets_api))
         .route("/catalog/instruments", get(list_instruments_api))
+        .route(
+            "/catalog/instrument-suggestions",
+            get(instrument_suggestions_api),
+        )
         .route("/catalog/bar-intervals", get(list_bar_intervals_api))
 }
 

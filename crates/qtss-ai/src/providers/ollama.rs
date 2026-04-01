@@ -16,24 +16,29 @@ pub struct OllamaProvider {
 }
 
 impl OllamaProvider {
-    pub fn from_env() -> AiResult<Self> {
-        let base_url = std::env::var("QTSS_AI_OLLAMA_BASE_URL")
-            .or_else(|_| std::env::var("OLLAMA_HOST"))
-            .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+    pub fn from_settings(base_url: String, timeout_secs: u64) -> AiResult<Self> {
         if base_url.trim().is_empty() {
             return Err(AiError::ProviderNotConfigured("QTSS_AI_OLLAMA_BASE_URL".into()));
         }
         let base_url = base_url.trim_end_matches('/').to_string();
-        let timeout_secs = std::env::var("QTSS_AI_ONPREM_TIMEOUT_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(180_u64);
+        let timeout_secs = timeout_secs.max(30);
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
             .user_agent(concat!("qtss-ai/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|e| AiError::http(format!("reqwest: {e}")))?;
         Ok(Self { client, base_url })
+    }
+
+    pub fn from_env() -> AiResult<Self> {
+        let base_url = std::env::var("QTSS_AI_OLLAMA_BASE_URL")
+            .or_else(|_| std::env::var("OLLAMA_HOST"))
+            .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+        let timeout_secs = std::env::var("QTSS_AI_ONPREM_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(180_u64);
+        Self::from_settings(base_url, timeout_secs)
     }
 
     fn url_chat(&self) -> String {

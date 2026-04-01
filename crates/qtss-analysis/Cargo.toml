@@ -8,6 +8,8 @@ description = "Engine symbol loop: trading range + signal dashboard snapshots (w
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+qtss-ai.workspace = true
+qtss-common.workspace = true
 qtss-chart-patterns.workspace = true
 qtss-notify.workspace = true
 qtss-storage.workspace = true

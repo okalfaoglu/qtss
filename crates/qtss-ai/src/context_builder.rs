@@ -11,7 +11,7 @@ use qtss_storage::{
 };
 
 use crate::error::{AiError, AiResult};
-use crate::storage::fetch_last_ai_decision_recent;
+use crate::storage::{fetch_active_portfolio_directive, fetch_last_ai_decision_recent};
 
 const BAR_LIMIT: i64 = 20;
 
@@ -41,6 +41,34 @@ pub(crate) fn bar_ohlc_window_metrics(
         0.0
     };
     Some((last_close, pct_change, range_vs_mean_pct, closes.len()))
+}
+
+fn portfolio_symbol_weight(symbol_scores: &Value, symbol: &str) -> Option<f64> {
+    let o = symbol_scores.as_object()?;
+    let needle = symbol.trim().to_uppercase();
+    for (k, v) in o {
+        if k.trim().to_uppercase() == needle {
+            return v
+                .as_f64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse::<f64>().ok()));
+        }
+    }
+    None
+}
+
+fn portfolio_directive_summary_for_symbol(
+    row: &crate::storage::AiPortfolioDirectiveRow,
+    symbol: &str,
+) -> Value {
+    let weight = portfolio_symbol_weight(&row.symbol_scores, symbol);
+    json!({
+        "risk_budget_pct": row.risk_budget_pct,
+        "max_open_positions": row.max_open_positions,
+        "preferred_regime": row.preferred_regime,
+        "macro_note": row.macro_note,
+        "symbol_weight_0_1": weight,
+        "valid_until": row.valid_until,
+    })
 }
 
 /// Builds the JSON context described in `QTSS_MASTER_DEV_GUIDE` §3.1 (token‑budget friendly).
@@ -93,6 +121,20 @@ pub async fn build_tactical_context(pool: &PgPool, symbol: &str) -> AiResult<Val
         })
         .unwrap_or(Value::Null);
 
+    let portfolio_directive = match fetch_active_portfolio_directive(pool).await? {
+        Some(row) => {
+            let stale = row
+                .valid_until
+                .is_some_and(|u| u < Utc::now());
+            if stale {
+                Value::Null
+            } else {
+                portfolio_directive_summary_for_symbol(&row, sym)
+            }
+        }
+        None => Value::Null,
+    };
+
     Ok(json!({
         "symbol": sym.to_uppercase(),
         "timestamp_utc": Utc::now(),
@@ -101,6 +143,7 @@ pub async fn build_tactical_context(pool: &PgPool, symbol: &str) -> AiResult<Val
         "price_context": price_context,
         "open_position": open_position,
         "last_ai_decision": last_ai_decision,
+        "portfolio_directive": portfolio_directive,
     }))
 }
 
@@ -274,5 +317,13 @@ mod tests {
         assert!((last - 110.0).abs() < f64::EPSILON);
         assert!((pct - 10.0).abs() < 1e-9);
         assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn portfolio_symbol_weight_case_insensitive() {
+        let scores = json!({ "BTCUSDT": 0.8, "ethusdt": "0.5" });
+        assert!((portfolio_symbol_weight(&scores, "btcusdt").unwrap() - 0.8).abs() < f64::EPSILON);
+        assert!((portfolio_symbol_weight(&scores, "ETHUSDT").unwrap() - 0.5).abs() < f64::EPSILON);
+        assert!(portfolio_symbol_weight(&scores, "SOLUSDT").is_none());
     }
 }

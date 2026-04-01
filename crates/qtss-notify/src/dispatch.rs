@@ -31,12 +31,46 @@ impl NotificationDispatcher {
         &self.config
     }
 
-    /// Tek kanal gönder; hata durumunda `Err` döner.
-    pub async fn send(
+    /// [`answerCallbackQuery`](https://core.telegram.org/bots/api#answercallbackquery) — inline button acknowledgements.
+    pub async fn telegram_answer_callback_query(
         &self,
-        channel: NotificationChannel,
-        n: &Notification,
-    ) -> NotifyResult<DeliveryReceipt> {
+        callback_query_id: &str,
+        text: Option<&str>,
+    ) -> NotifyResult<()> {
+        let c = self
+            .config
+            .telegram
+            .as_ref()
+            .ok_or_else(|| NotifyError::ChannelNotConfigured("telegram".into()))?;
+        let url = format!(
+            "https://api.telegram.org/bot{}/answerCallbackQuery",
+            c.bot_token
+        );
+        let body = json!({
+            "callback_query_id": callback_query_id,
+            "text": text.unwrap_or(""),
+            "show_alert": false,
+        });
+        let res = self
+            .client
+            .post(url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| NotifyError::Transport(e.to_string()))?;
+        let status = res.status();
+        let txt = res.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(NotifyError::Http {
+                status: status.as_u16(),
+                body: txt,
+            });
+        }
+        Ok(())
+    }
+
+    /// Tek kanal gönder; hata durumunda `Err` döner.
+    pub async fn send(&self, channel: NotificationChannel, n: &Notification) -> NotifyResult<DeliveryReceipt> {
         match channel {
             NotificationChannel::Telegram => self.send_telegram(n).await,
             NotificationChannel::Email => self.send_email(n).await,
@@ -51,11 +85,7 @@ impl NotificationDispatcher {
     }
 
     /// Birden fazla kanal; her biri için sonuç (hata olsa bile diğerleri çalışır).
-    pub async fn send_all(
-        &self,
-        channels: &[NotificationChannel],
-        n: &Notification,
-    ) -> Vec<DeliveryReceipt> {
+    pub async fn send_all(&self, channels: &[NotificationChannel], n: &Notification) -> Vec<DeliveryReceipt> {
         let mut v = Vec::with_capacity(channels.len());
         for c in channels {
             let r = match self.send(*c, n).await {
@@ -80,17 +110,16 @@ impl NotificationDispatcher {
             .ok_or_else(|| NotifyError::ChannelNotConfigured("telegram".into()))?;
         let url = format!("https://api.telegram.org/bot{}/sendMessage", c.bot_token);
         let text = format!("{}\n{}", n.title, n.body);
-        let body = json!({
+        let mut body = json!({
             "chat_id": c.chat_id,
             "text": text
         });
-        let res = self
-            .client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| NotifyError::Transport(e.to_string()))?;
+        if let Some(m) = &n.telegram_reply_markup {
+            body["reply_markup"] = m.clone();
+        }
+        let res = self.client.post(&url).json(&body).send().await.map_err(|e| {
+            NotifyError::Transport(e.to_string())
+        })?;
         let status = res.status();
         let txt = res.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -125,9 +154,10 @@ impl NotificationDispatcher {
             .from
             .parse()
             .map_err(|e: lettre::address::AddressError| NotifyError::Email(e.to_string()))?;
-        let to: Mailbox =
-            c.to.parse()
-                .map_err(|e: lettre::address::AddressError| NotifyError::Email(e.to_string()))?;
+        let to: Mailbox = c
+            .to
+            .parse()
+            .map_err(|e: lettre::address::AddressError| NotifyError::Email(e.to_string()))?;
 
         let email = if let Some(ref html) = n.body_html {
             Message::builder()
@@ -207,8 +237,7 @@ impl NotificationDispatcher {
             ("From", c.from.as_str()),
             ("Body", text.as_str()),
         ];
-        let auth = base64::engine::general_purpose::STANDARD
-            .encode(format!("{}:{}", c.account_sid, c.auth_token).as_bytes());
+        let auth = base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", c.account_sid, c.auth_token).as_bytes());
         let res = self
             .client
             .post(&url)
@@ -318,7 +347,10 @@ impl NotificationDispatcher {
             .as_ref()
             .ok_or_else(|| NotifyError::ChannelNotConfigured("facebook".into()))?;
         let msg = format!("{}\n\n{}", n.title, n.body);
-        let url = format!("https://graph.facebook.com/v21.0/{}/feed", c.page_id);
+        let url = format!(
+            "https://graph.facebook.com/v21.0/{}/feed",
+            c.page_id
+        );
         let res = self
             .client
             .post(&url)
@@ -441,16 +473,13 @@ async fn post_json_webhook(
 ) -> NotifyResult<()> {
     let mut req = client.post(url).json(payload);
     if let Some(h) = headers_json {
-        let map: std::collections::HashMap<String, String> = serde_json::from_str(h)
-            .map_err(|e| NotifyError::Transport(format!("WEBHOOK_HEADERS_JSON: {e}")))?;
+        let map: std::collections::HashMap<String, String> =
+            serde_json::from_str(h).map_err(|e| NotifyError::Transport(format!("WEBHOOK_HEADERS_JSON: {e}")))?;
         for (k, v) in map {
             req = req.header(k, v);
         }
     }
-    let res = req
-        .send()
-        .await
-        .map_err(|e| NotifyError::Transport(e.to_string()))?;
+    let res = req.send().await.map_err(|e| NotifyError::Transport(e.to_string()))?;
     let status = res.status();
     if !status.is_success() {
         let body = res.text().await.unwrap_or_default();
@@ -468,3 +497,4 @@ fn truncate_chars(s: &str, max: usize) -> String {
     }
     s.chars().take(max).collect()
 }
+

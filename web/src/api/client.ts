@@ -148,6 +148,44 @@ export async function upsertAdminSystemConfig(
   return JSON.parse(t) as SystemConfigRowApi;
 }
 
+/** Single row (including secret values — admin only). */
+export async function fetchAdminSystemConfigRow(
+  accessToken: string,
+  module: string,
+  configKey: string,
+): Promise<SystemConfigRowApi> {
+  const m = encodeURIComponent(module.trim());
+  const k = encodeURIComponent(configKey.trim());
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/admin/system-config/${m}/${k}`, accessToken, {});
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("admin/system-config row", r, t);
+  return JSON.parse(t) as SystemConfigRowApi;
+}
+
+export async function deleteAdminSystemConfig(
+  accessToken: string,
+  module: string,
+  configKey: string,
+): Promise<number> {
+  const m = encodeURIComponent(module.trim());
+  const k = encodeURIComponent(configKey.trim());
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/admin/system-config/${m}/${k}`, accessToken, {
+    method: "DELETE",
+  });
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("admin/system-config DELETE", r, t);
+  return JSON.parse(t) as number;
+}
+
+export type AppConfigEntryApi = {
+  id: string;
+  key: string;
+  value: unknown;
+  description: string | null;
+  updated_at: string;
+  updated_by_user_id: string | null;
+};
+
 export async function fetchHealth(): Promise<unknown> {
   const r = await fetch(`${API_BASE}/health`);
   const t = await r.text();
@@ -247,13 +285,13 @@ export async function patchMePreferredLocale(
   }
 }
 
-export async function fetchConfigList(accessToken: string): Promise<unknown> {
+export async function fetchConfigList(accessToken: string): Promise<AppConfigEntryApi[]> {
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/config`, accessToken, {});
   if (!r.ok) {
     const t = await r.text();
     throwQtssApiError("config", r, t);
   }
-  return r.json();
+  return r.json() as Promise<AppConfigEntryApi[]>;
 }
 
 /** Dashboard rolleri — `app_config.acp_chart_patterns` ile aynı JSON (admin değil). */
@@ -280,7 +318,7 @@ export async function fetchElliottWaveConfig(accessToken: string): Promise<unkno
 export async function upsertAppConfig(
   accessToken: string,
   body: { key: string; value: unknown; description?: string },
-): Promise<unknown> {
+): Promise<AppConfigEntryApi> {
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/config`, accessToken, {
     method: "POST",
     headers: {
@@ -292,7 +330,17 @@ export async function upsertAppConfig(
     const t = await r.text();
     throwQtssApiError("config upsert", r, t);
   }
-  return r.json();
+  return r.json() as Promise<AppConfigEntryApi>;
+}
+
+export async function deleteAppConfig(accessToken: string, key: string): Promise<number> {
+  const k = encodeURIComponent(key.trim());
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/config/${k}`, accessToken, {
+    method: "DELETE",
+  });
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("config DELETE", r, t);
+  return JSON.parse(t) as number;
 }
 
 /** API `MarketBarRow` (snake_case; Decimal alanları JSON sayı veya string olabilir). */
@@ -339,6 +387,82 @@ export async function fetchMarketBarsRecent(
   return r.json() as Promise<MarketBarRow[]>;
 }
 
+export type CatalogExchangeRowApi = {
+  id: string;
+  code: string;
+  display_name: string;
+  is_active: boolean;
+  metadata: unknown;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CatalogMarketWithExchangeApi = {
+  id: string;
+  exchange_id: string;
+  segment: string;
+  contract_kind: string;
+  display_name: string | null;
+  is_active: boolean;
+  metadata: unknown;
+  created_at: string;
+  updated_at: string;
+  exchange_code: string;
+};
+
+export type InstrumentSuggestionRowApi = {
+  native_symbol: string;
+  base_asset: string;
+  quote_asset: string;
+  status: string;
+};
+
+export async function fetchCatalogExchanges(accessToken: string): Promise<CatalogExchangeRowApi[]> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/catalog/exchanges`, accessToken, {});
+  if (!r.ok) {
+    const t = await r.text();
+    throwQtssApiError("catalog/exchanges", r, t);
+  }
+  return r.json() as Promise<CatalogExchangeRowApi[]>;
+}
+
+export async function fetchCatalogMarkets(
+  accessToken: string,
+  exchangeCode?: string,
+): Promise<CatalogMarketWithExchangeApi[]> {
+  const q = new URLSearchParams();
+  if (exchangeCode?.trim()) q.set("exchange_code", exchangeCode.trim());
+  q.set("limit", "200");
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/catalog/markets?${q}`, accessToken, {});
+  if (!r.ok) {
+    const t = await r.text();
+    throwQtssApiError("catalog/markets", r, t);
+  }
+  return r.json() as Promise<CatalogMarketWithExchangeApi[]>;
+}
+
+export async function fetchInstrumentSuggestions(
+  accessToken: string,
+  params: { exchangeCode: string; segment: string; query: string; limit?: number },
+): Promise<InstrumentSuggestionRowApi[]> {
+  const q = new URLSearchParams({
+    exchange_code: params.exchangeCode.trim() || "binance",
+    segment: params.segment.trim() || "spot",
+    query: params.query.trim(),
+    limit: String(params.limit ?? 40),
+  });
+  const r = await fetchWithBearerRetry(
+    `${API_BASE}/api/v1/catalog/instrument-suggestions?${q}`,
+    accessToken,
+    {},
+  );
+  if (!r.ok) {
+    const t = await r.text();
+    throwQtssApiError("catalog/instrument-suggestions", r, t);
+  }
+  return r.json() as Promise<InstrumentSuggestionRowApi[]>;
+}
+
 /** `qtss-binance` connector üzerinden klines (DB yazılmaz). JWT + dashboard rolü gerekir. */
 type QtssKlineBarJson = {
   open_time: number;
@@ -375,8 +499,8 @@ export async function fetchMarketBinanceKlinesForChart(
   if (params.endTimeMs != null && Number.isFinite(params.endTimeMs)) {
     q.set("end_time", String(Math.floor(params.endTimeMs)));
   }
-  const seg = params.segment?.trim();
-  if (seg) q.set("segment", seg);
+  const seg = (params.segment?.trim().toLowerCase() || "spot").trim();
+  q.set("segment", seg);
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/market/binance/klines?${q}`, accessToken, {});
   if (!r.ok) {
     const t = await r.text();
@@ -624,7 +748,7 @@ export type BacktestRunResponseApi = {
 export async function postBacktestRun(
   accessToken: string,
   body: {
-    strategy: "buy_and_hold" | "sma_cross";
+    strategy: "buy_and_hold" | "sma_cross" | "trading_range";
     exchange: string;
     segment: string;
     symbol: string;
@@ -634,6 +758,10 @@ export async function postBacktestRun(
     initial_equity: string | number;
     sma_fast?: number;
     sma_slow?: number;
+    /** Slippage in basis points (optional; server default). */
+    slippage_bps?: number;
+    /** Taker fee in basis points per fill (optional; server default). */
+    taker_fee_bps?: number;
   },
 ): Promise<BacktestRunResponseApi> {
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/backtest/run`, accessToken, {
@@ -687,6 +815,46 @@ export async function fetchEngineSnapshots(accessToken: string): Promise<EngineS
   const t = await r.text();
   if (!r.ok) throwQtssApiError("engine/snapshots", r, t);
   return JSON.parse(t) as EngineSnapshotJoinedApiRow[];
+}
+
+/** `app_config.range_engine` — worker + web; `GET /api/v1/analysis/range-engine/config`. */
+export type RangeEngineConfigApi = {
+  trading_range_params?: {
+    lookback?: number | null;
+    atr_period?: number | null;
+    atr_sma_period?: number | null;
+    require_range_regime?: boolean | null;
+  };
+  execution_gates?: {
+    allow_long_open?: boolean;
+    allow_short_open?: boolean;
+    allow_all_closes?: boolean;
+  };
+  worker?: {
+    refresh_requested?: boolean;
+  };
+};
+
+export async function fetchRangeEngineConfig(accessToken: string): Promise<RangeEngineConfigApi> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/range-engine/config`, accessToken, {});
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("analysis/range-engine/config", r, t);
+  return JSON.parse(t) as RangeEngineConfigApi;
+}
+
+/** `PATCH` — gövde `app_config` ile derin birleştirilir (`trader`/`admin` ops). */
+export async function patchRangeEngineConfig(
+  accessToken: string,
+  patch: Record<string, unknown>,
+): Promise<RangeEngineConfigApi> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/range-engine/config`, accessToken, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("analysis/range-engine/config PATCH", r, t);
+  return JSON.parse(t) as RangeEngineConfigApi;
 }
 
 /** Eski `qtss-api` bu rotayı sunmuyorsa 404 — Bağlam sekmesi diğer uçları yine yükleyebilsin. */
@@ -990,6 +1158,42 @@ export async function postEngineSymbol(
   const t = await r.text();
   if (!r.ok) throwQtssApiError("engine/symbols POST", r, t);
   return JSON.parse(t) as EngineSymbolApiRow;
+}
+
+export type EngineSymbolsBulkTarget = {
+  exchange?: string;
+  segment?: string;
+  symbol: string;
+  interval: string;
+  label?: string;
+  signal_direction_mode?: string;
+};
+
+export type EngineSymbolsBulkResponse = {
+  inserted: EngineSymbolApiRow[];
+  errors: { index: number; message: string }[];
+};
+
+export async function postEngineSymbolsBulk(
+  accessToken: string,
+  body: {
+    exchange?: string;
+    segment?: string;
+    label?: string;
+    signal_direction_mode?: string;
+    targets: EngineSymbolsBulkTarget[];
+  },
+): Promise<EngineSymbolsBulkResponse> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/engine/symbols-bulk`, accessToken, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("engine/symbols-bulk POST", r, t);
+  return JSON.parse(t) as EngineSymbolsBulkResponse;
 }
 
 export async function patchEngineSymbol(
@@ -1406,6 +1610,28 @@ export async function postNotifyOutbox(
   const t = await r.text();
   if (!r.ok) throwQtssApiError("notify/outbox POST", r, t);
   return JSON.parse(t) as NotifyOutboxRowApi;
+}
+
+export type NotifyTestResponseApi = {
+  status: string;
+  receipt?: unknown;
+};
+
+/** Immediate send via `qtss-notify` — uses merged DB + env config (`load_notify_config_merged`). */
+export async function postNotifyTest(
+  accessToken: string,
+  body: { channel: string; message?: string; title?: string },
+): Promise<NotifyTestResponseApi> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/notify/test`, accessToken, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("notify/test", r, t);
+  return JSON.parse(t) as NotifyTestResponseApi;
 }
 
 /** `ai_approval_requests` row — mirrors `qtss_storage::AiApprovalRequestRow` JSON. */

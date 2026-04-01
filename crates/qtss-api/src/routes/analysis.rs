@@ -17,12 +17,14 @@ use qtss_chart_patterns::{
     pattern_name_by_acp_id, ChannelSixDrawingHints, ChannelSixReject, ChannelSixScanOutcome,
     ChannelSixWindowFilter, OhlcBar, PatternDrawingBatch, SixPivotScanParams, SizeFilters,
 };
+use qtss_common::{log_business, QtssLogLevel};
 use qtss_storage::{
     fetch_analysis_snapshot_payload, fetch_data_snapshot, fetch_latest_nansen_setup_with_rows,
-    fetch_nansen_snapshot, insert_engine_symbol, list_analysis_snapshots_with_symbols,
-    list_data_snapshots, list_engine_symbols_all, list_engine_symbols_matching,
-    list_market_confluence_snapshots_for_symbol, list_market_context_summaries,
-    list_range_signal_events_joined, update_engine_symbol_patch, AnalysisSnapshotJoinedRow,
+    fetch_nansen_snapshot, fetch_range_engine_json, insert_engine_symbol,
+    list_analysis_snapshots_with_symbols, list_data_snapshots, list_engine_symbols_all,
+    list_engine_symbols_matching, list_market_confluence_snapshots_for_symbol,
+    list_market_context_summaries, list_range_signal_events_joined, merge_json_deep,
+    update_engine_symbol_patch, upsert_range_engine_json, AnalysisSnapshotJoinedRow,
     DataSnapshotRow, EngineSymbolInsert, EngineSymbolRow, MarketConfluenceSnapshotRow,
     MarketContextSummaryRow, NansenSetupRowDetail, NansenSetupRunRow, NansenSnapshotRow,
     RangeSignalEventJoinedRow,
@@ -88,6 +90,7 @@ pub fn analysis_read_router() -> Router<SharedState> {
             "/analysis/engine/range-signals",
             get(list_range_signals_api),
         )
+        .route("/analysis/range-engine/config", get(get_range_engine_config_api))
         .route("/analysis/nansen/snapshot", get(get_nansen_snapshot_api))
         .route(
             "/analysis/nansen/setups/latest",
@@ -98,11 +101,61 @@ pub fn analysis_read_router() -> Router<SharedState> {
 /// `engine_symbols` yazımı — `trader` / `admin` (`require_ops_roles`).
 pub fn analysis_write_router() -> Router<SharedState> {
     Router::new()
+        // Not under `symbols/bulk` — that path is captured by `symbols/{id}` (PATCH), yielding POST → 405.
+        .route("/analysis/engine/symbols-bulk", post(post_engine_symbols_bulk_api))
         .route("/analysis/engine/symbols", post(post_engine_symbol_api))
         .route(
             "/analysis/engine/symbols/{id}",
             patch(patch_engine_symbol_api),
         )
+        .route(
+            "/analysis/range-engine/config",
+            patch(patch_range_engine_config_api),
+        )
+}
+
+async fn get_range_engine_config_api(
+    State(st): State<SharedState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let doc = fetch_range_engine_json(&st.pool)
+        .await
+        .map_err(|e| {
+            tracing::warn!(target: "qtss_api", error = %e, "range_engine fetch");
+            ApiError::internal("range_engine config read failed")
+        })?;
+    log_business(
+        QtssLogLevel::Debug,
+        "qtss_api::range_engine",
+        "get_range_engine_config",
+    );
+    Ok(Json(doc))
+}
+
+async fn patch_range_engine_config_api(
+    Extension(claims): Extension<AccessClaims>,
+    State(st): State<SharedState>,
+    Json(patch): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let mut doc = fetch_range_engine_json(&st.pool)
+        .await
+        .map_err(|e| {
+            tracing::warn!(target: "qtss_api", error = %e, "range_engine fetch before patch");
+            ApiError::internal("range_engine config read failed")
+        })?;
+    merge_json_deep(&mut doc, &patch);
+    let actor = Uuid::parse_str(&claims.sub).ok();
+    upsert_range_engine_json(&st.pool, doc.clone(), actor)
+        .await
+        .map_err(|e| {
+            tracing::warn!(target: "qtss_api", error = %e, "range_engine upsert");
+            ApiError::internal("range_engine config write failed")
+        })?;
+    log_business(
+        QtssLogLevel::Info,
+        "qtss_api::range_engine",
+        "patch_range_engine_config",
+    );
+    Ok(Json(doc))
 }
 
 async fn list_engine_symbols_api(
@@ -161,6 +214,143 @@ async fn post_engine_symbol_api(
     };
     let inserted = insert_engine_symbol(&st.pool, &row).await?;
     Ok(Json(inserted))
+}
+
+#[derive(Deserialize)]
+struct BulkEngineSymbolTarget {
+    #[serde(default)]
+    pub exchange: Option<String>,
+    #[serde(default)]
+    pub segment: Option<String>,
+    pub symbol: String,
+    pub interval: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub signal_direction_mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PostEngineSymbolsBulkBody {
+    #[serde(default)]
+    pub exchange: Option<String>,
+    #[serde(default)]
+    pub segment: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub signal_direction_mode: Option<String>,
+    pub targets: Vec<BulkEngineSymbolTarget>,
+}
+
+#[derive(Serialize)]
+struct EngineSymbolBulkError {
+    pub index: usize,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+struct PostEngineSymbolsBulkResponse {
+    pub inserted: Vec<EngineSymbolRow>,
+    pub errors: Vec<EngineSymbolBulkError>,
+}
+
+async fn post_engine_symbols_bulk_api(
+    State(st): State<SharedState>,
+    Json(body): Json<PostEngineSymbolsBulkBody>,
+) -> Result<Json<PostEngineSymbolsBulkResponse>, ApiError> {
+    if body.targets.is_empty() {
+        return Err(ApiError::bad_request("targets boş olamaz"));
+    }
+    if body.targets.len() > 500 {
+        return Err(ApiError::bad_request("en fazla 500 hedef"));
+    }
+    let default_exchange = body
+        .exchange
+        .clone()
+        .unwrap_or_else(|| "binance".into())
+        .trim()
+        .to_lowercase();
+    let default_segment = body
+        .segment
+        .clone()
+        .unwrap_or_else(|| "spot".into())
+        .trim()
+        .to_lowercase();
+    let default_mode = body
+        .signal_direction_mode
+        .as_deref()
+        .map(normalize_signal_direction_mode)
+        .transpose()?;
+
+    let mut inserted: Vec<EngineSymbolRow> = Vec::new();
+    let mut errors: Vec<EngineSymbolBulkError> = Vec::new();
+
+    for (index, t) in body.targets.into_iter().enumerate() {
+        let sym = t.symbol.trim().to_uppercase();
+        if sym.is_empty() {
+            errors.push(EngineSymbolBulkError {
+                index,
+                message: "symbol boş".into(),
+            });
+            continue;
+        }
+        let iv = t.interval.trim().to_string();
+        if iv.is_empty() {
+            errors.push(EngineSymbolBulkError {
+                index,
+                message: "interval boş".into(),
+            });
+            continue;
+        }
+        let mode = t
+            .signal_direction_mode
+            .as_deref()
+            .map(normalize_signal_direction_mode)
+            .transpose();
+        let mode = match mode {
+            Ok(m) => m.or_else(|| default_mode.clone()),
+            Err(e) => {
+                errors.push(EngineSymbolBulkError {
+                    index,
+                    message: e.to_string(),
+                });
+                continue;
+            }
+        };
+        let row = EngineSymbolInsert {
+            exchange: t
+                .exchange
+                .as_ref()
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| default_exchange.clone()),
+            segment: t
+                .segment
+                .as_ref()
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| default_segment.clone()),
+            symbol: sym,
+            interval: iv,
+            label: t.label.or_else(|| body.label.clone()),
+            signal_direction_mode: mode,
+        };
+        match insert_engine_symbol(&st.pool, &row).await {
+            Ok(r) => inserted.push(r),
+            Err(e) => errors.push(EngineSymbolBulkError {
+                index,
+                message: e.to_string(),
+            }),
+        }
+    }
+
+    log_business(
+        QtssLogLevel::Info,
+        "qtss_api::engine_symbols",
+        "post_engine_symbols_bulk",
+    );
+    Ok(Json(PostEngineSymbolsBulkResponse { inserted, errors }))
 }
 
 async fn list_engine_snapshots_api(
@@ -742,50 +932,55 @@ fn default_elliott_wave_json() -> serde_json::Value {
         "subdivision_levels": 1,
         "swing_depth": 3,
         "max_pivot_windows": 120,
-        "strict_wave4_overlap": false,
         "show_projection_4h": false,
         "show_projection_1h": false,
         "show_projection_15m": false,
         "show_historical_waves": false,
         "show_nested_formations": true,
-        "projection_bar_hop": 22,
-        "projection_steps": 12,
-        "projection_mode": "legacy",
         "show_projection_alt_scenario": true,
+        "projection_multi_corrective_scenarios": false,
         "use_acp_zigzag_swing": false,
         "acp_zigzag_row_index": 0,
         "pattern_menu": {
             "motive_impulse": true,
-            "motive_diagonal": true,
+            "motive_diagonal_leading": true,
+            "motive_diagonal_ending": true,
             "corrective_zigzag": true,
             "corrective_flat": true,
             "corrective_triangle": true,
-            "corrective_complex_wxy": true
+            "corrective_complex_double": true,
+            "corrective_complex_triple": true
         },
         "pattern_menu_by_tf": {
             "4h": {
                 "motive_impulse": true,
-                "motive_diagonal": true,
+                "motive_diagonal_leading": true,
+                "motive_diagonal_ending": true,
                 "corrective_zigzag": true,
                 "corrective_flat": true,
                 "corrective_triangle": true,
-                "corrective_complex_wxy": true
+                "corrective_complex_double": true,
+                "corrective_complex_triple": true
             },
             "1h": {
                 "motive_impulse": true,
-                "motive_diagonal": true,
+                "motive_diagonal_leading": true,
+                "motive_diagonal_ending": true,
                 "corrective_zigzag": true,
                 "corrective_flat": true,
                 "corrective_triangle": true,
-                "corrective_complex_wxy": true
+                "corrective_complex_double": true,
+                "corrective_complex_triple": true
             },
             "15m": {
                 "motive_impulse": true,
-                "motive_diagonal": true,
+                "motive_diagonal_leading": true,
+                "motive_diagonal_ending": true,
                 "corrective_zigzag": true,
                 "corrective_flat": true,
                 "corrective_triangle": true,
-                "corrective_complex_wxy": true
+                "corrective_complex_double": true,
+                "corrective_complex_triple": true
             }
         },
         "mtf_wave_color_4h": "#e53935",

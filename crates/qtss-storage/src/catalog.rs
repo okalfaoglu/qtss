@@ -472,6 +472,59 @@ impl CatalogRepository {
         .await?;
         Ok(row)
     }
+
+    /// Full `exchangeInfo` senkronundan sonra bu süreden önce güncellenmemiş (artık yanıtta yok) satırları kapatır.
+    pub async fn deactivate_instruments_not_updated_since(
+        &self,
+        market_id: Uuid,
+        cutoff: DateTime<Utc>,
+    ) -> Result<u64, StorageError> {
+        let r = sqlx::query(
+            r#"UPDATE instruments
+               SET is_trading = false, updated_at = now()
+               WHERE market_id = $1 AND updated_at < $2 AND is_trading = true"#,
+        )
+        .bind(market_id)
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// İşlem gören sembol önerileri; `prefix` yalnızca API katmanında ASCII alfanümerik yapılmalıdır.
+    pub async fn search_tradable_instruments_prefix(
+        &self,
+        exchange_code: &str,
+        segment: &str,
+        contract_kind: &str,
+        prefix_upper: &str,
+        limit: i64,
+    ) -> Result<Vec<InstrumentRow>, StorageError> {
+        let lim = limit.clamp(1, 200);
+        let pattern = format!("{}%", prefix_upper.trim());
+        sqlx::query_as::<_, InstrumentRow>(
+            r#"SELECT i.id, i.market_id, i.native_symbol, i.base_asset, i.quote_asset, i.status,
+                      i.is_trading, i.price_filter, i.lot_filter, i.metadata, i.created_at, i.updated_at
+               FROM instruments i
+               INNER JOIN markets m ON m.id = i.market_id
+               INNER JOIN exchanges e ON e.id = m.exchange_id
+               WHERE LOWER(TRIM(e.code)) = LOWER(TRIM($1))
+                 AND m.segment = $2
+                 AND m.contract_kind = $3
+                 AND i.is_trading = true
+                 AND i.native_symbol ILIKE $4
+               ORDER BY i.native_symbol ASC
+               LIMIT $5"#,
+        )
+        .bind(exchange_code)
+        .bind(segment)
+        .bind(contract_kind)
+        .bind(pattern)
+        .bind(lim)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Into::into)
+    }
 }
 
 /// `engine_symbols` / `market_bars` metin alanlarından katalog FK çözümü (yoksa None).
@@ -483,12 +536,17 @@ pub struct SeriesCatalogIds {
     pub bar_interval_id: Option<Uuid>,
 }
 
-fn catalog_segment_parts(segment: &str) -> (&'static str, &'static str) {
+/// Toolbar / `engine_symbols.segment` → `markets.segment` + `contract_kind` (Binance USDT-M).
+pub fn ui_segment_to_market_keys(segment: &str) -> (&'static str, &'static str) {
     let s = segment.trim().to_lowercase();
     match s.as_str() {
         "futures" | "usdt_futures" | "fapi" => ("futures", "usdt_m"),
         _ => ("spot", ""),
     }
+}
+
+fn catalog_segment_parts(segment: &str) -> (&'static str, &'static str) {
+    ui_segment_to_market_keys(segment)
 }
 
 pub async fn resolve_series_catalog_ids(

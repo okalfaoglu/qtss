@@ -23,13 +23,19 @@ export function persistChartOhlcMode(m: ChartOhlcMode): void {
   }
 }
 
+function binanceSegmentUsesPublicKlines(segment: string): boolean {
+  const s = segment.trim().toLowerCase();
+  if (s === "spot") return true;
+  return s === "futures" || s === "usdt_futures" || s === "fapi";
+}
+
 /**
- * `true` → `fetchBinanceKlinesAsChartRows` (proxy / VITE_BINANCE_API_BASE).
+ * `true` → `fetchBinanceKlinesAsChartRows` (proxy / VITE_BINANCE_API_BASE / FAPI).
  * `false` → girişli kullanıcı için `fetchMarketBarsRecent` (`market_bars`).
  *
- * - **auto:** Giriş yoksa her zaman REST. Giriş varsa yalnızca `binance` + `spot` iken REST (güncel mum);
- *   diğer borsa/segment için DB (mevcut davranış).
- * - **exchange:** Her zaman Binance spot REST ile ana grafik (sembol üst çubuktaki gibi).
+ * - **auto:** Giriş yoksa her zaman REST. Giriş varsa `binance` + (`spot` veya USDT-M vadeli segment) iken REST;
+ *   aksi halde DB.
+ * - **exchange:** Her zaman Binance REST ile ana grafik (segment üst çubuğa göre spot / fapi).
  * - **database:** Tablo; JWT gerekir.
  */
 export function chartUsesBinanceRestForOhlc(
@@ -40,7 +46,8 @@ export function chartUsesBinanceRestForOhlc(
 ): boolean {
   if (mode === "exchange") return true;
   if (mode === "database") return false;
-  const binanceSpot = exchange.trim().toLowerCase() === "binance" && segment.trim().toLowerCase() === "spot";
+  const binancePublic =
+    exchange.trim().toLowerCase() === "binance" && binanceSegmentUsesPublicKlines(segment);
   if (!token?.trim()) return true;
-  return binanceSpot;
+  return binancePublic;
 }

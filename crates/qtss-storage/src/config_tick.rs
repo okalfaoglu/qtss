@@ -1,7 +1,9 @@
 //! Worker-facing config resolution: `system_config` JSON + env + `QTSS_CONFIG_ENV_OVERRIDES` (FAZ 11.7).
 
+use rust_decimal::Decimal;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
+use std::str::FromStr;
 
 use crate::system_config::SystemConfigRepository;
 
@@ -26,13 +28,58 @@ fn clamp_tick(raw: u64, min_secs: u64) -> u64 {
 }
 
 fn string_from_config_value(value: &JsonValue) -> Option<String> {
+    let raw = value.get("value").or(if value.is_string() {
+        Some(value)
+    } else {
+        None
+    });
+    if let Some(x) = raw {
+        if let Some(s) = x.as_str() {
+            let t = s.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
+            }
+        } else if let Some(n) = x.as_f64() {
+            return Some(n.to_string());
+        } else if let Some(u) = x.as_u64() {
+            return Some(u.to_string());
+        } else if let Some(i) = x.as_i64() {
+            return Some(i.to_string());
+        }
+    }
     value
-        .get("value")
-        .and_then(|x| x.as_str())
-        .or_else(|| value.as_str())
+        .as_str()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
+}
+
+fn f64_from_config_value(value: &JsonValue) -> Option<f64> {
+    value
+        .get("value")
+        .and_then(|x| {
+            x.as_f64()
+                .or_else(|| x.as_str().and_then(|s| s.trim().parse().ok()))
+        })
+        .or_else(|| value.as_f64())
+}
+
+/// JSON `value` field (string or number) → [`Decimal`].
+pub fn decimal_from_config_value(value: &JsonValue) -> Option<Decimal> {
+    value
+        .get("value")
+        .and_then(|x| {
+            if let Some(s) = x.as_str() {
+                return Decimal::from_str(s.trim()).ok();
+            }
+            x.as_f64()
+                .and_then(Decimal::from_f64_retain)
+        })
+        .or_else(|| {
+            value
+                .as_str()
+                .and_then(|s| Decimal::from_str(s.trim()).ok())
+        })
 }
 
 /// Resolution order: if `QTSS_CONFIG_ENV_OVERRIDES=1`, matching `env_key` wins; else `system_config`; else `env_key`; else `default_secs`.
@@ -107,6 +154,73 @@ pub async fn resolve_worker_enabled_flag(
     }
 
     default_enabled
+}
+
+/// Resolution order: if `QTSS_CONFIG_ENV_OVERRIDES=1`, matching `env_key` wins; else `system_config`; else `env_key`; else `default_f64`.
+pub async fn resolve_system_f64(
+    pool: &PgPool,
+    module: &str,
+    config_key: &str,
+    env_key: &str,
+    default_f64: f64,
+) -> f64 {
+    if qtss_common::env_overrides_enabled() {
+        if let Ok(s) = std::env::var(env_key) {
+            let t = s.trim();
+            if !t.is_empty() {
+                if let Ok(v) = t.parse::<f64>() {
+                    return v;
+                }
+            }
+        }
+    }
+
+    let repo = SystemConfigRepository::new(pool.clone());
+    if let Ok(Some(row)) = repo.get(module, config_key).await {
+        if let Some(v) = f64_from_config_value(&row.value) {
+            if v.is_finite() {
+                return v;
+            }
+        }
+    }
+
+    std::env::var(env_key)
+        .ok()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|v| v.is_finite())
+        .unwrap_or(default_f64)
+}
+
+/// Same precedence as [`resolve_system_string`], parses [`Decimal`].
+pub async fn resolve_system_decimal(
+    pool: &PgPool,
+    module: &str,
+    config_key: &str,
+    env_key: &str,
+    default_decimal: Decimal,
+) -> Decimal {
+    if qtss_common::env_overrides_enabled() {
+        if let Ok(s) = std::env::var(env_key) {
+            let t = s.trim();
+            if !t.is_empty() {
+                if let Ok(d) = Decimal::from_str(t) {
+                    return d;
+                }
+            }
+        }
+    }
+
+    let repo = SystemConfigRepository::new(pool.clone());
+    if let Ok(Some(row)) = repo.get(module, config_key).await {
+        if let Some(d) = decimal_from_config_value(&row.value) {
+            return d;
+        }
+    }
+
+    std::env::var(env_key)
+        .ok()
+        .and_then(|s| Decimal::from_str(s.trim()).ok())
+        .unwrap_or(default_decimal)
 }
 
 /// Resolution order: if `QTSS_CONFIG_ENV_OVERRIDES=1`, matching `env_key` wins; else `system_config`; else `env_key`; else `default_value`.

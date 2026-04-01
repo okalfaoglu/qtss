@@ -98,6 +98,8 @@ type Props = {
    * İçerik `details` ile açılıp kapanabilir.
    */
   layout?: "full" | "impulse" | "corrective";
+  /** `true`: üstteki «Elliott dalga türleri» tablosu üzerinde ana anahtar gösteriliyorsa tekrar etme. */
+  hideEnabledToggle?: boolean;
 };
 
 export function ElliottWaveCard({
@@ -114,6 +116,7 @@ export function ElliottWaveCard({
   onRefreshFromServer,
   allowPersistConfig = true,
   layout = "full",
+  hideEnabledToggle = false,
 }: Props) {
   const [rulesOpen, setRulesOpen] = useState(false);
   const [jsonOpen, setJsonOpen] = useState(false);
@@ -378,19 +381,21 @@ export function ElliottWaveCard({
 
   const drawingsBlock = (
     <>
-      <div className="tv-elliott-panel__row">
-        <label className="tv-elliott-panel__toggle">
-          <input
-            type="checkbox"
-            checked={value.enabled}
-            onChange={(e) => onChange({ ...value, enabled: e.target.checked })}
-          />
-          <span>Elliott analizi (grafik)</span>
-        </label>
-        <span className="muted" style={{ fontSize: "0.75rem" }}>
-          {value.enabled ? `${pivotCount} swing pivot` : ""}
-        </span>
-      </div>
+      {!hideEnabledToggle ? (
+        <div className="tv-elliott-panel__row">
+          <label className="tv-elliott-panel__toggle">
+            <input
+              type="checkbox"
+              checked={value.enabled}
+              onChange={(e) => onChange({ ...value, enabled: e.target.checked })}
+            />
+            <span>Elliott analizi (grafik)</span>
+          </label>
+          <span className="muted" style={{ fontSize: "0.75rem" }}>
+            {value.enabled ? `${pivotCount} swing pivot` : ""}
+          </span>
+        </div>
+      ) : null}
       <p className="muted" style={{ fontSize: "0.78rem", marginTop: "0.45rem", marginBottom: "0.25rem" }}>
         {layout === "impulse"
           ? "İtki dalgaları (1–5)"
@@ -401,33 +406,6 @@ export function ElliottWaveCard({
       <div className="tv-elliott-panel__params" style={{ display: "grid", gap: "0.35rem" }}>
         {showImpulseUi ? (
           <>
-            <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
-              <input
-                type="checkbox"
-                checked={value.show_projection_4h}
-                disabled={!value.enabled || !value.pattern_menu_by_tf["4h"].motive_impulse}
-                onChange={(e) => onChange({ ...value, show_projection_4h: e.target.checked })}
-              />
-              <span>İleri Fib projeksiyon — 4h (makro itkiden; şema, tahmin değildir)</span>
-            </label>
-            <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
-              <input
-                type="checkbox"
-                checked={value.show_projection_1h}
-                disabled={!value.enabled || !value.pattern_menu_by_tf["1h"].motive_impulse}
-                onChange={(e) => onChange({ ...value, show_projection_1h: e.target.checked })}
-              />
-              <span>İleri Fib projeksiyon — 1h (ara itkiden)</span>
-            </label>
-            <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
-              <input
-                type="checkbox"
-                checked={value.show_projection_15m}
-                disabled={!value.enabled || !value.pattern_menu_by_tf["15m"].motive_impulse}
-                onChange={(e) => onChange({ ...value, show_projection_15m: e.target.checked })}
-              />
-              <span>İleri Fib projeksiyon — 15m (mikro itkiden)</span>
-            </label>
             <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
               <input
                 type="checkbox"
@@ -534,102 +512,22 @@ export function ElliottWaveCard({
             className="tv-elliott-panel__params"
             style={{ marginTop: "0.15rem", display: "grid", gap: "0.45rem" }}
           >
-            <p className="muted" style={{ fontSize: "0.72rem", margin: 0, lineHeight: 1.4 }}>
-              MTF çizgi renkleri (ZigZag, itki, düzeltme)
-            </p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.45rem" }}>
-              <label className="muted tv-elliott-panel__field" style={{ margin: 0 }}>
-                <span style={{ fontSize: "0.7rem" }}>4h</span>
-                <input
-                  type="color"
-                  aria-label="4h dalga rengi"
-                  value={elliottHexForColorInput(value.mtf_wave_color_4h)}
-                  onChange={(e) => onChange({ ...value, mtf_wave_color_4h: e.target.value })}
-                  style={{ width: "100%", height: "1.85rem", padding: 0, border: "none", cursor: "pointer" }}
-                />
-              </label>
-              <label className="muted tv-elliott-panel__field" style={{ margin: 0 }}>
-                <span style={{ fontSize: "0.7rem" }}>1h</span>
-                <input
-                  type="color"
-                  aria-label="1h dalga rengi"
-                  value={elliottHexForColorInput(value.mtf_wave_color_1h)}
-                  onChange={(e) => onChange({ ...value, mtf_wave_color_1h: e.target.value })}
-                  style={{ width: "100%", height: "1.85rem", padding: 0, border: "none", cursor: "pointer" }}
-                />
-              </label>
-              <label className="muted tv-elliott-panel__field" style={{ margin: 0 }}>
-                <span style={{ fontSize: "0.7rem" }}>15m</span>
-                <input
-                  type="color"
-                  aria-label="15m dalga rengi"
-                  value={elliottHexForColorInput(value.mtf_wave_color_15m)}
-                  onChange={(e) => onChange({ ...value, mtf_wave_color_15m: e.target.value })}
-                  style={{ width: "100%", height: "1.85rem", padding: 0, border: "none", cursor: "pointer" }}
-                />
-              </label>
-            </div>
             {showImpulseUi &&
             (value.show_projection_4h || value.show_projection_1h || value.show_projection_15m) ? (
-              <>
-                <label className="muted tv-elliott-panel__field">
-                  <span>Projeksiyon modu</span>
-                  <select
-                    className="tv-topstrip__select"
-                    value={value.projection_mode ?? "legacy"}
-                    onChange={(e) =>
-                      onChange({
-                        ...value,
-                        projection_mode: e.target.value === "formation" ? "formation" : "legacy",
-                      })
-                    }
-                    title="Legacy: tek polyline. Formasyon: ABC + yeni 1-5 dalga segmentleri ve hedef seviyeleri."
-                  >
-                    <option value="legacy">Basit polyline (legacy)</option>
-                    <option value="formation">Formasyon projeksiyonu</option>
-                  </select>
-                </label>
-                <label className="muted tv-elliott-panel__field">
-                  <span>Projeksiyon: adım (kaç mum süresi)</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={100}
-                    title="Her segment arası ortalama mum süresinin katı (Pine 22)"
-                    value={value.projection_bar_hop}
-                    onChange={(e) =>
-                      onChange({
-                        ...value,
-                        projection_bar_hop: Math.min(
-                          100,
-                          Math.max(1, parseInt(e.target.value, 10) || 22),
-                        ),
-                      })
-                    }
-                    className="mono"
-                  />
-                </label>
-                <label className="muted tv-elliott-panel__field">
-                  <span>Projeksiyon: segment sayısı</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={24}
-                    title="İleri çizgide kaç adım (Pine 12)"
-                    value={value.projection_steps}
-                    onChange={(e) =>
-                      onChange({
-                        ...value,
-                        projection_steps: Math.min(
-                          24,
-                          Math.max(1, parseInt(e.target.value, 10) || 12),
-                        ),
-                      })
-                    }
-                    className="mono"
-                  />
-                </label>
-              </>
+              <label className="muted tv-elliott-panel__field" style={{ alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={!!value.projection_multi_corrective_scenarios}
+                  onChange={(e) =>
+                    onChange({
+                      ...value,
+                      projection_multi_corrective_scenarios: e.target.checked,
+                    })
+                  }
+                  title="Zigzag ve yassı (ve pivotla uyumlu ABC adayları) ayrı renklerle; A/B teyidine göre süzülür."
+                />
+                <span>Çoklu düzeltme senaryosu (renk ayrımı)</span>
+              </label>
             ) : null}
             <label className="muted tv-elliott-panel__field">
               <span>Geri arama (pivot penceresi)</span>
@@ -648,16 +546,6 @@ export function ElliottWaveCard({
                 className="mono"
               />
             </label>
-            {showCorrectiveUi ? (
-              <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
-                <input
-                  type="checkbox"
-                  checked={value.strict_wave4_overlap}
-                  onChange={(e) => onChange({ ...value, strict_wave4_overlap: e.target.checked })}
-                />
-                <span>Düzeltme: dalga 4, dalga 1 alanına girmesin (klasik örtüşme kuralı, sıkı)</span>
-              </label>
-            ) : null}
           </div>
         </>
       ) : null;

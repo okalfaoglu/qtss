@@ -13,28 +13,47 @@ function eventBarTimeSec(ev: RangeSignalEventApiRow): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
-function markerStyle(kind: string): Pick<SeriesMarker<UTCTimestamp>, "position" | "shape" | "color" | "text"> {
+function markerGeometry(
+  kind: string,
+): Pick<SeriesMarker<UTCTimestamp>, "position" | "shape" | "color"> {
   switch (kind) {
     case "long_entry":
-      return { position: "belowBar", shape: "arrowUp", color: "#26a69a", text: "L giriş" };
+      return { position: "belowBar", shape: "arrowUp", color: "#26a69a" };
     case "long_exit":
-      return { position: "aboveBar", shape: "circle", color: "#ffca28", text: "L çıkış" };
+      return { position: "aboveBar", shape: "circle", color: "#ffca28" };
     case "short_entry":
-      return { position: "aboveBar", shape: "arrowDown", color: "#ef5350", text: "S giriş" };
+      return { position: "aboveBar", shape: "arrowDown", color: "#ef5350" };
     case "short_exit":
-      return { position: "belowBar", shape: "circle", color: "#ff9800", text: "S çıkış" };
+      return { position: "belowBar", shape: "circle", color: "#ff9800" };
     default:
-      return { position: "aboveBar", shape: "circle", color: "#9e9e9e", text: kind };
+      return { position: "aboveBar", shape: "circle", color: "#9e9e9e" };
+  }
+}
+
+function defaultMarkerText(kind: string): string {
+  switch (kind) {
+    case "long_entry":
+      return "L Enter";
+    case "long_exit":
+      return "L Exit";
+    case "short_entry":
+      return "S Enter";
+    case "short_exit":
+      return "S Exit";
+    default:
+      return kind;
   }
 }
 
 /**
  * DB `range_signal_events` → mum serisi marker’ları.
  * Yalnızca grafikte yüklü bir mumun `open_time` ile eşleşen olaylar çizilir (zaman saniye bazında).
+ * @param markerText — i18n üzerinden etiket (ör. `L Enter`); yoksa kısa İngilizce varsayılan.
  */
 export function rangeSignalMarkersFromEvents(
   bars: ChartOhlcRow[],
   events: RangeSignalEventApiRow[],
+  markerText?: (eventKind: string) => string,
 ): SeriesMarker<UTCTimestamp>[] {
   if (!bars.length || !events.length) return [];
   const ch = chartOhlcRowsSortedChrono(bars);
@@ -48,13 +67,14 @@ export function rangeSignalMarkersFromEvents(
   for (const ev of events) {
     const sec = eventBarTimeSec(ev);
     if (sec == null || !barTimes.has(sec)) continue;
-    const st = markerStyle(ev.event_kind);
+    const geo = markerGeometry(ev.event_kind);
+    const text = markerText ? markerText(ev.event_kind) : defaultMarkerText(ev.event_kind);
     out.push({
       time: sec as UTCTimestamp,
-      position: st.position,
-      shape: st.shape,
-      color: st.color,
-      text: st.text,
+      position: geo.position,
+      shape: geo.shape,
+      color: geo.color,
+      text,
     });
   }
   return out.sort((a, b) => (a.time as number) - (b.time as number));

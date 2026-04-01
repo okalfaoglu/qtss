@@ -81,6 +81,12 @@ pub struct GenericWebhookConfig {
 }
 
 impl NotifyConfig {
+    /// `system_config.notify.dispatcher_config` JSON — şema ile uyumsuzsa varsayılan (boş kanallar).
+    #[must_use]
+    pub fn from_system_config_value(value: &serde_json::Value) -> Self {
+        serde_json::from_value(value.clone()).unwrap_or_default()
+    }
+
     /// Ortam değişkenlerinden okur; tanımlı olmayan kanallar `None` kalır.
     pub fn from_env() -> Self {
         Self {

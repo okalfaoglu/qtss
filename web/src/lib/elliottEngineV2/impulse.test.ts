@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectBestImpulseV2, detectHistoricalImpulsesV2 } from "./impulse";
+import { detectBestImpulseV2, detectHistoricalImpulsesV2, detectNestedImpulseInLeg } from "./impulse";
 import type { ZigzagPivot } from "./types";
 
 function p(index: number, price: number, kind: "high" | "low"): ZigzagPivot {
@@ -146,6 +146,27 @@ describe("detectBestImpulseV2 hard rule matrix", () => {
     expect(diag).not.toBeNull();
     expect(diag?.direction).toBe("bear");
     expect(diag?.variant).toBe("diagonal");
+  });
+
+  it("nested leg with w4–w1 overlap picks diagonal when menu allows, not standard", () => {
+    const pivots: ZigzagPivot[] = [
+      p(0, 200, "high"),
+      p(1, 180, "low"),
+      p(2, 192, "high"),
+      p(3, 172, "low"),
+      p(4, 185, "high"),
+      p(5, 165, "low"),
+    ];
+    const pa = pivots[0]!;
+    const pb = pivots[5]!;
+    const stdOnly = detectNestedImpulseInLeg(pivots, pa, pb, { allowStandard: true, allowDiagonal: false }, undefined, undefined);
+    expect(stdOnly?.variant).not.toBe("standard");
+    expect(stdOnly).toBeNull();
+
+    const stdAndDiag = detectNestedImpulseInLeg(pivots, pa, pb, { allowStandard: true, allowDiagonal: true }, undefined, undefined);
+    expect(stdAndDiag).not.toBeNull();
+    expect(stdAndDiag?.variant).toBe("diagonal");
+    expect(stdAndDiag?.direction).toBe("bear");
   });
 
   it("detectHistoricalImpulsesV2 returns at least one non-overlapping hit for a long pivot run", () => {

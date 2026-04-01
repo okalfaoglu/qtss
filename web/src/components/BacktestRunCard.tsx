@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ColorType, createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
 import { backfillMarketBarsFromRest, postBacktestRun, type BacktestRunResponseApi } from "../api/client";
 
@@ -10,6 +11,8 @@ type Props = {
   defaultSymbol: string;
   defaultInterval: string;
 };
+
+type BacktestStrategyId = "buy_and_hold" | "sma_cross" | "trading_range";
 
 type EquityPoint = { time: UTCTimestamp; value: number };
 
@@ -57,7 +60,8 @@ export function BacktestRunCard({
   defaultSymbol,
   defaultInterval,
 }: Props) {
-  const [strategy, setStrategy] = useState<"buy_and_hold" | "sma_cross">("sma_cross");
+  const { t } = useTranslation();
+  const [strategy, setStrategy] = useState<BacktestStrategyId>("sma_cross");
   const [smaFast, setSmaFast] = useState("10");
   const [smaSlow, setSmaSlow] = useState("30");
   const [exchange, setExchange] = useState(defaultExchange);
@@ -253,11 +257,21 @@ export function BacktestRunCard({
       <div className="tv-settings__fields">
         <label className="muted">
           <span>Strategy</span>
-          <select className="tv-topstrip__select" value={strategy} onChange={(e) => setStrategy(e.target.value as typeof strategy)}>
+          <select
+            className="tv-topstrip__select"
+            value={strategy}
+            onChange={(e) => setStrategy(e.target.value as BacktestStrategyId)}
+          >
             <option value="sma_cross">SMA cross (10/30)</option>
             <option value="buy_and_hold">Buy & hold</option>
+            <option value="trading_range">Trading range (signal dashboard)</option>
           </select>
         </label>
+        {strategy === "trading_range" ? (
+          <p className="muted" style={{ fontSize: "0.72rem", margin: "-0.2rem 0 0.15rem", lineHeight: 1.45 }}>
+            {t("app.backtest.tradingRangeServerNote")}
+          </p>
+        ) : null}
         {strategy === "sma_cross" ? (
           <>
             <label className="muted">
@@ -320,6 +334,15 @@ export function BacktestRunCard({
 
       {backfillNote ? <p className="muted mono" style={{ marginTop: "0.45rem" }}>{backfillNote}</p> : null}
       {err ? <p className="err" style={{ marginTop: "0.45rem" }}>{err}</p> : null}
+      {err &&
+      strategy === "trading_range" &&
+      /buy_and_hold/i.test(err) &&
+      /sma_cross/i.test(err) &&
+      !/trading_range/i.test(err) ? (
+        <p className="muted" style={{ marginTop: "0.35rem", fontSize: "0.78rem", lineHeight: 1.45 }}>
+          {t("app.backtest.oldApiStrategyErrorHint")}
+        </p>
+      ) : null}
       {err && /yeterli veri yok|market_bars/i.test(err) ? (
         <p className="muted" style={{ marginTop: "0.25rem", fontSize: "0.8rem" }}>
           İpucu: Önce <strong>Backfill (Binance→DB)</strong> çalıştırın, ardından <strong>Run</strong>.

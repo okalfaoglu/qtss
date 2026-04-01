@@ -403,11 +403,13 @@ const ALIGNED: readonly ElliottTheoryCodeFinding[] = [
     id: "diagonal_menu_default_off",
     status: "aligned",
     title: "Diagonal motive enabled in pattern menu by default",
-    summary: "`DEFAULT_ELLIOTT_PATTERN_MENU.motive_diagonal` is true so diagonal scans run unless the user disables them.",
+    summary: "`DEFAULT_ELLIOTT_PATTERN_MENU` enables both `motive_diagonal_leading` and `motive_diagonal_ending` so diagonal scans run unless the user disables them.",
     theory: "Diagonals are first-class motive variants in scope.",
     code: "`elliottPatternMenuCatalog.ts`.",
     impact: "Diagonal support is discoverable without toggling the menu.",
-    references: [{ file: "web/src/lib/elliottPatternMenuCatalog.ts", note: "`motive_diagonal` default" }],
+    references: [
+      { file: "web/src/lib/elliottPatternMenuCatalog.ts", note: "`motive_diagonal_leading` / `motive_diagonal_ending` defaults" },
+    ],
   },
   {
     id: "flat_regular_vs_expanded_not_encoded",

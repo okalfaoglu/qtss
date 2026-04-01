@@ -1,18 +1,18 @@
-//! Opsiyonel dry-run strateji döngüleri (`QTSS_STRATEGY_RUNNER_ENABLED=1`, dev guide ADIM 7 + §7.2).
+//! Opsiyonel dry-run strateji döngüleri (`worker.strategy_runner_enabled`, dev guide ADIM 7 + §7.2).
 //!
 //! Her strateji **ayrı** [`DryRunGateway`] ile çalışır (paylaşılan sanal bakiye yok).
-//! - Toplam: `QTSS_STRATEGY_RUNNER_QUOTE_BALANCE_USDT` (varsayılan `100000` USDT), strateji başına varsayılan = toplam / N.
-//! - Override: `QTSS_STRATEGY_<UPPER_NAME>_BALANCE` (örn. `QTSS_STRATEGY_SIGNAL_FILTER_BALANCE`), isimde tire → alt çizgi.
-//! `position_manager` dry kapanışı tam toplam havuzu için [`dry_gateway_from_env`] kullanır (FAZ 0.2 ile uyumlu).
+//! - Toplam: `worker.strategy_runner_quote_balance_usdt` (varsayılan 100000 USDT), strateji başına = toplam / N.
+//! - Override: `worker.strategy_*_balance` veya env `QTSS_STRATEGY_<NAME>_BALANCE`.
 
 use std::str::FromStr;
-use std::sync::Arc;
 
 use qtss_domain::commission::CommissionPolicy;
 use qtss_domain::execution::VirtualLedgerParams;
-use qtss_execution::DryRunGateway;
+use qtss_execution::{DryRunGateway, ExecutionGateway};
+use qtss_storage::{resolve_system_string, resolve_worker_enabled_flag};
 use rust_decimal::Decimal;
 use sqlx::PgPool;
+use std::sync::Arc;
 use tracing::info;
 
 /// Dry runner’da eşzamanlı strateji sayısı — bölme paydası ve spawn listesi buradan türetilir.
@@ -27,12 +27,6 @@ fn dry_runner_strategy_count_dec() -> Decimal {
     Decimal::from(DRY_RUNNER_STRATEGIES.len() as u32)
 }
 
-fn enabled() -> bool {
-    std::env::var("QTSS_STRATEGY_RUNNER_ENABLED")
-        .ok()
-        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
-}
-
 /// Normalizes strategy name for `QTSS_STRATEGY_<SUFFIX>_BALANCE` (hyphen → underscore, ASCII upper).
 #[must_use]
 pub fn strategy_env_suffix_normalized(strategy_name: &str) -> String {
@@ -44,25 +38,49 @@ pub fn strategy_env_suffix_normalized(strategy_name: &str) -> String {
         .to_ascii_uppercase()
 }
 
-fn env_strategy_balance_usdt(strategy_name: &str) -> Option<Decimal> {
-    let key = format!(
+fn worker_balance_key(strategy_name: &str) -> Option<&'static str> {
+    match strategy_name {
+        "signal_filter" => Some("strategy_signal_filter_balance"),
+        "whale_momentum" => Some("strategy_whale_momentum_balance"),
+        "arb_funding" => Some("strategy_arb_funding_balance"),
+        "copy_trade" => Some("strategy_copy_trade_balance"),
+        _ => None,
+    }
+}
+
+async fn strategy_balance_usdt(strategy_name: &str, pool: &PgPool) -> Option<Decimal> {
+    let Some(wkey) = worker_balance_key(strategy_name) else {
+        return None;
+    };
+    let env_key = format!(
         "QTSS_STRATEGY_{}_BALANCE",
         strategy_env_suffix_normalized(strategy_name)
     );
-    std::env::var(&key)
-        .ok()
-        .and_then(|s| Decimal::from_str(s.trim()).ok())
+    let raw = resolve_system_string(pool, "worker", wkey, &env_key, "").await;
+    let t = raw.trim();
+    if t.is_empty() {
+        return None;
+    }
+    Decimal::from_str(t).ok()
 }
 
-/// Her strateji için ayrı sanal bakiye: önce `QTSS_STRATEGY_<NAME>_BALANCE`, yoksa `QTSS_STRATEGY_RUNNER_QUOTE_BALANCE_USDT / N` (`N` = [`DRY_RUNNER_STRATEGIES`].len()).
-pub fn dry_gateway_for_strategy(strategy_name: &str) -> Arc<DryRunGateway> {
-    let default_total = std::env::var("QTSS_STRATEGY_RUNNER_QUOTE_BALANCE_USDT")
-        .ok()
-        .and_then(|s| Decimal::from_str(s.trim()).ok())
-        .unwrap_or_else(|| Decimal::new(100_000, 0));
+/// Her strateji için ayrı sanal bakiye — önce worker.strategy_*_balance, yoksa toplam / N.
+pub async fn dry_gateway_for_strategy(strategy_name: &str, pool: &PgPool) -> Arc<DryRunGateway> {
+    let default_total_s = resolve_system_string(
+        pool,
+        "worker",
+        "strategy_runner_quote_balance_usdt",
+        "QTSS_STRATEGY_RUNNER_QUOTE_BALANCE_USDT",
+        "100000",
+    )
+    .await;
+    let default_total =
+        Decimal::from_str(default_total_s.trim()).unwrap_or_else(|_| Decimal::new(100_000, 0));
     let per_default = default_total / dry_runner_strategy_count_dec();
 
-    let init = env_strategy_balance_usdt(strategy_name).unwrap_or(per_default);
+    let init = strategy_balance_usdt(strategy_name, pool)
+        .await
+        .unwrap_or(per_default);
 
     Arc::new(DryRunGateway::new(
         VirtualLedgerParams {
@@ -73,12 +91,17 @@ pub fn dry_gateway_for_strategy(strategy_name: &str) -> Arc<DryRunGateway> {
     ))
 }
 
-/// Geriye uyumluluk — tek gateway (ör. `position_manager` dry); tam `QTSS_STRATEGY_RUNNER_QUOTE_BALANCE_USDT`.
-pub fn dry_gateway_from_env() -> Arc<DryRunGateway> {
-    let init = std::env::var("QTSS_STRATEGY_RUNNER_QUOTE_BALANCE_USDT")
-        .ok()
-        .and_then(|s| Decimal::from_str(s.trim()).ok())
-        .unwrap_or_else(|| Decimal::new(100_000, 0));
+/// Tek gateway (`position_manager` dry) — toplam quote bakiyesi.
+pub async fn dry_gateway_from_pool(pool: &PgPool) -> Arc<DryRunGateway> {
+    let raw = resolve_system_string(
+        pool,
+        "worker",
+        "strategy_runner_quote_balance_usdt",
+        "QTSS_STRATEGY_RUNNER_QUOTE_BALANCE_USDT",
+        "100000",
+    )
+    .await;
+    let init = Decimal::from_str(raw.trim()).unwrap_or_else(|_| Decimal::new(100_000, 0));
     Arc::new(DryRunGateway::new(
         VirtualLedgerParams {
             initial_quote_balance: init,
@@ -88,18 +111,47 @@ pub fn dry_gateway_from_env() -> Arc<DryRunGateway> {
     ))
 }
 
-pub fn spawn_if_enabled(pool: &PgPool) {
-    if !enabled() {
+async fn gateway_for_strategy_async(name: &str, pool: &PgPool) -> Arc<dyn ExecutionGateway> {
+    let dry = dry_gateway_for_strategy(name, pool).await;
+    if let Some((org_id, user_id)) = qtss_strategy::paper_ledger_target_from_db(pool).await {
+        info!(
+            strategy = name,
+            %org_id,
+            %user_id,
+            "dry gateway + paper ledger persist (worker.paper_ledger_enabled)"
+        );
+        Arc::new(qtss_strategy::PaperRecordingDryGateway::new(
+            dry,
+            pool.clone(),
+            org_id,
+            user_id,
+            name,
+        ))
+    } else {
+        dry
+    }
+}
+
+pub async fn spawn_if_enabled(pool: &PgPool) {
+    let on = resolve_worker_enabled_flag(
+        pool,
+        "worker",
+        "strategy_runner_enabled",
+        "QTSS_STRATEGY_RUNNER_ENABLED",
+        false,
+    )
+    .await;
+    if !on {
         return;
     }
     info!(
-        "QTSS_STRATEGY_RUNNER_ENABLED: dry strateji döngüleri ({}) — her biri ayrı gateway; QTSS_STRATEGY_<NAME>_BALANCE veya toplam/{}",
+        "worker.strategy_runner_enabled: dry strateji döngüleri ({}) — worker.strategy_*_balance veya toplam/{}",
         DRY_RUNNER_STRATEGIES.join(", "),
         DRY_RUNNER_STRATEGIES.len(),
     );
     for &name in DRY_RUNNER_STRATEGIES {
         let p = pool.clone();
-        let g = dry_gateway_for_strategy(name);
+        let g = gateway_for_strategy_async(name, pool).await;
         match name {
             "signal_filter" => tokio::spawn(async move {
                 qtss_strategy::signal_filter::run(p, g).await;

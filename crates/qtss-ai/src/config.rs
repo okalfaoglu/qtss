@@ -57,8 +57,11 @@ impl AiEngineConfig {
         }
     }
 
-    /// Env takes precedence over DB fields where set (operational toggles without admin UI).
+    /// When `QTSS_CONFIG_ENV_OVERRIDES=1`, env takes precedence over `app_config` fields.
     pub fn merge_env_overrides(&mut self) {
+        if !qtss_common::env_overrides_enabled() {
+            return;
+        }
         if env_truthy("QTSS_AI_ENABLED") {
             self.enabled = true;
         }

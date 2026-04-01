@@ -60,6 +60,9 @@ pub struct Notification {
     /// HTML gövde (yalnızca e-posta).
     #[serde(default)]
     pub body_html: Option<String>,
+    /// Telegram Bot API `reply_markup` (ör. `inline_keyboard`); yalnızca Telegram kanalında kullanılır.
+    #[serde(default)]
+    pub telegram_reply_markup: Option<serde_json::Value>,
 }
 
 impl Notification {
@@ -68,11 +71,17 @@ impl Notification {
             title: title.into(),
             body: body.into(),
             body_html: None,
+            telegram_reply_markup: None,
         }
     }
 
     pub fn with_html(mut self, html: impl Into<String>) -> Self {
         self.body_html = Some(html.into());
+        self
+    }
+
+    pub fn with_telegram_reply_markup(mut self, markup: serde_json::Value) -> Self {
+        self.telegram_reply_markup = Some(markup);
         self
     }
 }

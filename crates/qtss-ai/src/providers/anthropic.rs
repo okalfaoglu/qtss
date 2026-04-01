@@ -22,21 +22,12 @@ pub struct AnthropicProvider {
 }
 
 impl AnthropicProvider {
-    pub fn from_env() -> AiResult<Self> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY")
-            .or_else(|_| std::env::var("QTSS_AI_ANTHROPIC_API_KEY"))
-            .map_err(|_| AiError::ProviderNotConfigured("ANTHROPIC_API_KEY".into()))?;
+    pub fn from_settings(api_key: String, base_url: String, timeout_secs: u64) -> AiResult<Self> {
         if api_key.trim().is_empty() {
             return Err(AiError::ProviderNotConfigured("ANTHROPIC_API_KEY empty".into()));
         }
-        let base_url = std::env::var("ANTHROPIC_BASE_URL")
-            .or_else(|_| std::env::var("QTSS_AI_ANTHROPIC_BASE_URL"))
-            .unwrap_or_else(|_| DEFAULT_BASE.to_string());
         let base_url = base_url.trim_end_matches('/').to_string();
-        let timeout_secs = std::env::var("QTSS_AI_ANTHROPIC_TIMEOUT_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(DEFAULT_TIMEOUT_SECS);
+        let timeout_secs = timeout_secs.max(30);
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
             .user_agent(concat!("qtss-ai/", env!("CARGO_PKG_VERSION")))
@@ -47,6 +38,20 @@ impl AnthropicProvider {
             api_key,
             base_url,
         })
+    }
+
+    pub fn from_env() -> AiResult<Self> {
+        let api_key = std::env::var("ANTHROPIC_API_KEY")
+            .or_else(|_| std::env::var("QTSS_AI_ANTHROPIC_API_KEY"))
+            .map_err(|_| AiError::ProviderNotConfigured("ANTHROPIC_API_KEY".into()))?;
+        let base_url = std::env::var("ANTHROPIC_BASE_URL")
+            .or_else(|_| std::env::var("QTSS_AI_ANTHROPIC_BASE_URL"))
+            .unwrap_or_else(|_| DEFAULT_BASE.to_string());
+        let timeout_secs = std::env::var("QTSS_AI_ANTHROPIC_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_TIMEOUT_SECS);
+        Self::from_settings(api_key, base_url, timeout_secs)
     }
 
     fn url_messages(&self) -> String {

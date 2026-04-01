@@ -13,14 +13,29 @@ import type {
   ZigzagParams,
   ZigzagPivot,
 } from "./types";
-import { DEFAULT_ELLIOTT_PATTERN_MENU, type ElliottPatternMenuToggles } from "../elliottPatternMenuCatalog";
+import {
+  DEFAULT_ELLIOTT_PATTERN_MENU,
+  patternMenuAllowDiagonal,
+  type ElliottPatternMenuToggles,
+} from "../elliottPatternMenuCatalog";
 import { pickMtfDiagonalRoleFor1hTf, pickMtfDiagonalRoleForMicroTf } from "./diagonalMtf";
 import { buildZigzagPivotsV2 } from "./zigzag";
+import { inferDiagonalRoleFromChart } from "./inferDiagonalRole";
 import { detectBestImpulseV2, detectHistoricalImpulsesV2, detectNestedImpulseInLeg } from "./impulse";
 import { detectImpulseCorrectionsV2, detectNestedAbcCorrectiveInLeg, detectNestedCorrectiveInLeg } from "./corrective";
 
 function mergePatternToggles(t?: ElliottPatternMenuToggles): ElliottPatternMenuToggles {
   return { ...DEFAULT_ELLIOTT_PATTERN_MENU, ...t };
+}
+
+function impulseDetectOptsFromMenu(menu: ElliottPatternMenuToggles) {
+  const allowDiag = patternMenuAllowDiagonal(menu);
+  return {
+    allowStandard: menu.motive_impulse,
+    allowDiagonal: allowDiag,
+    allowDiagonalLeading: menu.motive_diagonal_leading,
+    allowDiagonalEnding: menu.motive_diagonal_ending,
+  };
 }
 
 /** 15m mikro itkide dalga 1–5 arası en az bu kadar mum aralığı; aksi halde etiketler üst üste biner. */
@@ -87,21 +102,6 @@ function correctiveIsConfirmed(c: CorrectiveCountV2): boolean {
     return hasPassedCheck(c, "comb_confirmed") || hasPassedCheck(c, "wxyxz_confirmed");
   }
   return false;
-}
-
-/** Early pivot start + late pivot end → chart-window hint for leading vs ending diagonal. */
-function inferDiagonalRoleFromChart(imp: ImpulseCountV2, pivots: ZigzagPivot[]): DiagonalRoleV2 {
-  if (pivots.length < 4) return "unknown";
-  const [p0, , , , , p5] = imp.pivots;
-  const p0Rank = pivots.findIndex((p) => p.index === p0.index);
-  const p5Rank = pivots.findIndex((p) => p.index === p5.index);
-  if (p0Rank < 0 || p5Rank < 0) return "unknown";
-  const n = pivots.length;
-  const earlyStart = p0Rank <= 1;
-  const lateEnd = p5Rank >= n - 2;
-  if (earlyStart && !lateEnd) return "leading";
-  if (lateEnd && !earlyStart) return "ending";
-  return "unknown";
 }
 
 /** Tez §2.5.3.4 ld_r3 applies to leading diagonals; ending/unknown should not be scored against it. */
@@ -257,10 +257,7 @@ function refineDiagonalStateWithMtf(
   const fullInput: ElliottEngineInputV2 = { ...input, zigzag };
   const pivots = state.pivots;
 
-  const fresh = detectBestImpulseV2(pivots, input.maxWindows ?? 80, {
-    allowStandard: menu.motive_impulse,
-    allowDiagonal: menu.motive_diagonal,
-  });
+  const fresh = detectBestImpulseV2(pivots, input.maxWindows ?? 80, impulseDetectOptsFromMenu(menu));
   if (tf === "15m" && fresh && microImpulseTooCompressed(fresh)) {
     return state;
   }
@@ -373,14 +370,9 @@ function microImpulseTooCompressed(imp: ImpulseCountV2): boolean {
 function runForTf(tf: Timeframe, rows: OhlcV2[], input: ElliottEngineInputV2): TimeframeStateV2 {
   const pivots = buildZigzagPivotsV2(rows, input.zigzag);
   const menu = mergePatternToggles(input.patternTogglesByTf?.[tf] ?? input.patternToggles);
-  let impulse = detectBestImpulseV2(pivots, input.maxWindows ?? 80, {
-    allowStandard: menu.motive_impulse,
-    allowDiagonal: menu.motive_diagonal,
-  });
-  let historicalImpulses = detectHistoricalImpulsesV2(pivots, input.maxWindows ?? 240, 16, {
-    allowStandard: menu.motive_impulse,
-    allowDiagonal: menu.motive_diagonal,
-  });
+  const detectOpts = impulseDetectOptsFromMenu(menu);
+  let impulse = detectBestImpulseV2(pivots, input.maxWindows ?? 80, detectOpts);
+  let historicalImpulses = detectHistoricalImpulsesV2(pivots, input.maxWindows ?? 240, 16, detectOpts);
   if (tf === "15m" && impulse && microImpulseTooCompressed(impulse)) {
     impulse = null;
   }
@@ -478,7 +470,9 @@ function runForTf(tf: Timeframe, rows: OhlcV2[], input: ElliottEngineInputV2): T
 
   const nestedImpulseOpts = {
     allowStandard: menu.motive_impulse,
-    allowDiagonal: menu.motive_diagonal,
+    allowDiagonal: patternMenuAllowDiagonal(menu),
+    allowDiagonalLeading: menu.motive_diagonal_leading,
+    allowDiagonalEnding: menu.motive_diagonal_ending,
   };
   let wave1NestedImpulse: ImpulseCountV2 | null = null;
   let wave2NestedCorrective: CorrectiveCountV2 | null = null;
@@ -500,14 +494,8 @@ function runForTf(tf: Timeframe, rows: OhlcV2[], input: ElliottEngineInputV2): T
       input.zigzag,
     );
     wave4NestedCorrective = detectNestedCorrectiveInLeg(pivots, p3, p4, dir2, "wave4", menu, rows, input.zigzag);
-    wave5NestedImpulse = detectNestedImpulseInLeg(
-      pivots,
-      p4,
-      p5,
-      { ...nestedImpulseOpts, allowDiagonal: false },
-      rows,
-      input.zigzag,
-    );
+    // Same menu as wave-1 nested: w4–w1 overlap is invalid for standard but valid for diagonal (§2.5.3.4).
+    wave5NestedImpulse = detectNestedImpulseInLeg(pivots, p4, p5, nestedImpulseOpts, rows, input.zigzag);
   }
   const core = {
     timeframe: tf,

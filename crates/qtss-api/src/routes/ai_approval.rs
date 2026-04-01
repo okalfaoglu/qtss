@@ -4,8 +4,10 @@ use axum::extract::{Extension, Path, Query, State};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use uuid::Uuid;
 
+use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
 use qtss_storage::AiApprovalRequestRow;
 
 use crate::error::ApiError;
@@ -54,6 +56,36 @@ fn parse_org(claims: &AccessClaims) -> Result<Uuid, ApiError> {
         .map_err(|_| ApiError::bad_request("geçersiz token org_id"))
 }
 
+/// Best-effort Telegram for new queue rows (`a:{id}:a|r` callbacks — see `telegram_webhook`).
+async fn notify_approval_request_created_telegram(
+    pool: &sqlx::PgPool,
+    row: &AiApprovalRequestRow,
+) {
+    let ncfg = qtss_ai::load_notify_config_merged(pool).await;
+    let disp = NotificationDispatcher::new(ncfg);
+    if disp.config().telegram.is_none() {
+        return;
+    }
+    let payload_preview: String = serde_json::to_string(&row.payload)
+        .unwrap_or_else(|_| "{}".into())
+        .chars()
+        .take(400)
+        .collect();
+    let title = format!("Approval request pending ({})", row.kind);
+    let body = format!(
+        "id={}\norg_id={}\nrequester={}\nmodel_hint={:?}\n\n{}",
+        row.id, row.org_id, row.requester_user_id, row.model_hint, payload_preview
+    );
+    let markup = json!({"inline_keyboard":[[
+        {"text": "Approve", "callback_data": format!("a:{}:a", row.id)},
+        {"text": "Reject", "callback_data": format!("a:{}:r", row.id)},
+    ]]});
+    let n = Notification::new(title, body).with_telegram_reply_markup(markup);
+    if let Err(e) = disp.send(NotificationChannel::Telegram, &n).await {
+        tracing::warn!(error = %e, "approval request telegram notify failed");
+    }
+}
+
 async fn list_approval_requests(
     Extension(claims): Extension<AccessClaims>,
     State(st): State<SharedState>,
@@ -89,6 +121,7 @@ async fn create_approval_request(
         .ai_approval
         .insert(org_id, uid, kind, body.payload, model_hint)
         .await?;
+    notify_approval_request_created_telegram(&st.pool, &row).await;
     Ok(Json(row))
 }
 

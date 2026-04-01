@@ -23,30 +23,21 @@ pub struct OpenAiCompatibleProvider {
 }
 
 impl OpenAiCompatibleProvider {
-    pub fn from_env() -> AiResult<Self> {
-        let base_url = std::env::var("QTSS_AI_OPENAI_COMPAT_BASE_URL")
-            .or_else(|_| std::env::var("OPENAI_BASE_URL"))
-            .unwrap_or_else(|_| String::new());
+    pub fn from_settings(
+        base_url: String,
+        api_key: Option<String>,
+        extra_headers_json: Option<String>,
+        timeout_secs: u64,
+        max_in_flight: usize,
+    ) -> AiResult<Self> {
         if base_url.trim().is_empty() {
             return Err(AiError::ProviderNotConfigured(
                 "QTSS_AI_OPENAI_COMPAT_BASE_URL".into(),
             ));
         }
         let base_url = base_url.trim_end_matches('/').to_string();
-        let timeout_secs = std::env::var("QTSS_AI_ONPREM_TIMEOUT_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(180_u64);
-        let max_in_flight = std::env::var("QTSS_AI_ONPREM_MAX_IN_FLIGHT")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(4_usize);
-        let api_key = std::env::var("QTSS_AI_ONPREM_API_KEY")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .or_else(|| std::env::var("OPENAI_API_KEY").ok().filter(|s| !s.trim().is_empty()));
-        let extra_headers = parse_headers_json(std::env::var("QTSS_AI_OPENAI_COMPAT_HEADERS_JSON").ok());
-
+        let timeout_secs = timeout_secs.max(30);
+        let extra_headers = parse_headers_json(extra_headers_json);
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
             .user_agent(concat!("qtss-ai/", env!("CARGO_PKG_VERSION")))
@@ -60,6 +51,26 @@ impl OpenAiCompatibleProvider {
             max_in_flight: max_in_flight.max(1),
             provider_id: "openai_compatible",
         })
+    }
+
+    pub fn from_env() -> AiResult<Self> {
+        let base_url = std::env::var("QTSS_AI_OPENAI_COMPAT_BASE_URL")
+            .or_else(|_| std::env::var("OPENAI_BASE_URL"))
+            .unwrap_or_else(|_| String::new());
+        let timeout_secs = std::env::var("QTSS_AI_ONPREM_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(180_u64);
+        let max_in_flight = std::env::var("QTSS_AI_ONPREM_MAX_IN_FLIGHT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(4_usize);
+        let api_key = std::env::var("QTSS_AI_ONPREM_API_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| std::env::var("OPENAI_API_KEY").ok().filter(|s| !s.trim().is_empty()));
+        let headers = std::env::var("QTSS_AI_OPENAI_COMPAT_HEADERS_JSON").ok();
+        Self::from_settings(base_url, api_key, headers, timeout_secs, max_in_flight)
     }
 
     fn url_chat(&self) -> String {

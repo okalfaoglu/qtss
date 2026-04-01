@@ -24,6 +24,11 @@ pub struct TacticalDirectiveQuery {
     pub symbol: String,
 }
 
+#[derive(Deserialize)]
+pub struct LinkApprovalBody {
+    pub approval_request_id: Uuid,
+}
+
 fn map_ai(e: qtss_ai::AiError) -> ApiError {
     ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:?}"))
 }
@@ -40,6 +45,10 @@ pub fn ai_decisions_admin_router() -> Router<SharedState> {
     Router::new()
         .route("/ai/decisions/{id}/approve", post(approve_ai_decision))
         .route("/ai/decisions/{id}/reject", post(reject_ai_decision))
+        .route(
+            "/ai/decisions/{id}/link-approval-request",
+            post(link_decision_to_approval_request),
+        )
 }
 
 async fn list_ai_decisions(
@@ -123,4 +132,35 @@ async fn reject_ai_decision(
         return Err(ApiError::bad_request("no pending decision updated"));
     }
     Ok(Json(serde_json::json!({ "updated": n })))
+}
+
+async fn link_decision_to_approval_request(
+    Extension(claims): Extension<AccessClaims>,
+    State(st): State<SharedState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<LinkApprovalBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let org_id = Uuid::parse_str(claims.org_id.trim())
+        .map_err(|_| ApiError::bad_request("geçersiz token org_id"))?;
+    let row = st
+        .ai_approval
+        .fetch_by_id_for_org(body.approval_request_id, org_id)
+        .await?;
+    let Some(apr) = row else {
+        return Err(ApiError::not_found("approval request not found for org"));
+    };
+    if apr.status != "pending" {
+        return Err(ApiError::bad_request(
+            "approval request must be pending to link",
+        ));
+    }
+    let n = qtss_ai::storage::set_ai_decision_approval_link(&st.pool, id, body.approval_request_id)
+        .await
+        .map_err(map_ai)?;
+    if n == 0 {
+        return Err(ApiError::bad_request(
+            "AI decision not pending or id invalid",
+        ));
+    }
+    Ok(Json(serde_json::json!({ "linked": n })))
 }

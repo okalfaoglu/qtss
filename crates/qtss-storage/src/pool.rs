@@ -30,12 +30,11 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), StorageError> {
             if msg.contains("has been modified") {
                 return StorageError::Other(format!(
                     "{msg}\n\
-                     [QTSS] Migration dosyası uygulandıktan sonra değişmiş görünüyor. \
-                     Yalnızca yorum/satır sonu gibi içerik değiştiyse, repo kökünde DATABASE_URL ile: \
-                     `cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums` \
-                     — `_sqlx_migrations.checksum` diskteki dosyayla hizalanır. \
-                     Gerçek şema farkı varsa dosyayı eski haline getirin veya yeni numaralı migration ekleyin; \
-                     aynı sayısal önekli iki dosya kullanmayın (ör. çift `0013_*.sql`) — bkz. docs/QTSS_CURSOR_DEV_GUIDE.md §6."
+                     [QTSS] Checksum drift for an already-applied migration. Typical causes: (1) two files share the same numeric prefix (e.g. `ls migrations/0013*.sql` must list exactly one); (2) the `.sql` file was edited after it was applied.\n\
+                     Fix: remove duplicate `NNNN_*.sql` names, then from repo root with valid `DATABASE_URL`: \
+                     `cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums` — updates `_sqlx_migrations.checksum` for each version on disk. \
+                     Then rerun worker/API. Only use this when the SQL on disk matches what was actually executed; if the DB schema is wrong, restore the original migration file or repair the DB. \
+                     See docs/QTSS_CURSOR_DEV_GUIDE.md §6."
                 ));
             }
             if msg.contains("bar_intervals") && msg.contains("does not exist") {

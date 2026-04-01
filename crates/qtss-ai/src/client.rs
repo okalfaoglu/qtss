@@ -23,15 +23,40 @@ use qtss_storage::{
     ExchangeOrderRepository,
 };
 
+/// Scales `position_size_multiplier` by strategic `portfolio_directive.symbol_weight_0_1` when present (`QTSS_MASTER_DEV_GUIDE` FAZ 6.2).
+fn apply_strategic_portfolio_weight(ctx: &Value, parsed: &mut Value) {
+    let Some(w) = ctx
+        .get("portfolio_directive")
+        .filter(|p| !p.is_null())
+        .and_then(|p| p.get("symbol_weight_0_1"))
+        .and_then(|x| x.as_f64())
+    else {
+        return;
+    };
+    if !w.is_finite() || w <= 0.0 {
+        return;
+    }
+    let w = w.clamp(0.0, 1.0);
+    let base = parsed
+        .get("position_size_multiplier")
+        .and_then(|x| x.as_f64())
+        .unwrap_or(1.0);
+    let adj = (base * w).clamp(0.0, 2.0);
+    if let Some(obj) = parsed.as_object_mut() {
+        obj.insert("position_size_multiplier".into(), json!(adj));
+    }
+}
+
 fn connect_optional_provider(
     cfg: &AiEngineConfig,
     layer: LayerKind,
     layer_on: bool,
+    secrets: &crate::provider_secrets::AiProviderSecrets,
 ) -> Option<Arc<dyn AiCompletionProvider>> {
     if !cfg.enabled || !layer_on {
         return None;
     }
-    match providers::provider_for_layer(cfg, layer) {
+    match providers::provider_for_layer(cfg, layer, secrets) {
         Ok(p) => Some(p),
         Err(e) => {
             tracing::warn!(
@@ -56,18 +81,33 @@ pub struct AiRuntime {
 
 impl AiRuntime {
     pub async fn from_pool(pool: PgPool) -> AiResult<Self> {
+        let secrets = crate::provider_secrets::AiProviderSecrets::load(&pool).await;
         let repo = AppConfigRepository::new(pool.clone());
         let mut config = match repo.get_by_key("ai_engine_config").await? {
             Some(row) => serde_json::from_value(row.value).unwrap_or_else(|_| AiEngineConfig::default_disabled()),
             None => AiEngineConfig::default_disabled(),
         };
         config.merge_env_overrides();
-        let tactical_provider = connect_optional_provider(&config, LayerKind::Tactical, config.tactical_layer_enabled);
-        let operational_provider =
-            connect_optional_provider(&config, LayerKind::Operational, config.operational_layer_enabled);
-        let strategic_provider =
-            connect_optional_provider(&config, LayerKind::Strategic, config.strategic_layer_enabled);
-        let notify = NotificationDispatcher::from_env();
+        let tactical_provider = connect_optional_provider(
+            &config,
+            LayerKind::Tactical,
+            config.tactical_layer_enabled,
+            &secrets,
+        );
+        let operational_provider = connect_optional_provider(
+            &config,
+            LayerKind::Operational,
+            config.operational_layer_enabled,
+            &secrets,
+        );
+        let strategic_provider = connect_optional_provider(
+            &config,
+            LayerKind::Strategic,
+            config.strategic_layer_enabled,
+            &secrets,
+        );
+        let ncfg = crate::notify_telegram_config::load_notify_config_merged(&pool).await;
+        let notify = NotificationDispatcher::new(ncfg);
         let notify = if notify.config().telegram.is_some() || notify.config().webhook.is_some() {
             Some(notify)
         } else {
@@ -139,6 +179,7 @@ Locale: {locale}. {reasoning_lang}
 Required keys: "direction" (strong_buy|buy|neutral|sell|strong_sell|no_trade), "confidence" (0.0-1.0).
 Directional trades (not neutral/no_trade) MUST include positive "stop_loss_pct" (percent, > 0).
 Optional: "position_size_multiplier" (0.0-2.0), "take_profit_pct", "entry_price_hint", "reasoning".
+Context may include `portfolio_directive` from the strategic layer: honor `symbol_weight_0_1`, `preferred_regime`, and `risk_budget_pct` when deciding direction and size.
 {criteria}
 Temperature: conservative; output JSON only."#
     )
@@ -211,7 +252,7 @@ pub async fn run_tactical_sweep(rt: &AiRuntime) -> AiResult<()> {
                 continue;
             }
         };
-        let parsed = match parse_tactical_decision(&resp.text) {
+        let mut parsed = match parse_tactical_decision(&resp.text) {
             Ok(p) => p,
             Err(err) => {
                 let _ = insert_ai_decision_error(
@@ -229,6 +270,7 @@ pub async fn run_tactical_sweep(rt: &AiRuntime) -> AiResult<()> {
                 continue;
             }
         };
+        apply_strategic_portfolio_weight(&ctx, &mut parsed);
         let direction = parsed
             .get("direction")
             .and_then(|x| x.as_str())
@@ -279,6 +321,7 @@ pub async fn run_tactical_sweep(rt: &AiRuntime) -> AiResult<()> {
             Some(&parsed),
             Some(confidence),
             rt.config().decision_ttl_secs,
+            None,
             &meta,
         )
         .await?;
@@ -359,6 +402,7 @@ pub async fn run_operational_sweep(rt: &AiRuntime) -> AiResult<()> {
             Some(&parsed),
             Some(confidence),
             rt.config().decision_ttl_secs.min(3600),
+            None,
             &meta,
         )
         .await?;
@@ -422,6 +466,7 @@ pub async fn run_strategic_sweep(rt: &AiRuntime) -> AiResult<()> {
         Some(&parsed),
         Some(confidence),
         86400 * 7,
+        None,
         &meta,
     )
     .await?;
@@ -438,4 +483,40 @@ pub async fn run_strategic_sweep(rt: &AiRuntime) -> AiResult<()> {
     )
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod strategic_portfolio_weight_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn apply_strategic_portfolio_weight_scales_multiplier() {
+        let mut parsed = json!({
+            "direction": "buy",
+            "confidence": 0.9,
+            "stop_loss_pct": 2.0,
+            "position_size_multiplier": 1.0
+        });
+        let ctx = json!({ "portfolio_directive": { "symbol_weight_0_1": 0.5 } });
+        apply_strategic_portfolio_weight(&ctx, &mut parsed);
+        assert!(
+            (parsed["position_size_multiplier"].as_f64().unwrap() - 0.5).abs() < f64::EPSILON
+        );
+    }
+
+    #[test]
+    fn apply_strategic_portfolio_weight_no_field_unchanged() {
+        let mut parsed = json!({
+            "direction": "buy",
+            "confidence": 0.9,
+            "stop_loss_pct": 2.0,
+            "position_size_multiplier": 1.2
+        });
+        let ctx = json!({ "portfolio_directive": serde_json::Value::Null });
+        apply_strategic_portfolio_weight(&ctx, &mut parsed);
+        assert!(
+            (parsed["position_size_multiplier"].as_f64().unwrap() - 1.2).abs() < f64::EPSILON
+        );
+    }
 }

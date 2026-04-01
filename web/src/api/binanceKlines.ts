@@ -1,6 +1,11 @@
 import type { ChartOhlcRow } from "../lib/marketBarsToCandles";
 import { chartOhlcRowsSortedChrono } from "../lib/chartRowsToOhlcBars";
 import { fetchMarketBinanceKlinesForChart } from "./client";
+import { describeBinanceKlinesHttpFailure } from "./binanceKlinesErrorFormat";
+import {
+  normalizeSymbolForBinanceKlinesApi,
+  symbolLooksCompleteForBinanceKlines,
+} from "./binanceKlinesSymbol";
 
 const BINANCE_INTERVALS = new Set([
   "1m",
@@ -23,6 +28,9 @@ const BINANCE_INTERVALS = new Set([
 /** Binance / fapi tek istekte en fazla 1000 mum. */
 const BINANCE_KLINE_MAX_PER_REQUEST = 1000;
 
+/** Tarayıcıdan doğrudan (Vite proxy yok); `vite build` / `preview` / statik sunucu için. */
+const BINANCE_SPOT_PUBLIC_DEFAULT = "https://api.binance.com";
+
 function maxPagesEnv(): number {
   const raw = import.meta.env.VITE_BINANCE_KLINE_MAX_PAGES;
   const n = parseInt(String(raw ?? "50"), 10);
@@ -34,17 +42,10 @@ function isBinanceFuturesSegment(segment: string | undefined): boolean {
   return s === "futures" || s === "usdt_futures" || s === "fapi";
 }
 
-function formatBinanceKlinesError(status: number, body: string): string {
-  const slice = body.slice(0, 280);
-  try {
-    const j = JSON.parse(body) as { code?: number; msg?: string };
-    if (j.code === -1121) {
-      return `Binance klines ${status}: Geçersiz sembol (-1121). Çift spot’ta yoksa segment’i USDT vadeli (futures/usdt_futures) yapın; yine olmazsa sembolü Binance’te doğrulayın. Ham: ${slice}`;
-    }
-  } catch {
-    /* ignore */
-  }
-  return `Binance klines ${status}: ${slice}`;
+/** Spot’ta olmayan USDT-M sembolleri (-1121); bir kez FAPI ile yeniden dene. */
+function isBinanceInvalidSymbolKlines(bodyOrMessage: string): boolean {
+  const s = bodyOrMessage;
+  return s.includes("-1121") || /"code"\s*:\s*-1121/.test(s);
 }
 
 function klinesUrl(
@@ -56,9 +57,11 @@ function klinesUrl(
   endTimeMs?: number,
 ): string {
   const futures = isBinanceFuturesSegment(segment);
-  const spotBase = (import.meta.env.VITE_BINANCE_API_BASE as string | undefined)?.replace(/\/$/, "") ?? "";
+  const spotBaseEnv = (import.meta.env.VITE_BINANCE_API_BASE as string | undefined)?.replace(/\/$/, "") ?? "";
   const fapiBase =
     (import.meta.env.VITE_BINANCE_FAPI_API_BASE as string | undefined)?.replace(/\/$/, "") ?? "https://fapi.binance.com";
+  /** Yalnızca `npm run dev`: `/__binance` köprüleri. Build/preview’da yok — doğrudan HTTPS. */
+  const useViteBinanceProxy = import.meta.env.DEV && !spotBaseEnv;
   const q = new URLSearchParams({
     symbol: symbol.toUpperCase(),
     interval,
@@ -72,17 +75,34 @@ function klinesUrl(
   }
   if (futures) {
     const path = `/fapi/v1/klines?${q}`;
-    if (spotBase) return `${fapiBase}${path}`;
-    return `/__binance_fapi${path}`;
+    if (spotBaseEnv) return `${fapiBase}${path}`;
+    if (useViteBinanceProxy) return `/__binance_fapi${path}`;
+    return `${fapiBase}${path}`;
   }
   const path = `/api/v3/klines?${q}`;
-  if (spotBase) return `${spotBase}${path}`;
-  return `/__binance${path}`;
+  if (spotBaseEnv) return `${spotBaseEnv}${path}`;
+  if (useViteBinanceProxy) return `/__binance${path}`;
+  return `${BINANCE_SPOT_PUBLIC_DEFAULT}${path}`;
 }
 
 function binanceKlinesViaQtssApi(): boolean {
   const v = import.meta.env.VITE_BINANCE_KLINES_VIA_API;
   return v === "1" || v === "true" || String(v).toLowerCase() === "yes";
+}
+
+/** UI: giriş + env ile mumlar QTSS API → sunucu `fapi`/`spot` çağırır (tarayıcıda fapi host görünmeyebilir). */
+export function binanceKlinesUsesQtssApi(accessToken: string | null | undefined): boolean {
+  return Boolean(accessToken?.trim()) && binanceKlinesViaQtssApi();
+}
+
+export function binanceKlinesDebugLoggingEnabled(): boolean {
+  const v = import.meta.env.VITE_BINANCE_KLINES_DEBUG;
+  return v === "1" || v === "true" || String(v).toLowerCase() === "yes";
+}
+
+function debugKlines(message: string, details: Record<string, string>): void {
+  if (!binanceKlinesDebugLoggingEnabled()) return;
+  console.debug(`[qtss-klines] ${message}`, details);
 }
 
 function rowsFromBinanceJson(raw: unknown): ChartOhlcRow[] {
@@ -116,25 +136,78 @@ async function fetchBinanceKlinesOneRequest(params: {
   const iv = params.interval.trim();
   const lim = Math.min(BINANCE_KLINE_MAX_PER_REQUEST, Math.max(1, params.limit));
   const tok = params.accessToken?.trim();
-  if (binanceKlinesViaQtssApi() && tok) {
-    return fetchMarketBinanceKlinesForChart(tok, {
+  const seg0 = params.segment?.trim() || "spot";
+
+  const runViaApi = async (segment: string) =>
+    fetchMarketBinanceKlinesForChart(tok!, {
       symbol: sym,
       interval: iv,
       limit: lim,
-      segment: params.segment?.trim() || "spot",
+      segment,
       startTimeMs: params.startTimeMs,
       endTimeMs: params.endTimeMs,
     });
+
+  if (binanceKlinesViaQtssApi() && tok) {
+    debugKlines("QTSS API route (upstream spot/fapi on server)", {
+      segment: seg0,
+      symbol: sym,
+      interval: iv,
+      limit: String(lim),
+    });
+    try {
+      return await runViaApi(seg0);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!isBinanceFuturesSegment(seg0) && isBinanceInvalidSymbolKlines(msg)) {
+        return runViaApi("futures");
+      }
+      throw e;
+    }
   }
 
-  const url = klinesUrl(sym, iv, lim, params.segment, params.startTimeMs, params.endTimeMs);
-  const r = await fetch(url);
-  if (!r.ok) {
+  const segmentErrLabel = isBinanceFuturesSegment(seg0) ? "USDT-M" : "spot";
+
+  const fetchDirectOnce = async (segment: string | undefined) => {
+    const url = klinesUrl(sym, iv, lim, segment, params.startTimeMs, params.endTimeMs);
+    debugKlines("browser direct URL", {
+      segment: segment?.trim() || "spot",
+      url,
+      symbol: sym,
+      interval: iv,
+    });
+    const r = await fetch(url);
     const t = await r.text();
-    throw new Error(formatBinanceKlinesError(r.status, t));
+    if (!r.ok) {
+      return { ok: false as const, status: r.status, body: t, requestUrl: url };
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(t) as unknown;
+    } catch {
+      throw new Error("Binance klines: geçersiz JSON yanıtı");
+    }
+    return { ok: true as const, rows: rowsFromBinanceJson(raw) };
+  };
+
+  const first = await fetchDirectOnce(seg0);
+  if (first.ok) return first.rows;
+  if (!isBinanceFuturesSegment(seg0) && isBinanceInvalidSymbolKlines(first.body)) {
+    const second = await fetchDirectOnce("futures");
+    if (second.ok) return second.rows;
+    throw new Error(
+      describeBinanceKlinesHttpFailure(second.status, second.body, {
+        requestUrl: second.requestUrl,
+        segment: "USDT-M",
+      }),
+    );
   }
-  const raw = (await r.json()) as unknown;
-  return rowsFromBinanceJson(raw);
+  throw new Error(
+    describeBinanceKlinesHttpFailure(first.status, first.body, {
+      requestUrl: first.requestUrl,
+      segment: segmentErrLabel,
+    }),
+  );
 }
 
 /** `[rangeStartMs, rangeEndMs]` aralığındaki tüm mumlar (sayfalı, kronolojik). */
@@ -231,9 +304,14 @@ export async function fetchBinanceKlinesAsChartRows(params: {
   startTimeMs?: number;
   endTimeMs?: number;
 }): Promise<ChartOhlcRow[]> {
-  const sym = params.symbol.trim().toUpperCase();
-  const iv = params.interval.trim();
+  const rawSym = params.symbol.trim();
+  if (!rawSym) throw new Error("symbol boş");
+  const sym = normalizeSymbolForBinanceKlinesApi(rawSym);
   if (!sym) throw new Error("symbol boş");
+  if (!symbolLooksCompleteForBinanceKlines(sym, params.segment)) {
+    return [];
+  }
+  const iv = params.interval.trim();
   if (!BINANCE_INTERVALS.has(iv)) throw new Error(`desteklenmeyen interval: ${iv}`);
 
   const hasStart = params.startTimeMs != null && Number.isFinite(params.startTimeMs);

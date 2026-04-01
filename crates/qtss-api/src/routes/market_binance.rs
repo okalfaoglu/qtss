@@ -8,6 +8,7 @@ use axum::{Json, Router};
 use chrono::{TimeZone, Utc};
 use serde::Deserialize;
 use serde_json::json;
+use tracing::debug;
 use uuid::Uuid;
 
 use qtss_binance::{
@@ -15,7 +16,7 @@ use qtss_binance::{
     default_usdt_futures_commission_bps, futures_commission_hint_from_exchange_info,
     parse_klines_json, public_spot_kline_url, public_usdm_kline_url,
     spot_commission_hint_from_exchange_info, trade_fee_from_sapi_response, BinanceClient,
-    BinanceClientConfig, CommissionBps, KlineBar,
+    BinanceClientConfig, BinanceError, CommissionBps, KlineBar,
 };
 use qtss_storage::{list_recent_bars, upsert_market_bar, MarketBarUpsert};
 use rust_decimal::Decimal;
@@ -113,16 +114,37 @@ async fn binance_klines(
 ) -> Result<Json<Vec<KlineBar>>, ApiError> {
     let cfg = BinanceClientConfig::public_mainnet();
     let client = BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?;
-    let seg = q.segment.as_deref().unwrap_or("spot");
-    let raw = match seg {
+    let seg = q.segment.as_deref().unwrap_or("spot").trim().to_lowercase();
+    let upstream = match seg.as_str() {
+        "futures" | "usdt_futures" | "fapi" => "fapi",
+        _ => "spot_then_maybe_fapi",
+    };
+    debug!(
+        target: "qtss_api::market_binance",
+        symbol = %q.symbol,
+        interval = %q.interval,
+        segment = %seg,
+        upstream,
+        "binance klines"
+    );
+    let raw = match seg.as_str() {
         "futures" | "usdt_futures" | "fapi" => client
             .fapi_klines(&q.symbol, &q.interval, q.start_time, q.end_time, q.limit)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?,
-        _ => client
-            .spot_klines(&q.symbol, &q.interval, q.start_time, q.end_time, q.limit)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?,
+        _ => {
+            let spot_res = client
+                .spot_klines(&q.symbol, &q.interval, q.start_time, q.end_time, q.limit)
+                .await;
+            match spot_res {
+                Ok(v) => v,
+                Err(BinanceError::Api { code: -1121, .. }) => client
+                    .fapi_klines(&q.symbol, &q.interval, q.start_time, q.end_time, q.limit)
+                    .await
+                    .map_err(|e| ApiError::internal(e.to_string()))?,
+                Err(e) => return Err(ApiError::internal(e.to_string())),
+            }
+        }
     };
     let bars = parse_klines_json(&raw).map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(bars))

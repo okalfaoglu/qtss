@@ -20,36 +20,52 @@ pub struct BinanceOpenOrdersPatchConfig {
 }
 
 impl BinanceOpenOrdersPatchConfig {
-    pub fn worker_spot(patch_reconciled: bool) -> Self {
+    #[must_use]
+    pub fn spot_worker(refine_via_order_query: bool, refine_max_orders: usize, patch_reconciled: bool) -> Self {
         Self {
-            refine_via_order_query: std::env::var(
-                "QTSS_RECONCILE_BINANCE_SPOT_REFINE_ORDER_STATUS",
-            )
-            .ok()
-            .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on")),
-            refine_max_orders: std::env::var("QTSS_RECONCILE_BINANCE_SPOT_REFINE_MAX")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(30)
-                .clamp(1, 200),
+            refine_via_order_query,
+            refine_max_orders: refine_max_orders.clamp(1, 200),
             patch_submitted_to_reconciled_not_open: patch_reconciled,
         }
     }
 
-    pub fn worker_futures(patch_reconciled: bool) -> Self {
+    #[must_use]
+    pub fn futures_worker(
+        refine_via_order_query: bool,
+        refine_max_orders: usize,
+        patch_reconciled: bool,
+    ) -> Self {
         Self {
-            refine_via_order_query: std::env::var(
-                "QTSS_RECONCILE_BINANCE_FUTURES_REFINE_ORDER_STATUS",
-            )
-            .ok()
-            .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on")),
-            refine_max_orders: std::env::var("QTSS_RECONCILE_BINANCE_FUTURES_REFINE_MAX")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(30)
-                .clamp(1, 200),
+            refine_via_order_query,
+            refine_max_orders: refine_max_orders.clamp(1, 200),
             patch_submitted_to_reconciled_not_open: patch_reconciled,
         }
+    }
+
+    pub fn worker_spot(patch_reconciled: bool) -> Self {
+        Self::spot_worker(
+            std::env::var("QTSS_RECONCILE_BINANCE_SPOT_REFINE_ORDER_STATUS")
+                .ok()
+                .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on")),
+            std::env::var("QTSS_RECONCILE_BINANCE_SPOT_REFINE_MAX")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(30),
+            patch_reconciled,
+        )
+    }
+
+    pub fn worker_futures(patch_reconciled: bool) -> Self {
+        Self::futures_worker(
+            std::env::var("QTSS_RECONCILE_BINANCE_FUTURES_REFINE_ORDER_STATUS")
+                .ok()
+                .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on")),
+            std::env::var("QTSS_RECONCILE_BINANCE_FUTURES_REFINE_MAX")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(30),
+            patch_reconciled,
+        )
     }
 
     /// HTTP reconcile uçları: varsayılan olarak `reconciled_not_open` yazar; order query isteğe bağlı (spot/futures env).
@@ -102,7 +118,12 @@ pub async fn apply_binance_spot_open_orders_patch(
                     if let Some(st) = exchange_order_status_from_binance_json(&json) {
                         let n = orders
                             .update_submitted_status_and_venue_response(
-                                user_id, "binance", "spot", vid, &st, &json,
+                                user_id,
+                                "binance",
+                                "spot",
+                                vid,
+                                &st,
+                                &json,
                             )
                             .await?;
                         if n > 0 {
@@ -125,15 +146,14 @@ pub async fn apply_binance_spot_open_orders_patch(
     }
 
     if cfg.patch_submitted_to_reconciled_not_open {
-        let remaining: Vec<i64> = ids
-            .iter()
-            .copied()
-            .filter(|i| !resolved.contains(i))
-            .collect();
+        let remaining: Vec<i64> = ids.iter().copied().filter(|i| !resolved.contains(i)).collect();
         if !remaining.is_empty() {
             let n = orders
                 .mark_submitted_reconciled_not_open_by_venue_ids(
-                    user_id, "binance", "spot", &remaining,
+                    user_id,
+                    "binance",
+                    "spot",
+                    &remaining,
                 )
                 .await?;
             updated += n;
@@ -175,7 +195,12 @@ pub async fn apply_binance_futures_open_orders_patch(
                     if let Some(st) = exchange_order_status_from_binance_json(&json) {
                         let n = orders
                             .update_submitted_status_and_venue_response(
-                                user_id, "binance", "futures", vid, &st, &json,
+                                user_id,
+                                "binance",
+                                "futures",
+                                vid,
+                                &st,
+                                &json,
                             )
                             .await?;
                         if n > 0 {
@@ -198,15 +223,14 @@ pub async fn apply_binance_futures_open_orders_patch(
     }
 
     if cfg.patch_submitted_to_reconciled_not_open {
-        let remaining: Vec<i64> = ids
-            .iter()
-            .copied()
-            .filter(|i| !resolved.contains(i))
-            .collect();
+        let remaining: Vec<i64> = ids.iter().copied().filter(|i| !resolved.contains(i)).collect();
         if !remaining.is_empty() {
             let n = orders
                 .mark_submitted_reconciled_not_open_by_venue_ids(
-                    user_id, "binance", "futures", &remaining,
+                    user_id,
+                    "binance",
+                    "futures",
+                    &remaining,
                 )
                 .await?;
             updated += n;

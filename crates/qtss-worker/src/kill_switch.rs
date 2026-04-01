@@ -22,13 +22,6 @@ use tracing::{info, warn};
 
 pub const KILL_SWITCH_APP_CONFIG_KEY: &str = "kill_switch_trading_halted";
 
-fn enabled() -> bool {
-    // Legacy env-only gate (bootstrapping / emergency).
-    std::env::var("QTSS_KILL_SWITCH_ENABLED")
-        .ok()
-        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
-}
-
 fn decimal_from_json_value(v: &serde_json::Value) -> Option<Decimal> {
     v.get("value")
         .and_then(|x| x.as_str())
@@ -167,8 +160,8 @@ pub async fn kill_switch_loop(pool: PgPool) {
         false,
     )
     .await;
-    if !enabled() && !enabled_db {
-        info!("QTSS_KILL_SWITCH_ENABLED kapalı — kill_switch_loop çıkıyor");
+    if !enabled_db {
+        info!("worker.kill_switch_enabled kapalı — kill_switch_loop çıkıyor");
         return;
     }
     let pool_tick = pool.clone();

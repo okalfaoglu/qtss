@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 #[tokio::test]
 async fn maybe_auto_approve_marks_rows_approved_when_eligible() {
+    qtss_common::load_dotenv();
     let url = match std::env::var("DATABASE_URL") {
         Ok(u) if !u.trim().is_empty() => u,
         _ => {
@@ -38,6 +39,7 @@ async fn maybe_auto_approve_marks_rows_approved_when_eligible() {
         None,
         Some(0.92),
         3600,
+        None,
         &json!({}),
     )
     .await
@@ -91,6 +93,7 @@ async fn maybe_auto_approve_marks_rows_approved_when_eligible() {
 
 #[tokio::test]
 async fn maybe_auto_approve_leaves_pending_when_below_threshold() {
+    qtss_common::load_dotenv();
     let url = match std::env::var("DATABASE_URL") {
         Ok(u) if !u.trim().is_empty() => u,
         _ => {
@@ -117,6 +120,7 @@ async fn maybe_auto_approve_leaves_pending_when_below_threshold() {
         None,
         Some(0.50),
         3600,
+        None,
         &json!({}),
     )
     .await

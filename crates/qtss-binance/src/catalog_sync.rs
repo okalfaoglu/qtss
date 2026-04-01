@@ -1,5 +1,8 @@
 //! `exchangeInfo` → `exchanges` / `markets` / `instruments` senkronu (halka açık uçlar, API key gerekmez).
+//! Tüm uygun semboller yazılır; `TRADING` olmayanlar `is_trading=false` + Binance `status` ile işaretlenir.
+//! Senkron sonunda yanıtta artık görünmeyen satırlar (delist / kaldırılmış) `is_trading=false` yapılır.
 
+use chrono::Utc;
 use serde_json::{json, Value};
 
 use crate::error::BinanceError;
@@ -8,19 +11,31 @@ use qtss_storage::{CatalogRepository, StorageError};
 
 #[derive(Debug, Default, serde::Serialize)]
 pub struct CatalogSyncStats {
-    pub spot_instruments: usize,
-    pub usdt_futures_instruments: usize,
+    pub spot_instruments_upserted: usize,
+    pub usdt_futures_instruments_upserted: usize,
+    pub spot_deactivated_stale: u64,
+    pub futures_deactivated_stale: u64,
 }
 
 fn storage_err(e: StorageError) -> BinanceError {
     BinanceError::Other(e.to_string())
 }
 
-/// Spot `TRADING` + `permissions` içinde `SPOT` olan semboller.
+fn spot_symbol_has_spot_permission(s: &Value) -> bool {
+    let Some(perms) = s["permissions"].as_array() else {
+        return true;
+    };
+    perms
+        .iter()
+        .filter_map(|x| x.as_str())
+        .any(|p| p.eq_ignore_ascii_case("SPOT"))
+}
+
+/// Spot: `permissions` içinde `SPOT` olan tüm semboller (durum `TRADING` / `BREAK` / …).
 pub async fn sync_spot_instruments(
     client: &BinanceClient,
     catalog: &CatalogRepository,
-) -> Result<usize, BinanceError> {
+) -> Result<(usize, u64), BinanceError> {
     catalog
         .upsert_exchange("binance", "Binance", true, json!({}))
         .await
@@ -31,6 +46,7 @@ pub async fn sync_spot_instruments(
         .await
         .map_err(storage_err)?;
 
+    let sync_started = Utc::now();
     let info = client.spot_exchange_info(None).await?;
     let symbols = info["symbols"]
         .as_array()
@@ -38,23 +54,16 @@ pub async fn sync_spot_instruments(
 
     let mut n = 0usize;
     for s in symbols {
-        if s["status"].as_str() != Some("TRADING") {
+        if !spot_symbol_has_spot_permission(s) {
             continue;
-        }
-        if let Some(perms) = s["permissions"].as_array() {
-            let has_spot = perms
-                .iter()
-                .filter_map(|x| x.as_str())
-                .any(|p| p.eq_ignore_ascii_case("SPOT"));
-            if !has_spot {
-                continue;
-            }
         }
 
         let native = s["symbol"].as_str().unwrap_or("");
         if native.is_empty() {
             continue;
         }
+        let status = s["status"].as_str().unwrap_or("UNKNOWN");
+        let is_trading = status.eq_ignore_ascii_case("TRADING");
         let base = s["baseAsset"].as_str().unwrap_or("");
         let quote = s["quoteAsset"].as_str().unwrap_or("");
         let (price_f, lot_f) = extract_filters(s);
@@ -62,20 +71,34 @@ pub async fn sync_spot_instruments(
 
         catalog
             .upsert_instrument(
-                market.id, native, base, quote, "TRADING", true, price_f, lot_f, meta,
+                market.id,
+                native,
+                base,
+                quote,
+                status,
+                is_trading,
+                price_f,
+                lot_f,
+                meta,
             )
             .await
             .map_err(storage_err)?;
         n += 1;
     }
-    Ok(n)
+
+    let stale = catalog
+        .deactivate_instruments_not_updated_since(market.id, sync_started)
+        .await
+        .map_err(storage_err)?;
+
+    Ok((n, stale))
 }
 
-/// USDT-M sürekli vadeli sözleşmeler (`quoteAsset == USDT`, `contractType == PERPETUAL`).
+/// USDT-M sürekli vadeli sözleşmeler (`quoteAsset == USDT`, `contractType == PERPETUAL`) — tüm durumlar.
 pub async fn sync_usdt_futures_instruments(
     client: &BinanceClient,
     catalog: &CatalogRepository,
-) -> Result<usize, BinanceError> {
+) -> Result<(usize, u64), BinanceError> {
     catalog
         .upsert_exchange("binance", "Binance", true, json!({}))
         .await
@@ -93,6 +116,7 @@ pub async fn sync_usdt_futures_instruments(
         .await
         .map_err(storage_err)?;
 
+    let sync_started = Utc::now();
     let info = client.fapi_exchange_info(None).await?;
     let symbols = info["symbols"]
         .as_array()
@@ -106,14 +130,13 @@ pub async fn sync_usdt_futures_instruments(
         if s["quoteAsset"].as_str() != Some("USDT") {
             continue;
         }
-        if s["status"].as_str() != Some("TRADING") {
-            continue;
-        }
 
         let native = s["symbol"].as_str().unwrap_or("");
         if native.is_empty() {
             continue;
         }
+        let status = s["status"].as_str().unwrap_or("UNKNOWN");
+        let is_trading = status.eq_ignore_ascii_case("TRADING");
         let base = s["baseAsset"].as_str().unwrap_or("");
         let quote = s["quoteAsset"].as_str().unwrap_or("");
         let (price_f, lot_f) = extract_filters(s);
@@ -121,24 +144,40 @@ pub async fn sync_usdt_futures_instruments(
 
         catalog
             .upsert_instrument(
-                market.id, native, base, quote, "TRADING", true, price_f, lot_f, meta,
+                market.id,
+                native,
+                base,
+                quote,
+                status,
+                is_trading,
+                price_f,
+                lot_f,
+                meta,
             )
             .await
             .map_err(storage_err)?;
         n += 1;
     }
-    Ok(n)
+
+    let stale = catalog
+        .deactivate_instruments_not_updated_since(market.id, sync_started)
+        .await
+        .map_err(storage_err)?;
+
+    Ok((n, stale))
 }
 
 pub async fn sync_full_binance_catalog(
     client: &BinanceClient,
     catalog: &CatalogRepository,
 ) -> Result<CatalogSyncStats, BinanceError> {
-    let spot = sync_spot_instruments(client, catalog).await?;
-    let fut = sync_usdt_futures_instruments(client, catalog).await?;
+    let (spot_n, spot_stale) = sync_spot_instruments(client, catalog).await?;
+    let (fut_n, fut_stale) = sync_usdt_futures_instruments(client, catalog).await?;
     Ok(CatalogSyncStats {
-        spot_instruments: spot,
-        usdt_futures_instruments: fut,
+        spot_instruments_upserted: spot_n,
+        usdt_futures_instruments_upserted: fut_n,
+        spot_deactivated_stale: spot_stale,
+        futures_deactivated_stale: fut_stale,
     })
 }
 

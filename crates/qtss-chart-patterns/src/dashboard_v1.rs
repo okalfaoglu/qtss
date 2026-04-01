@@ -285,18 +285,9 @@ pub fn compute_signal_dashboard_v1_with_policy(
     let mut kar_al_dinamik = mid.or(kar_al_ilk);
     let mut stop_trail_aktif = stop_ilk;
 
-    let durum_model_raw = if tr.long_sweep_signal {
-        "LONG"
-    } else if tr.short_sweep_signal {
-        "SHORT"
-    } else if yerel_trend == "YUKARI" {
-        "LONG"
-    } else if yerel_trend == "ASAGI" {
-        "SHORT"
-    } else {
-        "NOTR"
-    }
-    .to_string();
+    // Skor tabanlı setup motoru: TradingRangeResult içindeki karar (hard+soft+eşik).
+    // Trend fallback kaldırıldı: setup yoksa NOTR.
+    let durum_model_raw = tr.setup_side.clone();
 
     let durum = match direction_policy {
         SignalDirectionPolicy::Both => durum_model_raw.clone(),
@@ -352,6 +343,14 @@ pub fn compute_signal_dashboard_v1_with_policy(
     }
     let pozisyon_gucu_10 = (score.clamp(0, 10)) as u8;
 
+    let sinyal_kaynagi = format!(
+        "RANGE_SETUP(score_best={}, long={}, short={}, zone={})",
+        tr.setup_score_best,
+        tr.setup_score_long,
+        tr.setup_score_short,
+        tr.range_zone
+    );
+
     SignalDashboardV1 {
         schema_version: 2,
         durum,
@@ -368,7 +367,7 @@ pub fn compute_signal_dashboard_v1_with_policy(
         kar_al_ilk,
         stop_trail_aktif,
         kar_al_dinamik,
-        sinyal_kaynagi: "AUTO(RANGE+TREND)".to_string(),
+        sinyal_kaynagi,
         trend_tukenmesi,
         yapi_kaymasi,
         pozisyon_gucu_10,
@@ -401,6 +400,7 @@ mod tests {
             atr_period: 14,
             atr_sma_period: 20,
             require_range_regime: false,
+            ..TradingRangeParams::default()
         };
         let tr = analyze_trading_range(&v, &p);
         let d = compute_signal_dashboard_v1(&v, &tr);
@@ -421,6 +421,7 @@ mod tests {
             atr_period: 14,
             atr_sma_period: 20,
             require_range_regime: false,
+            ..TradingRangeParams::default()
         };
         let tr = analyze_trading_range(&v, &p);
         let both = compute_signal_dashboard_v1_with_policy(&v, &tr, SignalDirectionPolicy::Both);

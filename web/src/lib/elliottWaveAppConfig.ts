@@ -26,20 +26,31 @@ export function mergePatternMenuOrTf(m: ElliottPatternMenuByTf): ElliottPatternM
   return {
     motive_impulse:
       m["4h"].motive_impulse || m["1h"].motive_impulse || m["15m"].motive_impulse,
-    motive_diagonal:
-      m["4h"].motive_diagonal || m["1h"].motive_diagonal || m["15m"].motive_diagonal,
+    motive_diagonal_leading:
+      m["4h"].motive_diagonal_leading ||
+      m["1h"].motive_diagonal_leading ||
+      m["15m"].motive_diagonal_leading,
+    motive_diagonal_ending:
+      m["4h"].motive_diagonal_ending ||
+      m["1h"].motive_diagonal_ending ||
+      m["15m"].motive_diagonal_ending,
     corrective_zigzag:
       m["4h"].corrective_zigzag || m["1h"].corrective_zigzag || m["15m"].corrective_zigzag,
     corrective_flat:
       m["4h"].corrective_flat || m["1h"].corrective_flat || m["15m"].corrective_flat,
     corrective_triangle:
       m["4h"].corrective_triangle || m["1h"].corrective_triangle || m["15m"].corrective_triangle,
-    corrective_complex_wxy:
-      m["4h"].corrective_complex_wxy ||
-      m["1h"].corrective_complex_wxy ||
-      m["15m"].corrective_complex_wxy,
+    corrective_complex_double:
+      m["4h"].corrective_complex_double ||
+      m["1h"].corrective_complex_double ||
+      m["15m"].corrective_complex_double,
+    corrective_complex_triple:
+      m["4h"].corrective_complex_triple ||
+      m["1h"].corrective_complex_triple ||
+      m["15m"].corrective_complex_triple,
   };
 }
+
 
 export function patternMenuForTf(c: ElliottWaveConfig, tf: keyof ElliottPatternMenuByTf): ElliottPatternMenuToggles {
   return { ...DEFAULT_ELLIOTT_PATTERN_MENU, ...c.pattern_menu_by_tf[tf] };
@@ -111,10 +122,9 @@ export type ElliottWaveConfig = {
   enabled: boolean;
   formations: ElliottWaveFormations;
   /**
-   * Pine “Elliott Wave Predictor” tarzı ileri Fib projeksiyon çizgisi (şema; tavsiye değil).
+   * İleri formasyon projeksiyonu (ABC / sonraki itki segmentleri; tavsiye değil).
    * Ana itki açıkken ve analiz varsa son mumdan itibaren çizilir.
    */
-  /** İleri Fib şeması — TF başına (ilgili itkiden projekte eder). */
   show_projection_4h: boolean;
   show_projection_1h: boolean;
   show_projection_15m: boolean;
@@ -122,17 +132,16 @@ export type ElliottWaveConfig = {
   show_historical_waves: boolean;
   /** Ana itkı içindeki alt itkı (1/3/5) ve dalga 2/4 içi mikro a–b–c çizimleri. */
   show_nested_formations: boolean;
-  /** Projeksiyonda her adım = kaç mum süresi (Pine varsayılan 22). */
-  projection_bar_hop: number;
-  /** Kaç segment ileri (Pine 12; üst sınır 24). */
-  projection_steps: number;
-  /** Projeksiyon çizim modu: legacy polyline veya formasyon bazlı şema. */
-  projection_mode: "legacy" | "formation";
   /**
-   * İleri projeksiyonda ikinci çizgi: daha uzun 3. dalga hedefi (kalibre çarpanı yükseltilmiş şema).
-   * Kapalıysa yalnızca birincil polyline çizilir.
+   * İkinci formasyon yolu: alternatif kalibrasyon (uzun 3. dalga tarzı).
+   * Kapalıysa yalnızca birincil yol çizilir.
    */
   show_projection_alt_scenario: boolean;
+  /**
+   * Formasyon projeksiyonunda zigzag / yassı (ve pivotla eşleşen ABC adayları) ayrı renklerle;
+   * A sonrası B–C ve B sonrası C hedefleri kalıba göre süzülür.
+   */
+  projection_multi_corrective_scenarios: boolean;
   /**
    * @deprecated ACP zigzag kanal/tarama ayarıdır; Elliott V2 ZigZag artık bunu kullanmaz.
    * Geriye dönük JSON uyumluluğu için saklanır.
@@ -154,7 +163,6 @@ export type ElliottWaveConfig = {
   /** @deprecated Eski alan; normalize `elliott_zigzag_depth` ile doldurulur. */
   swing_depth: number;
   max_pivot_windows: number;
-  strict_wave4_overlap: boolean;
   /**
    * Menüdeki dalga türleri — düzeltme motoru hangi kalıpları deneyeceğini filtreler (varsayılan hepsi açık).
    * @deprecated Yeni kayıtlar `pattern_menu_by_tf` kullanır; normalize sırasında OR ile doldurulur.
@@ -236,10 +244,8 @@ export const DEFAULT_ELLIOTT_WAVE_CONFIG: ElliottWaveConfig = {
   show_projection_15m: false,
   show_historical_waves: false,
   show_nested_formations: true,
-  projection_bar_hop: 22,
-  projection_steps: 12,
-  projection_mode: "legacy",
   show_projection_alt_scenario: true,
+  projection_multi_corrective_scenarios: false,
   use_acp_zigzag_swing: false,
   acp_zigzag_row_index: 0,
   elliott_zigzag_depth: 21,
@@ -248,7 +254,6 @@ export const DEFAULT_ELLIOTT_WAVE_CONFIG: ElliottWaveConfig = {
   elliott_zigzag_depth_15m: 21,
   swing_depth: 21,
   max_pivot_windows: 120,
-  strict_wave4_overlap: false,
   pattern_menu: { ...DEFAULT_ELLIOTT_PATTERN_MENU },
   pattern_menu_by_tf: defaultPatternMenuByTf(),
   mtf_wave_color_4h: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["4h"],
@@ -332,9 +337,6 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
       ? Math.min(400, Math.max(5, Math.floor(raw.max_pivot_windows)))
       : base.max_pivot_windows;
 
-  const strict_wave4_overlap =
-    typeof raw.strict_wave4_overlap === "boolean" ? raw.strict_wave4_overlap : base.strict_wave4_overlap;
-
   const legacyShowProj =
     typeof raw.show_projection === "boolean" ? raw.show_projection : undefined;
   const projTri = (key: "show_projection_4h" | "show_projection_1h" | "show_projection_15m") => {
@@ -352,27 +354,15 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
   const show_nested_formations =
     typeof raw.show_nested_formations === "boolean" ? raw.show_nested_formations : base.show_nested_formations;
 
-  const projection_bar_hop =
-    typeof raw.projection_bar_hop === "number" && Number.isFinite(raw.projection_bar_hop)
-      ? Math.min(100, Math.max(1, Math.floor(raw.projection_bar_hop)))
-      : base.projection_bar_hop;
-
-  const projection_steps =
-    typeof raw.projection_steps === "number" && Number.isFinite(raw.projection_steps)
-      ? Math.min(24, Math.max(1, Math.floor(raw.projection_steps)))
-      : base.projection_steps;
-
-  const projection_mode_raw =
-    raw && typeof raw === "object" ? (raw as Record<string, unknown>).projection_mode : undefined;
-  const projection_mode: "legacy" | "formation" =
-    projection_mode_raw === "formation" || projection_mode_raw === "legacy"
-      ? projection_mode_raw
-      : base.projection_mode;
-
   const show_projection_alt_scenario =
     typeof raw.show_projection_alt_scenario === "boolean"
       ? raw.show_projection_alt_scenario
       : base.show_projection_alt_scenario;
+
+  const projection_multi_corrective_scenarios =
+    typeof (raw as Record<string, unknown>).projection_multi_corrective_scenarios === "boolean"
+      ? (raw as { projection_multi_corrective_scenarios: boolean }).projection_multi_corrective_scenarios
+      : base.projection_multi_corrective_scenarios;
 
   const use_acp_zigzag_swing =
     typeof raw.use_acp_zigzag_swing === "boolean" ? raw.use_acp_zigzag_swing : base.use_acp_zigzag_swing;
@@ -385,15 +375,35 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
   let pattern_menu = { ...base.pattern_menu };
   const pmRaw = raw.pattern_menu;
   if (isRecord(pmRaw)) {
-    const b = (k: keyof ElliottPatternMenuToggles) =>
-      typeof pmRaw[k] === "boolean" ? pmRaw[k] : pattern_menu[k];
+    const legacyDiag =
+      typeof pmRaw["motive_diagonal"] === "boolean" ? pmRaw["motive_diagonal"] : undefined;
+    const hasNewDiag =
+      typeof pmRaw["motive_diagonal_leading"] === "boolean" ||
+      typeof pmRaw["motive_diagonal_ending"] === "boolean";
+    const legacyWxy =
+      typeof pmRaw["corrective_complex_wxy"] === "boolean" ? pmRaw["corrective_complex_wxy"] : undefined;
+    const hasNewComplex =
+      typeof pmRaw["corrective_complex_double"] === "boolean" ||
+      typeof pmRaw["corrective_complex_triple"] === "boolean";
+    const b = (k: keyof ElliottPatternMenuToggles) => {
+      if (typeof pmRaw[k] === "boolean") return pmRaw[k];
+      if (!hasNewDiag && legacyDiag !== undefined) {
+        if (k === "motive_diagonal_leading" || k === "motive_diagonal_ending") return legacyDiag;
+      }
+      if (!hasNewComplex && legacyWxy !== undefined) {
+        if (k === "corrective_complex_double" || k === "corrective_complex_triple") return legacyWxy;
+      }
+      return pattern_menu[k];
+    };
     pattern_menu = {
       motive_impulse: b("motive_impulse"),
-      motive_diagonal: b("motive_diagonal"),
+      motive_diagonal_leading: b("motive_diagonal_leading"),
+      motive_diagonal_ending: b("motive_diagonal_ending"),
       corrective_zigzag: b("corrective_zigzag"),
       corrective_flat: b("corrective_flat"),
       corrective_triangle: b("corrective_triangle"),
-      corrective_complex_wxy: b("corrective_complex_wxy"),
+      corrective_complex_double: b("corrective_complex_double"),
+      corrective_complex_triple: b("corrective_complex_triple"),
     };
   }
 
@@ -403,15 +413,33 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
     const tfPatch = (tf: keyof ElliottPatternMenuByTf) => {
       const o = pmTfRaw[tf];
       if (!isRecord(o)) return pattern_menu_by_tf[tf];
-      const z = (k: keyof ElliottPatternMenuToggles) =>
-        typeof o[k] === "boolean" ? o[k] : pattern_menu_by_tf[tf][k];
+      const legacyDiag = typeof o["motive_diagonal"] === "boolean" ? o["motive_diagonal"] : undefined;
+      const hasNewDiag =
+        typeof o["motive_diagonal_leading"] === "boolean" ||
+        typeof o["motive_diagonal_ending"] === "boolean";
+      const legacyWxy = typeof o["corrective_complex_wxy"] === "boolean" ? o["corrective_complex_wxy"] : undefined;
+      const hasNewComplex =
+        typeof o["corrective_complex_double"] === "boolean" ||
+        typeof o["corrective_complex_triple"] === "boolean";
+      const z = (k: keyof ElliottPatternMenuToggles) => {
+        if (typeof o[k] === "boolean") return o[k];
+        if (!hasNewDiag && legacyDiag !== undefined) {
+          if (k === "motive_diagonal_leading" || k === "motive_diagonal_ending") return legacyDiag;
+        }
+        if (!hasNewComplex && legacyWxy !== undefined) {
+          if (k === "corrective_complex_double" || k === "corrective_complex_triple") return legacyWxy;
+        }
+        return pattern_menu_by_tf[tf][k];
+      };
       return {
         motive_impulse: z("motive_impulse"),
-        motive_diagonal: z("motive_diagonal"),
+        motive_diagonal_leading: z("motive_diagonal_leading"),
+        motive_diagonal_ending: z("motive_diagonal_ending"),
         corrective_zigzag: z("corrective_zigzag"),
         corrective_flat: z("corrective_flat"),
         corrective_triangle: z("corrective_triangle"),
-        corrective_complex_wxy: z("corrective_complex_wxy"),
+        corrective_complex_double: z("corrective_complex_double"),
+        corrective_complex_triple: z("corrective_complex_triple"),
       };
     };
     pattern_menu_by_tf = {
@@ -474,10 +502,8 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
     show_projection_15m,
     show_historical_waves,
     show_nested_formations,
-    projection_bar_hop,
-    projection_steps,
-    projection_mode,
     show_projection_alt_scenario,
+    projection_multi_corrective_scenarios,
     use_acp_zigzag_swing,
     acp_zigzag_row_index,
     elliott_zigzag_depth,
@@ -486,7 +512,6 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
     elliott_zigzag_depth_15m,
     swing_depth,
     max_pivot_windows,
-    strict_wave4_overlap,
     pattern_menu,
     pattern_menu_by_tf,
     mtf_wave_color_4h,

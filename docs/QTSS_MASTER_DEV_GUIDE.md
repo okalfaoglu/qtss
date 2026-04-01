@@ -8,7 +8,7 @@
 
 ## İçindekiler
 
-**0.** Durum özeti (**0.1**–**0.4**: kanıtlar, AI durumu, **minimal vs tam checkout**, **Elliott projeksiyon**) · **1.** Hatalar ve sorunlar · **2.** İyileştirme önerileri · **3.** AI planı (çoklu sağlayıcı) · **4.** FAZ 0–11 görev listesi · **5.** Migration kuralları · **6.** Ortam değişkenleri (AI + bildirim + DB config hedefi) · **7.** Test stratejisi · **8.** Kod kalitesi kuralları (**8.1** log seviyeleri) · **9.** Güvenlik · **10.** Worker spawn sırası · **11.** `docs/` dosya envanteri
+**0.** Durum özeti (**0.1**–**0.4**: kanıtlar, AI durumu, **minimal vs tam checkout**, **Elliott projeksiyon**) · **1.** Hatalar ve sorunlar · **2.** İyileştirme önerileri · **3.** AI planı (çoklu sağlayıcı) · **4.** FAZ 0–11 görev listesi · **5.** Migration kuralları · **6.** Ortam değişkenleri (AI + bildirim + DB config hedefi) · **7.** Test stratejisi (**7.1**–**7.7**: katmanlar, CI, yerel komutlar, checklist) · **8.** Kod kalitesi kuralları (**8.1** log seviyeleri) · **9.** Güvenlik · **10.** Worker spawn sırası · **11.** `docs/` dosya envanteri
 
 *Önerilen okuma sırası (ilk oturum):* **0 → 1 → 2 → 4** (FAZ tabloları) → ihtiyaca göre **5–11**. Mimari özet için ayrıca `docs/PROJECT.md`.
 
@@ -103,12 +103,11 @@ Grafik üzerindeki **ileri Fib / Elliott projeksiyon** çizgileri `web/src/lib/e
 - Durum: `web/nul` repodan kaldırıldı; kök `.gitignore` içinde `web/nul` ignore ediliyor. Kökte `nul` kaldıysa WSL’de `rm -f nul` ile silin; git’e eklemeyin.
 
 **M4: Exchange `"binance"` hardcoded — çoklu borsa genişlemesini zorlaştırır**
-- Sorun: `main.rs` içinde `let exchange = "binance"` sabit. Kline WS loop'ları yalnız Binance'a bağlı.
-- Çözüm: Şimdilik sorun değil ama yeni borsa eklendiğinde env'den veya config'den okunmalı.
+- Sorun: `main.rs` içinde kline için borsa sabitti. Kline WS loop'ları yalnız Binance protokolüyle uygulanır.
+- **Durum (2026-03):** `QTSS_MARKET_DATA_EXCHANGE` + `system_config.worker.market_data_exchange` → `ExchangeId`; yalnızca `binance` birleşik kline WS’i başlatır; `bybit` / `okx` / `custom` için WS kapalı (yanlış `market_bars.exchange` etiketi önlenir). Tam adapter: **§2.3 madde 12**.
 
-**M5: `ai_approval_requests` ile planlanan `ai_decisions` arasında şema çatışması riski**
-- Sorun: Mevcut `0038_ai_approval_requests.sql` basit bir onay kuyruğu (`org_id`, `kind`, `payload`). AI katmanı planındaki `ai_decisions` tablosu tamamen farklı bir yapı (`layer`, `model_id`, `prompt_hash`, `parsed_decision`, `expires_at`, `confidence`).
-- Çözüm: İkisi farklı tablolar olarak kalmalı. `ai_approval_requests` genel amaçlı onay; `ai_decisions` LLM karar zinciri. `ai_decisions`'da `approval_request_id` FK ile bağlanabilir.
+**M5: `ai_approval_requests` ile `ai_decisions` ilişkisi**
+- İkisi ayrı tablolar kalır; bağlantı **`approval_request_id`** (`ai_decisions` → `ai_approval_requests`, `ON DELETE SET NULL`). Minimal zincir: `migrations/0013_ai_approval_requests_and_decision_engine.sql`. API: admin **`POST /api/v1/ai/decisions/{id}/link-approval-request`** (gövde: `approval_request_id`); LLM kararı onay/red veya otomatik onay sonrası kuyruk satırı **`sync_linked_approval_request_status`** ile eşitlenir (`qtss-ai` `storage` + `approval`).
 
 ### 1.3 DÜŞÜK — İyileştirme Fırsatları
 
@@ -169,13 +168,13 @@ Bu bölümdeki öneriler **1–12** numaralı sürekli liste + **13** (çok dil)
 
 ### 2.3 Uzun Vadeli (AI Engine sonrası)
 
-10. **Trailing stop desteği** — Mevcut `position_manager.rs`'de trailing stop yok. AI katmanının `activate_trailing` direktifi şu an uygulanamaz. `OrderType::TrailingStopMarket` + Binance `TRAILING_STOP_MARKET` emri.
+10. **Trailing stop desteği** — **Uygulandı:** `crates/qtss-worker/src/position_manager.rs` — `OrderType::TrailingStopMarket`, `QTSS_POSITION_MANAGER_TRAILING_ON_DIRECTIVE`, yönetilen futures stop-limit trailing; operasyonel **`activate_trailing`** / **`trailing_callback_pct`**, **`partial_close`** / **`full_close`** / **`deactivate_trailing`** (bkz. FAZ 5.3 modül başlığı).
 
-11. **WebSocket fill stream** — Copy trade ve reconcile için Binance user stream entegrasyonu. Daha hızlı dolum algılama.
+11. **WebSocket fill stream** — **Uygulandı:** `crates/qtss-worker/src/binance_user_stream.rs` — USDM + spot user stream, fill `exchange_fills`, `exchange_orders` durum güncellemesi; `QTSS_BINANCE_USER_STREAM_ENABLED` ve `.env.example` blokları. Copy trade / reconcile bu kayıtlardan yararlanır; follower mantığı ayrı tick ile kalır.
 
-12. **Çoklu borsa adapter** — `ExecutionGateway` trait'i hazır; `BybitGateway`, `OKXGateway` gibi yeni borsa implementasyonları.
+12. **Çoklu borsa adapter** — `ExecutionGateway`: `BinanceLiveGateway`, `BybitLiveGateway` (linear **market** + **limit** + `/v5/order/cancel` `orderLinkId`), `OkxLiveGateway` (v5 **SWAP** **market** + **limit** / IOC / FOK / `post_only` + `/trade/cancel-order` `clOrdId`, `exchange_accounts.passphrase` zorunlu); API: `POST /api/v1/orders/bybit/place|cancel`, `POST /api/v1/orders/okx/place|cancel` (ops rolü); tamamlanmamış venue’ler `UnsupportedLiveGateway`; dry defter `instrument_position_key`; `position_manager` canlı kapatma: Binance + Bybit + OKX USDT futures (trailing/managed yolları hâlâ Binance; kline WS / reconcile çoğunlukla Binance).
 
-> **Not (kapsam):** Maddeler **10–12** ayrı ürün / mimari iş paketleridir (execution + WS + çoklu borsa); bu rehberde izlenir ancak tek seferde “tam kod” olarak kapatılmaz — PR başına bir başlık seçilerek ilerlenmelidir.
+> **Not (kapsam):** Maddeler **10–11** kodda karşılandı; **12** kademeli — spot/limit/cancel/WS ve `venue_order_id` uç durumları ayrı PR’lar.
 
 ### 2.4 Çok dil (i18n) — planlı ürün özelliği
 
@@ -477,22 +476,92 @@ Uzun vadede çoğu `QTSS_*` ayarı veritabanına taşınır; `.env` öncelikle *
 
 ## 7. Test Stratejisi
 
-**Mevcut testler:** `cargo test -p qtss-worker --bin qtss-worker` — `signal_scorer`, `confluence`, **`position_manager`**, **`strategy_runner`** birimleri; `cargo test -p qtss-common --lib` — `config_resolve`, `kill_switch`; Postgres job’unda `cargo test -p qtss-ai --test decision_exists_for_hash_it` (`decision_exists_for_hash` TTL) ve `cargo test -p qtss-ai --test maybe_auto_approve_it` (`maybe_auto_approve` onay / `pending_approval` koruması). Tam tarama: `cargo test --workspace`. CI’da `.github/workflows/ci.yml` lib testleri + `migrations_apply` + bu iki `qtss-ai` entegrasyonu (tanıma göre).
+### 7.1 Amaç ve katmanlar
 
-**AI katmanı testleri (uygulama durumu):**
+| Katman | Amaç | Bağımlılık | CI |
+|--------|------|------------|-----|
+| **Birim** | Saf mantık, parser, küçük yardımcılar; hızlı geri bildirim | Yok (veya `sqlx` lib-only) | `rust` job |
+| **Entegrasyon (Postgres)** | Migrasyon zinciri, `system_config` tohumları, AI tabloları + SQL sorguları | Çalışan PostgreSQL + `DATABASE_URL` | `postgres-migrations` job |
+| **Web** | i18n anahtar bütünlüğü + üretim derlemesi | Node 20 | `web` job |
+| **Uçtan uca (isteğe bağlı)** | Worker tick + gerçek WS / borsa; manuel veya ayrı ortam | Tam stack; **§1.3 L1** — şart değil | CI dışı |
 
-1. `parser.rs` — ✅ geçerli/ geçersiz yön, eksik alan, güven aralığı dışı, çarpan sınırı, ` ```json ` / düz fence ile sarılı JSON.
-2. `safety.rs` — ✅ çarpan üst sınırı, yönlü işlemde SL zorunluluğu, `neutral` için SL muafiyeti, kill switch (`set_trading_halted`) — mutex ile seri test.
-3. `context_builder.rs` — ✅ saf fonksiyon `bar_ohlc_window_metrics` (OHLC penceresi istatistikleri); `build_tactical_context` / `build_operational_context` / `build_strategic_context` tam async yolu için ayrı Postgres fikstürü isteğe bağlı (ağır; üretimde katman tick’leri ile doğrulanır).
-4. `storage.rs` — `decision_exists_for_hash`: ✅ entegrasyon testi `crates/qtss-ai/tests/decision_exists_for_hash_it.rs`; CI `postgres-migrations` job’unda `DATABASE_URL` ile çalışır (`migrations_apply` sonrası).
-5. `approval.rs` — ✅ `auto_approve_eligible` (eşik + `auto_approve_enabled`); `maybe_auto_approve` DB dalı: ✅ `crates/qtss-ai/tests/maybe_auto_approve_it.rs` (onay + eşik altı `pending_approval`); CI `postgres-migrations` (`DATABASE_URL`).
+**İlke:** Regresyonu erken yakalamak için birim + migrasyon + kritik AI SQL yolları CI’da zorunlu; ağır veya dış ağa bağımlı senaryolar yerelde veya staging’de.
+
+### 7.2 Sürekli entegrasyon (`.github/workflows/ci.yml`)
+
+**`rust` (DB’siz)**
+
+- `cargo test -p qtss-storage --lib`
+- `cargo test -p qtss-notify --lib`
+- `cargo test -p qtss-common --lib`
+- `cargo test -p qtss-worker --bin qtss-worker` (`signal_scorer`, `confluence`, `position_manager`, `strategy_runner`, …)
+- `cargo check -p qtss-api -p qtss-worker`
+
+**`postgres-migrations`** — servis `postgres:16-alpine`, `DATABASE_URL=postgres://qtss:qtss@localhost:5432/qtss`
+
+1. `cargo test -p qtss-storage --test migrations_apply` — tüm `migrations/*.sql` uygulanır; AI/`system_config` tablolarının varlığı doğrulanır.
+2. `cargo test -p qtss-ai --test decision_exists_for_hash_it` — `decision_exists_for_hash` TTL.
+3. `cargo test -p qtss-ai --test maybe_auto_approve_it` — otomatik onay / `pending_approval` koruması.
+
+**`web`**
+
+- `npm ci` → `npm run i18n:check` → `npm run build`
+
+### 7.3 Yerel çalıştırma
 
 ```bash
-cargo test -p qtss-ai
-cargo test -p qtss-worker
+# Tüm workspace (bazı testler DB ister; eksikse Postgres testleri atlanabilir veya hata verir)
+cargo test --workspace
+
+# CI ile aynı DB’siz paket
+cargo test -p qtss-storage --lib
+cargo test -p qtss-notify --lib
+cargo test -p qtss-common --lib
+cargo test -p qtss-worker --bin qtss-worker
+
+# Postgres entegrasyonları (kök .env veya export)
+export DATABASE_URL='postgres://...'
+cargo test -p qtss-storage --test migrations_apply -- --nocapture
+cargo test -p qtss-ai --test decision_exists_for_hash_it --test maybe_auto_approve_it -- --nocapture
 ```
 
-Yerel kalite kapıları (CI tanımı repodaki workflow ile hizalanmalıdır): `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` (projede clippy katılaştırması varsa aynen uygulanır).
+**`.env`:** `cargo test` süreci kök `.env` dosyasını otomatik okumaz; entegrasyon testlerinde repo kökünden çalıştırırken ilgili test dosyaları `qtss_common::load_dotenv()` ile kök `.env` içindeki `DATABASE_URL`’ü yükleyebilir. Aksi halde `export DATABASE_URL=...` kullanılır.
+
+### 7.4 Crate / modül özeti
+
+| Alan | Ne test edilir | Not |
+|------|----------------|-----|
+| `qtss-ai` | `parser`, `safety`, `approval` (birim), `context_builder` (`bar_ohlc_window_metrics`), Postgres: `decision_exists_for_hash`, `maybe_auto_approve` | Tam `build_*_context` async yolu için ortak Postgres fikstürü **isteğe bağlı** (**§1.3 L1**) |
+| `qtss-worker` | `bin` target altı birimler; `position_manager::aggregate_long_books` vb. | Canlı borsa HTTP çağrısı **yok** |
+| `qtss-storage` | `config_tick`, `system_config` yardımcıları (lib); `migrations_apply` (integration) | |
+| `qtss-common` | `config_resolve`, `kill_switch` | |
+| `qtss-execution` | `gateway`, `unsupported_live`, `bybit_live` / `okx_live` (orderId / instId parse), `BinanceLiveGateway` birimleri | Ağ üstü place testi yok |
+| `web` | i18n senkronu + `vite build` | bileşen snapshot’ı CI’da zorunlu değil |
+
+### 7.5 Kalite kapıları (yerel / PR)
+
+CI workflow’da zorunlu olmayan ama PR öncesi önerilen komutlar:
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets
+```
+
+Projede `-D warnings` ile clippy katılaştırması tanımlıysa aynen kullanılır.
+
+### 7.6 Yeni özellik için kontrol listesi
+
+1. Davranış değişikliği için **birim testi** veya mevcut testin güncellenmesi.
+2. SQL/migration değişikliğinde **`migrations_apply`** yerelde ve CI’da yeşil.
+3. `qtss-ai` storage/onay mantığı dokunulduysa ilgili **`*_it.rs`** veya yeni entegrasyon testi.
+4. Kullanıcıya dönük yeni metinlerde **web** `locales` + `i18n:check` (**FAZ 9**).
+5. Harici API veya deterministik olmayan akışlarda **mock** veya yalnızca parse/doğrulama katmanını test et; ağa bağlı flaky test eklemeyin.
+
+### 7.7 Bilinen boşluklar (kasıtlı / sonraki iş)
+
+- **`position_manager`** tam tick + AI + doldurulmuş DB senaryosu (**§1.3 L1**).
+- **`build_tactical_context` / `build_operational_context` / `build_strategic_context`** tam async yol için Postgres fikstürü (ağır).
+- **Canlı borsa** ve **WebSocket** uçtan uca otomasyon — CI’da yok; manuel/runbook.
 
 ---
 

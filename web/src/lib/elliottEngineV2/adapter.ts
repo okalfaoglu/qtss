@@ -4,7 +4,12 @@ import {
   type ElliottMtfWaveColors,
   type ElliottPatternMenuByTf,
 } from "../elliottWaveAppConfig";
-import { DEFAULT_ELLIOTT_PATTERN_MENU, type ElliottPatternMenuToggles } from "../elliottPatternMenuCatalog";
+import {
+  correctiveCombinationIsTriple,
+  DEFAULT_ELLIOTT_PATTERN_MENU,
+  type ElliottPatternMenuToggles,
+} from "../elliottPatternMenuCatalog";
+import { patternMenuAllowsFlatAbc, patternMenuAllowsZigzagAbc } from "./corrective";
 import type { PatternLayerOverlay } from "../patternDrawingBatchOverlay";
 import type { CorrectiveCountV2, ElliottEngineOutputV2, ImpulseCountV2, TimeframeStateV2, ZigzagPivot } from "./types";
 import { extendZigzagPivotsForChartLine } from "./zigzag";
@@ -15,20 +20,27 @@ function mergePatternMenu(m?: ElliottPatternMenuToggles): ElliottPatternMenuTogg
 
 function showImpulseOverlay(menu: ElliottPatternMenuToggles, impulse: ImpulseCountV2): boolean {
   const v = impulse.variant ?? "standard";
-  if (v === "diagonal") return menu.motive_diagonal;
+  if (v === "diagonal") {
+    const role = impulse.diagonalRole ?? "unknown";
+    if (role === "leading") return menu.motive_diagonal_leading;
+    if (role === "ending") return menu.motive_diagonal_ending;
+    return menu.motive_diagonal_leading || menu.motive_diagonal_ending;
+  }
   return menu.motive_impulse;
 }
 
 function showCorrectiveOverlay(menu: ElliottPatternMenuToggles, c: CorrectiveCountV2): boolean {
   switch (c.pattern) {
     case "zigzag":
-      return menu.corrective_zigzag;
+      return patternMenuAllowsZigzagAbc(menu);
     case "flat":
-      return menu.corrective_flat;
+      return patternMenuAllowsFlatAbc(menu);
     case "triangle":
       return menu.corrective_triangle;
     case "combination":
-      return menu.corrective_complex_wxy;
+      return correctiveCombinationIsTriple(c)
+        ? menu.corrective_complex_triple
+        : menu.corrective_complex_double;
     case "abc":
       return menu.corrective_zigzag || menu.corrective_flat;
     default:
@@ -56,6 +68,25 @@ function postImpulseAbcLinePivots(c: CorrectiveCountV2): ZigzagPivot[] {
     return [...c.pivots];
   }
   return path;
+}
+
+/**
+ * Map `labels` to pivots without repeating: double W–X–Y keeps many vertices in `path` but only three
+ * structural corners (after start) in `pivots`; triangle / triple match `path.length - 1 === labels.length`.
+ */
+export function correctiveLabelAnchors(c: CorrectiveCountV2): { pts: ZigzagPivot[]; labels: string[] } {
+  const labels = c.labels?.length ? c.labels : ["a", "b", "c"];
+  const { pivots, path } = c;
+  if (pivots.length >= 2 && pivots.length - 1 === labels.length) {
+    return { pts: [...pivots.slice(1)], labels: [...labels] };
+  }
+  if (path?.length && path.length - 1 === labels.length) {
+    return { pts: [...path.slice(1)], labels: [...labels] };
+  }
+  const raw = path?.length ? path : pivots;
+  const tail = raw.slice(1);
+  const n = Math.min(tail.length, labels.length);
+  return { pts: tail.slice(0, n), labels: labels.slice(0, n) };
 }
 
 function impulseLabelsByTf(tf: "4h" | "1h" | "15m"): string[] {
@@ -123,14 +154,11 @@ function correctiveNestedLegLabels(
   wc: ElliottMtfWaveColors,
   labelColors: ElliottMtfWaveColors,
 ): SeriesMarker<UTCTimestamp>[] {
-  const path = c.path?.length ? c.path : c.pivots;
-  const labels = c.labels?.length ? c.labels : ["a", "b", "c"];
-  const pts = path.slice(1);
-  const n = labels.length;
+  const { pts, labels } = correctiveLabelAnchors(c);
   const prefix = role === "wave2" ? "w2·" : "w4·";
   const color = labelColors[tf] ?? wc[tf];
   return pts.map((p, i) => {
-    const li = n < 1 ? "a" : i < n ? labels[i]! : labels[i % n]!;
+    const li = labels[i] ?? "a";
     return {
       time: p.time as UTCTimestamp,
       position: p.kind === "high" ? "aboveBar" : "belowBar",
@@ -221,14 +249,11 @@ function correctiveLabels(
   wc: ElliottMtfWaveColors,
   labelColors: ElliottMtfWaveColors,
 ): SeriesMarker<UTCTimestamp>[] {
-  const path = c.path?.length ? c.path : c.pivots;
-  const labels = c.labels?.length ? c.labels : ["a", "b", "c"];
-  const pts = path.slice(1); // skip start
-  const n = labels.length;
+  const { pts, labels } = correctiveLabelAnchors(c);
   const prefix = correctiveRolePrefix(role, tf);
   const color = labelColors[tf] ?? wc[tf];
   return pts.map((p, i) => {
-    const li = n < 1 ? "a" : i < n ? labels[i]! : labels[i % n]!;
+    const li = labels[i] ?? "a";
     return {
       time: p.time as UTCTimestamp,
       position: p.kind === "high" ? "aboveBar" : "belowBar",
@@ -415,7 +440,7 @@ export function v2ToChartOverlays(
         zigzag: toPts(linePivots),
         zigzagKind: "elliott_v2_post_abc",
         zigzagLineColor: wc[tf],
-        zigzagLineStyle: "dashed",
+        zigzagLineStyle: lineStyles[tf],
         zigzagLineWidth: Math.max(1, lineWidths[tf] - 1),
       });
       if (showLabels[tf]) labels.push(...correctiveLabels(s.postImpulseAbc, "post", tf, wc, labelColors));

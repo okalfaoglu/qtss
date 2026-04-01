@@ -1,5 +1,6 @@
 import type {
   CorrectiveCountV2,
+  CorrectivePatternV2,
   ElliottRuleCheckV2,
   ImpulseCountV2,
   OhlcV2,
@@ -19,6 +20,14 @@ import { DEFAULT_ELLIOTT_PATTERN_MENU, type ElliottPatternMenuToggles } from "..
 
 function mergePatternToggles(t?: ElliottPatternMenuToggles): ElliottPatternMenuToggles {
   return { ...DEFAULT_ELLIOTT_PATTERN_MENU, ...t };
+}
+
+export function patternMenuAllowsZigzagAbc(t: ElliottPatternMenuToggles): boolean {
+  return t.corrective_zigzag;
+}
+
+export function patternMenuAllowsFlatAbc(t: ElliottPatternMenuToggles): boolean {
+  return t.corrective_flat;
 }
 
 const EPS = 1e-10;
@@ -149,14 +158,48 @@ function abcCandidateIsValid(pattern: "zigzag" | "flat", checks: ElliottRuleChec
   return hasPassedCheck(checks, "flat_r4") && hasPassedCheck(checks, "flat_g7");
 }
 
-function collectAbcCorrectiveDown(
+/**
+ * One ABC quadruple (start=a.k. wave-5 end, a,b,c pivots) for bull impulse / down correction.
+ */
+function abcFromQuadrupleDown(
   start: ZigzagPivot,
+  a: ZigzagPivot,
+  b: ZigzagPivot,
   end: ZigzagPivot,
-  inner: ZigzagPivot[],
 ): CorrectiveCountV2 | null {
-  const candidates: CorrectiveCountV2[] = [];
   const impulseBull = true;
+  if (a.kind !== "low" || b.kind !== "high" || end.kind !== "low") return null;
+  if (!(start.index < a.index && a.index < b.index && b.index < end.index)) return null;
+  if (a.price >= start.price) return null;
+  if (b.price <= a.price || b.price >= start.price + EPS) return null;
+  if (end.price >= b.price - EPS) return null;
 
+  const lenA = start.price - a.price;
+  if (lenA <= EPS) return null;
+  const retrB = (b.price - a.price) / lenA;
+  const lenC = b.price - end.price;
+  const cVsA = lenA > EPS ? lenC / lenA : 0;
+  if (!abcRetrBPassesPrefilter(retrB)) return null;
+
+  const pattern = classifyFlatVsZigzag(retrB);
+  const baseChecks: ElliottRuleCheckV2[] = [
+    { id: "abc_order", passed: true },
+    {
+      id: "abc_b_retrace",
+      passed: retrB >= TEZ_FLAT_B_VS_A_MIN - 1e-12 && retrB <= TEZ_FLAT_B_VS_A_MAX + 1e-12,
+      detail: retrB.toFixed(3),
+    },
+    { id: "abc_c_extent", passed: cVsA >= 0.3 && cVsA <= 2.4, detail: cVsA.toFixed(3) },
+  ];
+  const tezChecks = buildTez254AbcChecks(pattern, retrB, cVsA, impulseBull, start, a, b, end);
+  const checks = [...baseChecks, ...tezChecks];
+  if (!abcCandidateIsValid(pattern, checks)) return null;
+  const score = checks.filter((x) => x.passed).length + (pattern === "flat" ? 0.2 : 0.3);
+  return { pivots: [start, a, b, end], pattern, checks, score, labels: ["a", "b", "c"] };
+}
+
+function collectAllAbcCorrectiveDown(start: ZigzagPivot, end: ZigzagPivot, inner: ZigzagPivot[]): CorrectiveCountV2[] {
+  const candidates: CorrectiveCountV2[] = [];
   for (const a of inner) {
     if (a.kind !== "low") continue;
     if (a.price >= start.price) continue;
@@ -164,45 +207,62 @@ function collectAbcCorrectiveDown(
       if (b.kind !== "high") continue;
       if (b.index <= a.index || b.index >= end.index) continue;
       if (b.price <= a.price || b.price >= start.price + EPS) continue;
-
-      const lenA = start.price - a.price;
-      if (lenA <= EPS) continue;
-      const retrB = (b.price - a.price) / lenA;
-      /** C bacağı B→C (a→end değil); `cVsA` ve tez `zz_r1` ile uyumlu */
-      const lenC = b.price - end.price;
-      const cVsA = lenA > EPS ? lenC / lenA : 0;
-      if (!abcRetrBPassesPrefilter(retrB)) continue;
-
-      const pattern = classifyFlatVsZigzag(retrB);
-      const baseChecks: ElliottRuleCheckV2[] = [
-        { id: "abc_order", passed: start.index < a.index && a.index < b.index && b.index < end.index },
-        {
-          id: "abc_b_retrace",
-          passed: retrB >= TEZ_FLAT_B_VS_A_MIN - 1e-12 && retrB <= TEZ_FLAT_B_VS_A_MAX + 1e-12,
-          detail: retrB.toFixed(3),
-        },
-        { id: "abc_c_extent", passed: cVsA >= 0.3 && cVsA <= 2.4, detail: cVsA.toFixed(3) },
-      ];
-      const tezChecks = buildTez254AbcChecks(pattern, retrB, cVsA, impulseBull, start, a, b, end);
-      const checks = [...baseChecks, ...tezChecks];
-      if (!abcCandidateIsValid(pattern, checks)) continue;
-      const score = checks.filter((x) => x.passed).length + (pattern === "flat" ? 0.2 : 0.3);
-      candidates.push({ pivots: [start, a, b, end], pattern, checks, score, labels: ["a", "b", "c"] });
+      const hit = abcFromQuadrupleDown(start, a, b, end);
+      if (hit) candidates.push(hit);
     }
   }
-  if (!candidates.length) return null;
-  candidates.sort((a, b) => b.score - a.score);
-  return candidates[0]!;
+  candidates.sort((x, y) => y.score - x.score);
+  return candidates;
 }
 
-function collectAbcCorrectiveUp(
+function collectAbcCorrectiveDown(
   start: ZigzagPivot,
   end: ZigzagPivot,
   inner: ZigzagPivot[],
 ): CorrectiveCountV2 | null {
-  const candidates: CorrectiveCountV2[] = [];
-  const impulseBull = false;
+  const candidates = collectAllAbcCorrectiveDown(start, end, inner);
+  return candidates[0] ?? null;
+}
 
+function abcFromQuadrupleUp(
+  start: ZigzagPivot,
+  a: ZigzagPivot,
+  b: ZigzagPivot,
+  end: ZigzagPivot,
+): CorrectiveCountV2 | null {
+  const impulseBull = false;
+  if (a.kind !== "high" || b.kind !== "low" || end.kind !== "high") return null;
+  if (!(start.index < a.index && a.index < b.index && b.index < end.index)) return null;
+  if (a.price <= start.price) return null;
+  if (b.price >= a.price || b.price <= start.price - EPS) return null;
+  if (end.price <= b.price + EPS) return null;
+
+  const lenA = a.price - start.price;
+  if (lenA <= EPS) return null;
+  const retrB = (a.price - b.price) / lenA;
+  const lenC = end.price - b.price;
+  const cVsA = lenA > EPS ? lenC / lenA : 0;
+  if (!abcRetrBPassesPrefilter(retrB)) return null;
+
+  const pattern = classifyFlatVsZigzag(retrB);
+  const baseChecks: ElliottRuleCheckV2[] = [
+    { id: "abc_order", passed: true },
+    {
+      id: "abc_b_retrace",
+      passed: retrB >= TEZ_FLAT_B_VS_A_MIN - 1e-12 && retrB <= TEZ_FLAT_B_VS_A_MAX + 1e-12,
+      detail: retrB.toFixed(3),
+    },
+    { id: "abc_c_extent", passed: cVsA >= 0.3 && cVsA <= 2.4, detail: cVsA.toFixed(3) },
+  ];
+  const tezChecks = buildTez254AbcChecks(pattern, retrB, cVsA, impulseBull, start, a, b, end);
+  const checks = [...baseChecks, ...tezChecks];
+  if (!abcCandidateIsValid(pattern, checks)) return null;
+  const score = checks.filter((x) => x.passed).length + (pattern === "flat" ? 0.2 : 0.3);
+  return { pivots: [start, a, b, end], pattern, checks, score, labels: ["a", "b", "c"] };
+}
+
+function collectAllAbcCorrectiveUp(start: ZigzagPivot, end: ZigzagPivot, inner: ZigzagPivot[]): CorrectiveCountV2[] {
+  const candidates: CorrectiveCountV2[] = [];
   for (const a of inner) {
     if (a.kind !== "high") continue;
     if (a.price <= start.price) continue;
@@ -210,34 +270,21 @@ function collectAbcCorrectiveUp(
       if (b.kind !== "low") continue;
       if (b.index <= a.index || b.index >= end.index) continue;
       if (b.price >= a.price || b.price <= start.price - EPS) continue;
-
-      const lenA = a.price - start.price;
-      if (lenA <= EPS) continue;
-      const retrB = (a.price - b.price) / lenA;
-      const lenC = end.price - b.price;
-      const cVsA = lenA > EPS ? lenC / lenA : 0;
-      if (!abcRetrBPassesPrefilter(retrB)) continue;
-
-      const pattern = classifyFlatVsZigzag(retrB);
-      const baseChecks: ElliottRuleCheckV2[] = [
-        { id: "abc_order", passed: start.index < a.index && a.index < b.index && b.index < end.index },
-        {
-          id: "abc_b_retrace",
-          passed: retrB >= TEZ_FLAT_B_VS_A_MIN - 1e-12 && retrB <= TEZ_FLAT_B_VS_A_MAX + 1e-12,
-          detail: retrB.toFixed(3),
-        },
-        { id: "abc_c_extent", passed: cVsA >= 0.3 && cVsA <= 2.4, detail: cVsA.toFixed(3) },
-      ];
-      const tezChecks = buildTez254AbcChecks(pattern, retrB, cVsA, impulseBull, start, a, b, end);
-      const checks = [...baseChecks, ...tezChecks];
-      if (!abcCandidateIsValid(pattern, checks)) continue;
-      const score = checks.filter((x) => x.passed).length + (pattern === "flat" ? 0.2 : 0.3);
-      candidates.push({ pivots: [start, a, b, end], pattern, checks, score, labels: ["a", "b", "c"] });
+      const hit = abcFromQuadrupleUp(start, a, b, end);
+      if (hit) candidates.push(hit);
     }
   }
-  if (!candidates.length) return null;
-  candidates.sort((a, b) => b.score - a.score);
-  return candidates[0]!;
+  candidates.sort((x, y) => y.score - x.score);
+  return candidates;
+}
+
+function collectAbcCorrectiveUp(
+  start: ZigzagPivot,
+  end: ZigzagPivot,
+  inner: ZigzagPivot[],
+): CorrectiveCountV2 | null {
+  const candidates = collectAllAbcCorrectiveUp(start, end, inner);
+  return candidates[0] ?? null;
 }
 
 function findCorrectiveBetween(
@@ -253,11 +300,11 @@ function findCorrectiveBetween(
   if (inner.length < 2) return null;
 
   const tryAbc = (): CorrectiveCountV2 | null => {
-    if (!t.corrective_zigzag && !t.corrective_flat) return null;
+    if (!patternMenuAllowsZigzagAbc(t) && !patternMenuAllowsFlatAbc(t)) return null;
     const abc = direction === "down" ? collectAbcCorrectiveDown(start, end, inner) : collectAbcCorrectiveUp(start, end, inner);
     if (!abc) return null;
-    if (abc.pattern === "zigzag" && !t.corrective_zigzag) return null;
-    if (abc.pattern === "flat" && !t.corrective_flat) return null;
+    if (abc.pattern === "zigzag" && !patternMenuAllowsZigzagAbc(t)) return null;
+    if (abc.pattern === "flat" && !patternMenuAllowsFlatAbc(t)) return null;
     return abc;
   };
 
@@ -268,9 +315,11 @@ function findCorrectiveBetween(
       const tri = findTriangleBetween(start, end, inner, context);
       if (tri) return tri;
     }
-    if (t.corrective_complex_wxy) {
+    if (t.corrective_complex_triple) {
       const wxyxz = findWxyxzBetween(start, end, inner, "down", context);
       if (wxyxz) return wxyxz;
+    }
+    if (t.corrective_complex_double) {
       const comb = findCombinationBetween(start, end, inner, "down", context);
       if (comb) return comb;
     }
@@ -283,9 +332,11 @@ function findCorrectiveBetween(
     const tri = findTriangleBetween(start, end, inner, context);
     if (tri) return tri;
   }
-  if (t.corrective_complex_wxy) {
+  if (t.corrective_complex_triple) {
     const wxyxz = findWxyxzBetween(start, end, inner, "up", context);
     if (wxyxz) return wxyxz;
+  }
+  if (t.corrective_complex_double) {
     return findCombinationBetween(start, end, inner, "up", context);
   }
   return null;
@@ -680,6 +731,74 @@ function findWxyxzBetween(
     checks,
     score,
   };
+}
+
+/**
+ * Same pattern label (zigzag vs flat): keep the highest-scoring ABC candidate.
+ */
+export function dedupeAbcScenariosByPattern(candidates: CorrectiveCountV2[]): CorrectiveCountV2[] {
+  const m = new Map<CorrectivePatternV2, CorrectiveCountV2>();
+  for (const c of candidates) {
+    if (c.pattern !== "zigzag" && c.pattern !== "flat") continue;
+    const prev = m.get(c.pattern);
+    if (!prev || c.score > prev.score) m.set(c.pattern, c);
+  }
+  return [...m.values()].sort((a, b) => b.score - a.score);
+}
+
+/**
+ * All valid ABC counts between wave-5 and the latest pivot after P5 (same window as the engine).
+ */
+export function collectAllAbcPostImpulseCandidates(
+  pivots: ZigzagPivot[],
+  impulse: ImpulseCountV2,
+  toggles?: ElliottPatternMenuToggles,
+): CorrectiveCountV2[] {
+  const p5 = impulse.pivots[5];
+  const later = pivots.filter((p) => p.index > p5.index);
+  if (!later.length) return [];
+  const end = later[later.length - 1]!;
+  const inner = pivots.filter((p) => p.index > p5.index && p.index < end.index);
+  if (inner.length < 2) return [];
+  const t = mergePatternToggles(toggles);
+  const dir = impulse.direction === "bull" ? "down" : "up";
+  const raw =
+    dir === "down" ? collectAllAbcCorrectiveDown(p5, end, inner) : collectAllAbcCorrectiveUp(p5, end, inner);
+  const filtered = raw.filter((c) => {
+    if (c.pattern === "zigzag" && !patternMenuAllowsZigzagAbc(t)) return false;
+    if (c.pattern === "flat" && !patternMenuAllowsFlatAbc(t)) return false;
+    return true;
+  });
+  return dedupeAbcScenariosByPattern(filtered);
+}
+
+/**
+ * Observed A and B fixed; enumerate valid C endpoints from pivots after B (best score per pattern).
+ */
+export function collectAbcCorrectivesWithFixedAB(
+  impulse: ImpulseCountV2,
+  pivotA: ZigzagPivot,
+  pivotB: ZigzagPivot,
+  allPivots: ZigzagPivot[],
+  toggles?: ElliottPatternMenuToggles,
+): CorrectiveCountV2[] {
+  const start = impulse.pivots[5];
+  if (pivotA.index <= start.index || pivotB.index <= pivotA.index) return [];
+  const ends = allPivots.filter((p) => p.index > pivotB.index);
+  const t = mergePatternToggles(toggles);
+  const candidates: CorrectiveCountV2[] = [];
+  const dir = impulse.direction === "bull" ? "down" : "up";
+  for (const end of ends) {
+    const hit =
+      dir === "down"
+        ? abcFromQuadrupleDown(start, pivotA, pivotB, end)
+        : abcFromQuadrupleUp(start, pivotA, pivotB, end);
+    if (!hit) continue;
+    if (hit.pattern === "zigzag" && !patternMenuAllowsZigzagAbc(t)) continue;
+    if (hit.pattern === "flat" && !patternMenuAllowsFlatAbc(t)) continue;
+    candidates.push(hit);
+  }
+  return dedupeAbcScenariosByPattern(candidates);
 }
 
 export function detectImpulseCorrectionsV2(

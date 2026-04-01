@@ -12,9 +12,13 @@ use uuid::Uuid;
 
 use crate::error::StorageError;
 
+/// Default `strategy_key` when a single ledger per user is enough (e.g. API/manual paper).
+pub const PAPER_LEDGER_DEFAULT_STRATEGY_KEY: &str = "default";
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct PaperBalanceRow {
     pub user_id: Uuid,
+    pub strategy_key: String,
     pub org_id: Uuid,
     pub quote_balance: Decimal,
     pub base_positions: Json<HashMap<String, Decimal>>,
@@ -26,6 +30,7 @@ pub struct PaperFillRow {
     pub id: Uuid,
     pub org_id: Uuid,
     pub user_id: Uuid,
+    pub strategy_key: String,
     pub exchange: String,
     pub segment: String,
     pub symbol: String,
@@ -53,13 +58,15 @@ impl PaperLedgerRepository {
     pub async fn fetch_balance(
         &self,
         user_id: Uuid,
+        strategy_key: &str,
     ) -> Result<Option<PaperBalanceRow>, StorageError> {
         let row = sqlx::query_as::<_, PaperBalanceRow>(
-            r#"SELECT user_id, org_id, quote_balance, base_positions, updated_at
+            r#"SELECT user_id, strategy_key, org_id, quote_balance, base_positions, updated_at
                FROM paper_balances
-               WHERE user_id = $1"#,
+               WHERE user_id = $1 AND strategy_key = $2"#,
         )
         .bind(user_id)
+        .bind(strategy_key)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)
@@ -69,14 +76,16 @@ impl PaperLedgerRepository {
         &self,
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
+        strategy_key: &str,
     ) -> Result<Option<PaperBalanceRow>, StorageError> {
         let row = sqlx::query_as::<_, PaperBalanceRow>(
-            r#"SELECT user_id, org_id, quote_balance, base_positions, updated_at
+            r#"SELECT user_id, strategy_key, org_id, quote_balance, base_positions, updated_at
                FROM paper_balances
-               WHERE user_id = $1
+               WHERE user_id = $1 AND strategy_key = $2
                FOR UPDATE"#,
         )
         .bind(user_id)
+        .bind(strategy_key)
         .fetch_optional(&mut **tx)
         .await?;
         Ok(row)
@@ -87,15 +96,17 @@ impl PaperLedgerRepository {
         tx: &mut Transaction<'_, Postgres>,
         org_id: Uuid,
         user_id: Uuid,
+        strategy_key: &str,
         initial_quote: Decimal,
     ) -> Result<PaperBalanceRow, StorageError> {
         let empty = Json(HashMap::<String, Decimal>::new());
         let row = sqlx::query_as::<_, PaperBalanceRow>(
-            r#"INSERT INTO paper_balances (user_id, org_id, quote_balance, base_positions)
-               VALUES ($1, $2, $3, $4)
-               RETURNING user_id, org_id, quote_balance, base_positions, updated_at"#,
+            r#"INSERT INTO paper_balances (user_id, strategy_key, org_id, quote_balance, base_positions)
+               VALUES ($1, $2, $3, $4, $5)
+               RETURNING user_id, strategy_key, org_id, quote_balance, base_positions, updated_at"#,
         )
         .bind(user_id)
+        .bind(strategy_key)
         .bind(org_id)
         .bind(initial_quote)
         .bind(empty)
@@ -108,6 +119,7 @@ impl PaperLedgerRepository {
         &self,
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
+        strategy_key: &str,
         quote_balance: Decimal,
         base_positions: &HashMap<String, Decimal>,
     ) -> Result<(), StorageError> {
@@ -115,11 +127,42 @@ impl PaperLedgerRepository {
         sqlx::query(
             r#"UPDATE paper_balances
                SET quote_balance = $1, base_positions = $2, updated_at = now()
-               WHERE user_id = $3"#,
+               WHERE user_id = $3 AND strategy_key = $4"#,
         )
         .bind(quote_balance)
         .bind(j)
         .bind(user_id)
+        .bind(strategy_key)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    /// Insert or update the paper balance row to match the in-memory dry ledger after a fill.
+    pub async fn upsert_balance_snapshot(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        org_id: Uuid,
+        user_id: Uuid,
+        strategy_key: &str,
+        quote_balance: Decimal,
+        base_positions: &HashMap<String, Decimal>,
+    ) -> Result<(), StorageError> {
+        let j = Json(base_positions.clone());
+        sqlx::query(
+            r#"INSERT INTO paper_balances (user_id, strategy_key, org_id, quote_balance, base_positions)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (user_id, strategy_key) DO UPDATE SET
+                 org_id = EXCLUDED.org_id,
+                 quote_balance = EXCLUDED.quote_balance,
+                 base_positions = EXCLUDED.base_positions,
+                 updated_at = now()"#,
+        )
+        .bind(user_id)
+        .bind(strategy_key)
+        .bind(org_id)
+        .bind(quote_balance)
+        .bind(j)
         .execute(&mut **tx)
         .await?;
         Ok(())
@@ -131,6 +174,7 @@ impl PaperLedgerRepository {
         tx: &mut Transaction<'_, Postgres>,
         org_id: Uuid,
         user_id: Uuid,
+        strategy_key: &str,
         exchange: &str,
         segment: &str,
         symbol: &str,
@@ -148,16 +192,17 @@ impl PaperLedgerRepository {
         let bases = Json(base_positions_after.clone());
         let row = sqlx::query_as::<_, PaperFillRow>(
             r#"INSERT INTO paper_fills (
-                   org_id, user_id, exchange, segment, symbol,
+                   org_id, user_id, strategy_key, exchange, segment, symbol,
                    client_order_id, side, quantity, avg_price, fee,
                    quote_balance_after, base_positions_after, intent
-               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-               RETURNING id, org_id, user_id, exchange, segment, symbol,
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+               RETURNING id, org_id, user_id, strategy_key, exchange, segment, symbol,
                          client_order_id, side, quantity, avg_price, fee,
                          quote_balance_after, base_positions_after, intent, created_at"#,
         )
         .bind(org_id)
         .bind(user_id)
+        .bind(strategy_key)
         .bind(exchange)
         .bind(segment)
         .bind(symbol)
@@ -192,7 +237,7 @@ impl PaperLedgerRepository {
         let lim = limit.clamp(1, 1000);
         let rows = if let Some(ts) = since {
             sqlx::query_as::<_, PaperFillRow>(
-                r#"SELECT id, org_id, user_id, exchange, segment, symbol,
+                r#"SELECT id, org_id, user_id, strategy_key, exchange, segment, symbol,
                           client_order_id, side, quantity, avg_price, fee,
                           quote_balance_after, base_positions_after, intent, created_at
                    FROM paper_fills
@@ -207,7 +252,7 @@ impl PaperLedgerRepository {
             .await?
         } else {
             sqlx::query_as::<_, PaperFillRow>(
-                r#"SELECT id, org_id, user_id, exchange, segment, symbol,
+                r#"SELECT id, org_id, user_id, strategy_key, exchange, segment, symbol,
                           client_order_id, side, quantity, avg_price, fee,
                           quote_balance_after, base_positions_after, intent, created_at
                    FROM paper_fills
@@ -231,7 +276,7 @@ impl PaperLedgerRepository {
     ) -> Result<Vec<PaperFillRow>, StorageError> {
         let lim = limit.clamp(1, 100);
         let rows = sqlx::query_as::<_, PaperFillRow>(
-            r#"SELECT id, org_id, user_id, exchange, segment, symbol,
+            r#"SELECT id, org_id, user_id, strategy_key, exchange, segment, symbol,
                       client_order_id, side, quantity, avg_price, fee,
                       quote_balance_after, base_positions_after, intent, created_at
                FROM paper_fills

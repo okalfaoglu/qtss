@@ -251,8 +251,8 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`).
 
 1. **Kimlik ve RBAC** — OAuth + JWT + `qtss:audit:read` + `user_permissions` + admin izin CRUD; `GET /api/v1/audit/recent` (admin veya salt okunur denetim izni); `PUT .../permissions` + `audit_log.details` (`QTSS_AUDIT_HTTP=1`) (**kısmen**; kurumlar arası admin, tam olay şeması sonra)  
 2. **Binance spot + futures** — REST + katalog + kline + stream URL + komisyon fallback + kline WS → DB; hesap bazlı fee: `commission-account` (**v1 tamam**)  
-3. **Emir ve mutabakat** — `BinanceLiveGateway` + HTTP place/Cancel; `qtss-reconcile` + worker/API reconcile; `*_PATCH_STATUS`, isteğe bağlı `*_REFINE_ORDER_STATUS` / `*_REFINE_MAX` (`GET .../order` → `filled` / `canceled` / `partially_filled`); kalan `submitted` → `reconciled_not_open` (**kısmen**; fill WebSocket / ek kolonlar sonra)  
-4. **Copy trade** — CRUD API + `copy_trade_follower` + `copy_trade_queue` / `copy_trade_execution_jobs` (**kısmen**); Binance user-stream fill + canlı follower emir sonraki iterasyon  
+3. **Emir ve mutabakat** — `BinanceLiveGateway` + HTTP place/Cancel; `qtss-reconcile` + worker/API reconcile; `*_PATCH_STATUS`, isteğe bağlı `*_REFINE_ORDER_STATUS` / `*_REFINE_MAX` (`GET .../order` → `filled` / `canceled` / `partially_filled`); kalan `submitted` → `reconciled_not_open`. **User stream (isteğe bağlı):** `binance_user_stream.rs` + `QTSS_BINANCE_USER_STREAM_ENABLED` → fill / order durumu DB; reconcile ile birlikte kullanılabilir (**kısmen**: venue/edge durumları ve ince ayar)  
+4. **Copy trade** — CRUD API + `copy_trade_follower` + `copy_trade_queue` / `copy_trade_execution_jobs` (**kısmen**); dolum hızı için user stream + DB üzerinden pozisyon/ledger tutarlılığı; canlı follower emir mantığı / SLA ayrı iterasyon  
 5. **Analiz motoru** — `qtss-analysis` crate + worker entegrasyonu (**kısmen**; genişletilmiş motor / tam API yüzeyi sonra)  
 6. **AI katmanı** — onay kuyruğu DB + HTTP (**kısmen**; worker/LLM/policy sonraki)  
 7. **Bildirim** — `qtss-notify` + `notify_outbox` worker (**kısmen**; retry/DLQ/çoklu tüketici sonra)  

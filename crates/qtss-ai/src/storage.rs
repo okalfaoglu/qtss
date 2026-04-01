@@ -72,6 +72,7 @@ pub async fn insert_ai_decision(
     parsed_decision: Option<&Value>,
     confidence: Option<f64>,
     decision_ttl_secs: u64,
+    approval_request_id: Option<Uuid>,
     meta_json: &Value,
 ) -> AiResult<Uuid> {
     let expires_at = Utc::now() + Duration::seconds(decision_ttl_secs as i64);
@@ -79,9 +80,10 @@ pub async fn insert_ai_decision(
         r#"
         INSERT INTO ai_decisions (
             layer, symbol, model_id, prompt_hash, input_snapshot,
-            raw_output, parsed_decision, status, confidence, expires_at, meta_json
+            raw_output, parsed_decision, status, confidence, expires_at, meta_json,
+            approval_request_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending_approval', $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending_approval', $8, $9, $10, $11)
         RETURNING id
         "#,
     )
@@ -95,9 +97,83 @@ pub async fn insert_ai_decision(
     .bind(confidence)
     .bind(expires_at)
     .bind(meta_json)
+    .bind(approval_request_id)
     .fetch_one(pool)
     .await?;
     Ok(id)
+}
+
+/// Attach an existing `ai_approval_requests` row to a pending LLM decision (same org enforced by caller).
+pub async fn set_ai_decision_approval_link(
+    pool: &PgPool,
+    decision_id: Uuid,
+    approval_request_id: Uuid,
+) -> AiResult<u64> {
+    let res = sqlx::query(
+        r#"UPDATE ai_decisions
+           SET approval_request_id = $2
+           WHERE id = $1 AND status = 'pending_approval'"#,
+    )
+    .bind(decision_id)
+    .bind(approval_request_id)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+/// When an AI decision is approved/rejected (API or auto), mirror status onto a linked general approval queue row.
+pub async fn sync_linked_approval_request_status(
+    pool: &PgPool,
+    decision_id: Uuid,
+    approval_status: &str,
+    admin_note: Option<&str>,
+    decided_by_user_id: Option<Uuid>,
+) -> AiResult<()> {
+    if approval_status != "approved" && approval_status != "rejected" {
+        return Ok(());
+    }
+    // Column is nullable; decode as `Option<Uuid>` or NULL becomes a decode error for plain `Uuid`.
+    let aid: Option<Uuid> = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT approval_request_id FROM ai_decisions WHERE id = $1",
+    )
+    .bind(decision_id)
+    .fetch_one(pool)
+    .await?;
+    let Some(aid) = aid else {
+        return Ok(());
+    };
+    if let Some(uid) = decided_by_user_id {
+        sqlx::query(
+            r#"UPDATE ai_approval_requests
+               SET status = $1,
+                   admin_note = COALESCE($2, admin_note),
+                   decided_by_user_id = $3,
+                   decided_at = now(),
+                   updated_at = now()
+               WHERE id = $4 AND status = 'pending'"#,
+        )
+        .bind(approval_status)
+        .bind(admin_note)
+        .bind(uid)
+        .bind(aid)
+        .execute(pool)
+        .await?;
+    } else {
+        sqlx::query(
+            r#"UPDATE ai_approval_requests
+               SET status = $1,
+                   admin_note = COALESCE($2, admin_note),
+                   decided_at = now(),
+                   updated_at = now()
+               WHERE id = $3 AND status = 'pending'"#,
+        )
+        .bind(approval_status)
+        .bind(admin_note)
+        .bind(aid)
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
 }
 
 pub async fn insert_ai_decision_error(
@@ -468,6 +544,7 @@ pub struct AiDecisionDetailRow {
     pub expires_at: Option<DateTime<Utc>>,
     pub confidence: Option<f64>,
     pub meta_json: Value,
+    pub approval_request_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
@@ -597,7 +674,7 @@ pub async fn fetch_ai_decision_detail(pool: &PgPool, id: Uuid) -> AiResult<Optio
     let row = sqlx::query_as::<_, AiDecisionDetailRow>(
         r#"SELECT id, created_at, layer, symbol, model_id, prompt_hash, input_snapshot,
                   raw_output, parsed_decision, status, approved_by, approved_at, applied_at,
-                  expires_at, confidence, meta_json
+                  expires_at, confidence, meta_json, approval_request_id
            FROM ai_decisions WHERE id = $1"#,
     )
     .bind(id)
@@ -629,6 +706,10 @@ pub async fn admin_approve_ai_decision(pool: &PgPool, id: Uuid, approved_by: &st
     .bind(id)
     .execute(pool)
     .await?;
+    let decider = approved_by
+        .strip_prefix("jwt:")
+        .and_then(|s| Uuid::parse_str(s.trim()).ok());
+    sync_linked_approval_request_status(pool, id, "approved", None, decider).await?;
     Ok(n)
 }
 
@@ -655,7 +736,40 @@ pub async fn admin_reject_ai_decision(pool: &PgPool, id: Uuid, approved_by: &str
     .bind(id)
     .execute(pool)
     .await?;
+    let decider = approved_by
+        .strip_prefix("jwt:")
+        .and_then(|s| Uuid::parse_str(s.trim()).ok());
+    sync_linked_approval_request_status(pool, id, "rejected", None, decider).await?;
     Ok(n)
+}
+
+/// After `ai_approval_requests` is resolved (e.g. Telegram), apply the same outcome to linked `ai_decisions` (pending only).
+pub async fn mirror_approval_request_outcome_to_linked_ai_decisions(
+    pool: &PgPool,
+    approval_request_id: Uuid,
+    approve: bool,
+    decided_by: &str,
+) -> AiResult<()> {
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM ai_decisions WHERE approval_request_id = $1 AND status = 'pending_approval'",
+    )
+    .bind(approval_request_id)
+    .fetch_all(pool)
+    .await?;
+    for id in ids {
+        let n = if approve {
+            admin_approve_ai_decision(pool, id, decided_by).await?
+        } else {
+            admin_reject_ai_decision(pool, id, decided_by).await?
+        };
+        if n == 0 {
+            tracing::debug!(
+                decision_id = %id,
+                "mirror approval_request outcome: ai_decision not updated"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Latest active portfolio directive (FAZ 7.1).

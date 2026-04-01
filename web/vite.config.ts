@@ -43,21 +43,40 @@ export default defineConfig(({ mode }) => {
       include: ["src/**/*.test.ts"],
       environment: "node",
     },
+    /** Binance proxy: `/__binance_fapi` MUST be listed before `/__binance` — otherwise `/__binance_fapi/...` matches the spot prefix and rewrites to a bogus path on api.binance.com (404). */
     server: {
       port: 5173,
       proxy: {
         "/api": { target: "http://127.0.0.1:8080", changeOrigin: true },
         "/oauth": { target: "http://127.0.0.1:8080", changeOrigin: true },
         "/health": { target: "http://127.0.0.1:8080", changeOrigin: true },
+        "/__binance_fapi": {
+          target: binanceFapiProxyTarget,
+          changeOrigin: true,
+          rewrite: (p) => p.replace(/^\/__binance_fapi/, ""),
+        },
         "/__binance": {
           target: binanceProxyTarget,
           changeOrigin: true,
           rewrite: (p) => p.replace(/^\/__binance/, ""),
         },
+      },
+    },
+    preview: {
+      port: 4173,
+      proxy: {
+        "/api": { target: "http://127.0.0.1:8080", changeOrigin: true },
+        "/oauth": { target: "http://127.0.0.1:8080", changeOrigin: true },
+        "/health": { target: "http://127.0.0.1:8080", changeOrigin: true },
         "/__binance_fapi": {
           target: binanceFapiProxyTarget,
           changeOrigin: true,
           rewrite: (p) => p.replace(/^\/__binance_fapi/, ""),
+        },
+        "/__binance": {
+          target: binanceProxyTarget,
+          changeOrigin: true,
+          rewrite: (p) => p.replace(/^\/__binance/, ""),
         },
       },
     },

@@ -50,7 +50,8 @@ async fn position_notify_channels(pool: &PgPool) -> Vec<NotificationChannel> {
 
 fn fill_line_tr(f: &PaperFillRow) -> String {
     format!(
-        "· {} {} {} | {} qty {} @ {} (ücret {}) | quote {}",
+        "· [{}] {} {} {} | {} qty {} @ {} (ücret {}) | quote {}",
+        f.strategy_key,
         f.exchange,
         f.segment,
         f.symbol,
@@ -64,7 +65,8 @@ fn fill_line_tr(f: &PaperFillRow) -> String {
 
 fn fill_line_en(f: &PaperFillRow) -> String {
     format!(
-        "· {} {} {} | {} qty {} @ {} (fee {}) | quote {}",
+        "· [{}] {} {} {} | {} qty {} @ {} (fee {}) | quote {}",
+        f.strategy_key,
         f.exchange,
         f.segment,
         f.symbol,

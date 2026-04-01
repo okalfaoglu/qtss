@@ -2,7 +2,6 @@
 //!
 //! Lider dolum kuyruğu yok; smart-money perp aggregate yönü takipçi hesabına paper/canlı market emri olarak yansıtılır.
 
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,68 +11,147 @@ use qtss_domain::orders::{OrderIntent, OrderSide, OrderType, TimeInForce};
 use qtss_domain::symbol::InstrumentId;
 use qtss_domain::CopyRule;
 use qtss_execution::ExecutionGateway;
-use qtss_storage::{data_snapshot_age_secs, fetch_data_snapshot, list_recent_bars};
+use qtss_storage::{
+    data_snapshot_age_secs, fetch_data_snapshot, list_recent_bars, resolve_system_decimal,
+    resolve_system_f64, resolve_system_string, resolve_worker_enabled_flag, resolve_worker_tick_secs,
+};
 use rust_decimal::Decimal;
 use serde_json::Value;
 use sqlx::PgPool;
 use tracing::{info, warn};
 
-use crate::risk::{apply_kelly_scale_to_qty, clamp_qty_by_max_notional_usdt};
+use crate::risk::{
+    apply_kelly_scale_to_qty, clamp_qty_by_max_notional_usdt, kelly_qty_scale,
+};
 
 const NANSEN_PERP_TRADES_KEY: &str = "nansen_perp_trades";
 
-fn tick_secs() -> u64 {
-    std::env::var("QTSS_COPY_TRADE_STRATEGY_TICK_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(120)
-        .max(30)
+struct CopyTradeParams {
+    tick_secs: u64,
+    direction_threshold: f64,
+    base_order_qty: Decimal,
+    default_symbol: String,
+    bar_exchange: String,
+    bar_segment: String,
+    bar_interval: String,
+    auto_place: bool,
+    requires_human_approval: bool,
+    max_notional_usdt: Decimal,
 }
 
-fn direction_threshold() -> f64 {
-    std::env::var("QTSS_COPY_TRADE_DIRECTION_THRESHOLD")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0.25)
-}
-
-fn base_order_qty() -> Decimal {
-    let base = std::env::var("QTSS_COPY_TRADE_BASE_QTY")
-        .ok()
-        .and_then(|s| Decimal::from_str(s.trim()).ok())
-        .or_else(|| {
-            std::env::var("QTSS_STRATEGY_ORDER_QTY")
-                .ok()
-                .and_then(|s| s.parse().ok())
-        })
-        .unwrap_or_else(|| Decimal::new(1, 3));
-    apply_kelly_scale_to_qty(base)
-}
-
-fn default_symbol() -> String {
-    std::env::var("QTSS_COPY_TRADE_DEFAULT_SYMBOL")
-        .unwrap_or_else(|_| "BTCUSDT".into())
+async fn load_copy_params(pool: &PgPool) -> CopyTradeParams {
+    let kelly_apply = resolve_worker_enabled_flag(
+        pool,
+        "strategy",
+        "kelly_apply",
+        "QTSS_KELLY_APPLY",
+        false,
+    )
+    .await;
+    let kelly_win = resolve_system_f64(pool, "strategy", "kelly_win_rate", "QTSS_KELLY_WIN_RATE", 0.55).await;
+    let kelly_wl =
+        resolve_system_f64(pool, "strategy", "kelly_avg_win_loss_ratio", "QTSS_KELLY_AVG_WIN_LOSS_RATIO", 1.5).await;
+    let kelly_cap =
+        resolve_system_f64(pool, "strategy", "kelly_max_fraction", "QTSS_KELLY_MAX_FRACTION", 0.25).await;
+    let kelly_scale = kelly_qty_scale(kelly_apply, kelly_win, kelly_wl, kelly_cap);
+    let mut base = resolve_system_decimal(
+        pool,
+        "strategy",
+        "copy_trade_base_qty",
+        "QTSS_COPY_TRADE_BASE_QTY",
+        Decimal::ZERO,
+    )
+    .await;
+    if base <= Decimal::ZERO {
+        base = resolve_system_decimal(
+            pool,
+            "strategy",
+            "strategy_order_qty",
+            "QTSS_STRATEGY_ORDER_QTY",
+            Decimal::new(1, 3),
+        )
+        .await;
+    }
+    let base_order_qty = apply_kelly_scale_to_qty(base, kelly_scale);
+    let skip_human = resolve_worker_enabled_flag(
+        pool,
+        "strategy",
+        "strategy_skip_human_approval",
+        "QTSS_STRATEGY_SKIP_HUMAN_APPROVAL",
+        false,
+    )
+    .await;
+    CopyTradeParams {
+        tick_secs: resolve_worker_tick_secs(
+            pool,
+            "strategy",
+            "copy_trade_strategy_tick_secs",
+            "QTSS_COPY_TRADE_STRATEGY_TICK_SECS",
+            120,
+            30,
+        )
+        .await,
+        direction_threshold: resolve_system_f64(
+            pool,
+            "strategy",
+            "copy_trade_direction_threshold",
+            "QTSS_COPY_TRADE_DIRECTION_THRESHOLD",
+            0.25,
+        )
+        .await,
+        base_order_qty,
+        default_symbol: resolve_system_string(
+            pool,
+            "strategy",
+            "copy_trade_default_symbol",
+            "QTSS_COPY_TRADE_DEFAULT_SYMBOL",
+            "BTCUSDT",
+        )
+        .await
         .trim()
-        .to_uppercase()
-}
-
-fn bar_ctx() -> (String, String, String) {
-    let ex = std::env::var("QTSS_COPY_TRADE_BAR_EXCHANGE").unwrap_or_else(|_| "binance".into());
-    let seg = std::env::var("QTSS_COPY_TRADE_BAR_SEGMENT").unwrap_or_else(|_| "futures".into());
-    let iv = std::env::var("QTSS_COPY_TRADE_BAR_INTERVAL").unwrap_or_else(|_| "1m".into());
-    (ex, seg, iv)
-}
-
-fn auto_place() -> bool {
-    std::env::var("QTSS_COPY_TRADE_STRATEGY_AUTO_PLACE")
-        .ok()
-        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
-}
-
-fn requires_human_approval() -> bool {
-    !std::env::var("QTSS_STRATEGY_SKIP_HUMAN_APPROVAL")
-        .ok()
-        .is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes" | "on"))
+        .to_uppercase(),
+        bar_exchange: resolve_system_string(
+            pool,
+            "strategy",
+            "copy_trade_bar_exchange",
+            "QTSS_COPY_TRADE_BAR_EXCHANGE",
+            "binance",
+        )
+        .await,
+        bar_segment: resolve_system_string(
+            pool,
+            "strategy",
+            "copy_trade_bar_segment",
+            "QTSS_COPY_TRADE_BAR_SEGMENT",
+            "futures",
+        )
+        .await,
+        bar_interval: resolve_system_string(
+            pool,
+            "strategy",
+            "copy_trade_bar_interval",
+            "QTSS_COPY_TRADE_BAR_INTERVAL",
+            "1m",
+        )
+        .await,
+        auto_place: resolve_worker_enabled_flag(
+            pool,
+            "strategy",
+            "copy_trade_strategy_auto_place",
+            "QTSS_COPY_TRADE_STRATEGY_AUTO_PLACE",
+            false,
+        )
+        .await,
+        requires_human_approval: !skip_human,
+        max_notional_usdt: resolve_system_decimal(
+            pool,
+            "strategy",
+            "max_position_notional_usdt",
+            "QTSS_MAX_POSITION_NOTIONAL_USDT",
+            Decimal::new(10_000, 0),
+        )
+        .await,
+    }
 }
 
 /// Worker `score_nansen_perp_direction` ile aynı mantık (crate ayrımı için kopya).
@@ -140,7 +218,7 @@ async fn perp_data_fresh_ms(pool: &PgPool, max_latency_ms: i64) -> bool {
     }
 }
 
-fn pick_symbol(rule: &CopyRule) -> String {
+fn pick_symbol(rule: &CopyRule, default_symbol: &str) -> String {
     if let Some(s) = rule
         .symbol_allowlist
         .iter()
@@ -149,7 +227,7 @@ fn pick_symbol(rule: &CopyRule) -> String {
     {
         s
     } else {
-        default_symbol()
+        default_symbol.to_string()
     }
 }
 
@@ -174,13 +252,14 @@ fn apply_notional_bounds(rule: &CopyRule, qty: Decimal, mark: Decimal) -> Option
 }
 
 pub async fn run(pool: PgPool, gateway: Arc<dyn ExecutionGateway>) {
-    let tick = Duration::from_secs(tick_secs());
+    let p = load_copy_params(&pool).await;
+    let tick = Duration::from_secs(p.tick_secs.max(30));
     let repo = qtss_storage::CopySubscriptionRepository::new(pool.clone());
-    let (bar_ex, bar_seg, bar_iv) = bar_ctx();
-    info!(
-        poll_secs = tick.as_secs(),
-        "copy_trade strateji döngüsü (perp aggregate)"
-    );
+    let bar_ex = p.bar_exchange.clone();
+    let bar_seg = p.bar_segment.clone();
+    let bar_iv = p.bar_interval.clone();
+    let default_sym = p.default_symbol.clone();
+    info!(poll_secs = tick.as_secs(), "copy_trade strateji döngüsü (perp aggregate)");
     loop {
         tokio::time::sleep(tick).await;
         if is_trading_halted() {
@@ -198,7 +277,7 @@ pub async fn run(pool: PgPool, gateway: Arc<dyn ExecutionGateway>) {
             continue;
         };
         let score = perp_long_ratio_score(&j);
-        let th = direction_threshold();
+        let th = p.direction_threshold;
 
         match repo.list_active_subscriptions().await {
             Ok(rows) => {
@@ -211,7 +290,7 @@ pub async fn run(pool: PgPool, gateway: Arc<dyn ExecutionGateway>) {
                     if !perp_data_fresh_ms(&pool, rule.max_latency_ms).await {
                         continue;
                     }
-                    let sym = pick_symbol(&rule);
+                    let sym = pick_symbol(&rule, &default_sym);
                     let bars = list_recent_bars(&pool, &bar_ex, &bar_seg, &sym, &bar_iv, 1)
                         .await
                         .ok()
@@ -220,11 +299,11 @@ pub async fn run(pool: PgPool, gateway: Arc<dyn ExecutionGateway>) {
                         tracing::debug!(%sym, "copy_trade: bar / mark yok");
                         continue;
                     };
-                    let qty = base_order_qty() * rule.size_multiplier;
+                    let qty = p.base_order_qty * rule.size_multiplier;
                     let Some(qty) = apply_notional_bounds(&rule, qty, mark) else {
                         continue;
                     };
-                    let qty = clamp_qty_by_max_notional_usdt(qty, mark);
+                    let qty = clamp_qty_by_max_notional_usdt(qty, mark, p.max_notional_usdt);
                     if qty <= Decimal::ZERO {
                         continue;
                     }
@@ -249,11 +328,11 @@ pub async fn run(pool: PgPool, gateway: Arc<dyn ExecutionGateway>) {
                         quantity: qty,
                         order_type: OrderType::Market,
                         time_in_force: TimeInForce::Gtc,
-                        requires_human_approval: requires_human_approval(),
+                        requires_human_approval: p.requires_human_approval,
                         futures: None,
                     };
                     let _ = gateway.set_reference_price(&intent.instrument, mark);
-                    if auto_place() {
+                    if p.auto_place {
                         match gateway.place(intent).await {
                             Ok(id) => info!(sub_id = %r.id, %sym, ?side, %id, "copy_trade: emir"),
                             Err(e) => warn!(sub_id = %r.id, %sym, %e, "copy_trade: place"),
@@ -264,7 +343,7 @@ pub async fn run(pool: PgPool, gateway: Arc<dyn ExecutionGateway>) {
                             %sym,
                             ?side,
                             score,
-                            "copy_trade: sinyal (QTSS_COPY_TRADE_STRATEGY_AUTO_PLACE=1 ile yürüt)"
+                            "copy_trade: sinyal (strategy.copy_trade_strategy_auto_place)"
                         );
                     }
                 }

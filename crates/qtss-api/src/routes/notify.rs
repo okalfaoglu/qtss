@@ -4,6 +4,7 @@ use axum::extract::{Extension, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use qtss_ai::load_notify_config_merged;
 use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher, NotifyError};
 use qtss_storage::NotifyOutboxRow;
 use serde::Deserialize;
@@ -29,6 +30,7 @@ pub fn notify_outbox_write_router() -> Router<SharedState> {
 pub struct NotifyTestBody {
     pub channel: Option<String>,
     pub message: Option<String>,
+    pub title: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -56,6 +58,7 @@ pub struct EnqueueOutboxBody {
 
 async fn notify_test(
     Extension(_claims): Extension<AccessClaims>,
+    State(st): State<SharedState>,
     Json(body): Json<NotifyTestBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let ch = body
@@ -63,11 +66,21 @@ async fn notify_test(
         .as_deref()
         .and_then(NotificationChannel::parse)
         .unwrap_or(NotificationChannel::Telegram);
+    let title = body
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("QTSS test");
     let msg = body
         .message
-        .unwrap_or_else(|| "QTSS panel — bildirim testi".into());
-    let n = Notification::new("QTSS test", msg);
-    let d = NotificationDispatcher::from_env();
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("QTSS panel — channel test (merged notify config)");
+    let n = Notification::new(title, msg);
+    let ncfg = load_notify_config_merged(&st.pool).await;
+    let d = NotificationDispatcher::new(ncfg);
     match d.send(ch, &n).await {
         Ok(rec) => Ok(Json(json!({
             "status": "sent",

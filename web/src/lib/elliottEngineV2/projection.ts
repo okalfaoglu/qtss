@@ -1,44 +1,87 @@
-import type { SeriesMarker, UTCTimestamp } from "lightweight-charts";
+import type { UTCTimestamp } from "lightweight-charts";
+import {
+  collectAbcCorrectivesWithFixedAB,
+  collectAllAbcPostImpulseCandidates,
+} from "./corrective";
 import { DEFAULT_ELLIOTT_PATTERN_MENU, type ElliottPatternMenuToggles } from "../elliottPatternMenuCatalog";
+import { patternMenuAllowsFlatAbc, patternMenuAllowsZigzagAbc } from "./corrective";
 import type { PatternLayerOverlay } from "../patternDrawingBatchOverlay";
-import type { CorrectiveCountV2, ElliottEngineOutputV2, ImpulseCountV2, OhlcV2, Timeframe } from "./types";
+import type {
+  CorrectiveCountV2,
+  ElliottEngineOutputV2,
+  ImpulseCountV2,
+  OhlcV2,
+  Timeframe,
+  ZigzagPivot,
+} from "./types";
+
+/**
+ * Post–P5 düzeltmede `path` tüm zigzag uçlarını içerir; W–X–Y (ve ABC) **köşeleri** `pivots` içindedir.
+ * Projeksiyon `path[1..3]` ile yapılırsa X yanlış köşe olur ve “+Y’den sonra” çizgi yönü bozulur.
+ */
+function postImpulseStructuralGuide(post: CorrectiveCountV2 | null): null | {
+  donePolyline: ZigzagPivot[];
+  a: ZigzagPivot;
+  b: ZigzagPivot;
+  c: ZigzagPivot | null;
+  hasA: boolean;
+  hasB: boolean;
+  hasC: boolean;
+  /** Düzeltmenin bitiş köşesi (C / Y / E); sonraki itkı buradan başlar. */
+  patternEnd: ZigzagPivot;
+} {
+  if (!post) return null;
+  const donePolyline = post.path?.length ? post.path : [...post.pivots];
+  if (post.pattern === "triangle") {
+    const path = post.path?.length ? post.path : post.pivots;
+    if (path.length < 3) return null;
+    const patternEnd = path[path.length - 1]!;
+    return {
+      donePolyline,
+      a: path[1]!,
+      b: path[2]!,
+      c: path.length >= 4 ? path[3]! : null,
+      hasA: path.length >= 2,
+      hasB: path.length >= 3,
+      hasC: path.length >= 4,
+      patternEnd,
+    };
+  }
+  const pv = post.pivots;
+  const hasA = pv.length >= 2;
+  const hasB = pv.length >= 3;
+  const hasC = pv.length >= 4;
+  if (!hasA) return null;
+  const a = pv[1]!;
+  const b = hasB ? pv[2]! : a;
+  const c = hasC ? pv[3]! : null;
+  const patternEnd = hasC ? pv[3]! : hasB ? pv[2]! : pv[1]!;
+  return { donePolyline, a, b, c, hasA, hasB, hasC, patternEnd };
+}
 
 function impulseShownInMenu(imp: ImpulseCountV2, menu?: ElliottPatternMenuToggles): boolean {
   const m = { ...DEFAULT_ELLIOTT_PATTERN_MENU, ...menu };
   const v = imp.variant ?? "standard";
-  if (v === "diagonal") return m.motive_diagonal;
+  if (v === "diagonal") {
+    const role = imp.diagonalRole ?? "unknown";
+    if (role === "leading") return m.motive_diagonal_leading;
+    if (role === "ending") return m.motive_diagonal_ending;
+    return m.motive_diagonal_leading || m.motive_diagonal_ending;
+  }
   return m.motive_impulse;
 }
 
 type Pt = { time: UTCTimestamp; value: number };
 
 export type ElliottProjectionV2Options = {
-  barHop: number;
-  maxSteps: number;
-  /** Projection rendering mode. */
-  mode?: "legacy" | "formation";
   /**
-   * Fib time blend weight for measured impulse durations vs fixed defaults.
-   * `0` => only fixed defaults, `1` => only measured ratios.
-   * @default 0.5
-   */
-  fibMeasuredWeight?: number;
-  /**
-   * İkinci polyline: uzatılmış 3. dalga senaryosu. `false` veya çıkarılırsa yalnızca birincil yol.
+   * Second formation path: alternate Fib calibration (extended wave-3 style).
    * @default true
    */
   includeAltScenario?: boolean;
+  /** Multiple zigzag vs flat (and pivot ABC) hypotheses in distinct colors. */
+  multiCorrectiveScenarios?: boolean;
 };
-
-function markerLabel(step: number, tf: Timeframe): string {
-  const seq =
-    tf === "4h"
-      ? ["Ⓐ", "Ⓑ", "Ⓒ", "①", "②", "③", "④", "⑤"]
-      : tf === "1h"
-        ? ["(A)", "(B)", "(C)", "(1)", "(2)", "(3)", "(4)", "(5)"]
-        : ["a", "b", "c", "i", "ii", "iii", "iv", "v"];
-  return seq[(step - 1) % seq.length] ?? String(step);
-}
 
 function chooseImpulse(out: ElliottEngineOutputV2) {
   return out.hierarchy.micro?.impulse ?? out.hierarchy.intermediate?.impulse ?? out.hierarchy.macro?.impulse ?? null;
@@ -52,19 +95,8 @@ function postAbcForProjectionTf(out: ElliottEngineOutputV2, tf: Timeframe): Corr
   return out.states[tf]?.postImpulseAbc ?? null;
 }
 
-function inferBarStepSec(rows: OhlcV2[]): number {
-  if (rows.length < 2) return 60;
-  const tail = rows.slice(-120);
-  let sum = 0;
-  let n = 0;
-  for (let i = 1; i < tail.length; i++) {
-    const d = tail[i].t - tail[i - 1].t;
-    if (d > 0) {
-      sum += d;
-      n++;
-    }
-  }
-  return n ? Math.max(30, Math.round(sum / n)) : 60;
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, v));
 }
 
 /** Son ~14 mum için ortalama true range — itkı bacak ortalaması ile karıştırılarak projeksiyon genliği ölçeklenir. */
@@ -100,393 +132,6 @@ function blendedProjectionPriceBase(imp: ImpulseCountV2, rows: OhlcV2[]): number
   const r = atr / Math.max(legAvg, 1e-12);
   const boost = clamp((r - 1) * 0.35, 0, 0.95);
   return Math.max(1e-8, legAvg * (1 + boost));
-}
-
-/**
- * 1-5 kabulünden sonra projeksiyonun "mevcut duruma" hizası:
- * - Son mum p5'e gore nerede? (duzeltme/asiri uzama)
- * - Sonraki adimi A/B/C veya 1/2/3/... olarak sec.
- */
-function startStepFromCurrentState(isBull: boolean, p5: number, latest: number, base: number): number {
-  const dir = isBull ? 1 : -1;
-  const x = ((latest - p5) * dir) / Math.max(1e-8, base);
-
-  // x < 0: itkiye ters yönde düzeltme (A/B/C). Üst sınır `>` ile değil `>=` ile: örn. x = -0.22 ile
-  // x = -0.219999 aynı bantta kalsın (yarı-açık sola: A = [-0.22, 0), B = [-0.58, -0.22), C < -0.58).
-  if (x < 0) {
-    if (x >= -0.22) return 1; // A
-    if (x >= -0.58) return 2; // B
-    return 3; // C veya C sonu (yalnızca A/B teyidi varsa kullanılmalı)
-  }
-
-  // x >= 0: p5 üstü/altında trend yönünde; [0,0.25), [0.25,0.75), … yarı-açık bantlar.
-  if (x < 0.25) return 4; // yeni 1
-  if (x < 0.75) return 5; // 2
-  if (x < 1.6) return 6; // 3
-  if (x < 2.1) return 7; // 4
-  return 8; // 5
-}
-
-function stepDirection(step: number): number {
-  // A/C/2/4 ters yon, B/1/3/5 trend yonu
-  const inCycle = ((step - 1) % 8) + 1;
-  return inCycle === 1 || inCycle === 3 || inCycle === 5 || inCycle === 7 ? -1 : 1;
-}
-
-type ProjectionCalibration = {
-  aMul: number;
-  bMul: number;
-  cMul: number;
-  i1Mul: number;
-  i2Mul: number;
-  i3Mul: number;
-  i4Mul: number;
-  i5Mul: number;
-};
-
-const DEFAULT_CALIBRATION: ProjectionCalibration = {
-  aMul: 0.382,
-  bMul: 0.236,
-  cMul: 0.618,
-  i1Mul: 1.0,
-  i2Mul: 0.382,
-  i3Mul: 1.618,
-  i4Mul: 0.382,
-  i5Mul: 1.0,
-};
-
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.min(hi, Math.max(lo, v));
-}
-
-function median(nums: number[]): number {
-  if (!nums.length) return 0;
-  const s = [...nums].sort((a, b) => a - b);
-  const m = Math.floor(s.length / 2);
-  if (s.length % 2) return s[m]!;
-  return (s[m - 1]! + s[m]!) / 2;
-}
-
-/** Son mumların fiyat/s hızını itkı ortalama hızıyla kıyasla; piyasa hızlandıkça projeksiyon süreleri kısalır. */
-function recentVsImpulseVelocityMul(rows: OhlcV2[], refRatePerSec: number): number {
-  const tail = rows.slice(-40);
-  if (tail.length < 4 || refRatePerSec <= 1e-12) return 1;
-  let sumDp = 0;
-  let sumDt = 0;
-  for (let i = 1; i < tail.length; i++) {
-    const dt = tail[i]!.t - tail[i - 1]!.t;
-    if (dt <= 0) continue;
-    sumDp += Math.abs(tail[i]!.c - tail[i - 1]!.c);
-    sumDt += dt;
-  }
-  const recent = sumDt > 0 ? sumDp / sumDt : refRatePerSec;
-  return clamp(recent / refRatePerSec, 0.48, 2.05);
-}
-
-/** Projeksiyon başlangıcından bu segment uca kadar yaklaşık süre (işaret metni). */
-function formatEtaFromStart(deltaSec: number): string {
-  const s = Math.max(0, Math.round(deltaSec));
-  if (s < 3600) return `+${Math.max(1, Math.round(s / 60))}m`;
-  if (s < 172800) return `+${Math.round(s / 3600)}h`;
-  return `+${Math.round(s / 86400)}d`;
-}
-
-/**
- * Post-ABC tespitinden dinamik oran profili uret:
- * - A/B/C carpani gercek segment buyukluklerinden gelir.
- * - Impuls 1-5 carpani C ve onceki ortalamaya gore hafif ayarlanir.
- */
-function buildCalibrationFromPostAbc(
-  post: CorrectiveCountV2 | null,
-  base: number,
-): ProjectionCalibration {
-  if (!post) return DEFAULT_CALIBRATION;
-  const path = post.path?.length ? post.path : post.pivots;
-  if (path.length < 4) return DEFAULT_CALIBRATION;
-
-  const a = Math.abs(path[1]!.price - path[0]!.price);
-  const b = Math.abs(path[2]!.price - path[1]!.price);
-  const c = Math.abs(path[3]!.price - path[2]!.price);
-  const d = Math.max(1e-8, base);
-
-  const aMul = clamp(a / d, 0.18, 1.2);
-  const bMul = clamp(b / d, 0.12, 0.9);
-  const cMul = clamp(c / d, 0.28, 2.2);
-
-  // C ne kadar gucluyse yeni impuls 1/3 bir miktar buyusun.
-  const cBoost = clamp(cMul / Math.max(1e-8, aMul), 0.75, 1.45);
-  const i1Mul = clamp(0.85 * cBoost, 0.55, 1.35);
-  const i2Mul = clamp(0.35 * (bMul / Math.max(1e-8, aMul)), 0.22, 0.62);
-  const i3Mul = clamp(1.35 * cBoost, 1.0, 2.35);
-  const i4Mul = clamp(i2Mul, 0.22, 0.62);
-  const i5Mul = clamp(0.9 * cBoost, 0.6, 1.55);
-
-  return { aMul, bMul, cMul, i1Mul, i2Mul, i3Mul, i4Mul, i5Mul };
-}
-
-/** Tespit edilen düzeltme kalıbına göre projeksiyon büyüklüklerine hafif düzeltme. */
-function applyFormationCalibrationTweak(
-  post: CorrectiveCountV2 | null,
-  cal: ProjectionCalibration,
-): ProjectionCalibration {
-  if (!post) return cal;
-  switch (post.pattern) {
-    case "triangle":
-      return {
-        ...cal,
-        cMul: clamp(cal.cMul * 0.9, 0.2, 2.2),
-        i3Mul: clamp(cal.i3Mul * 0.94, 0.85, 2.45),
-      };
-    case "flat":
-      return {
-        ...cal,
-        bMul: clamp(cal.bMul * 1.06, 0.12, 0.95),
-        aMul: clamp(cal.aMul * 1.03, 0.18, 1.2),
-      };
-    case "combination":
-      return {
-        ...cal,
-        cMul: clamp(cal.cMul * 1.05, 0.28, 2.3),
-      };
-    default:
-      return cal;
-  }
-}
-
-/** Alternatif senaryo: 3. dalga hedefi güçlü, 5. hafif kısılır. */
-function extendedThirdWaveCalibration(cal: ProjectionCalibration): ProjectionCalibration {
-  return {
-    ...cal,
-    i3Mul: clamp(cal.i3Mul * 1.2, 1.05, 2.55),
-    i5Mul: clamp(cal.i5Mul * 0.92, 0.55, 1.55),
-    i2Mul: clamp(cal.i2Mul * 0.95, 0.18, 0.65),
-  };
-}
-
-/**
- * Elliott tipik süre oranları + ölçülen itkı bacak sürelerinin karışımı.
- * `dt` çarpanı olarak kullanılır (fiyat hızı ile çarpılmış ham süre üzerine).
- */
-function projectionFibTimeMultiplier(
-  inCycle: number,
-  imp: ImpulseCountV2,
-  post: CorrectiveCountV2 | null,
-  fibMeasuredWeight: number,
-): number {
-  const p = imp.pivots;
-  const d01 = Math.max(1, p[1].time - p[0].time);
-  const d12 = Math.max(1, p[2].time - p[1].time);
-  const d23 = Math.max(1, p[3].time - p[2].time);
-  const d34 = Math.max(1, p[4].time - p[3].time);
-  const d45 = Math.max(1, p[5].time - p[4].time);
-  const w1 = Math.max(60, d01);
-
-  const fibDefaults: Record<number, number> = {
-    1: 1.0,
-    2: 0.618,
-    3: 1.618,
-    4: 1.0,
-    5: 0.5,
-    6: 1.618,
-    7: 0.382,
-    8: 1.0,
-  };
-  const def = fibDefaults[inCycle] ?? 1;
-
-  if (inCycle <= 3) {
-    let corrRef = Math.max(60, (d12 + d34) / 2);
-    const path = post?.path?.length ? post.path : post?.pivots;
-    if (path && path.length >= 2) {
-      const seg: number[] = [];
-      for (let i = 1; i < path.length; i++) {
-        seg.push(Math.max(1, path[i]!.time - path[i - 1]!.time));
-      }
-      if (seg.length) corrRef = Math.max(60, median(seg));
-    }
-    const blend = clamp(corrRef / w1, 0.35, 2.0);
-    return clamp(def * (0.55 + 0.45 * blend) * (1 + (inCycle - 2) * 0.06), 0.32, 2.35);
-  }
-
-  const meas: Record<number, number> = {
-    4: d01 / w1,
-    5: d12 / Math.max(60, d01),
-    6: d23 / Math.max(60, d01),
-    7: d34 / Math.max(60, d23),
-    8: d45 / Math.max(60, d01),
-  };
-  const m = clamp(meas[inCycle] ?? 1, 0.22, 2.85);
-  const w = clamp(fibMeasuredWeight, 0, 1);
-  return clamp((1 - w) * def + w * m, 0.28, 2.85);
-}
-
-function stepMagnitudeWithCalibration(step: number, base: number, cal: ProjectionCalibration): number {
-  const inCycle = ((step - 1) % 8) + 1;
-  switch (inCycle) {
-    case 1:
-      return base * cal.aMul; // A
-    case 2:
-      return base * cal.bMul; // B
-    case 3:
-      return base * cal.cMul; // C
-    case 4:
-      return base * cal.i1Mul; // 1
-    case 5:
-      return base * cal.i2Mul; // 2
-    case 6:
-      return base * cal.i3Mul; // 3
-    case 7:
-      return base * cal.i4Mul; // 4
-    default:
-      return base * cal.i5Mul; // 5
-  }
-}
-
-type RateProfile = {
-  motiveRate: number; // price/sec
-  corrRate: number; // price/sec
-};
-
-function buildRateProfile(imp: ImpulseCountV2, post: CorrectiveCountV2 | null): RateProfile {
-  const motiveRates: number[] = [];
-  const corrRates: number[] = [];
-  const p = imp.pivots;
-  const pushPairs: Array<[number, number]> = [
-    [0, 1], // wave1
-    [2, 3], // wave3
-    [4, 5], // wave5
-  ];
-  const corrPairs: Array<[number, number]> = [
-    [1, 2], // wave2
-    [3, 4], // wave4
-  ];
-
-  for (const [a, b] of pushPairs) {
-    const dt = Math.max(1, p[b]!.time - p[a]!.time);
-    const dp = Math.abs(p[b]!.price - p[a]!.price);
-    motiveRates.push(dp / dt);
-  }
-  for (const [a, b] of corrPairs) {
-    const dt = Math.max(1, p[b]!.time - p[a]!.time);
-    const dp = Math.abs(p[b]!.price - p[a]!.price);
-    corrRates.push(dp / dt);
-  }
-
-  if (post) {
-    const path = post.path?.length ? post.path : post.pivots;
-    for (let i = 1; i < path.length; i++) {
-      const dt = Math.max(1, path[i]!.time - path[i - 1]!.time);
-      const dp = Math.abs(path[i]!.price - path[i - 1]!.price);
-      corrRates.push(dp / dt);
-    }
-  }
-
-  const motiveRate = Math.max(1e-8, median(motiveRates));
-  const corrRate = Math.max(1e-8, corrRates.length ? median(corrRates) : motiveRate * 0.62);
-  return { motiveRate, corrRate };
-}
-
-function stepIsCorrective(step: number): boolean {
-  const inCycle = ((step - 1) % 8) + 1;
-  return inCycle <= 3;
-}
-
-function startStepFromPostAbc(
-  isBull: boolean,
-  post: CorrectiveCountV2 | null,
-  latest: number,
-  base: number,
-): number | null {
-  if (!post) return null;
-  const path = post.path?.length ? post.path : post.pivots;
-  if (!path.length) return null;
-  const end = path[path.length - 1]!;
-  const d = ((latest - end.price) * (isBull ? 1 : -1)) / Math.max(1e-8, base);
-
-  // post-ABC son pivota gore:
-  // d<0: C devam ediyor/uzuyor -> C fazi
-  // d~0: C tamamlandi -> yeni 1
-  // d>0: yeni impuls ilerliyor -> 1/2/3...
-  if (d < -0.18) return 3; // C
-  if (d < 0.22) return 4; // yeni 1
-  if (d < 0.68) return 5; // 2
-  if (d < 1.55) return 6; // 3
-  if (d < 2.05) return 7; // 4
-  return 8; // 5
-}
-
-function buildForwardPolylineLayer(params: {
-  startStep: number;
-  startTime: number;
-  startPrice: number;
-  maxSteps: number;
-  base: number;
-  /** Son mumların ATR tabanı — segment fiyat adımı uç değerlerini volatiliteye göre sıkıştırır. */
-  atrFloor: number;
-  cal: ProjectionCalibration;
-  rates: RateProfile;
-  regimeMul: number;
-  isBull: boolean;
-  tf: Timeframe;
-  stepSec: number;
-  barPeriodSec: number;
-  fibMeasuredWeight: number;
-  imp: ImpulseCountV2;
-  postAbc: CorrectiveCountV2 | null;
-  lineColor: string | undefined;
-  zigzagKind: "elliott_projection" | "elliott_projection_alt";
-  markerSuffix: string;
-}): PatternLayerOverlay {
-  const points: Pt[] = [{ time: params.startTime as UTCTimestamp, value: params.startPrice }];
-  const markers: SeriesMarker<UTCTimestamp>[] = [];
-  let cur = params.startPrice;
-  let t = params.startTime as number;
-  const markerColor =
-    params.lineColor && /^#[0-9A-Fa-f]{3,8}$/.test(params.lineColor.trim())
-      ? params.lineColor.trim()
-      : "#64b5f6";
-
-  for (let i = 0; i < params.maxSteps; i++) {
-    const stepNo = params.startStep + i;
-    const magRaw = stepMagnitudeWithCalibration(stepNo, params.base, params.cal);
-    const stepRateBase = stepIsCorrective(stepNo) ? params.rates.corrRate : params.rates.motiveRate;
-    const stepRate = Math.max(1e-12, stepRateBase * params.regimeMul);
-    const magNominal = stepRate * params.stepSec;
-    const loB = magNominal * 0.42;
-    const hiB = magNominal * 1.88;
-    const af = params.atrFloor;
-    const mag =
-      af > 1e-12
-        ? clamp(magRaw, Math.max(loB, af * 0.1), Math.min(hiB, af * 5.5))
-        : clamp(magRaw, loB, hiB);
-    const dir = stepDirection(stepNo);
-    const signed = (params.isBull ? 1 : -1) * dir * mag;
-    cur += signed;
-    const deltaPrice = Math.abs(signed);
-    const dtRaw = deltaPrice / stepRate;
-    const inCycle = ((stepNo - 1) % 8) + 1;
-    const fibT = projectionFibTimeMultiplier(inCycle, params.imp, params.postAbc, params.fibMeasuredWeight);
-    const minDt = Math.max(45, Math.round(params.stepSec * 0.28), params.barPeriodSec);
-    const maxDt = Math.max(minDt + 1, Math.round(params.stepSec * 7.5));
-    t += Math.round(clamp(dtRaw * fibT, minDt, maxDt));
-    points.push({ time: t as UTCTimestamp, value: cur });
-
-    markers.push({
-      time: t as UTCTimestamp,
-      position: signed >= 0 ? "aboveBar" : "belowBar",
-      shape: "circle",
-      color: markerColor,
-      text: `${markerLabel(stepNo, params.tf)} ${formatEtaFromStart(t - params.startTime)}${params.markerSuffix}`,
-    });
-  }
-
-  return {
-    upper: [],
-    lower: [],
-    zigzag: points,
-    zigzagKind: params.zigzagKind,
-    zigzagLineColor: params.lineColor,
-    zigzagMarkers: markers,
-  };
 }
 
 type FormationPoint = { time: UTCTimestamp; value: number };
@@ -566,11 +211,10 @@ function buildFormationProjection(params: {
   const bPt: FormationPoint = { time: tB, value: projBVal };
   const cPt: FormationPoint = { time: tC, value: projCVal };
 
-  // Post-ABC state
-  const postPath = postAbc ? (postAbc.path?.length ? postAbc.path : postAbc.pivots) : null;
-  const hasA = !!postPath && postPath.length >= 2;
-  const hasB = !!postPath && postPath.length >= 3;
-  const hasC = !!postPath && postPath.length >= 4;
+  const postGuide = postImpulseStructuralGuide(postAbc);
+  const hasA = !!postGuide?.hasA;
+  const hasB = !!postGuide?.hasB;
+  const hasC = !!postGuide?.hasC;
 
   const w5Pt: FormationPoint = { time: p5.time as UTCTimestamp, value: p5.price };
 
@@ -581,7 +225,7 @@ function buildFormationProjection(params: {
     layers.push(seg(bPt, cPt, kind, "dashed", lineColor));
   } else if (hasA && !hasB) {
     // A observed -> project B and C from observed A point
-    const obsA = postPath![1]!;
+    const obsA = postGuide!.a;
     const obsAPt: FormationPoint = { time: obsA.time as UTCTimestamp, value: obsA.price };
     const abObs = Math.abs(obsAPt.value - p5.price);
     const projB2 = isBull ? obsAPt.value + abObs * 0.618 : obsAPt.value - abObs * 0.618;
@@ -592,16 +236,16 @@ function buildFormationProjection(params: {
     layers.push(seg(b2, c2, kind, "dashed", lineColor));
   } else if (hasA && hasB && !hasC) {
     // A and B observed -> project C from observed B
-    const obsB = postPath![2]!;
+    const obsB = postGuide!.b;
     const obsBPt: FormationPoint = { time: obsB.time as UTCTimestamp, value: obsB.price };
-    const aRef = postPath![1]!;
+    const aRef = postGuide!.a;
     const abObs = Math.abs(aRef.price - p5.price);
     const projC2 = isBull ? obsBPt.value - abObs * 1.0 : obsBPt.value + abObs * 1.0;
     const c2: FormationPoint = { time: tC, value: projC2 };
     layers.push(seg(obsBPt, c2, kind, "dashed", lineColor));
   } else {
     // ABC completed -> project new impulse 1-2-3-4-5 from C end (observed)
-    const cEnd = postPath![postPath!.length - 1]!;
+    const cEnd = postGuide!.patternEnd;
     const cEndPt: FormationPoint = { time: cEnd.time as UTCTimestamp, value: cEnd.price };
     const w3Target = cEndPt.value + dir * w1Size * 1.618;
     const w4Target = w3Target - dir * Math.abs(w3Target - cEndPt.value) * 0.382;
@@ -634,13 +278,220 @@ function buildFormationProjection(params: {
   return { layers };
 }
 
+const MULTI_SCENARIO_COLORS = ["#E57373", "#42A5F5", "#66BB6A", "#FFB74D", "#AB47BC"] as const;
+
+function mergeProjectionPatternMenu(m?: ElliottPatternMenuToggles): ElliottPatternMenuToggles {
+  return { ...DEFAULT_ELLIOTT_PATTERN_MENU, ...m };
+}
+
+function layerSegmentsBetweenPivots(
+  pivots: ZigzagPivot[],
+  color: string,
+  style: "solid" | "dashed" | "dotted",
+): PatternLayerOverlay[] {
+  const out: PatternLayerOverlay[] = [];
+  for (let i = 0; i < pivots.length - 1; i++) {
+    const a = { time: pivots[i]!.time as UTCTimestamp, value: pivots[i]!.price };
+    const b = { time: pivots[i + 1]!.time as UTCTimestamp, value: pivots[i + 1]!.price };
+    out.push({
+      upper: [],
+      lower: [],
+      zigzag: [a, b],
+      zigzagKind: "elliott_projection",
+      zigzagLineColor: color,
+      zigzagLineStyle: style,
+    });
+  }
+  return out;
+}
+
+/** Theoretical B/C after observed A (zigzag: moderate B retrace; flat: deep B). */
+function theoreticalBCPrices(
+  impulseBull: boolean,
+  p5: ZigzagPivot,
+  obsA: ZigzagPivot,
+  pattern: "zigzag" | "flat",
+): { b: number; c: number } {
+  const bRetrace = pattern === "zigzag" ? 0.5 : 0.92;
+  const cMul = pattern === "zigzag" ? 1.0 : 0.88;
+  if (impulseBull) {
+    const legA = p5.price - obsA.price;
+    if (legA <= 1e-12) return { b: obsA.price, c: obsA.price };
+    const b = obsA.price + legA * bRetrace;
+    const c = b - Math.abs(b - obsA.price) * cMul;
+    return { b, c };
+  }
+  const legA = obsA.price - p5.price;
+  if (legA <= 1e-12) return { b: obsA.price, c: obsA.price };
+  const b = obsA.price - legA * bRetrace;
+  const c = b + Math.abs(b - obsA.price) * cMul;
+  return { b, c };
+}
+
 /**
- * Lightweight V2 forward projection:
- * - `sourceTf` doluysa o TF itkisi kullanılır; çizim çapası **aynı TF’in** `ohlcByTf` son mumu olmalı
- *   (ana grafik farklı intervaldeyse `anchorRows` son mumu itkı ile yanlış hizalanırdı).
- * - Segment süresi: `Δt ≈ |Δfiyat| / hız` (itkı/düzeltme için ölçülen pivot hızları + güncel mum volatilitesi).
- * - Genlik: itkı 1/3/5 ortalaması + son 14 mum ATR karışımı; segment fiyat adımı ATR ile alt/üst sıkıştırılır.
- * - `barHop`: bir segment için nominal süre ölçeği (`≈ hop × ortalama mum aralığı`); gerçek `Δt` bant içinde kalır.
+ * Formation projection: enumerate zigzag + flat (and pivot-backed ABC candidates), separate colors.
+ * Returns [] when ABC is complete (caller uses single `buildFormationProjection` for the next impulse leg).
+ */
+function buildMultiScenarioFormationLayers(params: {
+  imp: ImpulseCountV2;
+  postAbc: CorrectiveCountV2 | null;
+  zigzagPivots: ZigzagPivot[];
+  startTime: number;
+  lineColor?: string;
+  patternMenu: ElliottPatternMenuToggles;
+}): PatternLayerOverlay[] {
+  const menu = mergeProjectionPatternMenu(params.patternMenu);
+  const allowZig = patternMenuAllowsZigzagAbc(menu);
+  const allowFlat = patternMenuAllowsFlatAbc(menu);
+  if (!allowZig && !allowFlat) return [];
+
+  const { imp, postAbc, zigzagPivots, startTime } = params;
+  const p = imp.pivots;
+  const p5 = p[5];
+  const isBull = imp.direction === "bull";
+  const postGuide = postImpulseStructuralGuide(postAbc);
+  const hasA = !!postGuide?.hasA;
+  const hasB = !!postGuide?.hasB;
+  const hasC = !!postGuide?.hasC;
+
+  const w1Dur = Math.max(60, p[1].time - p[0].time);
+  const w2Dur = Math.max(60, p[2].time - p[1].time);
+  const minSegDur = Math.max(120, Math.round(w1Dur * 0.35));
+  const durationB = Math.max(minSegDur, Math.round(w2Dur * 1.0));
+  const durationC = Math.max(minSegDur, Math.round(w1Dur * 1.0));
+
+  let cidx = 0;
+  const nextColor = () => MULTI_SCENARIO_COLORS[cidx++ % MULTI_SCENARIO_COLORS.length]!;
+
+  const layers: PatternLayerOverlay[] = [];
+
+  if (hasC) {
+    return [];
+  }
+
+  if (hasB) {
+    const obsA = postGuide!.a;
+    const obsB = postGuide!.b;
+    const fixed = collectAbcCorrectivesWithFixedAB(imp, obsA, obsB, zigzagPivots, menu);
+    if (fixed.length) {
+      for (const c of fixed) {
+        const col = nextColor();
+        const cEnd = c.pivots[3]!;
+        layers.push(...layerSegmentsBetweenPivots([obsB, cEnd], col, "dashed"));
+      }
+      return layers;
+    }
+    for (const pat of ["zigzag", "flat"] as const) {
+      if (pat === "zigzag" && !allowZig) continue;
+      if (pat === "flat" && !allowFlat) continue;
+      const th = theoreticalBCPrices(isBull, p5, obsA, pat);
+      const cVal = isBull ? obsB.price - Math.abs(th.b - th.c) : obsB.price + Math.abs(th.b - th.c);
+      const tC = (obsB.time + durationC) as UTCTimestamp;
+      const col = nextColor();
+      layers.push({
+        upper: [],
+        lower: [],
+        zigzag: [
+          { time: obsB.time as UTCTimestamp, value: obsB.price },
+          { time: tC, value: cVal },
+        ],
+        zigzagKind: "elliott_projection",
+        zigzagLineColor: col,
+        zigzagLineStyle: "dashed",
+      });
+    }
+    return layers;
+  }
+
+  if (hasA) {
+    const obsA = postGuide!.a;
+    const tAfterA = Math.max(obsA.time, startTime);
+    for (const pat of ["zigzag", "flat"] as const) {
+      if (pat === "zigzag" && !allowZig) continue;
+      if (pat === "flat" && !allowFlat) continue;
+      const { b, c } = theoreticalBCPrices(isBull, p5, obsA, pat);
+      const tB = (tAfterA + durationB) as UTCTimestamp;
+      const tC = (tAfterA + durationB + durationC) as UTCTimestamp;
+      const col = nextColor();
+      const obsAPt = { time: obsA.time as UTCTimestamp, value: obsA.price };
+      layers.push({
+        upper: [],
+        lower: [],
+        zigzag: [obsAPt, { time: tB, value: b }],
+        zigzagKind: "elliott_projection",
+        zigzagLineColor: col,
+        zigzagLineStyle: "dashed",
+      });
+      layers.push({
+        upper: [],
+        lower: [],
+        zigzag: [{ time: tB, value: b }, { time: tC, value: c }],
+        zigzagKind: "elliott_projection",
+        zigzagLineColor: col,
+        zigzagLineStyle: "dotted",
+      });
+    }
+    return layers;
+  }
+
+  const cands = collectAllAbcPostImpulseCandidates(zigzagPivots, imp, menu);
+  if (cands.length) {
+    for (const c of cands) {
+      const col = nextColor();
+      const path = [c.pivots[0]!, c.pivots[1]!, c.pivots[2]!, c.pivots[3]!];
+      layers.push(...layerSegmentsBetweenPivots(path, col, "solid"));
+    }
+    return layers;
+  }
+
+  const impulseSize = Math.abs(p5.price - p[0].price);
+  const projAVal = isBull ? p5.price - impulseSize * 0.382 : p5.price + impulseSize * 0.382;
+  const abSize = Math.abs(projAVal - p5.price);
+  const durationA = Math.max(minSegDur, Math.round(w1Dur * 0.618));
+  const tA = (startTime + durationA) as UTCTimestamp;
+  const tBBase = startTime + durationA + durationB;
+  const tCBase = startTime + durationA + durationB + durationC;
+
+  for (const pat of ["zigzag", "flat"] as const) {
+    if (pat === "zigzag" && !allowZig) continue;
+    if (pat === "flat" && !allowFlat) continue;
+    const bRetrace = pat === "zigzag" ? 0.618 : 0.9;
+    const cMul = pat === "zigzag" ? 1.0 : 0.85;
+    const projBVal = isBull ? projAVal + abSize * bRetrace : projAVal - abSize * bRetrace;
+    const projCVal = isBull ? projBVal - abSize * cMul : projBVal + abSize * cMul;
+    const col = nextColor();
+    const w5Pt = { time: p5.time as UTCTimestamp, value: p5.price };
+    layers.push({
+      upper: [],
+      lower: [],
+      zigzag: [w5Pt, { time: tA, value: projAVal }],
+      zigzagKind: "elliott_projection",
+      zigzagLineColor: col,
+      zigzagLineStyle: "dashed",
+    });
+    layers.push({
+      upper: [],
+      lower: [],
+      zigzag: [{ time: tA, value: projAVal }, { time: tBBase as UTCTimestamp, value: projBVal }],
+      zigzagKind: "elliott_projection",
+      zigzagLineColor: col,
+      zigzagLineStyle: "dotted",
+    });
+    layers.push({
+      upper: [],
+      lower: [],
+      zigzag: [{ time: tBBase as UTCTimestamp, value: projBVal }, { time: tCBase as UTCTimestamp, value: projCVal }],
+      zigzagKind: "elliott_projection",
+      zigzagLineColor: col,
+      zigzagLineStyle: "dashed",
+    });
+  }
+  return layers;
+}
+
+/**
+ * V2 formation-only forward projection (ABC / next impulse segments).
+ * Anchor: last bar of `ohlcByTf[sourceTf]` when present, else `anchorRows`.
  */
 export function buildElliottProjectionOverlayV2(
   out: ElliottEngineOutputV2,
@@ -661,44 +512,24 @@ export function buildElliottProjectionOverlayV2(
   const p = imp.pivots;
   const p5 = p[5];
   const isBull = imp.direction === "bull";
-  const barPeriodSec = inferBarStepSec(rowsForStep);
-  const hop = Math.max(1, Math.floor(opt.barHop || 1));
-  const stepSec = barPeriodSec * hop;
-  const maxSteps = Math.min(24, Math.max(1, Math.floor(opt.maxSteps || 12)));
-  const fibMeasuredWeight =
-    typeof opt.fibMeasuredWeight === "number" && Number.isFinite(opt.fibMeasuredWeight) ? opt.fibMeasuredWeight : 0.5;
 
   const base = blendedProjectionPriceBase(imp, rowsForStep);
-  const atrFloor = inferAtr14(rowsForStep);
 
   const anchorLast = rowsForStep.length ? rowsForStep[rowsForStep.length - 1]! : anchorRows[anchorRows.length - 1]!;
   const startPrice = anchorLast.c;
   const startTime = anchorLast.t;
-  const startStepRaw =
-    startStepFromPostAbc(isBull, postAbc, startPrice, base) ??
-    startStepFromCurrentState(isBull, p5.price, startPrice, base);
-  const postPath = postAbc ? (postAbc.path?.length ? postAbc.path : postAbc.pivots) : null;
-  const hasObservedAB = !!postPath && postPath.length >= 3;
-  // A/B teyidi yoksa C'den (veya B'den) başlatma: düzeltme her zaman A'dan başlar.
-  const startStep = !hasObservedAB && startStepRaw < 4 ? 1 : startStepRaw;
-  const calBase = buildCalibrationFromPostAbc(postAbc, base);
-  const cal0 = applyFormationCalibrationTweak(postAbc, calBase);
-  const rates = buildRateProfile(imp, postAbc);
-  const refBlendRate = (rates.motiveRate + rates.corrRate) * 0.5;
-  const regimeMul = recentVsImpulseVelocityMul(rowsForStep, refBlendRate);
+  const postGuide = postImpulseStructuralGuide(postAbc);
 
   const layers: PatternLayerOverlay[] = [];
   const showAlt = opt.includeAltScenario !== false;
-  const mode = opt.mode ?? "legacy";
+  /** When structural C/Y exists and last close confirms trend resumption, skip synthetic next-impulse paths. */
+  let skipForwardFormationAfterConfirmedCorrection = false;
 
-  // 1-2-3-4-5 sonrasinda ABC teyit aramasi:
-  // A ve B varsa bu kisimlar duz (done), C tamamlanmadiysa B->son fiyat kesik gosterilir.
-  if (postPath && postPath.length >= 3) {
-    const a = postPath[1]!;
-    const b = postPath[2]!;
-    const c = postPath.length >= 4 ? postPath[3]! : null;
+  if (postGuide?.hasB) {
+    const { a, b, c, hasC } = postGuide;
     const dir = isBull ? 1 : -1;
     const cCompleted = !!c && startPrice * dir > c.price * dir + 0.05 * base;
+    if (cCompleted) skipForwardFormationAfterConfirmedCorrection = true;
     const donePts: Pt[] = [
       { time: p5.time as UTCTimestamp, value: p5.price },
       { time: a.time as UTCTimestamp, value: a.price },
@@ -712,12 +543,13 @@ export function buildElliottProjectionOverlayV2(
       zigzagKind: "elliott_projection_done",
       zigzagLineColor: lineColor,
     });
-    if (c && !cCompleted) {
+    if (!cCompleted) {
+      const anchor = hasC && c ? c : b;
       layers.push({
         upper: [],
         lower: [],
         zigzag: [
-          { time: b.time as UTCTimestamp, value: b.price },
+          { time: anchor.time as UTCTimestamp, value: anchor.price },
           { time: startTime as UTCTimestamp, value: startPrice },
         ],
         zigzagKind: "elliott_projection_c_active",
@@ -726,26 +558,24 @@ export function buildElliottProjectionOverlayV2(
     }
   }
 
-  const polyShared = {
-    startStep,
-    startTime,
-    startPrice,
-    maxSteps,
-    base,
-    atrFloor,
-    rates,
-    regimeMul,
-    isBull,
-    tf,
-    stepSec,
-    barPeriodSec,
-    fibMeasuredWeight,
-    imp,
-    postAbc,
-    lineColor,
-  };
-
-  if (mode === "formation") {
+  const zzPivots =
+    (sourceTf ? out.states[sourceTf]?.pivots : undefined) ?? out.states[tf]?.pivots ?? [];
+  const multi =
+    !skipForwardFormationAfterConfirmedCorrection &&
+    opt.multiCorrectiveScenarios &&
+    patternMenu
+      ? buildMultiScenarioFormationLayers({
+          imp,
+          postAbc,
+          zigzagPivots: zzPivots,
+          startTime,
+          lineColor,
+          patternMenu,
+        })
+      : [];
+  if (multi.length) {
+    layers.push(...multi);
+  } else if (!skipForwardFormationAfterConfirmedCorrection) {
     const formed = buildFormationProjection({
       imp,
       postAbc,
@@ -768,30 +598,8 @@ export function buildElliottProjectionOverlayV2(
       });
       layers.push(...formedAlt.layers);
     }
-  } else {
-    if (showAlt) {
-      layers.push(
-        buildForwardPolylineLayer({
-          ...polyShared,
-          cal: extendedThirdWaveCalibration(cal0),
-          zigzagKind: "elliott_projection_alt",
-          markerSuffix: " \u203b",
-        }),
-      );
-    }
-
-    layers.push(
-      buildForwardPolylineLayer({
-        ...polyShared,
-        cal: cal0,
-        zigzagKind: "elliott_projection",
-        markerSuffix: "",
-      }),
-    );
   }
 
-  return {
-    layers,
-  };
+  return { layers };
 }
 

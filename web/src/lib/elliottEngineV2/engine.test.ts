@@ -78,6 +78,7 @@ const flatConfirmedChecks: CorrectiveCountV2["checks"] = [
   { id: "abc_order", passed: true },
   { id: "flat_r4", passed: true },
   { id: "flat_g7", passed: true },
+  { id: "flat_ba_label_floor", passed: true },
   { id: "flat_a_corrective3", passed: true },
   { id: "flat_b_corrective3", passed: true },
   { id: "flat_c_motive5", passed: true },

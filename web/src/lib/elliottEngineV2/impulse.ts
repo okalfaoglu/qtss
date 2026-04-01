@@ -1,4 +1,5 @@
-import type { ElliottRuleCheckV2, ImpulseCountV2, OhlcV2, ZigzagParams, ZigzagPivot } from "./types";
+import type { DiagonalRoleV2, ElliottRuleCheckV2, ImpulseCountV2, OhlcV2, ZigzagParams, ZigzagPivot } from "./types";
+import { inferDiagonalRoleFromChart } from "./inferDiagonalRole";
 import { buildZigzagPivotsV2 } from "./zigzag";
 
 const EPS = 1e-10;
@@ -9,7 +10,32 @@ const LD_R3_W5_VS_W4_MIN = 1.382;
 export type ImpulseDetectOptions = {
   allowStandard?: boolean;
   allowDiagonal?: boolean;
+  /** Defaults to `allowDiagonal` when omitted (per-role menu). */
+  allowDiagonalLeading?: boolean;
+  allowDiagonalEnding?: boolean;
 };
+
+function resolveImpulseDetectDiagonal(opts?: ImpulseDetectOptions): {
+  allowStandard: boolean;
+  diagOn: boolean;
+  allowLeading: boolean;
+  allowEnding: boolean;
+} {
+  const allowStandard = opts?.allowStandard !== false;
+  const allowDiagonalBase = opts?.allowDiagonal !== false;
+  const allowLeading =
+    typeof opts?.allowDiagonalLeading === "boolean" ? opts.allowDiagonalLeading : allowDiagonalBase;
+  const allowEnding =
+    typeof opts?.allowDiagonalEnding === "boolean" ? opts.allowDiagonalEnding : allowDiagonalBase;
+  const diagOn = allowDiagonalBase && (allowLeading || allowEnding);
+  return { allowStandard, diagOn, allowLeading, allowEnding };
+}
+
+function diagonalRoleAllowedForMenu(role: DiagonalRoleV2, allowLeading: boolean, allowEnding: boolean): boolean {
+  if (role === "leading") return allowLeading;
+  if (role === "ending") return allowEnding;
+  return allowLeading || allowEnding;
+}
 
 function checksBull(
   p: [ZigzagPivot, ZigzagPivot, ZigzagPivot, ZigzagPivot, ZigzagPivot, ZigzagPivot],
@@ -60,8 +86,9 @@ function checksBull(
     detail: `|4|=${len4.toFixed(4)} <= |3|=${len3.toFixed(4)}`,
   });
 
-  const overlap = p4.price > p1.price + EPS;
-  checks.push({ id: "w4_no_overlap_w1", passed: overlap, detail: `P4>${p1.price.toFixed(4)}` });
+  /** True when the no-overlap rule holds: bull, W4 low (P4) above W1 end (P1). */
+  const w4NoOverlapW1 = p4.price > p1.price + EPS;
+  checks.push({ id: "w4_no_overlap_w1", passed: w4NoOverlapW1, detail: `P4>${p1.price.toFixed(4)}` });
 
   const trendShape = p3.price > p1.price && p5.price >= p3.price - EPS;
   checks.push({ id: "trend_shape", passed: trendShape });
@@ -246,8 +273,9 @@ function checksBear(
     detail: `|4|=${len4.toFixed(4)} <= |3|=${len3.toFixed(4)}`,
   });
 
-  const overlap = p4.price < p1.price - EPS;
-  checks.push({ id: "w4_no_overlap_w1", passed: overlap, detail: `P4<${p1.price.toFixed(4)}` });
+  /** True when the no-overlap rule holds: bear, W4 high (P4) below W1 end (P1). */
+  const w4NoOverlapW1 = p4.price < p1.price - EPS;
+  checks.push({ id: "w4_no_overlap_w1", passed: w4NoOverlapW1, detail: `P4<${p1.price.toFixed(4)}` });
 
   const trendShape = p3.price < p1.price && p5.price <= p3.price + EPS;
   checks.push({ id: "trend_shape", passed: trendShape });
@@ -393,9 +421,8 @@ export function detectBestImpulseV2(
   maxWindows = 80,
   opts?: ImpulseDetectOptions,
 ): ImpulseCountV2 | null {
-  const allowStandard = opts?.allowStandard !== false;
-  const allowDiagonal = opts?.allowDiagonal !== false;
-  if (!allowStandard && !allowDiagonal) return null;
+  const { allowStandard, diagOn, allowLeading, allowEnding } = resolveImpulseDetectDiagonal(opts);
+  if (!allowStandard && !diagOn) return null;
 
   if (pivots.length < 6) return null;
   let best: ImpulseCountV2 | null = null;
@@ -435,7 +462,7 @@ export function detectBestImpulseV2(
         if (beatsImpulseCandidate(best, c)) best = c;
       }
     }
-    if (allowDiagonal) {
+    if (diagOn) {
       const bull = checksBullDiagonal(s);
       if (!bull.hardFail) {
         const c: ImpulseCountV2 = {
@@ -445,7 +472,12 @@ export function detectBestImpulseV2(
           score: bull.score,
           variant: "diagonal",
         };
-        if (beatsImpulseCandidate(best, c)) best = c;
+        if (
+          diagonalRoleAllowedForMenu(inferDiagonalRoleFromChart(c, pivots), allowLeading, allowEnding) &&
+          beatsImpulseCandidate(best, c)
+        ) {
+          best = c;
+        }
       }
       const bear = checksBearDiagonal(s);
       if (!bear.hardFail) {
@@ -456,7 +488,12 @@ export function detectBestImpulseV2(
           score: bear.score,
           variant: "diagonal",
         };
-        if (beatsImpulseCandidate(best, c)) best = c;
+        if (
+          diagonalRoleAllowedForMenu(inferDiagonalRoleFromChart(c, pivots), allowLeading, allowEnding) &&
+          beatsImpulseCandidate(best, c)
+        ) {
+          best = c;
+        }
       }
     }
   }
@@ -506,11 +543,11 @@ function bestImpulseForSixPivots(
     ZigzagPivot,
   ],
   bull: boolean,
-  opts?: ImpulseDetectOptions,
+  opts: ImpulseDetectOptions | undefined,
+  pivotsForDiagonalRole: ZigzagPivot[],
 ): ImpulseCountV2 | null {
-  const allowStandard = opts?.allowStandard !== false;
-  const allowDiagonal = opts?.allowDiagonal !== false;
-  if (!allowStandard && !allowDiagonal) return null;
+  const { allowStandard, diagOn, allowLeading, allowEnding } = resolveImpulseDetectDiagonal(opts);
+  if (!allowStandard && !diagOn) return null;
   let best: ImpulseCountV2 | null = null;
   if (allowStandard) {
     const r = bull ? checksBull(win) : checksBear(win);
@@ -525,7 +562,7 @@ function bestImpulseForSixPivots(
       if (beatsImpulseCandidate(best, c)) best = c;
     }
   }
-  if (allowDiagonal) {
+  if (diagOn) {
     const r = bull ? checksBullDiagonal(win) : checksBearDiagonal(win);
     if (!r.hardFail) {
       const c: ImpulseCountV2 = {
@@ -535,7 +572,12 @@ function bestImpulseForSixPivots(
         score: r.score,
         variant: "diagonal",
       };
-      if (beatsImpulseCandidate(best, c)) best = c;
+      if (
+        diagonalRoleAllowedForMenu(inferDiagonalRoleFromChart(c, pivotsForDiagonalRole), allowLeading, allowEnding) &&
+        beatsImpulseCandidate(best, c)
+      ) {
+        best = c;
+      }
     }
   }
   return best;
@@ -575,7 +617,7 @@ function pickBestNestedImpulseInChain(
       ZigzagPivot,
       ZigzagPivot,
     ];
-    const hit = bestImpulseForSixPivots(win, bull, opts);
+    const hit = bestImpulseForSixPivots(win, bull, opts, chain);
     if (!hit) continue;
     const exact = win[0].index === pa.index && win[5].index === pb.index;
     const dist = Math.abs(win[0].index - pa.index) + Math.abs(win[5].index - pb.index);

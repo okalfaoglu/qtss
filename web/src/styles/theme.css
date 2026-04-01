@@ -669,6 +669,47 @@ button.theme-toggle:hover {
   word-break: break-word;
 }
 
+/* Elliott ayar tablosu: renk seçicileri checkbox boyutunda, çerçevesiz */
+input[type="color"].tv-elliott-color-swatch {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 1rem;
+  height: 1rem;
+  min-width: 1rem;
+  min-height: 1rem;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 2px;
+  cursor: pointer;
+  vertical-align: middle;
+  background: transparent;
+  box-sizing: border-box;
+}
+
+input[type="color"].tv-elliott-color-swatch::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+input[type="color"].tv-elliott-color-swatch::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+input[type="color"].tv-elliott-color-swatch::-moz-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+input[type="color"].tv-elliott-color-swatch:focus {
+  outline: none;
+}
+
+input[type="color"].tv-elliott-color-swatch:focus-visible {
+  outline: 2px solid var(--accent, #5c8bd6);
+  outline-offset: 1px;
+}
+
 .tv-elliott-panel__row {
   display: flex;
   align-items: center;
@@ -696,6 +737,23 @@ button.theme-toggle:hover {
   gap: 0.35rem;
   align-items: flex-start;
   margin-bottom: 0.2rem;
+}
+
+/* Trading Range çekmecesi — grafik katmanı onay kutuları dikey */
+.tv-trading-range-checks {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.tv-trading-range-checks .tv-elliott-panel__field--check {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin: 0;
 }
 
 .tv-elliott-panel__checks li.ok .tv-elliott-panel__mark {
@@ -834,6 +892,53 @@ button.theme-toggle:hover {
   z-index: 1;
 }
 
+/** Yardım / SSS — çekmece içi kısayol */
+.help-cross-link {
+  margin-left: 0.35rem;
+  padding: 0.12rem 0.45rem;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  cursor: pointer;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--card));
+  color: var(--fg);
+}
+
+.help-cross-link:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.help-panel__topics {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.help-panel__topic details {
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  border-radius: 8px;
+  padding: 0.35rem 0.45rem;
+  background: color-mix(in srgb, var(--card) 96%, transparent);
+}
+
+.help-panel__summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.84rem;
+  list-style: none;
+}
+
+.help-panel__summary::-webkit-details-marker {
+  display: none;
+}
+
+.help-panel__body {
+  margin-top: 0.4rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
 .tv-drawer-scrim {
   position: fixed;
   inset: 0;
@@ -903,6 +1008,10 @@ button.theme-toggle:hover {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.tv-settings__subtabs--cols-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .tv-settings__subtabs .tv-settings__tab {
   font-size: 0.72rem;
   padding: 0.32rem 0.35rem;
@@ -967,6 +1076,393 @@ button.theme-toggle:hover {
   margin: 0;
   padding: 0.8rem;
   border-radius: 10px;
+}
+
+/* ServerRegistryPanel — system_config / app_config admin editor */
+.tv-registry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 0.95rem !important;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--card) 92%, var(--accent)) 0%,
+    var(--card) 48%,
+    color-mix(in srgb, var(--card) 94%, var(--border)) 100%
+  );
+  border: 1px solid color-mix(in srgb, var(--border) 70%, var(--accent));
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--fg) 6%, transparent);
+}
+
+.tv-registry__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.tv-registry__title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg);
+}
+
+.tv-registry__subtitle {
+  margin: 0.2rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.tv-registry__pickers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.tv-registry__picker {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.6rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 40%, transparent);
+  color: var(--fg);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.12s ease;
+}
+
+.tv-registry__picker:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  transform: translateY(-1px);
+}
+
+.tv-registry__picker.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.tv-registry__picker-icon {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  font-size: 1.1rem;
+  line-height: 1;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.tv-registry__picker-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.tv-registry__picker-label {
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.tv-registry__picker-hint {
+  font-size: 0.65rem;
+  color: var(--muted);
+  line-height: 1.25;
+}
+
+.tv-registry__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.tv-registry__hint {
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--card));
+}
+
+.tv-registry__hint-title {
+  margin: 0 0 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.tv-registry__hint-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+.tv-registry__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.45rem;
+}
+
+.tv-registry__filter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  flex: 1;
+  min-width: 8rem;
+}
+
+.tv-registry__filter input {
+  width: 100%;
+}
+
+.tv-registry__form {
+  padding: 0.55rem 0.6rem;
+  border-radius: 8px;
+  border: 1px dashed color-mix(in srgb, var(--border) 85%, var(--accent));
+  background: color-mix(in srgb, var(--card) 88%, var(--bg));
+}
+
+.tv-registry__form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+
+@media (max-width: 28rem) {
+  .tv-registry__form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tv-registry__pickers {
+    grid-template-columns: 1fr;
+  }
+}
+
+.tv-registry__form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.72rem;
+}
+
+.tv-registry__textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 5rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.tv-registry__check {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.35rem !important;
+  margin-top: 1.2rem;
+}
+
+.tv-registry__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.45rem;
+}
+
+.tv-registry__table-wrap {
+  overflow: auto;
+  max-height: 14rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.tv-registry__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.68rem;
+}
+
+.tv-registry__table th,
+.tv-registry__table td {
+  padding: 0.35rem 0.45rem;
+  text-align: left;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  vertical-align: top;
+}
+
+.tv-registry__table th {
+  position: sticky;
+  top: 0;
+  background: color-mix(in srgb, var(--card) 92%, var(--accent));
+  font-weight: 700;
+  z-index: 1;
+}
+
+.tv-registry__table tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--bg) 35%, transparent);
+}
+
+.tv-registry__cell-preview {
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tv-registry__row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  white-space: nowrap;
+}
+
+.tv-registry__row-actions .theme-toggle {
+  padding: 0.22rem 0.45rem;
+  font-size: 0.65rem;
+}
+
+/* NotificationDrawerPanel + NotifyChannelTestPanel */
+.tv-notify-hub {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.tv-notify-hub__pickers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.tv-notify-hub__picker {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 0.55rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--card) 90%, var(--bg));
+  color: var(--fg);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.tv-notify-hub__picker:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.tv-notify-hub__picker.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--card));
+}
+
+.tv-notify-hub__picker-icon {
+  flex-shrink: 0;
+  width: 1.85rem;
+  height: 1.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  font-size: 1rem;
+  line-height: 1;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.tv-notify-hub__picker-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.08rem;
+  min-width: 0;
+}
+
+.tv-notify-hub__picker-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.tv-notify-hub__picker-hint {
+  font-size: 0.62rem;
+  color: var(--muted);
+  line-height: 1.25;
+}
+
+.tv-notify-test__channel-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.55rem 0 0.45rem;
+  max-height: 5.2rem;
+  overflow-y: auto;
+  padding-bottom: 0.1rem;
+}
+
+.tv-notify-test__channel-tab {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  border-radius: 999px;
+  padding: 0.22rem 0.5rem;
+  font-size: 0.65rem;
+  cursor: pointer;
+}
+
+.tv-notify-test__channel-tab:hover {
+  border-color: var(--accent);
+}
+
+.tv-notify-test__channel-tab.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-weight: 700;
+}
+
+.tv-notify-test__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.tv-notify-test__form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.72rem;
+}
+
+.tv-notify-test__form input {
+  width: 100%;
+}
+
+.tv-notify-test__textarea {
+  width: 100%;
+  resize: vertical;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  padding: 0.35rem 0.45rem;
+}
+
+@media (max-width: 22rem) {
+  .tv-notify-hub__pickers {
+    grid-template-columns: 1fr;
+  }
 }
 
 .tv-drawer__section-head {
@@ -1487,4 +1983,401 @@ button.theme-toggle:hover {
 
 .tv-dash__chart {
   padding: 0 0.35rem 0.55rem;
+}
+
+/* Trading Range Setup — renkli olay tablosu (çekmece) */
+.tv-tr-setup-wrap {
+  max-height: min(52vh, 22rem);
+  overflow: auto;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 85%, var(--accent));
+  box-shadow: 0 6px 22px color-mix(in srgb, var(--border) 22%, transparent);
+  background: linear-gradient(
+    165deg,
+    color-mix(in srgb, var(--card) 94%, var(--accent) 3%),
+    color-mix(in srgb, var(--card) 88%, var(--bg))
+  );
+}
+
+.tv-tr-setup-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.tv-tr-setup-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 22%, var(--card)),
+    color-mix(in srgb, var(--accent) 8%, var(--card))
+  );
+  color: var(--fg);
+  box-shadow: 0 1px 0 var(--border);
+}
+
+.tv-tr-setup-table th {
+  text-align: left;
+  padding: 0.45rem 0.4rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  font-size: 0.58rem;
+  white-space: nowrap;
+}
+
+.tv-tr-setup-table th:nth-child(7),
+.tv-tr-setup-table th:nth-child(8),
+.tv-tr-setup-table td.tv-tr-setup-num {
+  text-align: right;
+}
+
+.tv-tr-setup-table td {
+  padding: 0.42rem 0.4rem;
+  vertical-align: top;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.tv-tr-setup-row:nth-child(even) td {
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+
+.tv-tr-setup-row:hover td {
+  background: color-mix(in srgb, var(--accent) 10%, var(--card));
+}
+
+.tv-tr-setup-mono {
+  font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
+  color: var(--fg);
+}
+
+.tv-tr-setup-symbol {
+  font-weight: 700;
+  color: color-mix(in srgb, var(--accent) 55%, var(--fg));
+}
+
+.tv-tr-setup-enter {
+  min-width: 7.5rem;
+}
+
+.tv-tr-setup-enter-px {
+  display: block;
+  font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.tv-tr-setup-enter-bar {
+  display: block;
+  font-size: 0.58rem;
+  color: var(--muted);
+  margin-top: 0.12rem;
+  word-break: break-all;
+}
+
+.tv-tr-setup-num {
+  text-align: right;
+}
+
+.tv-tr-setup-badge {
+  display: inline-block;
+  padding: 0.12rem 0.38rem;
+  border-radius: 999px;
+  font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.tv-tr-setup-badge--long-entry {
+  background: color-mix(in srgb, #15803d 28%, var(--card));
+  border-color: color-mix(in srgb, #22c55e 45%, var(--border));
+  color: color-mix(in srgb, #bbf7d0 70%, var(--fg));
+}
+
+.tv-tr-setup-badge--long-exit {
+  background: color-mix(in srgb, #0369a1 26%, var(--card));
+  border-color: color-mix(in srgb, #38bdf8 40%, var(--border));
+  color: color-mix(in srgb, #bae6fd 65%, var(--fg));
+}
+
+.tv-tr-setup-badge--short-entry {
+  background: color-mix(in srgb, #a16207 26%, var(--card));
+  border-color: color-mix(in srgb, #facc15 35%, var(--border));
+  color: color-mix(in srgb, #fef08a 55%, var(--fg));
+}
+
+.tv-tr-setup-badge--short-exit {
+  background: color-mix(in srgb, #9f1239 24%, var(--card));
+  border-color: color-mix(in srgb, #fb7185 38%, var(--border));
+  color: color-mix(in srgb, #fecdd3 55%, var(--fg));
+}
+
+.tv-tr-setup-badge--other {
+  background: color-mix(in srgb, var(--muted) 20%, var(--card));
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+.tv-tr-setup-empty {
+  padding: 0.5rem 0;
+}
+
+/* Trading Range — trade summary cards + PnL meters */
+.tv-tr-ts-root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 100%;
+}
+
+.tv-tr-ts-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.tv-tr-ts-card {
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, var(--accent));
+  padding: 0.55rem 0.65rem 0.6rem;
+  background: linear-gradient(
+    155deg,
+    color-mix(in srgb, var(--card) 92%, var(--accent) 5%),
+    color-mix(in srgb, var(--card) 86%, var(--bg))
+  );
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--border) 18%, transparent);
+}
+
+.tv-tr-ts-card--long {
+  border-color: color-mix(in srgb, #26a69a 32%, var(--border));
+}
+
+.tv-tr-ts-card--short {
+  border-color: color-mix(in srgb, #e57373 28%, var(--border));
+}
+
+.tv-tr-ts-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.tv-tr-ts-side-badge {
+  font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.tv-tr-ts-card--long .tv-tr-ts-side-badge {
+  color: color-mix(in srgb, #26a69a 85%, var(--fg));
+}
+
+.tv-tr-ts-card--short .tv-tr-ts-side-badge {
+  color: color-mix(in srgb, #e57373 88%, var(--fg));
+}
+
+.tv-tr-ts-status {
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.tv-tr-ts-status--open {
+  background: color-mix(in srgb, var(--accent) 14%, var(--card));
+  color: var(--fg);
+}
+
+.tv-tr-ts-status--closed {
+  background: color-mix(in srgb, var(--muted) 12%, var(--card));
+  color: var(--muted);
+}
+
+.tv-tr-ts-flow {
+  display: flex;
+  align-items: stretch;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+}
+
+.tv-tr-ts-flow-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+
+.tv-tr-ts-flow-label {
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.tv-tr-ts-flow-time {
+  font-size: 0.62rem;
+  color: var(--fg);
+  line-height: 1.3;
+  word-break: break-all;
+}
+
+.tv-tr-ts-flow-px {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--fg) 92%, var(--accent));
+}
+
+.tv-tr-ts-flow-na {
+  font-size: 0.72rem;
+  align-self: flex-start;
+}
+
+.tv-tr-ts-flow-arrow {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  color: color-mix(in srgb, var(--muted) 70%, var(--accent));
+  padding-top: 1.1rem;
+}
+
+.tv-tr-ts-flow-arrow-svg {
+  display: block;
+}
+
+.tv-tr-ts-meters {
+  display: flex;
+  flex-direction: column;
+  gap: 0.38rem;
+}
+
+.tv-tr-ts-meter-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+
+.tv-tr-ts-meter-label {
+  font-size: 0.58rem;
+  font-weight: 600;
+  color: var(--muted);
+  line-height: 1.25;
+  max-width: 58%;
+}
+
+.tv-tr-ts-meter-val {
+  font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.tv-tr-ts-meter-val--pos {
+  color: #26a69a;
+}
+
+.tv-tr-ts-meter-val--neg {
+  color: #e57373;
+}
+
+.tv-tr-ts-meter-val--na {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.tv-tr-ts-meter-track {
+  position: relative;
+  height: 9px;
+  border-radius: 5px;
+  margin-top: 0.12rem;
+  background: color-mix(in srgb, var(--border) 38%, transparent);
+  overflow: hidden;
+}
+
+.tv-tr-ts-meter-track--empty {
+  opacity: 0.4;
+}
+
+.tv-tr-ts-meter-axis {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: color-mix(in srgb, var(--fg) 18%, var(--border));
+  z-index: 2;
+  pointer-events: none;
+}
+
+.tv-tr-ts-meter-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+  max-width: 50%;
+}
+
+.tv-tr-ts-meter-fill--pos {
+  left: 50%;
+  background: linear-gradient(90deg, color-mix(in srgb, #26a69a 55%, transparent), #26a69a);
+}
+
+.tv-tr-ts-meter-fill--neg {
+  right: 50%;
+  background: linear-gradient(270deg, color-mix(in srgb, #e57373 55%, transparent), #e57373);
+}
+
+.tv-tr-ts-details {
+  margin-top: 0.15rem;
+  border-radius: 8px;
+  border: 1px dashed color-mix(in srgb, var(--border) 75%, transparent);
+  padding: 0.15rem 0.4rem 0.35rem;
+  background: color-mix(in srgb, var(--card) 96%, transparent);
+}
+
+.tv-tr-ts-details-summary {
+  cursor: pointer;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--muted);
+  list-style: none;
+  padding: 0.25rem 0.15rem;
+}
+
+.tv-tr-ts-details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.tv-tr-ts-details-summary::before {
+  content: "▸ ";
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.tv-tr-ts-details[open] > .tv-tr-ts-details-summary::before {
+  transform: rotate(90deg);
+}
+
+.tv-tr-ts-details-inner {
+  overflow: auto;
+  max-width: 100%;
+}
+
+.tv-tr-ts-table th,
+.tv-tr-ts-table td {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }

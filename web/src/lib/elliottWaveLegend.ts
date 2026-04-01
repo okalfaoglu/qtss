@@ -9,7 +9,7 @@ export type ElliottLegendRow = {
 
 /**
  * GUI lejantı — MTF V2 makro / ara / mikro dalgaları.
- * `showProjection`: Pine tarzı ileri Fib şeması açıksa ek satır.
+ * `showProjection`: İleri formasyon projeksiyonu açıksa ek satır.
  */
 export function buildElliottLegendRows(
   out: ElliottEngineOutputV2 | null,
@@ -56,8 +56,8 @@ export function buildElliottLegendRows(
     rows.push({
       id: "projection",
       swatch: "projection",
-      title: "İleri projeksiyon (Fib şeması)",
-      detail: "Pine benzeri olası hedef şeması. Yatırım tavsiyesi değildir.",
+      title: "İleri projeksiyon (formasyon)",
+      detail: "ABC ve sonraki itki segmentleri şeması. Yatırım tavsiyesi değildir.",
     });
   }
   if (showProjectionTargets) {

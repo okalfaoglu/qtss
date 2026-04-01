@@ -2,19 +2,21 @@
 
 use std::time::Duration;
 
+use qtss_storage::resolve_worker_enabled_flag;
 use sqlx::PgPool;
 use tracing::{info, warn};
 
-fn ai_worker_env_enabled() -> bool {
-    match std::env::var("QTSS_AI_ENGINE_WORKER") {
-        Ok(s) => matches!(s.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"),
-        Err(_) => true,
-    }
-}
-
-pub fn spawn_ai_background_tasks(pool: &PgPool) {
-    if !ai_worker_env_enabled() {
-        info!("QTSS_AI_ENGINE_WORKER kapalı — AI arka plan döngüleri başlatılmıyor");
+pub async fn spawn_ai_background_tasks(pool: &PgPool) {
+    let on = resolve_worker_enabled_flag(
+        pool,
+        "worker",
+        "ai_engine_worker_enabled",
+        "QTSS_AI_ENGINE_WORKER",
+        true,
+    )
+    .await;
+    if !on {
+        info!("worker.ai_engine_worker_enabled kapalı — AI arka plan döngüleri başlatılmıyor");
         return;
     }
     let p_exp = pool.clone();

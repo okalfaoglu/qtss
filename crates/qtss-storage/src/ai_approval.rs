@@ -97,6 +97,24 @@ impl AiApprovalRepository {
     }
 
     /// Sets terminal status for a **pending** row in `org_id`. Returns rows affected (0 if not found / wrong org / not pending).
+    pub async fn fetch_by_id_for_org(
+        &self,
+        id: Uuid,
+        org_id: Uuid,
+    ) -> Result<Option<AiApprovalRequestRow>, StorageError> {
+        let row = sqlx::query_as::<_, AiApprovalRequestRow>(
+            r#"SELECT id, org_id, requester_user_id, status, kind, payload, model_hint,
+                      admin_note, decided_by_user_id, decided_at, created_at, updated_at
+               FROM ai_approval_requests
+               WHERE id = $1 AND org_id = $2"#,
+        )
+        .bind(id)
+        .bind(org_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
     pub async fn decide(
         &self,
         id: Uuid,
@@ -124,6 +142,36 @@ impl AiApprovalRepository {
         .bind(decided_by_user_id)
         .bind(id)
         .bind(org_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
+    /// Telegram webhook: yalnızca **`pending`** satırı `id` ile güncellenir; `decided_by_user_id` NULL, kaynak `admin_note` içinde.
+    pub async fn decide_pending_via_telegram(
+        &self,
+        id: Uuid,
+        new_status: &str,
+        telegram_user_id: i64,
+    ) -> Result<u64, StorageError> {
+        if new_status != "approved" && new_status != "rejected" {
+            return Err(StorageError::Other(
+                "decide_pending_via_telegram: new_status must be approved or rejected".into(),
+            ));
+        }
+        let note = format!("[telegram:{telegram_user_id}]");
+        let res = sqlx::query(
+            r#"UPDATE ai_approval_requests
+               SET status = $1,
+                   admin_note = $2,
+                   decided_by_user_id = NULL,
+                   decided_at = now(),
+                   updated_at = now()
+               WHERE id = $3 AND status = 'pending'"#,
+        )
+        .bind(new_status)
+        .bind(note)
+        .bind(id)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected())

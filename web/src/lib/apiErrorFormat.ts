@@ -16,6 +16,13 @@ export type QtssApiErrorBody = {
 
 const MAX_DETAIL = 900;
 
+function responseLooksLikeHtml(text: string): boolean {
+  const t = text.trimStart();
+  const head = t.slice(0, 48).toLowerCase();
+  if (head.startsWith("<!doctype") || head.startsWith("<html") || head.startsWith("<head")) return true;
+  return head.startsWith("<") && /<title>/i.test(t.slice(0, 800));
+}
+
 export function parseQtssApiErrorJson(text: string): QtssApiErrorBody | null {
   try {
     const j = JSON.parse(text) as unknown;
@@ -60,6 +67,9 @@ function i18nInterpolationFromArgs(args: Record<string, unknown> | undefined): R
  * `status: detail` where detail prefers i18n for `error_key`, else server `error` or raw body (truncated).
  */
 export function formatQtssApiErrorMessage(status: number, text: string): string {
+  if (responseLooksLikeHtml(text)) {
+    return `${status}: Sunucu JSON yerine HTML döndü; API tabanı (VITE_API_BASE), proxy veya endpoint yolunu kontrol edin.`;
+  }
   const slice = text.length > MAX_DETAIL ? `${text.slice(0, MAX_DETAIL)}…` : text;
   const body = parseQtssApiErrorJson(text);
   const fallback = (

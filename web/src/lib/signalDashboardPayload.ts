@@ -1,5 +1,10 @@
 /** `analysis_snapshots` / `signal_dashboard` JSON (Rust `SignalDashboardV1`). */
 export type SignalDashboardPayload = {
+  /** Worker `attach_engine_context` — JOIN satırıyla aynı olmalı. */
+  symbol?: string;
+  exchange?: string;
+  segment?: string;
+  interval?: string;
   schema_version?: number;
   durum?: string;
   /** Politika öncesi ham model (LONG/SHORT/NOTR). */

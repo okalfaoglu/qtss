@@ -57,8 +57,14 @@ pub trait AiCompletionProvider: Send + Sync {
     async fn complete(&self, req: &AiRequest) -> AiResult<AiResponse>;
 }
 
-/// Build the configured provider for a layer (`ai_engine_config.provider_*` + env URLs / keys).
-pub fn provider_for_layer(cfg: &AiEngineConfig, layer: LayerKind) -> AiResult<Arc<dyn AiCompletionProvider>> {
+use crate::provider_secrets::AiProviderSecrets;
+
+/// Build the configured provider for a layer (`ai_engine_config.provider_*` + `AiProviderSecrets`).
+pub fn provider_for_layer(
+    cfg: &AiEngineConfig,
+    layer: LayerKind,
+    secrets: &AiProviderSecrets,
+) -> AiResult<Arc<dyn AiCompletionProvider>> {
     let id = match layer {
         LayerKind::Tactical => cfg.provider_tactical.trim(),
         LayerKind::Operational => cfg.provider_operational.trim(),
@@ -66,11 +72,29 @@ pub fn provider_for_layer(cfg: &AiEngineConfig, layer: LayerKind) -> AiResult<Ar
     };
     let id_lower = id.to_lowercase();
     match id_lower.as_str() {
-        "anthropic" => Ok(Arc::new(AnthropicProvider::from_env()?)),
-        "openai_compatible" | "openai_compatible_onprem" | "openai" | "vllm" | "tgi" => {
-            Ok(Arc::new(OpenAiCompatibleProvider::from_env()?))
+        "anthropic" => {
+            let Some(ref api_key) = secrets.anthropic_api_key else {
+                return Err(AiError::ProviderNotConfigured("ANTHROPIC_API_KEY".into()));
+            };
+            Ok(Arc::new(AnthropicProvider::from_settings(
+                api_key.clone(),
+                secrets.anthropic_base_url.clone(),
+                secrets.anthropic_timeout_secs,
+            )?))
         }
-        "ollama" => Ok(Arc::new(OllamaProvider::from_env()?)),
+        "openai_compatible" | "openai_compatible_onprem" | "openai" | "vllm" | "tgi" => Ok(Arc::new(
+            OpenAiCompatibleProvider::from_settings(
+                secrets.openai_compat_base_url.clone(),
+                secrets.onprem_api_key.clone(),
+                secrets.openai_compat_headers_json.clone(),
+                secrets.onprem_timeout_secs,
+                secrets.onprem_max_in_flight,
+            )?,
+        )),
+        "ollama" => Ok(Arc::new(OllamaProvider::from_settings(
+            secrets.ollama_base_url.clone(),
+            secrets.onprem_timeout_secs,
+        )?)),
         _ => Err(AiError::UnknownProvider(id.to_string())),
     }
 }
