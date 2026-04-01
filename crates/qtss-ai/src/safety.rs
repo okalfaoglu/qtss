@@ -62,6 +62,75 @@ pub fn validate_ai_decision_safety(decision: &Value, config: &SafetyConfig) -> R
     Ok(())
 }
 
+const RISKY_OPERATIONAL_ACTIONS: &[&str] = &[
+    "full_close",
+    "add_to_position",
+    "widen_stop",
+    "deactivate_trailing",
+];
+
+/// Validates parsed operational directive JSON before persistence.
+pub fn validate_operational_decision_safety(decision: &Value, _config: &SafetyConfig) -> Result<(), &'static str> {
+    if qtss_common::is_trading_halted() {
+        return Err("trading halted (kill switch)");
+    }
+    let action = decision
+        .get("action")
+        .and_then(|x| x.as_str())
+        .ok_or("missing action")?;
+    if RISKY_OPERATIONAL_ACTIONS.contains(&action) {
+        let reasoning = decision.get("reasoning").and_then(|x| x.as_str()).unwrap_or("");
+        if reasoning.trim().is_empty() {
+            return Err("risky operational action requires reasoning");
+        }
+    }
+    if action == "partial_close" {
+        let pct = decision.get("partial_close_pct").and_then(|x| x.as_f64());
+        match pct {
+            Some(p) if p > 0.0 && p <= 100.0 => {}
+            Some(_) => return Err("partial_close_pct must be > 0 and <= 100"),
+            None => return Err("partial_close requires partial_close_pct"),
+        }
+    }
+    if action == "activate_trailing" {
+        let cb = decision.get("trailing_callback_pct").and_then(|x| x.as_f64());
+        if cb.is_none() || cb.unwrap_or(0.0) <= 0.0 {
+            return Err("activate_trailing requires positive trailing_callback_pct");
+        }
+    }
+    Ok(())
+}
+
+/// Validates parsed strategic/portfolio directive JSON before persistence.
+pub fn validate_strategic_decision_safety(decision: &Value, _config: &SafetyConfig) -> Result<(), &'static str> {
+    if qtss_common::is_trading_halted() {
+        return Err("trading halted (kill switch)");
+    }
+    if let Some(rbp) = decision.get("risk_budget_pct").and_then(|x| x.as_f64()) {
+        if rbp < 0.0 || rbp > 100.0 {
+            return Err("risk_budget_pct must be 0..=100");
+        }
+    }
+    if let Some(mop) = decision.get("max_open_positions").and_then(|x| x.as_i64()) {
+        if mop < 0 || mop > 200 {
+            return Err("max_open_positions must be 0..=200");
+        }
+    }
+    if let Some(scores) = decision.get("symbol_scores").and_then(|x| x.as_object()) {
+        for (sym, w) in scores {
+            if let Some(v) = w.as_f64() {
+                if v < 0.0 || v > 1.0 {
+                    return Err("symbol_scores weights must be 0.0..=1.0");
+                }
+            }
+            if sym.trim().is_empty() {
+                return Err("symbol_scores contains empty symbol key");
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
