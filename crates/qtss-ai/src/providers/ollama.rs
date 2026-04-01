@@ -108,9 +108,11 @@ impl AiCompletionProvider for OllamaProvider {
                 num_predict: Some(req.max_tokens),
             }),
         };
+        let timeout = std::time::Duration::from_secs(req.suggested_timeout_secs());
         let res = self
             .client
             .post(self.url_chat())
+            .timeout(timeout)
             .header(CONTENT_TYPE, "application/json")
             .json(&body)
             .send()

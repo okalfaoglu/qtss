@@ -123,9 +123,11 @@ impl AiCompletionProvider for AnthropicProvider {
             HeaderValue::from_static(ANTHROPIC_VERSION),
         );
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        let timeout = Duration::from_secs(req.suggested_timeout_secs());
         let res = self
             .client
             .post(self.url_messages())
+            .timeout(timeout)
             .headers(headers)
             .json(&body)
             .send()

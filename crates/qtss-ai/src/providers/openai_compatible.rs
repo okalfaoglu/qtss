@@ -194,9 +194,11 @@ impl OpenAiCompatibleProvider {
             temperature: req.temperature,
         };
         let headers = self.build_headers()?;
+        let timeout = std::time::Duration::from_secs(req.suggested_timeout_secs());
         let res = self
             .client
             .post(self.url_chat())
+            .timeout(timeout)
             .headers(headers)
             .json(&body)
             .send()

@@ -15,6 +15,33 @@ use crate::storage::{fetch_active_portfolio_directive, fetch_last_ai_decision_re
 
 const BAR_LIMIT: i64 = 20;
 
+/// Approximate max chars for context JSON (~token budget × 4 chars/token).
+/// Exceeding this triggers truncation of low-priority fields.
+const MAX_CONTEXT_CHARS: usize = 12_000; // ~3000 tokens
+
+/// Trim context JSON to stay within token budget by removing low-priority fields.
+fn trim_context_if_needed(ctx: &mut Value) {
+    let serialized_len = serde_json::to_string(ctx).map(|s| s.len()).unwrap_or(0);
+    if serialized_len <= MAX_CONTEXT_CHARS {
+        return;
+    }
+    // Priority order for removal: ai_feedback → confluence → open_position → onchain_signals
+    let low_priority_keys = ["ai_feedback", "confluence", "open_position"];
+    if let Some(obj) = ctx.as_object_mut() {
+        for key in &low_priority_keys {
+            obj.remove(*key);
+            let new_len = serde_json::to_string(&Value::Object(obj.clone()))
+                .map(|s| s.len())
+                .unwrap_or(0);
+            if new_len <= MAX_CONTEXT_CHARS {
+                obj.insert("_trimmed".into(), json!(key));
+                return;
+            }
+        }
+        obj.insert("_trimmed".into(), json!("multiple_fields"));
+    }
+}
+
 /// OHLC window metrics for prompts (`closes[0]` = newest bar, `closes[last]` = oldest in window).
 /// Extracted for unit tests (FAZ 3 / `QTSS_MASTER_DEV_GUIDE` §7).
 pub(crate) fn bar_ohlc_window_metrics(
@@ -137,7 +164,7 @@ pub async fn build_tactical_context(pool: &PgPool, symbol: &str) -> AiResult<Val
         None => Value::Null,
     };
 
-    Ok(json!({
+    let mut ctx = json!({
         "symbol": sym.to_uppercase(),
         "timestamp_utc": Utc::now(),
         "onchain_signals": onchain,
@@ -147,7 +174,9 @@ pub async fn build_tactical_context(pool: &PgPool, symbol: &str) -> AiResult<Val
         "last_ai_decision": last_ai_decision,
         "ai_feedback": ai_feedback,
         "portfolio_directive": portfolio_directive,
-    }))
+    });
+    trim_context_if_needed(&mut ctx);
+    Ok(ctx)
 }
 
 pub(super) async fn summarize_recent_bars(
@@ -289,13 +318,37 @@ pub async fn build_strategic_context(pool: &PgPool) -> AiResult<Value> {
 
     let feedback = crate::storage::fetch_recent_outcome_stats(pool, 30).await?;
 
-    Ok(json!({
+    let mut ctx = json!({
         "timestamp_utc": Utc::now(),
         "enabled_engine_symbols": engine.len(),
         "symbol_confluence": symbol_confluence,
         "pnl_rollups_7d_hint": pnl_summary,
         "recent_ai_outcomes": feedback,
-    }))
+    });
+    // Strategic context has a larger budget (4096 output tokens, ~50k chars input budget).
+    const MAX_STRATEGIC_CHARS: usize = 50_000;
+    let len = serde_json::to_string(&ctx).map(|s| s.len()).unwrap_or(0);
+    if len > MAX_STRATEGIC_CHARS {
+        // Truncate symbol_confluence array until it fits
+        loop {
+            let cur = serde_json::to_string(&ctx).map(|s| s.len()).unwrap_or(0);
+            if cur <= MAX_STRATEGIC_CHARS {
+                break;
+            }
+            let should_pop = ctx
+                .get("symbol_confluence")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len() > 5)
+                .unwrap_or(false);
+            if !should_pop {
+                break;
+            }
+            if let Some(arr) = ctx.get_mut("symbol_confluence").and_then(|v| v.as_array_mut()) {
+                arr.pop();
+            }
+        }
+    }
+    Ok(ctx)
 }
 
 #[cfg(test)]
@@ -322,6 +375,34 @@ mod tests {
         assert!((last - 110.0).abs() < f64::EPSILON);
         assert!((pct - 10.0).abs() < 1e-9);
         assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn trim_context_removes_low_priority_fields() {
+        // Build a context that exceeds MAX_CONTEXT_CHARS
+        let big_str = "x".repeat(MAX_CONTEXT_CHARS + 1000);
+        let mut ctx = json!({
+            "symbol": "BTCUSDT",
+            "confluence": big_str,
+            "ai_feedback": {"win_rate": 0.5},
+            "price_context": {"last_close": 100.0},
+        });
+        trim_context_if_needed(&mut ctx);
+        // ai_feedback should be removed first (lowest priority)
+        assert!(ctx.get("ai_feedback").is_none());
+        assert!(ctx.get("_trimmed").is_some());
+    }
+
+    #[test]
+    fn trim_context_noop_when_small() {
+        let mut ctx = json!({
+            "symbol": "BTCUSDT",
+            "confluence": "small",
+            "ai_feedback": {"win_rate": 0.5},
+        });
+        trim_context_if_needed(&mut ctx);
+        assert!(ctx.get("ai_feedback").is_some());
+        assert!(ctx.get("_trimmed").is_none());
     }
 
     #[test]

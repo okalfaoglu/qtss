@@ -43,6 +43,15 @@ pub struct AiRequest {
     pub model: String,
 }
 
+impl AiRequest {
+    /// Suggested timeout based on `max_tokens` — longer generation needs more time.
+    /// ~30 tokens/sec baseline → max_tokens/30 + 30s base.
+    pub fn suggested_timeout_secs(&self) -> u64 {
+        let gen_secs = (self.max_tokens as u64) / 30;
+        (gen_secs + 30).clamp(60, 600)
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AiUsage {
     pub input_tokens: Option<u64>,

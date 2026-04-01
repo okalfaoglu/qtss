@@ -515,6 +515,10 @@ pub async fn run_operational_sweep(rt: &AiRuntime) -> AiResult<()> {
     use rust_decimal::Decimal;
     let min_q = Decimal::new(1, 8);
     let symbols = symbols_with_positive_long_from_fills(&rows, min_q);
+    let cfg_ref = rt.config().clone();
+    let operational_prompt = resolve_system_prompt(
+        rt.pool(), PROMPT_KEY_OPERATIONAL, || operational_system_prompt_default(&cfg_ref),
+    ).await;
     for sym in symbols {
         let ctx = match crate::context_builder::build_operational_context(rt.pool(), &sym).await {
             Ok(c) => c,
@@ -529,7 +533,7 @@ pub async fn run_operational_sweep(rt: &AiRuntime) -> AiResult<()> {
         }
         let user = serde_json::to_string_pretty(&ctx).unwrap_or_else(|_| "{}".to_string());
         let req = AiRequest {
-            system: Some(operational_system_prompt(rt.config())),
+            system: Some(operational_prompt.clone()),
             user,
             max_tokens: rt.config().max_tokens_operational,
             temperature: 0.2,
@@ -628,9 +632,13 @@ pub async fn run_strategic_sweep(rt: &AiRuntime) -> AiResult<()> {
     if decision_exists_for_hash(rt.pool(), &format!("st:{h}"), 60 * 24).await? {
         return Ok(());
     }
+    let cfg_ref = rt.config().clone();
+    let strategic_prompt = resolve_system_prompt(
+        rt.pool(), PROMPT_KEY_STRATEGIC, || strategic_system_prompt_default(&cfg_ref),
+    ).await;
     let user = serde_json::to_string_pretty(&ctx).unwrap_or_else(|_| "{}".to_string());
     let req = AiRequest {
-        system: Some(strategic_system_prompt(rt.config())),
+        system: Some(strategic_prompt),
         user,
         max_tokens: rt.config().max_tokens_strategic,
         temperature: 0.35,
