@@ -1872,6 +1872,13 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [drawerOpen, drawerTab, token, tradingRangeAutoRefresh, refreshEnginePanel]);
 
+  /** Veri girişi alt sekmesi: kayıtlı engine_symbols listesini hemen doldur (Motor çekmecesine gitmeden). */
+  useEffect(() => {
+    if (!drawerOpen || drawerTab !== "trading_range" || !token) return;
+    if (tradingRangeSubtab !== "data_entry") return;
+    void refreshEnginePanel();
+  }, [drawerOpen, drawerTab, tradingRangeSubtab, token, refreshEnginePanel]);
+
   /** Sinyal panosu sekmesi + otomatik yenileme kutusu: `signal_dashboard` anlık görüntüsü periyodik çekilir. */
   useEffect(() => {
     if (!drawerOpen || drawerTab !== "signal_dashboard" || !token || !signalDashboardAutoRefresh) return;
@@ -3667,6 +3674,8 @@ export default function App() {
                               }
                             }}
                             engineRegisterBusy={engineFormBusy}
+                            registeredTargets={engineSymbols}
+                            onEngineTargetsPatchError={(message) => setEnginePanelErr(message)}
                           />
                         </div>
                       ) : null}

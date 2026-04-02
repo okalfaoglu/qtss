@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { postEngineSymbolsBulk, type EngineSymbolsBulkTarget } from "../api/client";
+import {
+  patchEngineSymbol,
+  postEngineSymbolsBulk,
+  type EngineSymbolApiRow,
+  type EngineSymbolsBulkTarget,
+} from "../api/client";
 
 function parseEngineSymbolsBulkLines(text: string): EngineSymbolsBulkTarget[] {
   const out: EngineSymbolsBulkTarget[] = [];
@@ -53,6 +58,8 @@ export type TradingRangeDataEntryPanelProps = {
   onSyncScopeToEngineDraft: () => void;
   onRegisterEngine: () => void | Promise<void>;
   engineRegisterBusy: boolean;
+  registeredTargets: EngineSymbolApiRow[];
+  onEngineTargetsPatchError?: (message: string) => void;
 };
 
 export function TradingRangeDataEntryPanel(props: TradingRangeDataEntryPanelProps) {
@@ -85,6 +92,8 @@ export function TradingRangeDataEntryPanel(props: TradingRangeDataEntryPanelProp
     onSyncScopeToEngineDraft,
     onRegisterEngine,
     engineRegisterBusy,
+    registeredTargets,
+    onEngineTargetsPatchError,
   } = props;
 
   const [bulkText, setBulkText] = useState("");
@@ -283,6 +292,91 @@ export function TradingRangeDataEntryPanel(props: TradingRangeDataEntryPanelProp
               {bulkSummary}
             </p>
           ) : null}
+        </>
+      ) : null}
+      {isLoggedIn ? (
+        <>
+          <p className="tv-drawer__section-head" style={{ marginTop: "0.65rem", marginBottom: "0.25rem" }}>
+            {t("app.tradingRangeDrawer.registeredTargetsHead", { count: registeredTargets.length })}
+          </p>
+          <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.35rem", lineHeight: 1.45 }}>
+            {t("app.tradingRangeDrawer.registeredTargetsHint")}
+          </p>
+          {registeredTargets.length === 0 ? (
+            <p className="muted" style={{ fontSize: "0.72rem" }}>
+              {t("app.tradingRangeDrawer.registeredTargetsEmpty")}
+            </p>
+          ) : (
+            <ul
+              className="muted mono"
+              style={{
+                fontSize: "0.72rem",
+                maxHeight: "12rem",
+                overflow: "auto",
+                listStyle: "none",
+                paddingLeft: 0,
+                marginTop: 0,
+              }}
+            >
+              {registeredTargets.map((s) => (
+                <li
+                  key={s.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.35rem",
+                    flexWrap: "wrap",
+                    marginBottom: "0.25rem",
+                  }}
+                >
+                  <span>
+                    {s.enabled ? "●" : "○"} {s.exchange}/{s.segment} {s.symbol} {s.interval}
+                    {s.label ? ` — ${s.label}` : ""}
+                  </span>
+                  {canOps && accessToken ? (
+                    <>
+                      <select
+                        className="mono"
+                        style={{ fontSize: "0.65rem", maxWidth: "11rem" }}
+                        value={(s.signal_direction_mode ?? "auto_segment").toLowerCase()}
+                        title={t("app.engineDrawer.signalModeTitle")}
+                        onChange={async (e) => {
+                          try {
+                            await patchEngineSymbol(accessToken, s.id, {
+                              signal_direction_mode: e.target.value,
+                            });
+                            await onEnginesUpdated?.();
+                          } catch (err) {
+                            onEngineTargetsPatchError?.(String(err));
+                          }
+                        }}
+                      >
+                        <option value="auto_segment">{t("app.engineDrawer.optAutoSegment")}</option>
+                        <option value="long_only">{t("app.engineDrawer.optLongOnly")}</option>
+                        <option value="both">{t("app.engineDrawer.optBoth")}</option>
+                        <option value="short_only">{t("app.engineDrawer.optShortOnly")}</option>
+                      </select>
+                      <button
+                        type="button"
+                        className="theme-toggle"
+                        style={{ fontSize: "0.65rem", padding: "0.12rem 0.4rem" }}
+                        onClick={async () => {
+                          try {
+                            await patchEngineSymbol(accessToken, s.id, { enabled: !s.enabled });
+                            await onEnginesUpdated?.();
+                          } catch (e) {
+                            onEngineTargetsPatchError?.(String(e));
+                          }
+                        }}
+                      >
+                        {s.enabled ? t("app.engineDrawer.toggleDisable") : t("app.engineDrawer.toggleEnable")}
+                      </button>
+                    </>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
         </>
       ) : null}
     </>

@@ -368,7 +368,10 @@
       "bulkSubmit": "Register all lines",
       "bulkBusy": "Registering…",
       "bulkEmpty": "No valid lines — use SYMBOL interval or exchange segment SYMBOL interval.",
-      "bulkResult": "Done: {{inserted}} upserted, {{errors}} row errors (see API message if any)."
+      "bulkResult": "Done: {{inserted}} upserted, {{errors}} row errors (see API message if any).",
+      "registeredTargetsHead": "Registered engine targets ({{count}})",
+      "registeredTargetsHint": "Same list as Settings → Engine & data. Ops can change signal mode or enable/disable here.",
+      "registeredTargetsEmpty": "No rows in engine_symbols yet — add a target above or use bulk registration."
     },
     "tradingRangeFutures": {
       "sectionTitle": "Futures (Binance) — quick orders",
