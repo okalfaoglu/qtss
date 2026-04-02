@@ -1,5 +1,11 @@
-//! İlk kurulum: migrasyonlar (`migrations/*.sql`), varsayılan org, admin kullanıcı, OAuth istemcisi.
-//! `DATABASE_URL=... cargo run -p qtss-api --bin qtss-seed` — admin şifresi `system_config.seed.admin_password`.
+//! İlk kurulum ve **yeniden eşitleme**: migrasyonlar, varsayılan org, admin kullanıcı, OAuth istemcisi.
+//! `DATABASE_URL=... cargo run -p qtss-api --bin qtss-seed`
+//!
+//! **Öncelik (admin parola):** `QTSS_SEED_ADMIN_PASSWORD` (doluysa) → `system_config.seed.admin_password` → yoksa üret.
+//! Her başarılı koşuda `seed.admin_password` ve admin `users.password_hash` güncellenir.
+//!
+//! **Öncelik (OAuth client_secret):** `QTSS_SEED_OAUTH_CLIENT_SECRET` (doluysa) → `system_config.seed.oauth_client_secret` → yoksa üret.
+//! Her koşuda plaintext `oauth_client_secret` `system_config`’te tutulur; `oauth_clients` hash’i yenilenir.
 
 use anyhow::Context;
 use qtss_common::{load_dotenv, require_postgres_database_url};
@@ -64,6 +70,13 @@ fn generate_secret_hex(bytes_len: usize) -> String {
     hex::encode(buf)
 }
 
+fn env_trimmed(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     load_dotenv();
@@ -86,28 +99,24 @@ async fn main() -> anyhow::Result<()> {
         Some(row) => json_string_value(&row.value).unwrap_or_else(|| "admin@localhost".into()),
         None => "admin@localhost".into(),
     };
-    let admin_password = match sys.get("seed", "admin_password").await? {
+    let admin_password_from_db = match sys.get("seed", "admin_password").await? {
         Some(row) => json_string_value(&row.value),
         None => None,
-    }
-    .or_else(|| std::env::var("QTSS_SEED_ADMIN_PASSWORD").ok())
-    .unwrap_or_else(|| {
-        let p = generate_secret_hex(24);
-        p
-    });
-    if sys.get("seed", "admin_password").await?.is_none() {
-        let _ = sys
-            .upsert(
-                "seed",
-                "admin_password",
-                serde_json::json!({ "value": admin_password }),
-                Some(1),
-                Some("Admin password (generated if missing)."),
-                Some(true),
-                None,
-            )
-            .await;
-    }
+    };
+    let admin_password = env_trimmed("QTSS_SEED_ADMIN_PASSWORD")
+        .or(admin_password_from_db)
+        .unwrap_or_else(|| generate_secret_hex(24));
+    sys.upsert(
+        "seed",
+        "admin_password",
+        serde_json::json!({ "value": admin_password }),
+        Some(1),
+        Some("Admin password (env QTSS_SEED_ADMIN_PASSWORD overrides; else DB; else generated)."),
+        Some(true),
+        None,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("system_config seed.admin_password: {e}"))?;
 
     let org_id: Uuid =
         match sqlx::query_scalar::<_, Uuid>("SELECT id FROM organizations WHERE name = 'Default'")
@@ -132,7 +141,11 @@ async fn main() -> anyhow::Result<()> {
     sqlx::query(
         r#"INSERT INTO users (id, org_id, email, password_hash, display_name, is_admin)
            VALUES ($1, $2, $3, $4, 'Administrator', true)
-           ON CONFLICT (email) DO NOTHING"#,
+           ON CONFLICT (email) DO UPDATE SET
+             password_hash = EXCLUDED.password_hash,
+             org_id = EXCLUDED.org_id,
+             display_name = EXCLUDED.display_name,
+             is_admin = EXCLUDED.is_admin"#,
     )
     .bind(new_id)
     .bind(org_id)
@@ -159,24 +172,23 @@ async fn main() -> anyhow::Result<()> {
     .await?;
 
     let oauth_sec_row = sys.get("seed", "oauth_client_secret").await?;
-    let from_db_oauth = oauth_sec_row
+    let oauth_from_db = oauth_sec_row
         .as_ref()
         .and_then(|row| json_string_value(&row.value));
-    let had_oauth_secret = from_db_oauth.is_some();
-    let client_secret = from_db_oauth.unwrap_or_else(|| generate_secret_hex(24));
-    if !had_oauth_secret {
-        let _ = sys
-            .upsert(
-                "seed",
-                "oauth_client_secret",
-                serde_json::json!({ "value": client_secret }),
-                Some(1),
-                Some("OAuth client_secret for qtss-cli (generated if missing)."),
-                Some(true),
-                None,
-            )
-            .await;
-    }
+    let client_secret = env_trimmed("QTSS_SEED_OAUTH_CLIENT_SECRET")
+        .or(oauth_from_db)
+        .unwrap_or_else(|| generate_secret_hex(24));
+    sys.upsert(
+        "seed",
+        "oauth_client_secret",
+        serde_json::json!({ "value": client_secret }),
+        Some(1),
+        Some("OAuth client_secret for qtss-cli (env QTSS_SEED_OAUTH_CLIENT_SECRET overrides; else DB; else generated)."),
+        Some(true),
+        None,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("system_config seed.oauth_client_secret: {e}"))?;
     let salt_c = SaltString::generate(&mut rand::thread_rng());
     let client_ph = Argon2::default()
         .hash_password(client_secret.as_bytes(), &salt_c)
