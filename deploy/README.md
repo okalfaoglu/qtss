@@ -118,7 +118,7 @@ cd /app/qtss
 sudo bash deploy/setup-web-rocky9.sh
 ```
 
-Node 18+ gerekir; varsayılan `nodejs` modülü eskiyse: `sudo dnf module install nodejs:20 -y` (veya dağıtımınıza uygun sürüm).
+Node **18+** gerekir. `setup-web-rocky9.sh` Node 16 gibi eski sürüm görürse **AppStream `nodejs:20`** modülünü etkinleştirip yeniden kurmayı dener. Elle: `sudo dnf module reset -y nodejs && sudo dnf module enable -y nodejs:20 && sudo dnf install -y nodejs npm`.
 
 ### 2. Ortam (`web/.env`)
 
