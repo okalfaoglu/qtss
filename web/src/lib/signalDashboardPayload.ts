@@ -1,3 +1,5 @@
+import type { EngineSnapshotJoinedApiRow } from "../api/client";
+
 /** `analysis_snapshots` / `signal_dashboard` JSON (Rust `SignalDashboardV1`). */
 export type SignalDashboardPayload = {
   /** Worker `attach_engine_context` — JOIN satırıyla aynı olmalı. */
@@ -97,4 +99,106 @@ export function pickDashboardNum(
 export function pickDashboardBool(v2: boolean | undefined, v1: boolean | undefined): boolean | undefined {
   if (typeof v2 === "boolean") return v2;
   return v1;
+}
+
+/** List row border / accent from effective status (and payload health). */
+export type SignalDashboardRowAccent = "long" | "short" | "neutral" | "error" | "insufficient";
+
+export function signalDashboardRowAccent(snapshot: EngineSnapshotJoinedApiRow): SignalDashboardRowAccent {
+  if (snapshot.error?.trim()) return "error";
+  const raw = snapshot.payload;
+  if (!raw || typeof raw !== "object") return "neutral";
+  const ins = raw as Record<string, unknown>;
+  if (ins.reason === "insufficient_bars") return "insufficient";
+  const p = raw as SignalDashboardPayload;
+  const v2 = parseSignalDashboardV2(ins.signal_dashboard_v2);
+  const status = pickDashboardStr(v2?.status, p.durum).trim().toUpperCase();
+  if (status === "LONG") return "long";
+  if (status === "SHORT") return "short";
+  return "neutral";
+}
+
+/** Detail table cell coloring (semantic, works with EN/TR display strings). */
+export type DashboardValueTone = "default" | "bull" | "bear" | "muted" | "warn" | "accent" | "stop";
+
+function classifyStatusDisplay(valueStr: string): DashboardValueTone {
+  const u = valueStr.trim().toUpperCase();
+  if (u === "LONG") return "bull";
+  if (u === "SHORT") return "bear";
+  if (u === "NOTR" || u === "NEUTRAL" || u === "NÖTR") return "muted";
+  return "default";
+}
+
+function classifyTrendDisplay(valueStr: string): DashboardValueTone {
+  const v = valueStr.trim().toLowerCase();
+  if (v === "up" || v === "yukarı" || v === "yukari") return "bull";
+  if (v === "down" || v === "aşağı" || v === "asagi") return "bear";
+  if (v === "off" || v === "closed" || v === "kapalı" || v === "kapali" || v === "none") return "muted";
+  return "default";
+}
+
+function classifyMomentumDisplay(valueStr: string): DashboardValueTone {
+  const v = valueStr.trim().toLowerCase();
+  if (v.includes("positive") || v.includes("pozitif")) return "bull";
+  if (v.includes("negative") || v.includes("negatif")) return "bear";
+  if (v.includes("neutral") || v.includes("nötr") || v.includes("notr")) return "muted";
+  return "default";
+}
+
+/**
+ * Maps a translated row label key (`app.signalDashboard.row.*`) plus rendered value to a tone.
+ * Optional `toneOverride` skips inference (e.g. booleans).
+ */
+export function dashboardValueTone(rowKey: string, valueStr: string): DashboardValueTone {
+  if (valueStr === "—") return "default";
+  const v = valueStr.trim().toLowerCase();
+  switch (rowKey) {
+    case "symbol":
+    case "venueInterval":
+    case "directionPolicyDb":
+    case "directionEffective":
+    case "volatilityPct":
+    case "rangeHigh":
+    case "rangeLow":
+    case "rangeMid":
+    case "atr":
+    case "lastBar":
+      return "default";
+    case "entryActual":
+      return "warn";
+    case "stopInitial":
+    case "stopTrailActive":
+      return "stop";
+    case "takeProfitInitial":
+    case "takeProfitDynamic":
+      return "bull";
+    case "status":
+    case "statusModelRaw":
+      return classifyStatusDisplay(valueStr);
+    case "localTrend":
+    case "globalTrend":
+      return classifyTrendDisplay(valueStr);
+    case "marketMode": {
+      if (v.includes("break") || v.includes("kopuş") || v.includes("kopus")) return "warn";
+      return "default";
+    }
+    case "entryMode": {
+      if (v.includes("reversal") || v.includes("dönüş") || v.includes("donus")) return "accent";
+      return "default";
+    }
+    case "momentum1":
+    case "momentum2":
+      return classifyMomentumDisplay(valueStr);
+    case "signalSource":
+      return "accent";
+    case "trendExhaustion":
+    case "structureShift":
+      return "default";
+    case "positionStrength":
+      return "default";
+    case "system":
+      return "default";
+    default:
+      return "default";
+  }
 }
