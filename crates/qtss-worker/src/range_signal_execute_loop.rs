@@ -226,7 +226,7 @@ pub async fn range_signal_execute_loop(pool: PgPool) {
             "worker",
             "range_auto_paper_qty_base",
             "QTSS_RANGE_AUTO_PAPER_QTY_BASE",
-            "0.001",
+            Decimal::new(1, 3),
         )
         .await;
         let qty_live_raw = resolve_system_string(
