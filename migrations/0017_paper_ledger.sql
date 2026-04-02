@@ -1,6 +1,7 @@
--- Dry / paper defter (`PaperLedgerRepository`).
+-- Dry / paper ledger (`PaperLedgerRepository`).
+-- Idempotent: `0013_worker_analytics_schema.sql` may already create these tables.
 
-CREATE TABLE paper_balances (
+CREATE TABLE IF NOT EXISTS paper_balances (
     user_id UUID NOT NULL PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
     org_id UUID NOT NULL REFERENCES organizations (id) ON DELETE CASCADE,
     quote_balance NUMERIC NOT NULL,
@@ -8,7 +9,7 @@ CREATE TABLE paper_balances (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE paper_fills (
+CREATE TABLE IF NOT EXISTS paper_fills (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id UUID NOT NULL REFERENCES organizations (id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -26,5 +27,5 @@ CREATE TABLE paper_fills (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_paper_fills_user_created ON paper_fills (user_id, created_at DESC);
-CREATE INDEX idx_paper_fills_created ON paper_fills (created_at);
+CREATE INDEX IF NOT EXISTS idx_paper_fills_user_created ON paper_fills (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_fills_created ON paper_fills (created_at);
