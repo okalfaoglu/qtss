@@ -849,6 +849,34 @@ export async function fetchEngineSnapshots(accessToken: string): Promise<EngineS
   return JSON.parse(t) as EngineSnapshotJoinedApiRow[];
 }
 
+/** `GET …/ingestion-state` — worker `engine_symbol_ingestion_state` joined with `engine_symbols`. */
+export type EngineSymbolIngestionApiRow = {
+  id: string;
+  exchange: string;
+  segment: string;
+  symbol: string;
+  interval: string;
+  enabled: boolean;
+  sort_order: number;
+  label: string | null;
+  bar_row_count: number | null;
+  min_open_time: string | null;
+  max_open_time: string | null;
+  gap_count: number | null;
+  max_gap_seconds: number | null;
+  last_backfill_at: string | null;
+  last_health_check_at: string | null;
+  last_error: string | null;
+  ingestion_updated_at: string | null;
+};
+
+export async function fetchEngineSymbolIngestion(accessToken: string): Promise<EngineSymbolIngestionApiRow[]> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/engine/ingestion-state`, accessToken, {});
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("engine/ingestion-state", r, t);
+  return JSON.parse(t) as EngineSymbolIngestionApiRow[];
+}
+
 /** `app_config.range_engine` — worker + web; `GET /api/v1/analysis/range-engine/config`. */
 export type RangeEngineConfigApi = {
   trading_range_params?: {

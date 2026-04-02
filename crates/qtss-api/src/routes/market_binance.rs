@@ -1,25 +1,21 @@
 //! Halka açık Binance OHLCV ve komisyon özetleri (okuma).
 
-use std::str::FromStr;
-
 use axum::extract::{Extension, Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::{TimeZone, Utc};
 use serde::Deserialize;
 use serde_json::json;
 use tracing::debug;
 use uuid::Uuid;
 
 use qtss_binance::{
-    commission_rate_from_fapi_response, default_spot_commission_bps,
+    backfill_binance_public_klines, commission_rate_from_fapi_response, default_spot_commission_bps,
     default_usdt_futures_commission_bps, futures_commission_hint_from_exchange_info,
     parse_klines_json, public_spot_kline_url, public_usdm_kline_url,
     spot_commission_hint_from_exchange_info, trade_fee_from_sapi_response, BinanceClient,
     BinanceClientConfig, BinanceError, CommissionBps, KlineBar,
 };
-use qtss_storage::{list_recent_bars, upsert_market_bar, MarketBarUpsert};
-use rust_decimal::Decimal;
+use qtss_storage::list_recent_bars;
 
 use crate::error::ApiError;
 use crate::oauth::AccessClaims;
@@ -320,81 +316,9 @@ async fn backfill_market_bars_from_rest(
         _ => "spot",
     };
     let target = i64::from(body.limit.unwrap_or(500).clamp(1, 50_000));
-    const PAGE: u32 = 1000;
-
-    let cfg = BinanceClientConfig::public_mainnet();
-    let client = BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let mut upserted = 0_i64;
-    let mut end_time: Option<u64> = None;
-    let mut pages = 0_u32;
-
-    while upserted < target && pages < 60 {
-        pages += 1;
-        let need = (target - upserted) as u32;
-        let batch_lim = need.min(PAGE);
-        let raw = match seg {
-            "futures" | "usdt_futures" | "fapi" => client
-                .fapi_klines(&sym, &interval, None, end_time, Some(batch_lim))
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?,
-            _ => client
-                .spot_klines(&sym, &interval, None, end_time, Some(batch_lim))
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?,
-        };
-        let klines = parse_klines_json(&raw).map_err(|e| ApiError::internal(e.to_string()))?;
-        if klines.is_empty() {
-            break;
-        }
-        let oldest = klines.iter().map(|b| b.open_time).min().unwrap_or(0);
-        for b in &klines {
-            let open_time = Utc
-                .timestamp_millis_opt(b.open_time as i64)
-                .single()
-                .ok_or_else(|| {
-                    ApiError::bad_request(format!("open_time geçersiz: {}", b.open_time))
-                })?;
-            let quote_volume = if b.quote_asset_volume.trim().is_empty() {
-                None
-            } else {
-                Some(
-                    Decimal::from_str(b.quote_asset_volume.trim())
-                        .map_err(|e| ApiError::bad_request(e.to_string()))?,
-                )
-            };
-            let row = MarketBarUpsert {
-                exchange: "binance".into(),
-                segment: seg_db.into(),
-                symbol: sym.clone(),
-                interval: interval.clone(),
-                open_time,
-                open: Decimal::from_str(b.open.trim())
-                    .map_err(|e| ApiError::bad_request(e.to_string()))?,
-                high: Decimal::from_str(b.high.trim())
-                    .map_err(|e| ApiError::bad_request(e.to_string()))?,
-                low: Decimal::from_str(b.low.trim())
-                    .map_err(|e| ApiError::bad_request(e.to_string()))?,
-                close: Decimal::from_str(b.close.trim())
-                    .map_err(|e| ApiError::bad_request(e.to_string()))?,
-                volume: Decimal::from_str(b.volume.trim())
-                    .map_err(|e| ApiError::bad_request(e.to_string()))?,
-                quote_volume,
-                trade_count: Some(b.number_of_trades as i64),
-                instrument_id: None,
-                bar_interval_id: None,
-            };
-            upsert_market_bar(&st.pool, &row).await?;
-            upserted += 1;
-            if upserted >= target {
-                break;
-            }
-        }
-        if klines.len() < batch_lim as usize {
-            break;
-        }
-        end_time = Some(oldest.saturating_sub(1));
-    }
+    let upserted = backfill_binance_public_klines(&st.pool, &sym, &interval, seg, target)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     Ok(Json(json!({
         "exchange": "binance",

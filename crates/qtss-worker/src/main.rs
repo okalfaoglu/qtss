@@ -27,6 +27,7 @@ mod signal_scorer;
 mod strategy_runner;
 mod ai_tactical_executor;
 mod worker_probe_http;
+mod engine_ingest;
 
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -38,8 +39,9 @@ use chrono::{TimeZone, Utc};
 use anyhow::Context;
 use futures_util::{SinkExt, StreamExt};
 use qtss_binance::{
-    connect_url, parse_closed_kline_json, public_spot_combined_kline_url, public_spot_kline_url,
-    public_usdm_combined_kline_url, public_usdm_kline_url,
+    connect_url, kline_stream_path, parse_closed_kline_json, public_spot_combined_kline_url,
+    public_spot_combined_streams_url, public_spot_kline_url, public_usdm_combined_kline_url,
+    public_usdm_combined_streams_url, public_usdm_kline_url,
 };
 use qtss_common::{init_logging, load_dotenv, postgres_url_from_env_or_default};
 use qtss_domain::ExchangeId;
@@ -164,6 +166,8 @@ async fn main() -> anyhow::Result<()> {
             engine_pool,
             confluence_hook,
         ));
+        let ingest_pool = pool.clone();
+        tokio::spawn(engine_ingest::engine_symbol_ingest_loop(ingest_pool));
         let range_exec_pool = pool.clone();
         tokio::spawn(range_signal_execute_loop::range_signal_execute_loop(
             range_exec_pool,
@@ -237,7 +241,7 @@ async fn main() -> anyhow::Result<()> {
         ),
     };
 
-    let mut symbols: Vec<String> = match pool_opt.as_ref() {
+    let env_symbols: Vec<String> = match pool_opt.as_ref() {
         Some(pool) => resolve_system_csv(pool, "worker", "kline_symbols_csv", "QTSS_KLINE_SYMBOLS", "").await,
         None => std::env::var("QTSS_KLINE_SYMBOLS").unwrap_or_default().split(',').map(|s| s.trim().to_string()).collect(),
     }
@@ -246,121 +250,176 @@ async fn main() -> anyhow::Result<()> {
     .filter(|s| !s.is_empty())
     .collect();
 
-    let mut kline_symbols_from_engine = false;
-    if symbols.is_empty() {
+    let market_data_exchange = resolve_market_data_exchange_id(pool_opt.as_ref()).await;
+    let market_data_exchange_label = market_data_exchange.to_string();
+
+    // Binance combined URL length guard — split into parallel sockets.
+    const KLINE_WS_STREAM_CHUNK: usize = 48;
+
+    let mut kline_started = false;
+    if market_data_exchange == ExchangeId::Binance {
         if let Some(pool) = pool_opt.as_ref() {
             match list_enabled_engine_symbols(pool).await {
                 Ok(rows) => {
-                    let mut seen = HashSet::new();
-                    for r in &rows {
-                        let s = r.symbol.trim().to_uppercase();
-                        if !s.is_empty() && seen.insert(s.clone()) {
-                            symbols.push(s);
+                    let binance_rows: Vec<_> = rows
+                        .into_iter()
+                        .filter(|r| r.exchange.trim().eq_ignore_ascii_case("binance"))
+                        .collect();
+                    if !binance_rows.is_empty() {
+                        let mut spot_paths: HashSet<String> = HashSet::new();
+                        let mut fut_paths: HashSet<String> = HashSet::new();
+                        for r in &binance_rows {
+                            let path = kline_stream_path(r.symbol.trim(), r.interval.trim());
+                            if segment_ws_db(r.segment.trim()) == "futures" {
+                                fut_paths.insert(path);
+                            } else {
+                                spot_paths.insert(path);
+                            }
                         }
-                    }
-                    if !symbols.is_empty() {
-                        kline_symbols_from_engine = true;
-                        if let Some(first) = rows.first() {
-                            interval = first.interval.trim().to_string();
-                            segment = first.segment.trim().to_string();
-                            info!(
-                                %interval,
-                                %segment,
-                                "kline: using interval/segment from first enabled engine_symbols row (override worker.kline_* / QTSS_KLINE_* when symbols fall back)"
-                            );
+                        let n_spot = spot_paths.len();
+                        let n_fut = fut_paths.len();
+                        let ex = market_data_exchange_label.clone();
+                        for chunk in spot_paths.into_iter().collect::<Vec<_>>().chunks(KLINE_WS_STREAM_CHUNK) {
+                            let paths = chunk.to_vec();
+                            let p = pool.clone();
+                            let exc = ex.clone();
+                            tokio::spawn(multi_kline_ws_streams_loop(paths, "spot", Some(p), exc));
+                        }
+                        for chunk in fut_paths.into_iter().collect::<Vec<_>>().chunks(KLINE_WS_STREAM_CHUNK) {
+                            let paths = chunk.to_vec();
+                            let p = pool.clone();
+                            let exc = ex.clone();
+                            tokio::spawn(multi_kline_ws_streams_loop(paths, "futures", Some(p), exc));
                         }
                         info!(
-                            count = symbols.len(),
-                            "kline WebSocket symbols from enabled engine_symbols (set QTSS_KLINE_SYMBOLS or worker.kline_symbols_csv to override)"
+                            spot_streams = n_spot,
+                            futures_streams = n_fut,
+                            exchange = %market_data_exchange_label,
+                            "kline WebSocket: engine_symbols (per symbol+interval; spot and futures split)"
                         );
+                        kline_started = true;
                     }
                 }
-                Err(e) => warn!(%e, "kline: could not read engine_symbols for symbol fallback"),
+                Err(e) => warn!(%e, "kline: engine_symbols read failed (WS fallback may use env symbols)"),
             }
         }
     }
 
-    let market_data_exchange = resolve_market_data_exchange_id(pool_opt.as_ref()).await;
-    let market_data_exchange_label = market_data_exchange.to_string();
-
-    if !symbols.is_empty() {
-        if market_data_exchange == ExchangeId::Binance {
-            info!(
-                count = symbols.len(),
-                %interval,
-                %segment,
-                exchange = %market_data_exchange_label,
-                from_engine = kline_symbols_from_engine,
-                "kline combined WebSocket starting"
-            );
-            let ex = market_data_exchange_label.clone();
-            match pool_opt.as_ref() {
-                Some(pool) => tokio::spawn(multi_kline_ws_loop(
-                    symbols,
-                    interval,
-                    segment,
-                    Some(pool.clone()),
-                    ex,
-                )),
-                None => {
-                    warn!("DATABASE_URL yok — combined kline yalnızca log");
-                    tokio::spawn(multi_kline_ws_loop(symbols, interval, segment, None, ex))
+    if !kline_started {
+        let mut symbols = env_symbols;
+        let mut kline_symbols_from_engine = false;
+        if symbols.is_empty() {
+            if let Some(pool) = pool_opt.as_ref() {
+                match list_enabled_engine_symbols(pool).await {
+                    Ok(rows) => {
+                        let mut seen = HashSet::new();
+                        for r in &rows {
+                            let s = r.symbol.trim().to_uppercase();
+                            if !s.is_empty() && seen.insert(s.clone()) {
+                                symbols.push(s);
+                            }
+                        }
+                        if !symbols.is_empty() {
+                            kline_symbols_from_engine = true;
+                            if let Some(first) = rows.first() {
+                                interval = first.interval.trim().to_string();
+                                segment = first.segment.trim().to_string();
+                                info!(
+                                    %interval,
+                                    %segment,
+                                    "kline: single-interval fallback from first engine_symbols row"
+                                );
+                            }
+                            info!(
+                                count = symbols.len(),
+                                "kline WebSocket symbols from engine_symbols (unique symbol only; set QTSS_KLINE_SYMBOLS to override)"
+                            );
+                        }
+                    }
+                    Err(e) => warn!(%e, "kline: could not read engine_symbols for symbol fallback"),
                 }
-            };
-        } else {
-            warn!(
-                count = symbols.len(),
-                %interval,
-                %segment,
-                exchange = %market_data_exchange_label,
-                "kline WebSocket skipped: multi-symbol feed is implemented for Binance only; set QTSS_MARKET_DATA_EXCHANGE=binance or worker.market_data_exchange",
-            );
-        }
-    } else {
-        let sym = match pool_opt.as_ref() {
-            Some(pool) => {
-                resolve_system_string(pool, "worker", "kline_symbol", "QTSS_KLINE_SYMBOL", "")
-                    .await
             }
-            None => std::env::var("QTSS_KLINE_SYMBOL").unwrap_or_default(),
-        };
-        let sym = sym.trim().to_string();
-        if !sym.is_empty() {
+        }
+
+        if !symbols.is_empty() {
             if market_data_exchange == ExchangeId::Binance {
                 info!(
-                    %sym,
+                    count = symbols.len(),
                     %interval,
                     %segment,
                     exchange = %market_data_exchange_label,
-                    "kline WebSocket starting (QTSS_KLINE_SYMBOL)",
+                    from_engine = kline_symbols_from_engine,
+                    "kline combined WebSocket starting (single interval for all symbols)"
                 );
                 let ex = market_data_exchange_label.clone();
                 match pool_opt.as_ref() {
-                    Some(pool) => tokio::spawn(kline_ws_loop(
-                        sym,
+                    Some(pool) => tokio::spawn(multi_kline_ws_loop(
+                        symbols,
                         interval,
                         segment,
                         Some(pool.clone()),
                         ex,
                     )),
                     None => {
-                        warn!("DATABASE_URL yok — kline yalnızca log (market_bars yazılmaz)");
-                        tokio::spawn(kline_ws_loop(sym, interval, segment, None, ex))
+                        warn!("DATABASE_URL yok — combined kline yalnızca log");
+                        tokio::spawn(multi_kline_ws_loop(symbols, interval, segment, None, ex))
                     }
                 };
             } else {
                 warn!(
-                    %sym,
+                    count = symbols.len(),
                     %interval,
                     %segment,
                     exchange = %market_data_exchange_label,
-                    "kline WebSocket skipped: feed is implemented for Binance only; set QTSS_MARKET_DATA_EXCHANGE=binance or worker.market_data_exchange",
+                    "kline WebSocket skipped: multi-symbol feed is implemented for Binance only; set QTSS_MARKET_DATA_EXCHANGE=binance or worker.market_data_exchange",
                 );
             }
         } else {
-            warn!(
-                "kline WebSocket off: set QTSS_KLINE_SYMBOLS or QTSS_KLINE_SYMBOL, worker.kline_symbols_csv, or enable engine_symbols rows. Example: QTSS_KLINE_SYMBOLS=BTCUSDT,ETHUSDT"
-            );
+            let sym = match pool_opt.as_ref() {
+                Some(pool) => {
+                    resolve_system_string(pool, "worker", "kline_symbol", "QTSS_KLINE_SYMBOL", "")
+                        .await
+                }
+                None => std::env::var("QTSS_KLINE_SYMBOL").unwrap_or_default(),
+            };
+            let sym = sym.trim().to_string();
+            if !sym.is_empty() {
+                if market_data_exchange == ExchangeId::Binance {
+                    info!(
+                        %sym,
+                        %interval,
+                        %segment,
+                        exchange = %market_data_exchange_label,
+                        "kline WebSocket starting (QTSS_KLINE_SYMBOL)",
+                    );
+                    let ex = market_data_exchange_label.clone();
+                    match pool_opt.as_ref() {
+                        Some(pool) => tokio::spawn(kline_ws_loop(
+                            sym,
+                            interval,
+                            segment,
+                            Some(pool.clone()),
+                            ex,
+                        )),
+                        None => {
+                            warn!("DATABASE_URL yok — kline yalnızca log (market_bars yazılmaz)");
+                            tokio::spawn(kline_ws_loop(sym, interval, segment, None, ex))
+                        }
+                    };
+                } else {
+                    warn!(
+                        %sym,
+                        %interval,
+                        %segment,
+                        exchange = %market_data_exchange_label,
+                        "kline WebSocket skipped: feed is implemented for Binance only; set QTSS_MARKET_DATA_EXCHANGE=binance or worker.market_data_exchange",
+                    );
+                }
+            } else {
+                warn!(
+                    "kline WebSocket off: add enabled Binance rows to engine_symbols, or set QTSS_KLINE_SYMBOLS / QTSS_KLINE_SYMBOL / worker.kline_symbols_csv"
+                );
+            }
         }
     }
 
@@ -468,6 +527,64 @@ async fn persist_kline_closed_bar(
         bar_interval_id: None,
     };
     upsert_market_bar(pool, &row).await
+}
+
+/// Combined multiplex: each path is `symbol@kline_{interval}` (mixed intervals allowed).
+async fn multi_kline_ws_streams_loop(
+    stream_paths: Vec<String>,
+    segment_db_key: &'static str,
+    pool: Option<PgPool>,
+    exchange: String,
+) {
+    if stream_paths.is_empty() {
+        return;
+    }
+    let url = match segment_db_key {
+        "futures" => public_usdm_combined_streams_url(&stream_paths),
+        _ => public_spot_combined_streams_url(&stream_paths),
+    };
+    let seg_db = segment_db_key;
+    info!(%url, streams = stream_paths.len(), %seg_db, "combined kline WebSocket (multi-interval)");
+    loop {
+        match connect_url(&url).await {
+            Ok(mut ws) => {
+                info!(%url, "combined WebSocket bağlandı");
+                while let Some(msg) = ws.next().await {
+                    match msg {
+                        Ok(Message::Text(t)) => {
+                            if let Some(pool) = pool.as_ref() {
+                                if let Some(k) = parse_closed_kline_json(&t) {
+                                    if let Err(e) =
+                                        persist_kline_closed_bar(pool, exchange.as_str(), seg_db, &k).await
+                                    {
+                                        warn!(%e, symbol = %k.symbol, "market_bars upsert");
+                                    } else {
+                                        tracing::debug!(symbol = %k.symbol, interval = %k.interval, "mum yazıldı");
+                                    }
+                                }
+                            } else if t.len() < 400 {
+                                tracing::debug!(%t, "kline combined");
+                            }
+                        }
+                        Ok(Message::Ping(p)) => {
+                            let _ = ws.send(Message::Pong(p)).await;
+                        }
+                        Ok(Message::Close(_)) => break,
+                        Err(e) => {
+                            warn!(%e, "ws okuma hatası");
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                warn!("combined WebSocket kapandı, 5 sn sonra yeniden bağlanılacak");
+            }
+            Err(e) => {
+                warn!(%e, "combined WebSocket bağlantı hatası");
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
 }
 
 async fn multi_kline_ws_loop(

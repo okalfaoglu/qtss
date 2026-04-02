@@ -8,6 +8,7 @@ The historical chain (`0001` … `0063`) was merged into a **single** file for s
 
 - **`0001_qtss_baseline.sql`** — full schema + seeds + alters, in the same order as the old numbered files.
 - **`0002_notify_telegram_system_config.sql`** — placeholder `notify.telegram_bot_token` / `notify.telegram_chat_id` (empty until configured).
+- **`0003_engine_symbol_ingestion_state.sql`** — `engine_symbol_ingestion_state` (worker `market_bars` health per `engine_symbols` row).
 
 **Regenerate** (after editing split files in a branch, or restoring from VCS history):
 

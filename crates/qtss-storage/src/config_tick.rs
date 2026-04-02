@@ -64,6 +64,20 @@ fn f64_from_config_value(value: &JsonValue) -> Option<f64> {
         .or_else(|| value.as_f64())
 }
 
+fn u64_from_config_value(value: &JsonValue) -> Option<u64> {
+    let from_num = |v: &JsonValue| {
+        v.as_u64()
+            .or_else(|| v.as_i64().filter(|&i| i >= 0).map(|i| i as u64))
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+    };
+    value
+        .get("value")
+        .and_then(from_num)
+        .or_else(|| value.get("bars").and_then(from_num))
+        .or_else(|| value.get("window").and_then(from_num))
+        .or_else(|| from_num(value))
+}
+
 /// JSON `value` field (string or number) → [`Decimal`].
 pub fn decimal_from_config_value(value: &JsonValue) -> Option<Decimal> {
     value
@@ -189,6 +203,43 @@ pub async fn resolve_system_f64(
         .and_then(|s| s.trim().parse::<f64>().ok())
         .filter(|v| v.is_finite())
         .unwrap_or(default_f64)
+}
+
+/// Same precedence as [`resolve_system_f64`]: JSON (`value`, `bars`, `window`, or bare number), then env, then default — clamped to \[`min_u64`, `max_u64`\].
+pub async fn resolve_system_u64(
+    pool: &PgPool,
+    module: &str,
+    config_key: &str,
+    env_key: &str,
+    default_u64: u64,
+    min_u64: u64,
+    max_u64: u64,
+) -> u64 {
+    let clamp = |u: u64| u.clamp(min_u64, max_u64);
+
+    if qtss_common::env_overrides_enabled() {
+        if let Ok(s) = std::env::var(env_key) {
+            let t = s.trim();
+            if !t.is_empty() {
+                if let Ok(u) = t.parse::<u64>() {
+                    return clamp(u);
+                }
+            }
+        }
+    }
+
+    let repo = SystemConfigRepository::new(pool.clone());
+    if let Ok(Some(row)) = repo.get(module, config_key).await {
+        if let Some(u) = u64_from_config_value(&row.value) {
+            return clamp(u);
+        }
+    }
+
+    std::env::var(env_key)
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(clamp)
+        .unwrap_or_else(|| clamp(default_u64))
 }
 
 /// Same precedence as [`resolve_system_string`], parses [`Decimal`].

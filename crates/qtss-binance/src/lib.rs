@@ -9,6 +9,7 @@ mod config;
 mod error;
 mod futures;
 mod klines;
+pub mod market_bars_backfill;
 mod order_parse;
 mod rest;
 mod sign;
@@ -29,9 +30,11 @@ pub use commission::{
 pub use config::{BinanceClientConfig, BinanceCredentials, BinanceEndpoints};
 pub use error::BinanceError;
 pub use klines::{parse_klines_json, KlineBar};
+pub use market_bars_backfill::backfill_binance_public_klines;
 pub use order_parse::venue_order_id_from_binance_order_response;
 pub use ws::{
-    connect_url, public_spot_combined_kline_url, public_spot_kline_url, public_usdm_combined_kline_url,
+    connect_url, kline_stream_path, public_spot_combined_kline_url, public_spot_combined_streams_url,
+    public_spot_kline_url, public_usdm_combined_kline_url, public_usdm_combined_streams_url,
     public_usdm_kline_url, spot_user_data_stream_url, usdm_user_data_stream_url, WsStream,
 };
 pub use ws_kline::{parse_closed_kline_json, ClosedKline};

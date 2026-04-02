@@ -50,6 +50,16 @@ fn sanitize_stream_symbol(symbol: &str) -> String {
         .collect()
 }
 
+/// Single multiplex path, e.g. `btcusdt@kline_15m` (used to mix intervals in one combined URL).
+#[must_use]
+pub fn kline_stream_path(symbol: &str, interval: &str) -> String {
+    format!(
+        "{}@kline_{}",
+        sanitize_stream_symbol(symbol),
+        interval.trim()
+    )
+}
+
 /// Spot combined stream: `wss://stream.binance.com:9443/stream?streams=btcusdt@kline_1m/ethusdt@kline_1m`
 #[must_use]
 pub fn public_spot_combined_kline_url(symbols: &[String], interval: &str) -> String {
@@ -57,9 +67,15 @@ pub fn public_spot_combined_kline_url(symbols: &[String], interval: &str) -> Str
         .iter()
         .map(|s| format!("{}@kline_{interval}", sanitize_stream_symbol(s)))
         .collect();
+    public_spot_combined_streams_url(&streams)
+}
+
+/// Spot combined stream with arbitrary `symbol@kline_iv` paths (mixed intervals per symbol).
+#[must_use]
+pub fn public_spot_combined_streams_url(stream_paths: &[String]) -> String {
     format!(
         "wss://stream.binance.com:9443/stream?streams={}",
-        streams.join("/")
+        stream_paths.join("/")
     )
 }
 
@@ -70,9 +86,15 @@ pub fn public_usdm_combined_kline_url(symbols: &[String], interval: &str) -> Str
         .iter()
         .map(|s| format!("{}@kline_{interval}", sanitize_stream_symbol(s)))
         .collect();
+    public_usdm_combined_streams_url(&streams)
+}
+
+/// USDT-M combined stream with arbitrary stream paths.
+#[must_use]
+pub fn public_usdm_combined_streams_url(stream_paths: &[String]) -> String {
     format!(
         "wss://fstream.binance.com/stream?streams={}",
-        streams.join("/")
+        stream_paths.join("/")
     )
 }
 
@@ -96,6 +118,17 @@ mod combined_url_tests {
     fn usdm_combined_streams_joined() {
         let u = public_usdm_combined_kline_url(&["BTCUSDT".into()], "5m");
         assert!(u.contains("btcusdt@kline_5m"));
+    }
+
+    #[test]
+    fn mixed_interval_paths_in_one_url() {
+        let paths = vec![
+            kline_stream_path("BTCUSDT", "15m"),
+            kline_stream_path("ETHUSDT", "4h"),
+        ];
+        let u = public_usdm_combined_streams_url(&paths);
+        assert!(u.contains("btcusdt@kline_15m"));
+        assert!(u.contains("ethusdt@kline_4h"));
     }
 }
 

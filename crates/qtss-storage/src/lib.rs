@@ -13,6 +13,7 @@ pub mod exchange_fills;
 pub mod exchange_orders;
 pub mod external_fetch;
 pub mod fill_long_estimate;
+pub mod ingestion_state;
 pub mod market_bars;
 pub mod market_confluence_snapshots;
 pub mod nansen;
@@ -40,6 +41,7 @@ pub use config::{AppConfigEntry, AppConfigRepository};
 pub use config_tick::{
     decimal_from_config_value, normalize_notify_locale_code, resolve_notify_default_locale,
     resolve_system_csv, resolve_system_decimal, resolve_system_f64, resolve_system_string,
+    resolve_system_u64,
     resolve_worker_enabled_flag, resolve_worker_tick_secs, tick_secs_from_config_value,
 };
 pub use copy_trade::{CopySubscriptionRepository, CopySubscriptionRow};
@@ -66,6 +68,11 @@ pub use external_fetch::{
     list_external_sources, upsert_external_source, ExternalDataSourceRow,
 };
 pub use fill_long_estimate::{symbols_with_positive_long_from_fills, FillPositionKey};
+pub use ingestion_state::{
+    count_market_bars_series, list_engine_symbols_with_ingestion,
+    list_recent_bar_open_times_desc, upsert_engine_symbol_ingestion_state,
+    EngineSymbolIngestionJoinedRow,
+};
 pub use market_bars::{
     fetch_recent_bars_stats, list_bars_in_range, list_recent_bars, upsert_market_bar, MarketBarRow,
     MarketBarUpsert, RecentBarsStats,

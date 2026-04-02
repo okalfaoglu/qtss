@@ -26,6 +26,7 @@ import {
   type DataSnapshotApiRow,
   type ExternalDataSourceApiRow,
   fetchEngineSnapshots,
+  fetchEngineSymbolIngestion,
   fetchDataSnapshots,
   fetchExternalFetchSources,
   fetchMarketContextLatest,
@@ -51,6 +52,7 @@ import {
   patchEngineSymbol,
   type EngineSnapshotJoinedApiRow,
   type EngineSymbolApiRow,
+  type EngineSymbolIngestionApiRow,
   type MarketContextLatestApiResponse,
   type MarketContextSummaryItemApi,
   type NansenSetupsLatestApiResponse,
@@ -728,6 +730,7 @@ export default function App() {
   const [contextTabBusy, setContextTabBusy] = useState(false);
   const [engineRangeSignals, setEngineRangeSignals] = useState<RangeSignalEventApiRow[]>([]);
   const [engineSymbols, setEngineSymbols] = useState<EngineSymbolApiRow[]>([]);
+  const [engineIngestionRows, setEngineIngestionRows] = useState<EngineSymbolIngestionApiRow[]>([]);
   const [enginePanelErr, setEnginePanelErr] = useState("");
   const [engineFormSymbol, setEngineFormSymbol] = useState("");
   const [engineFormInterval, setEngineFormInterval] = useState("4h");
@@ -1607,7 +1610,8 @@ export default function App() {
         symbol: symQ.length > 0 ? symQ : undefined,
       }).catch(() => null);
       const rangeCfgPromise = fetchRangeEngineConfig(token).catch(() => null);
-      const [snaps, syms, sigs, pbal, pfills, liveFills, ds, mc, commDef, rangeCfg] = await Promise.all([
+      const ingestPromise = fetchEngineSymbolIngestion(token).catch(() => [] as EngineSymbolIngestionApiRow[]);
+      const [snaps, syms, sigs, pbal, pfills, liveFills, ds, mc, commDef, rangeCfg, ingest] = await Promise.all([
         fetchEngineSnapshots(token),
         fetchEngineSymbols(token),
         fetchEngineRangeSignals(token, { limit: 80 }),
@@ -1618,12 +1622,14 @@ export default function App() {
         mcPromise,
         commDefPromise,
         rangeCfgPromise,
+        ingestPromise,
       ]);
       setRangeEngineConfig(rangeCfg);
       setEngineSnapshots(snaps);
       setDataSnapshots(ds);
       setMarketContext(mc);
       setEngineSymbols(syms);
+      setEngineIngestionRows(ingest);
       setEngineRangeSignals(sigs);
       setPaperBalance(pbal);
       setPaperFills(pfills);
@@ -1828,6 +1834,7 @@ export default function App() {
       setContextTabErr("");
       setEngineRangeSignals([]);
       setEngineSymbols([]);
+      setEngineIngestionRows([]);
       setPaperBalance(null);
       setPaperFills([]);
       setExchangeFills([]);
@@ -4274,6 +4281,79 @@ export default function App() {
                               </li>
                             ))}
                           </ul>
+                          <p className="tv-drawer__section-head" style={{ marginTop: "0.75rem" }}>
+                            {t("app.engineDrawer.ingestionHead")}
+                          </p>
+                          <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.4rem", lineHeight: 1.45 }}>
+                            {t("app.engineDrawer.ingestionIntro")}
+                          </p>
+                          {engineIngestionRows.length === 0 ? (
+                            <p className="muted" style={{ fontSize: "0.72rem" }}>
+                              {t("app.engineDrawer.ingestionEmpty")}
+                            </p>
+                          ) : (
+                            <div style={{ overflowX: "auto", maxHeight: "14rem", overflowY: "auto" }}>
+                              <table
+                                className="mono"
+                                style={{ width: "100%", fontSize: "0.65rem", borderCollapse: "collapse" }}
+                              >
+                                <thead>
+                                  <tr className="muted">
+                                    <th style={{ textAlign: "left", padding: "0.2rem 0.35rem 0.2rem 0" }}>
+                                      {t("app.engineDrawer.ingestionColTarget")}
+                                    </th>
+                                    <th style={{ textAlign: "right", padding: "0.2rem 0.25rem" }}>
+                                      {t("app.engineDrawer.ingestionColBars")}
+                                    </th>
+                                    <th style={{ textAlign: "right", padding: "0.2rem 0.25rem" }}>
+                                      {t("app.engineDrawer.ingestionColGaps")}
+                                    </th>
+                                    <th style={{ textAlign: "left", padding: "0.2rem 0.25rem" }}>
+                                      {t("app.engineDrawer.ingestionColMaxOpen")}
+                                    </th>
+                                    <th style={{ textAlign: "left", padding: "0.2rem 0" }}>
+                                      {t("app.engineDrawer.ingestionColError")}
+                                    </th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {engineIngestionRows.map((row) => (
+                                    <tr key={row.id}>
+                                      <td style={{ padding: "0.18rem 0.35rem 0.18rem 0", wordBreak: "break-all" }}>
+                                        {row.enabled ? "●" : "○"}{" "}
+                                        {row.exchange}/{row.segment} {row.symbol} {row.interval}
+                                      </td>
+                                      <td style={{ textAlign: "right", padding: "0.18rem 0.25rem" }}>
+                                        {row.bar_row_count ?? "—"}
+                                      </td>
+                                      <td style={{ textAlign: "right", padding: "0.18rem 0.25rem" }}>
+                                        {row.gap_count ?? "—"}
+                                      </td>
+                                      <td style={{ padding: "0.18rem 0.25rem", fontSize: "0.62rem", wordBreak: "break-all" }}>
+                                        {row.max_open_time
+                                          ? row.max_open_time.slice(0, 19).replace("T", " ")
+                                          : "—"}
+                                      </td>
+                                      <td
+                                        style={{
+                                          padding: "0.18rem 0",
+                                          fontSize: "0.62rem",
+                                          wordBreak: "break-word",
+                                          color: row.last_error ? "var(--err, #f66)" : undefined,
+                                        }}
+                                      >
+                                        {row.last_error
+                                          ? row.last_error
+                                          : row.last_backfill_at
+                                            ? `↻ ${row.last_backfill_at.slice(0, 19).replace("T", " ")}`
+                                            : "—"}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
                           {matchesSetting(
                             "paper",
                             "dry",

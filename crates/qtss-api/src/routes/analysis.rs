@@ -22,12 +22,13 @@ use qtss_storage::{
     fetch_analysis_snapshot_payload, fetch_data_snapshot, fetch_latest_nansen_setup_with_rows,
     fetch_nansen_snapshot, fetch_range_engine_json, insert_engine_symbol,
     list_analysis_snapshots_with_symbols, list_data_snapshots, list_engine_symbols_all,
+    list_engine_symbols_with_ingestion,
     list_engine_symbols_matching, list_market_confluence_snapshots_for_symbol,
     list_market_context_summaries, list_range_signal_events_joined, merge_json_deep,
     update_engine_symbol_patch, upsert_range_engine_json, AnalysisSnapshotJoinedRow,
     DataSnapshotRow, EngineSymbolInsert, EngineSymbolRow, MarketConfluenceSnapshotRow,
     MarketContextSummaryRow, NansenSetupRowDetail, NansenSetupRunRow, NansenSnapshotRow,
-    RangeSignalEventJoinedRow,
+    EngineSymbolIngestionJoinedRow, RangeSignalEventJoinedRow,
 };
 
 use crate::error::ApiError;
@@ -65,6 +66,10 @@ pub fn analysis_read_router() -> Router<SharedState> {
         .route("/analysis/patterns/channel-six", post(channel_six_scan))
         .route("/analysis/engine/symbols", get(list_engine_symbols_api))
         .route("/analysis/engine/snapshots", get(list_engine_snapshots_api))
+        .route(
+            "/analysis/engine/ingestion-state",
+            get(list_engine_symbol_ingestion_api),
+        )
         .route(
             "/analysis/engine/confluence/latest",
             get(list_confluence_snapshots_api),
@@ -357,6 +362,17 @@ async fn list_engine_snapshots_api(
     State(st): State<SharedState>,
 ) -> Result<Json<Vec<AnalysisSnapshotJoinedRow>>, ApiError> {
     let rows = list_analysis_snapshots_with_symbols(&st.pool).await?;
+    Ok(Json(rows))
+}
+
+/// `engine_symbols` + worker `market_bars` health (counts, gaps, stale feed, last REST backfill).
+async fn list_engine_symbol_ingestion_api(
+    State(st): State<SharedState>,
+) -> Result<Json<Vec<EngineSymbolIngestionJoinedRow>>, ApiError> {
+    let rows = list_engine_symbols_with_ingestion(&st.pool).await.map_err(|e| {
+        tracing::warn!(target: "qtss_api", error = %e, "list_engine_symbols_with_ingestion");
+        ApiError::internal("ingestion state list failed".to_string())
+    })?;
     Ok(Json(rows))
 }
 
