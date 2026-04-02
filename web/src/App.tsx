@@ -4222,21 +4222,17 @@ export default function App() {
                           <p className="tv-drawer__section-head" style={{ marginTop: "0.75rem" }}>
                             {t("app.engineDrawer.registeredTargets", { count: engineSymbols.length })}
                           </p>
-                          <ul className="muted mono" style={{ fontSize: "0.72rem", maxHeight: "8rem", overflow: "auto", listStyle: "none", paddingLeft: 0 }}>
+                          <ul className="tv-drawer-target-list muted mono">
                             {engineSymbols.map((s) => (
-                              <li
-                                key={s.id}
-                                style={{ display: "flex", alignItems: "center", gap: "0.35rem", flexWrap: "wrap", marginBottom: "0.25rem" }}
-                              >
-                                <span>
+                              <li key={s.id} className="tv-drawer-target-list__item">
+                                <span className="tv-drawer-target-list__meta">
                                   {s.enabled ? "●" : "○"} {s.exchange}/{s.segment} {s.symbol} {s.interval}
                                   {s.label ? ` — ${s.label}` : ""}
                                 </span>
                                 {rbacIsOps ? (
-                                  <>
+                                  <div className="tv-drawer-target-list__actions">
                                     <select
                                       className="mono"
-                                      style={{ fontSize: "0.65rem", maxWidth: "11rem" }}
                                       value={(s.signal_direction_mode ?? "auto_segment").toLowerCase()}
                                       title={t("app.engineDrawer.signalModeTitle")}
                                       onChange={async (e) => {
@@ -4259,7 +4255,6 @@ export default function App() {
                                     <button
                                       type="button"
                                       className="theme-toggle"
-                                      style={{ fontSize: "0.65rem", padding: "0.12rem 0.4rem" }}
                                       onClick={async () => {
                                         if (!token) return;
                                         try {
@@ -4274,7 +4269,7 @@ export default function App() {
                                         ? t("app.engineDrawer.toggleDisable")
                                         : t("app.engineDrawer.toggleEnable")}
                                     </button>
-                                  </>
+                                  </div>
                                 ) : null}
                               </li>
                             ))}

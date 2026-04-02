@@ -951,7 +951,8 @@ input[type="color"].tv-elliott-color-swatch:focus-visible {
   top: 0;
   left: 0;
   bottom: 0;
-  width: min(30rem, 96vw);
+  /* Was 30rem — too narrow for 4-up tabs + long engine_symbols labels + controls. */
+  width: min(40rem, 94vw);
   z-index: 201;
   background: var(--card);
   border-right: 1px solid var(--border);
@@ -959,6 +960,8 @@ input[type="color"].tv-elliott-color-swatch:focus-visible {
   flex-direction: column;
   box-shadow: 4px 0 24px rgba(0, 0, 0, 0.15);
   overflow: hidden;
+  container-type: inline-size;
+  container-name: tv-drawer;
 }
 
 .tv-drawer__head {
@@ -1008,8 +1011,15 @@ input[type="color"].tv-elliott-color-swatch:focus-visible {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+/* Four subtabs: 2×2 in a narrow drawer, single row when the panel is wide enough. */
 .tv-settings__subtabs--cols-4 {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@container tv-drawer (min-width: 34rem) {
+  .tv-settings__subtabs--cols-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 .tv-settings__subtabs .tv-settings__tab {
@@ -1470,6 +1480,56 @@ input[type="color"].tv-elliott-color-swatch:focus-visible {
   font-size: 0.86rem;
   font-weight: 700;
   letter-spacing: 0.02em;
+}
+
+/* engine_symbols rows: label on its own line, controls below (avoids cramped flex-wrap). */
+.tv-drawer-target-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 0.72rem;
+  max-height: 14rem;
+  overflow: auto;
+}
+
+.tv-drawer-target-list__item {
+  margin-bottom: 0.45rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+}
+
+.tv-drawer-target-list__item:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.tv-drawer-target-list__meta {
+  display: block;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+  margin-bottom: 0.35rem;
+}
+
+.tv-drawer-target-list__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+}
+
+.tv-drawer-target-list__actions select {
+  flex: 1 1 10rem;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 0.65rem;
+}
+
+.tv-drawer-target-list__actions .theme-toggle {
+  flex: 0 0 auto;
+  font-size: 0.65rem;
+  padding: 0.12rem 0.45rem;
 }
 
 .tv-collapsible summary {
