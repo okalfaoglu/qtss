@@ -291,8 +291,9 @@ Temperature: conservative; output JSON only."#
 fn operational_system_prompt_default(cfg: &AiEngineConfig) -> String {
     let locale = cfg.output_locale.as_deref().unwrap_or("en");
     format!(
-        r#"You manage open positions for QTSS (operational layer). Reply JSON only, locale {locale}.
+        r#"You manage open positions (long AND short) for QTSS (operational layer). Reply JSON only, locale {locale}.
 Required: "action" one of: keep, tighten_stop, widen_stop, activate_trailing, deactivate_trailing, partial_close, full_close, add_to_position.
+For short positions: tighten_stop means moving stop closer to entry (lower), partial_close means buying back part of the short.
 Optional: new_stop_loss_pct, new_take_profit_pct, trailing_callback_pct, partial_close_pct, reasoning.
 Context may include `decision_history` — your recent decisions for this symbol. Maintain consistency; avoid contradicting recent actions without clear justification.
 Context may include `ai_feedback` with past decision outcomes for this symbol: use win_rate and avg_pnl_pct to calibrate risk.
@@ -516,7 +517,7 @@ pub async fn run_operational_sweep(rt: &AiRuntime) -> AiResult<()> {
     let rows = repo.list_recent_filled_orders_global(2000).await?;
     use rust_decimal::Decimal;
     let min_q = Decimal::new(1, 8);
-    let symbols = symbols_with_positive_long_from_fills(&rows, min_q);
+    let symbols = symbols_with_open_positions_from_fills(&rows, min_q);
     let cfg_ref = rt.config().clone();
     let operational_prompt = resolve_system_prompt(
         rt.pool(), PROMPT_KEY_OPERATIONAL, || operational_system_prompt_default(&cfg_ref),
