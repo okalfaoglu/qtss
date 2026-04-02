@@ -3893,84 +3893,66 @@ export default function App() {
               ) : null}
 
               {drawerTab === "signal_dashboard" ? (
-                <>
-                  {matchesSetting(
-                    "sinyal",
-                    "dashboard",
-                    "panosu",
-                    "durum",
-                    "trend",
-                    "kopu",
-                    "range",
-                    "v2",
-                    "ingilizce",
-                    "signal_dashboard",
-                    "wire",
-                    "ta",
-                    "piyasa",
-                  ) ? (
-                    <div className="card">
-                      <p className="tv-drawer__section-head">{t("app.signalDashboardDrawer.sectionTitle")}</p>
-                      <p className="muted" style={{ fontSize: "0.78rem", marginBottom: "0.5rem" }}>
-                        {t("app.signalDashboardDrawer.intro")}
-                      </p>
-                      {token ? (
-                        <>
-                          <label
-                            className="muted tv-elliott-panel__field tv-elliott-panel__field--check"
-                            style={{ display: "flex", alignItems: "flex-start", gap: "0.45rem", marginBottom: "0.35rem" }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={signalDashboardAutoRefresh}
-                              onChange={(e) => setSignalDashboardAutoRefresh(e.target.checked)}
-                            />
-                            <span style={{ fontSize: "0.72rem" }}>{t("app.signalDashboardDrawer.autoRefreshCheckbox")}</span>
-                          </label>
-                          {signalDashboardAutoRefresh ? (
-                            <p className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.4rem" }}>
-                              {t("app.signalDashboardDrawer.autoRefreshActive", {
-                                seconds: SIGNAL_DASHBOARD_DRAWER_REFRESH_MS / 1000,
-                              })}
-                            </p>
-                          ) : (
-                            <p className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.4rem" }}>
-                              {t("app.signalDashboardDrawer.autoRefreshHint")}
-                            </p>
-                          )}
-                        </>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="theme-toggle"
-                        style={{ marginTop: "0.2rem", fontSize: "0.78rem" }}
-                        disabled={engineListRefreshing}
-                        onClick={async () => {
-                          setEngineListRefreshing(true);
-                          try {
-                            await refreshEnginePanel();
-                          } finally {
-                            setEngineListRefreshing(false);
-                          }
-                        }}
+                <div className="card">
+                  <p className="tv-drawer__section-head">{t("app.signalDashboardDrawer.sectionTitle")}</p>
+                  <p className="muted" style={{ fontSize: "0.78rem", marginBottom: "0.5rem" }}>
+                    {t("app.signalDashboardDrawer.intro")}
+                  </p>
+                  {token ? (
+                    <>
+                      <label
+                        className="muted tv-elliott-panel__field tv-elliott-panel__field--check"
+                        style={{ display: "flex", alignItems: "flex-start", gap: "0.45rem", marginBottom: "0.35rem" }}
                       >
-                        {engineListRefreshing
-                          ? t("app.signalDashboardDrawer.refreshBusy")
-                          : t("app.signalDashboardDrawer.refreshNow")}
-                      </button>
-                      {enginePanelErr ? <p className="err">{enginePanelErr}</p> : null}
-                      {token ? (
-                        <div style={{ marginTop: "0.55rem" }}>
-                          <SignalDashboardDrawerPanel snapshot={dbSignalDashboardSnapshot} />
-                        </div>
+                        <input
+                          type="checkbox"
+                          checked={signalDashboardAutoRefresh}
+                          onChange={(e) => setSignalDashboardAutoRefresh(e.target.checked)}
+                        />
+                        <span style={{ fontSize: "0.72rem" }}>{t("app.signalDashboardDrawer.autoRefreshCheckbox")}</span>
+                      </label>
+                      {signalDashboardAutoRefresh ? (
+                        <p className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.4rem" }}>
+                          {t("app.signalDashboardDrawer.autoRefreshActive", {
+                            seconds: SIGNAL_DASHBOARD_DRAWER_REFRESH_MS / 1000,
+                          })}
+                        </p>
                       ) : (
-                        <p className="muted" style={{ marginTop: "0.45rem" }}>
-                          {t("app.signalDashboardDrawer.loginHint")}
+                        <p className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.4rem" }}>
+                          {t("app.signalDashboardDrawer.autoRefreshHint")}
                         </p>
                       )}
-                    </div>
+                    </>
                   ) : null}
-                </>
+                  <button
+                    type="button"
+                    className="theme-toggle"
+                    style={{ marginTop: "0.2rem", fontSize: "0.78rem" }}
+                    disabled={engineListRefreshing}
+                    onClick={async () => {
+                      setEngineListRefreshing(true);
+                      try {
+                        await refreshEnginePanel();
+                      } finally {
+                        setEngineListRefreshing(false);
+                      }
+                    }}
+                  >
+                    {engineListRefreshing
+                      ? t("app.signalDashboardDrawer.refreshBusy")
+                      : t("app.signalDashboardDrawer.refreshNow")}
+                  </button>
+                  {enginePanelErr ? <p className="err">{enginePanelErr}</p> : null}
+                  {token ? (
+                    <div style={{ marginTop: "0.55rem" }}>
+                      <SignalDashboardDrawerPanel snapshot={dbSignalDashboardSnapshot} />
+                    </div>
+                  ) : (
+                    <p className="muted" style={{ marginTop: "0.45rem" }}>
+                      {t("app.signalDashboardDrawer.loginHint")}
+                    </p>
+                  )}
+                </div>
               ) : null}
 
               {drawerTab === "engine" ? (
