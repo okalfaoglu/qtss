@@ -270,7 +270,7 @@
       "addTargetRbacFull": "Ops/yönetici gerekir.",
       "registeredTargets": "Kayıtlı hedefler ({{count}})",
       "ingestionHead": "Market mumları sağlığı (worker)",
-      "ingestionIntro": "Hedef başına: market_bars satır sayısı, son pencerede tahmini gap, bayat veri uyarıları. qtss-worker doldurur (migration 0003). Ayar: QTSS_ENGINE_INGEST_TICK_SECS, QTSS_ENGINE_INGEST_MIN_BARS, QTSS_ENGINE_INGEST_GAP_WINDOW.",
+      "ingestionIntro": "Hedef başına: market_bars satır sayısı, son pencerede tahmini gap, bayat veri uyarıları. qtss-worker doldurur (migration 0003). Asıl ayar: system_config worker.engine_ingest_tick_secs ({\"secs\":N}), engine_ingest_min_bars, engine_ingest_gap_window ({\"value\":N}). Env QTSS_ENGINE_INGEST_* yedek; QTSS_CONFIG_ENV_OVERRIDES=1 iken env DB’yi ezer.",
       "ingestionColTarget": "Hedef",
       "ingestionColBars": "Mum",
       "ingestionColGaps": "Gap",
