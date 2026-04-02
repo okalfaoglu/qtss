@@ -1,6 +1,7 @@
 -- Setup taraması: `setup_scan_engine` → `insert_nansen_setup_run` / `insert_nansen_setup_row`.
+-- Idempotent: `0013_worker_analytics_schema.sql` may already create these tables.
 
-CREATE TABLE nansen_setup_runs (
+CREATE TABLE IF NOT EXISTS nansen_setup_runs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     computed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     request_json JSONB NOT NULL,
@@ -10,9 +11,9 @@ CREATE TABLE nansen_setup_runs (
     error TEXT
 );
 
-CREATE INDEX idx_nansen_setup_runs_computed ON nansen_setup_runs (computed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_nansen_setup_runs_computed ON nansen_setup_runs (computed_at DESC);
 
-CREATE TABLE nansen_setup_rows (
+CREATE TABLE IF NOT EXISTS nansen_setup_rows (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     run_id UUID NOT NULL REFERENCES nansen_setup_runs (id) ON DELETE CASCADE,
     rank INT NOT NULL,
@@ -35,4 +36,4 @@ CREATE TABLE nansen_setup_rows (
     raw_metrics JSONB NOT NULL
 );
 
-CREATE INDEX idx_nansen_setup_rows_run ON nansen_setup_rows (run_id, rank);
+CREATE INDEX IF NOT EXISTS idx_nansen_setup_rows_run ON nansen_setup_rows (run_id, rank);
