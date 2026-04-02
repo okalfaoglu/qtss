@@ -25,6 +25,7 @@ mod range_signal_execute_loop;
 mod setup_scan_engine;
 mod signal_scorer;
 mod strategy_runner;
+mod ai_tactical_executor;
 mod worker_probe_http;
 
 use std::collections::HashSet;
@@ -215,6 +216,8 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(copy_trade_queue::copy_trade_queue_loop(ctq_pool));
         strategy_runner::spawn_if_enabled(&pool).await;
         ai_engine::spawn_ai_background_tasks(&pool).await;
+        let ai_exec_pool = pool.clone();
+        tokio::spawn(ai_tactical_executor::ai_tactical_executor_loop(ai_exec_pool));
         binance_user_stream::spawn_binance_user_stream_tasks(&pool).await;
         Some(pool)
     } else {

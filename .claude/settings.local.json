@@ -5,7 +5,8 @@
       "Read(//c/Users/oguzk/.cargo/**)",
       "Read(//c/Users/oguzk/**)",
       "Bash(wsl -e bash -c \"which cargo && cargo --version\")",
-      "Bash(wsl bash:*)"
+      "Bash(wsl bash:*)",
+      "Bash(xargs grep:*)"
     ]
   }
 }
