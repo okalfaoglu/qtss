@@ -7,6 +7,7 @@ Applied at API/worker startup via `qtss_storage::run_migrations` (SQLx).
 The historical chain (`0001` … `0063`) was merged into a **single** file for simpler deploys and fewer checksum edges:
 
 - **`0001_qtss_baseline.sql`** — full schema + seeds + alters, in the same order as the old numbered files.
+- **`0002_notify_telegram_system_config.sql`** — placeholder `notify.telegram_bot_token` / `notify.telegram_chat_id` (empty until configured).
 
 **Regenerate** (after editing split files in a branch, or restoring from VCS history):
 
@@ -31,6 +32,6 @@ Databases that already applied the **old** multi-file chain (`_sqlx_migrations` 
 
 ## Rules (summary)
 
-- One numeric prefix per file in the folder (after squash: typically only `0001_*.sql`).
+- One numeric prefix per file in the folder (e.g. `0001_*.sql`, `0002_*.sql`, …).
 - Do not edit an already-applied migration in production; add a new numbered file or re-squash with a DB reset.
 - If your workflow uses offline SQLx query data, refresh it after schema changes (`qtss-sync-sqlx-checksums` / project conventions).
