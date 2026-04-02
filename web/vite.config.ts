@@ -21,9 +21,25 @@ function binanceFapiProxyTargetFromEnv(mode: string): string {
   return "https://fapi.binance.com";
 }
 
+/** `qtss-api` base URL for Vite dev/preview proxies (`/api`, `/oauth`, `/health`). Not exposed to the browser bundle. */
+function qtssApiProxyTargetFromEnv(mode: string): string {
+  const env = loadEnv(mode, process.cwd(), "");
+  const raw = env.QTSS_API_PROXY_TARGET?.trim() ?? "";
+  if (raw && /^https?:\/\//i.test(raw)) {
+    return raw.replace(/\/$/, "");
+  }
+  return "http://127.0.0.1:8080";
+}
+
 export default defineConfig(({ mode }) => {
   const binanceProxyTarget = binanceProxyTargetFromEnv(mode);
   const binanceFapiProxyTarget = binanceFapiProxyTargetFromEnv(mode);
+  const qtssApiProxyTarget = qtssApiProxyTargetFromEnv(mode);
+  const qtssApiProxy = {
+    "/api": { target: qtssApiProxyTarget, changeOrigin: true },
+    "/oauth": { target: qtssApiProxyTarget, changeOrigin: true },
+    "/health": { target: qtssApiProxyTarget, changeOrigin: true },
+  } as const;
   return {
     plugins: [react()],
     build: {
@@ -47,9 +63,7 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       proxy: {
-        "/api": { target: "http://127.0.0.1:8080", changeOrigin: true },
-        "/oauth": { target: "http://127.0.0.1:8080", changeOrigin: true },
-        "/health": { target: "http://127.0.0.1:8080", changeOrigin: true },
+        ...qtssApiProxy,
         "/__binance_fapi": {
           target: binanceFapiProxyTarget,
           changeOrigin: true,
@@ -65,9 +79,7 @@ export default defineConfig(({ mode }) => {
     preview: {
       port: 4173,
       proxy: {
-        "/api": { target: "http://127.0.0.1:8080", changeOrigin: true },
-        "/oauth": { target: "http://127.0.0.1:8080", changeOrigin: true },
-        "/health": { target: "http://127.0.0.1:8080", changeOrigin: true },
+        ...qtssApiProxy,
         "/__binance_fapi": {
           target: binanceFapiProxyTarget,
           changeOrigin: true,

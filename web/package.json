@@ -10,6 +10,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "preview:bind": "vite preview --host 0.0.0.0 --port 4173",
     "test": "vitest run",
     "i18n:check": "node scripts/check-i18n-keys.mjs"
   },
