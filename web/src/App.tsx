@@ -3627,6 +3627,7 @@ export default function App() {
                       </div>
                       {tradingRangeSubtab === "data_entry" ? (
                         <div className="card">
+                          {enginePanelErr ? <p className="err">{enginePanelErr}</p> : null}
                           <TradingRangeDataEntryPanel
                             accessToken={token}
                             onEnginesUpdated={() => void refreshEnginePanel()}

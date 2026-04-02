@@ -368,7 +368,10 @@
       "bulkSubmit": "Tüm satırları kaydet",
       "bulkBusy": "Kaydediliyor…",
       "bulkEmpty": "Geçerli satır yok — SEMBOL aralık veya borsa segment SEMBOL aralık kullanın.",
-      "bulkResult": "Tamam: {{inserted}} upsert, {{errors}} satır hatası (ayrıntı API ile)."
+      "bulkResult": "Tamam: {{inserted}} upsert, {{errors}} satır hatası (ayrıntı API ile).",
+      "registeredTargetsHead": "Kayıtlı motor hedefleri ({{count}})",
+      "registeredTargetsHint": "Ayarlar → Motor ve veri ile aynı liste. Ops burada sinyal modu veya etkin/pasif değiştirebilir.",
+      "registeredTargetsEmpty": "engine_symbols’da henüz satır yok — yukarıdan hedef ekleyin veya toplu kayıt kullanın."
     },
     "tradingRangeFutures": {
       "sectionTitle": "Vadeli (Binance) — hızlı emir",
