@@ -813,6 +813,53 @@ pub async fn insert_ai_decision_outcome(
     Ok(id)
 }
 
+/// Recent decisions with outcomes for multi-turn context (FAZ P2-15).
+/// Returns last N decisions for a symbol with direction, confidence, reasoning, status, and outcome.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct AiDecisionHistoryRow {
+    pub id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub layer: String,
+    pub direction_or_action: Option<String>,
+    pub confidence: Option<f64>,
+    pub reasoning: Option<String>,
+    pub status: String,
+    pub outcome: Option<String>,
+    pub pnl_pct: Option<f64>,
+}
+
+pub async fn fetch_recent_decisions_with_outcomes(
+    pool: &PgPool,
+    symbol: &str,
+    limit: i64,
+) -> AiResult<Vec<AiDecisionHistoryRow>> {
+    let sym = symbol.trim().to_uppercase();
+    let lim = limit.clamp(1, 20);
+    let rows = sqlx::query_as::<_, AiDecisionHistoryRow>(
+        r#"SELECT d.id, d.created_at, d.layer,
+                  COALESCE(
+                      d.parsed_decision->>'direction',
+                      d.parsed_decision->>'action'
+                  ) AS direction_or_action,
+                  d.confidence,
+                  d.parsed_decision->>'reasoning' AS reasoning,
+                  d.status,
+                  o.outcome,
+                  o.pnl_pct
+           FROM ai_decisions d
+           LEFT JOIN ai_decision_outcomes o ON o.decision_id = d.id
+           WHERE d.symbol = $1
+             AND d.status NOT IN ('error', 'expired')
+           ORDER BY d.created_at DESC
+           LIMIT $2"#,
+    )
+    .bind(&sym)
+    .bind(lim)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Per-symbol outcome stats for tactical/operational feedback (FAZ P2).
 pub async fn fetch_symbol_outcome_stats(pool: &PgPool, symbol: &str, n: i64) -> AiResult<Value> {
     let sym = symbol.trim().to_uppercase();

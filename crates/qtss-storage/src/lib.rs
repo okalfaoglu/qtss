@@ -67,7 +67,7 @@ pub use external_fetch::{
     delete_external_source, external_snapshot_age_secs, list_enabled_external_sources,
     list_external_sources, upsert_external_source, ExternalDataSourceRow,
 };
-pub use fill_long_estimate::{symbols_with_positive_long_from_fills, FillPositionKey};
+pub use fill_long_estimate::{symbols_with_open_positions_from_fills, symbols_with_positive_long_from_fills, FillPositionKey};
 pub use ingestion_state::{
     count_market_bars_series, list_engine_symbols_with_ingestion,
     list_recent_bar_open_times_desc, upsert_engine_symbol_ingestion_state,

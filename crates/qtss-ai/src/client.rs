@@ -20,7 +20,7 @@ use crate::storage::{
 };
 use qtss_notify::NotificationDispatcher;
 use qtss_storage::{
-    list_enabled_engine_symbols, symbols_with_positive_long_from_fills, AppConfigRepository,
+    list_enabled_engine_symbols, symbols_with_open_positions_from_fills, AppConfigRepository,
     ExchangeOrderRepository,
 };
 
@@ -281,6 +281,7 @@ Required keys: "direction" (strong_buy|buy|neutral|sell|strong_sell|no_trade), "
 Directional trades (not neutral/no_trade) MUST include positive "stop_loss_pct" (percent, > 0).
 Optional: "position_size_multiplier" (0.0-2.0), "take_profit_pct", "entry_price_hint", "reasoning".
 Context may include `portfolio_directive` from the strategic layer: honor `symbol_weight_0_1`, `preferred_regime`, and `risk_budget_pct` when deciding direction and size.
+Context may include `decision_history` — your recent decisions for this symbol with outcomes. Avoid flip-flopping; if your last decision was recent and the context hasn't materially changed, prefer consistency. Learn from outcomes (profit/loss).
 Context may include `ai_feedback` with past decision outcomes (win_rate, avg_pnl_pct): factor these into confidence calibration.
 {criteria}
 Temperature: conservative; output JSON only."#
@@ -293,6 +294,7 @@ fn operational_system_prompt_default(cfg: &AiEngineConfig) -> String {
         r#"You manage open positions for QTSS (operational layer). Reply JSON only, locale {locale}.
 Required: "action" one of: keep, tighten_stop, widen_stop, activate_trailing, deactivate_trailing, partial_close, full_close, add_to_position.
 Optional: new_stop_loss_pct, new_take_profit_pct, trailing_callback_pct, partial_close_pct, reasoning.
+Context may include `decision_history` — your recent decisions for this symbol. Maintain consistency; avoid contradicting recent actions without clear justification.
 Context may include `ai_feedback` with past decision outcomes for this symbol: use win_rate and avg_pnl_pct to calibrate risk.
 Never loosen stops without justification; prefer protecting capital."#
     )

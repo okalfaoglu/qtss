@@ -1,4 +1,5 @@
-//! Net long estimate from filled `exchange_orders` (same rules as `position_manager`).
+//! Net position estimate from filled `exchange_orders` (same rules as `position_manager`).
+//! Tracks both long and short books for futures bidirectional support.
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -24,9 +25,16 @@ struct LongBook {
     cost: Decimal,
 }
 
+#[derive(Clone, Default)]
+struct ShortBook {
+    qty: Decimal,  // absolute short quantity (positive number)
+    cost: Decimal,
+}
+
 #[derive(Default)]
 pub(crate) struct BookWithOrg {
     book: LongBook,
+    short: ShortBook,
     org_id: Option<Uuid>,
 }
 
@@ -81,6 +89,62 @@ fn update_long_book(book: &mut LongBook, side: OrderSide, qty: Decimal, price: D
     }
 }
 
+/// Update short book: sell opens short, buy closes short.
+fn update_short_book(book: &mut ShortBook, side: OrderSide, qty: Decimal, price: Decimal) {
+    match side {
+        OrderSide::Sell => {
+            book.cost += price * qty;
+            book.qty += qty;
+        }
+        OrderSide::Buy => {
+            let take = qty.min(book.qty);
+            if take > Decimal::ZERO && book.qty > Decimal::ZERO {
+                let avg = book.cost / book.qty;
+                book.cost -= avg * take;
+                book.qty -= take;
+            }
+        }
+    }
+    if book.qty <= Decimal::ZERO {
+        book.qty = Decimal::ZERO;
+        book.cost = Decimal::ZERO;
+    }
+}
+
+/// For futures: buy opens/adds long and closes short; sell opens/adds short and closes long.
+fn update_books_bidirectional(
+    long: &mut LongBook,
+    short: &mut ShortBook,
+    side: OrderSide,
+    qty: Decimal,
+    price: Decimal,
+) {
+    match side {
+        OrderSide::Buy => {
+            // First close short, remainder opens long
+            let close_short = qty.min(short.qty);
+            if close_short > Decimal::ZERO {
+                update_short_book(short, OrderSide::Buy, close_short, price);
+            }
+            let remainder = qty - close_short;
+            if remainder > Decimal::ZERO {
+                update_long_book(long, OrderSide::Buy, remainder, price);
+            }
+        }
+        OrderSide::Sell => {
+            // First close long, remainder opens short
+            let close_long = qty.min(long.qty);
+            if close_long > Decimal::ZERO {
+                update_long_book(long, OrderSide::Sell, close_long, price);
+            }
+            let remainder = qty - close_long;
+            if remainder > Decimal::ZERO {
+                update_short_book(short, OrderSide::Sell, remainder, price);
+            }
+        }
+    }
+}
+
 /// Aggregates net long books per (user, exchange, segment, symbol) from fill-like rows.
 pub(crate) fn aggregate_long_books_from_fills(rows: &[ExchangeOrderRow]) -> HashMap<FillPositionKey, BookWithOrg> {
     let mut sorted: Vec<_> = rows.iter().collect();
@@ -112,9 +176,31 @@ pub(crate) fn aggregate_long_books_from_fills(rows: &[ExchangeOrderRow]) -> Hash
         if e.org_id.is_none() {
             e.org_id = Some(row.org_id);
         }
-        update_long_book(&mut e.book, side, qty, price);
+        let is_futures = row.segment.trim().eq_ignore_ascii_case("futures")
+            || row.segment.trim().eq_ignore_ascii_case("usdm");
+        if is_futures {
+            update_books_bidirectional(&mut e.book, &mut e.short, side, qty, price);
+        } else {
+            update_long_book(&mut e.book, side, qty, price);
+        }
     }
     m
+}
+
+/// Distinct symbols with any open position (long OR short) ≥ `min_qty`.
+pub fn symbols_with_open_positions_from_fills(
+    rows: &[ExchangeOrderRow],
+    min_qty: Decimal,
+) -> Vec<String> {
+    let m = aggregate_long_books_from_fills(rows);
+    let mut syms: Vec<String> = m
+        .into_iter()
+        .filter(|(_, v)| v.book.qty >= min_qty || v.short.qty >= min_qty)
+        .map(|(k, _)| k.symbol)
+        .collect();
+    syms.sort();
+    syms.dedup();
+    syms
 }
 
 /// Distinct symbols with estimated net long ≥ `min_qty`.

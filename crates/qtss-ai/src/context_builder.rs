@@ -11,7 +11,7 @@ use qtss_storage::{
 };
 
 use crate::error::{AiError, AiResult};
-use crate::storage::{fetch_active_portfolio_directive, fetch_last_ai_decision_recent, fetch_symbol_outcome_stats};
+use crate::storage::{fetch_active_portfolio_directive, fetch_last_ai_decision_recent, fetch_recent_decisions_with_outcomes, fetch_symbol_outcome_stats};
 
 const BAR_LIMIT: i64 = 20;
 
@@ -26,7 +26,7 @@ fn trim_context_if_needed(ctx: &mut Value) {
         return;
     }
     // Priority order for removal: ai_feedback → confluence → open_position → onchain_signals
-    let low_priority_keys = ["ai_feedback", "confluence", "open_position"];
+    let low_priority_keys = ["ai_feedback", "decision_history", "confluence", "open_position"];
     if let Some(obj) = ctx.as_object_mut() {
         for key in &low_priority_keys {
             obj.remove(*key);
@@ -148,6 +148,25 @@ pub async fn build_tactical_context(pool: &PgPool, symbol: &str) -> AiResult<Val
         })
         .unwrap_or(Value::Null);
 
+    let decision_history = match fetch_recent_decisions_with_outcomes(pool, sym, 5).await {
+        Ok(rows) if !rows.is_empty() => {
+            let entries: Vec<Value> = rows.iter().map(|r| {
+                json!({
+                    "created_at": r.created_at,
+                    "layer": r.layer,
+                    "direction_or_action": r.direction_or_action,
+                    "confidence": r.confidence,
+                    "reasoning": r.reasoning,
+                    "status": r.status,
+                    "outcome": r.outcome,
+                    "pnl_pct": r.pnl_pct,
+                })
+            }).collect();
+            Value::Array(entries)
+        }
+        _ => Value::Null,
+    };
+
     let ai_feedback = fetch_symbol_outcome_stats(pool, sym, 20).await.unwrap_or(Value::Null);
 
     let portfolio_directive = match fetch_active_portfolio_directive(pool).await? {
@@ -172,6 +191,7 @@ pub async fn build_tactical_context(pool: &PgPool, symbol: &str) -> AiResult<Val
         "price_context": price_context,
         "open_position": open_position,
         "last_ai_decision": last_ai_decision,
+        "decision_history": decision_history,
         "ai_feedback": ai_feedback,
         "portfolio_directive": portfolio_directive,
     });
@@ -264,12 +284,30 @@ pub async fn build_operational_context(pool: &PgPool, symbol: &str) -> AiResult<
     } else {
         Value::Null
     };
+    let decision_history = match fetch_recent_decisions_with_outcomes(pool, sym, 5).await {
+        Ok(rows) if !rows.is_empty() => {
+            let entries: Vec<Value> = rows.iter().map(|r| {
+                json!({
+                    "created_at": r.created_at,
+                    "layer": r.layer,
+                    "direction_or_action": r.direction_or_action,
+                    "confidence": r.confidence,
+                    "status": r.status,
+                    "outcome": r.outcome,
+                    "pnl_pct": r.pnl_pct,
+                })
+            }).collect();
+            Value::Array(entries)
+        }
+        _ => Value::Null,
+    };
     let ai_feedback = fetch_symbol_outcome_stats(pool, sym, 20).await.unwrap_or(Value::Null);
     Ok(json!({
         "symbol": sym.to_uppercase(),
         "timestamp_utc": Utc::now(),
         "onchain_signals": onchain,
         "recent_price_stats": recent_price_stats,
+        "decision_history": decision_history,
         "ai_feedback": ai_feedback,
         "funding_snapshot": Value::Null,
     }))
