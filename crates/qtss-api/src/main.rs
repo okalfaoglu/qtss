@@ -106,7 +106,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/oauth/token", post(oauth::oauth_token))
         .nest(
             "/api/v1",
-            routes::public_locales_routes().merge(routes::api_router(state.clone())),
+            routes::public_locales_routes()
+                .merge(routes::public_bootstrap_routes())
+                .merge(routes::api_router(state.clone())),
         )
         .layer(middleware::from_fn(metrics::count_http_requests_middleware))
         .layer(PropagateRequestIdLayer::new(x_request_id.clone()))

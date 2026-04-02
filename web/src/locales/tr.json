@@ -39,7 +39,9 @@
     "status": "Durum",
     "apiHealth": "API",
     "sessionConfig": "Oturum",
-    "sessionHint": "Geliştirici girişi web `.env` içindeki VITE_* değerlerini kullanır. Üretimde IdP kullanın.",
+    "sessionHint": "OAuth istemci bilgisi API üzerinden yüklenir (`GET /api/v1/bootstrap/web-oauth-client`, PostgreSQL `system_config` seed). İsteğe bağlı: web `.env` VITE_*.",
+    "loginEmail": "E-posta",
+    "loginPassword": "Parola",
     "loginTry": "Geliştirici girişi",
     "configLoading": "Yükleniyor…",
     "configRefresh": "Yapılandırmayı yenile",
@@ -216,7 +218,7 @@
       "dbDescription": "Elliott dalga görünümü ve motor ayarları (`app_config.elliott_wave`)."
     },
     "dev": {
-      "missingWebEnv": "Web ortamı eksik: web/.env içinde VITE_OAUTH_CLIENT_ID ve VITE_OAUTH_CLIENT_SECRET ayarlayın (web/.env.example)."
+      "missingWebEnv": "E-posta ve parolayı girin; API bootstrap (DB’de seed.oauth_client_secret) çalışmalı veya web/.env içinde VITE_* yedekleri tanımlı olsun."
     },
     "chartToolbar": {
       "menuAria": "Grafik araçları",

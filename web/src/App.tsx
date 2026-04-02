@@ -14,6 +14,7 @@ import {
   fetchElliottWaveConfig,
   fetchHealth,
   fetchMarketBarsRecent,
+  fetchWebOAuthBootstrap,
   oauthTokenPassword,
   oauthTokenRefresh,
   scanChannelSix,
@@ -339,15 +340,6 @@ function channelSixRejectMessage(t: TFunction, reject: ChannelSixRejectJson | un
   }
 }
 
-function readEnvHint(): { clientId: string; clientSecret: string; email: string; password: string } {
-  return {
-    clientId: import.meta.env.VITE_OAUTH_CLIENT_ID ?? "",
-    clientSecret: import.meta.env.VITE_OAUTH_CLIENT_SECRET ?? "",
-    email: import.meta.env.VITE_DEV_EMAIL ?? "",
-    password: import.meta.env.VITE_DEV_PASSWORD ?? "",
-  };
-}
-
 /** OAuth access token — Ctrl+F5 / tam yenilemede oturum kalsın diye `localStorage` (Çıkış ile silinir). */
 const ACCESS_TOKEN_STORAGE_KEY = "qtss_access_token";
 const ACCESS_TOKEN_EXP_MS_STORAGE_KEY = "qtss_access_token_exp_ms";
@@ -410,6 +402,34 @@ export default function App() {
 
   const [health, setHealth] = useState<string>("…");
   const [token, setToken] = useState<string | null>(() => readStoredAccessToken());
+  /** OAuth client id/secret from `GET /api/v1/bootstrap/web-oauth-client` (`system_config` seed). */
+  const [webOauthBootstrap, setWebOauthBootstrap] = useState<{
+    clientId: string;
+    clientSecret: string;
+    suggestedLoginEmail: string;
+  } | null>(null);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchWebOAuthBootstrap()
+      .then((b) => {
+        if (cancelled) return;
+        setWebOauthBootstrap({
+          clientId: b.clientId,
+          clientSecret: b.clientSecret,
+          suggestedLoginEmail: b.suggestedLoginEmail,
+        });
+        setLoginEmail((prev) => (prev.trim() ? prev : b.suggestedLoginEmail || ""));
+      })
+      .catch(() => {
+        /* fall back to VITE_* in configureApiAuth / tryDevLogin */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -441,14 +461,15 @@ export default function App() {
         }
       },
       getOAuthClientCredentials: () => ({
-        clientId: import.meta.env.VITE_OAUTH_CLIENT_ID ?? "",
-        clientSecret: import.meta.env.VITE_OAUTH_CLIENT_SECRET ?? "",
+        clientId: webOauthBootstrap?.clientId ?? import.meta.env.VITE_OAUTH_CLIENT_ID ?? "",
+        clientSecret:
+          webOauthBootstrap?.clientSecret ?? import.meta.env.VITE_OAUTH_CLIENT_SECRET ?? "",
       }),
     });
     return () => {
       configureApiAuth(null);
     };
-  }, []);
+  }, [webOauthBootstrap]);
 
   // Proactive refresh: refresh access_token shortly before expiry.
   useEffect(() => {
@@ -459,8 +480,10 @@ export default function App() {
     async function arm() {
       const expMs = readStoredAccessExpMs();
       const rt = readStoredRefreshToken();
-      const clientId = import.meta.env.VITE_OAUTH_CLIENT_ID ?? "";
-      const clientSecret = import.meta.env.VITE_OAUTH_CLIENT_SECRET ?? "";
+      const clientId =
+        webOauthBootstrap?.clientId ?? import.meta.env.VITE_OAUTH_CLIENT_ID ?? "";
+      const clientSecret =
+        webOauthBootstrap?.clientSecret ?? import.meta.env.VITE_OAUTH_CLIENT_SECRET ?? "";
       if (!expMs || !rt || !clientId || !clientSecret) return;
       const now = Date.now();
       const refreshAt = expMs - 30_000; // 30s early
@@ -491,7 +514,7 @@ export default function App() {
       cancelled = true;
       if (to != null) window.clearTimeout(to);
     };
-  }, [token]);
+  }, [token, webOauthBootstrap]);
   const [authSession, setAuthSession] = useState<AuthSession | null>(null);
   const [authMeErr, setAuthMeErr] = useState("");
   const [authMeLoading, setAuthMeLoading] = useState(false);
@@ -2117,7 +2140,32 @@ export default function App() {
   const tryDevLogin = async () => {
     setError("");
     setConfigPreview("");
-    const env = readEnvHint();
+    let creds = webOauthBootstrap;
+    if (!creds?.clientSecret) {
+      try {
+        const b = await fetchWebOAuthBootstrap();
+        creds = {
+          clientId: b.clientId,
+          clientSecret: b.clientSecret,
+          suggestedLoginEmail: b.suggestedLoginEmail,
+        };
+        setWebOauthBootstrap(creds);
+        setLoginEmail((prev) => (prev.trim() ? prev : b.suggestedLoginEmail || ""));
+      } catch (e) {
+        setError(String(e));
+        return;
+      }
+    }
+    const env = {
+      clientId: creds!.clientId || import.meta.env.VITE_OAUTH_CLIENT_ID || "",
+      clientSecret: creds!.clientSecret || import.meta.env.VITE_OAUTH_CLIENT_SECRET || "",
+      email:
+        loginEmail.trim() ||
+        import.meta.env.VITE_DEV_EMAIL ||
+        creds!.suggestedLoginEmail ||
+        "",
+      password: loginPassword || import.meta.env.VITE_DEV_PASSWORD || "",
+    };
     if (!env.clientId || !env.clientSecret || !env.email || !env.password) {
       setError(t("app.dev.missingWebEnv"));
       return;
@@ -2600,6 +2648,49 @@ export default function App() {
                       <p className="muted" style={{ fontSize: "0.75rem", marginBottom: "0.35rem" }}>
                         {t("drawer.sessionHint")}
                       </p>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "0.35rem",
+                          marginBottom: "0.35rem",
+                        }}
+                      >
+                        <label className="muted" style={{ fontSize: "0.72rem" }}>
+                          {t("drawer.loginEmail")}
+                          <input
+                            type="email"
+                            autoComplete="username"
+                            value={loginEmail}
+                            onChange={(e) => setLoginEmail(e.target.value)}
+                            className="theme-toggle"
+                            style={{
+                              display: "block",
+                              width: "100%",
+                              maxWidth: "22rem",
+                              marginTop: "0.2rem",
+                              padding: "0.25rem 0.4rem",
+                            }}
+                          />
+                        </label>
+                        <label className="muted" style={{ fontSize: "0.72rem" }}>
+                          {t("drawer.loginPassword")}
+                          <input
+                            type="password"
+                            autoComplete="current-password"
+                            value={loginPassword}
+                            onChange={(e) => setLoginPassword(e.target.value)}
+                            className="theme-toggle"
+                            style={{
+                              display: "block",
+                              width: "100%",
+                              maxWidth: "22rem",
+                              marginTop: "0.2rem",
+                              padding: "0.25rem 0.4rem",
+                            }}
+                          />
+                        </label>
+                      </div>
                       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
                         <LanguageSwitcher
                           accessToken={token}

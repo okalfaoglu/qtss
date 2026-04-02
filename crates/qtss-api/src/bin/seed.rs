@@ -196,6 +196,18 @@ async fn main() -> anyhow::Result<()> {
         .to_string();
 
     let client_id = "qtss-cli";
+    sys.upsert(
+        "seed",
+        "oauth_client_id",
+        serde_json::json!({ "value": client_id }),
+        Some(1),
+        Some("OAuth client_id for qtss-cli (web bootstrap + DB)."),
+        Some(false),
+        None,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("system_config seed.oauth_client_id: {e}"))?;
+
     let grants = vec![
         "password".to_string(),
         "refresh_token".to_string(),

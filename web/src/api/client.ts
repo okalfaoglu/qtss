@@ -208,6 +208,38 @@ export async function fetchSupportedLocales(): Promise<SupportedLocaleApi[]> {
   return j.locales ?? [];
 }
 
+/** SPA bootstrap: `system_config` seed values via API (no JWT). */
+export type WebOAuthBootstrapApi = {
+  clientId: string;
+  clientSecret: string;
+  suggestedLoginEmail: string;
+};
+
+function webOAuthBootstrapHeaders(): HeadersInit {
+  const tok = import.meta.env.VITE_WEB_OAUTH_BOOTSTRAP_TOKEN?.trim();
+  return tok ? { "X-QTSS-Bootstrap-Token": tok } : {};
+}
+
+export async function fetchWebOAuthBootstrap(): Promise<WebOAuthBootstrapApi> {
+  const r = await fetch(`${API_BASE}/api/v1/bootstrap/web-oauth-client`, {
+    headers: webOAuthBootstrapHeaders(),
+  });
+  const t = await r.text();
+  if (!r.ok) {
+    throwQtssApiError("bootstrap/web-oauth-client", r, t);
+  }
+  const j = JSON.parse(t) as {
+    clientId?: string;
+    clientSecret?: string;
+    suggestedLoginEmail?: string;
+  };
+  return {
+    clientId: j.clientId?.trim() ?? "",
+    clientSecret: j.clientSecret?.trim() ?? "",
+    suggestedLoginEmail: j.suggestedLoginEmail?.trim() ?? "",
+  };
+}
+
 export async function oauthTokenPassword(params: {
   clientId: string;
   clientSecret: string;
@@ -230,7 +262,7 @@ export async function oauthTokenPassword(params: {
   if (!r.ok) {
     const hint =
       r.status === 401
-        ? " (401: genelde VITE_OAUTH_CLIENT_SECRET, seed çıktısındaki client_secret ile aynı değil veya client_id DB’de yok.)"
+        ? " (401: client_id/client_secret uyuşmuyor veya oauth_clients satırı eksik — seed çalıştırın; web tarafında GET /api/v1/bootstrap/web-oauth-client ile system_config eşleşmeli.)"
         : "";
     throwQtssApiError("oauth", r, t, hint);
   }

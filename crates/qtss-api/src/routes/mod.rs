@@ -1,6 +1,7 @@
 mod ai_approval;
 mod ai_decisions;
 mod analysis;
+mod bootstrap;
 mod audit_admin;
 mod backtest;
 mod catalog_admin;
@@ -33,6 +34,7 @@ pub use catalog_sync::catalog_sync_router;
 pub use config_admin::config_router;
 pub use dashboard::{dashboard_admin_router, dashboard_router};
 pub use health::health_router;
+pub use bootstrap::public_bootstrap_routes;
 pub use locales::public_locales_routes;
 
 use crate::audit_http::audit_http_middleware;

@@ -39,7 +39,9 @@
     "status": "Status",
     "apiHealth": "API",
     "sessionConfig": "Session",
-    "sessionHint": "Dev login uses values from web `.env` (VITE_*). Production should use your IdP.",
+    "sessionHint": "OAuth client id/secret load from `GET /api/v1/bootstrap/web-oauth-client` (PostgreSQL `system_config` seed). Optional overrides: web `.env` VITE_*.",
+    "loginEmail": "Email",
+    "loginPassword": "Password",
     "loginTry": "Dev login",
     "configLoading": "Loading…",
     "configRefresh": "Reload config",
@@ -216,7 +218,7 @@
       "dbDescription": "Elliott wave display and engine settings (`app_config.elliott_wave`)."
     },
     "dev": {
-      "missingWebEnv": "Missing web env: set VITE_OAUTH_CLIENT_ID and VITE_OAUTH_CLIENT_SECRET in web/.env (see web/.env.example)."
+      "missingWebEnv": "Fill email and password, ensure the API returns bootstrap (seed.oauth_client_secret in DB), or set VITE_* fallbacks in web/.env."
     },
     "chartToolbar": {
       "menuAria": "Chart tools",
