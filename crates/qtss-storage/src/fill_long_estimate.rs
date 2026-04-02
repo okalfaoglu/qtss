@@ -218,3 +218,107 @@ pub fn symbols_with_positive_long_from_fills(
     syms.dedup();
     syms
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use serde_json::json;
+
+    fn make_order(segment: &str, symbol: &str, side: &str, qty: &str, price: &str) -> ExchangeOrderRow {
+        ExchangeOrderRow {
+            id: Uuid::new_v4(),
+            org_id: Uuid::nil(),
+            user_id: Uuid::nil(),
+            exchange: "binance".into(),
+            segment: segment.into(),
+            symbol: symbol.into(),
+            client_order_id: Uuid::new_v4(),
+            status: "filled".into(),
+            intent: json!({ "side": side }),
+            venue_order_id: None,
+            venue_response: Some(json!({
+                "executedQty": qty,
+                "avgPrice": price,
+            })),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn spot_long_only() {
+        let rows = vec![
+            make_order("spot", "BTCUSDT", "buy", "1.0", "50000"),
+        ];
+        let min = Decimal::new(1, 8);
+        let long = symbols_with_positive_long_from_fills(&rows, min);
+        let all = symbols_with_open_positions_from_fills(&rows, min);
+        assert_eq!(long, vec!["BTCUSDT"]);
+        assert_eq!(all, vec!["BTCUSDT"]);
+    }
+
+    #[test]
+    fn spot_sell_closes_long_no_short() {
+        let rows = vec![
+            make_order("spot", "ETHUSDT", "buy", "10.0", "3000"),
+            make_order("spot", "ETHUSDT", "sell", "10.0", "3100"),
+        ];
+        let min = Decimal::new(1, 8);
+        let long = symbols_with_positive_long_from_fills(&rows, min);
+        let all = symbols_with_open_positions_from_fills(&rows, min);
+        assert!(long.is_empty());
+        // Spot sell should NOT create short
+        assert!(all.is_empty());
+    }
+
+    #[test]
+    fn futures_short_detected() {
+        let rows = vec![
+            make_order("futures", "BTCUSDT", "sell", "0.5", "60000"),
+        ];
+        let min = Decimal::new(1, 8);
+        let long = symbols_with_positive_long_from_fills(&rows, min);
+        let all = symbols_with_open_positions_from_fills(&rows, min);
+        // Long list should be empty (no long position)
+        assert!(long.is_empty());
+        // Open positions should include the short
+        assert_eq!(all, vec!["BTCUSDT"]);
+    }
+
+    #[test]
+    fn futures_bidirectional_buy_closes_short() {
+        let rows = vec![
+            make_order("futures", "ETHUSDT", "sell", "5.0", "3000"),
+            make_order("futures", "ETHUSDT", "buy", "5.0", "2900"),
+        ];
+        let min = Decimal::new(1, 8);
+        let all = symbols_with_open_positions_from_fills(&rows, min);
+        // Short was closed by buy → no open position
+        assert!(all.is_empty());
+    }
+
+    #[test]
+    fn futures_buy_exceeds_short_creates_long() {
+        let rows = vec![
+            make_order("futures", "SOLUSDT", "sell", "10.0", "100"),
+            make_order("futures", "SOLUSDT", "buy", "15.0", "95"),
+        ];
+        let min = Decimal::new(1, 8);
+        let long = symbols_with_positive_long_from_fills(&rows, min);
+        let all = symbols_with_open_positions_from_fills(&rows, min);
+        // 15 buy - 10 short close = 5 long
+        assert_eq!(long, vec!["SOLUSDT"]);
+        assert_eq!(all, vec!["SOLUSDT"]);
+    }
+
+    #[test]
+    fn futures_usdm_segment_treated_as_futures() {
+        let rows = vec![
+            make_order("usdm", "XRPUSDT", "sell", "100.0", "0.50"),
+        ];
+        let min = Decimal::new(1, 8);
+        let all = symbols_with_open_positions_from_fills(&rows, min);
+        assert_eq!(all, vec!["XRPUSDT"]);
+    }
+}
