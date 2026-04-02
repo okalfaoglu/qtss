@@ -397,11 +397,16 @@
     },
     "signalDashboardDrawer": {
       "sectionTitle": "Signal dashboard",
-      "intro": "Computed in the same worker pass as Trading Range (`engine_analysis_loop`): every enabled `engine_symbols` row is processed in a loop over `market_bars`; each target gets a `signal_dashboard` snapshot. This table shows the snapshot for the chart toolbar (exchange / segment / symbol / interval).",
+      "intro": "Computed in the same worker pass as Trading Range (`engine_analysis_loop`): every enabled `engine_symbols` row is processed over `market_bars`. Below is the full list of `signal_dashboard` snapshots; open a row for the same detail table as before. The row that matches the chart toolbar is labeled.",
       "refreshBusy": "Refreshing…",
       "refreshNow": "Refresh data",
       "loginHint": "Sign in to load the signal snapshot.",
       "noSnapshotForChart": "No signal_dashboard snapshot for this chart — add or enable an engine target matching the top bar, or align exchange/segment/symbol/interval.",
+      "listEmpty": "No signal_dashboard rows loaded yet — enable engine targets and run the worker, then refresh.",
+      "listHint": "Click a row for full detail. Row color reflects status (LONG / SHORT / neutral); red border also marks errors.",
+      "backToList": "← All signals",
+      "chartBadge": "Chart",
+      "strengthShort": "PS {{value}}",
       "autoRefreshCheckbox": "Auto-refresh data while this tab is open",
       "autoRefreshActive": "Auto-refresh on: engine snapshots are fetched about every {{seconds}}s.",
       "autoRefreshHint": "Check the box above to poll the snapshot on an interval."

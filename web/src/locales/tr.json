@@ -397,11 +397,16 @@
     },
     "signalDashboardDrawer": {
       "sectionTitle": "Sinyal panosu",
-      "intro": "Trading Range ile aynı worker turunda (`engine_analysis_loop`) üretilir: etkin her `engine_symbols` satırı için `market_bars` üzerinde döngüde hesaplanır; hedef başına `signal_dashboard` anlık görüntüsü yazılır. Tablo, üst çubukla eşleşen (borsa / segment / sembol / aralık) satırı gösterir.",
+      "intro": "Trading Range ile aynı worker turunda (`engine_analysis_loop`) üretilir: etkin her `engine_symbols` hedefi için `signal_dashboard` anlık görüntüsü yazılır. Aşağıda tüm hedefler listelenir; satıra tıklayınca önceki gibi ayrıntılı tablo açılır. Üst çubukla eşleşen satır etiketlenir.",
       "refreshBusy": "Yenileniyor…",
       "refreshNow": "Verileri yenile",
       "loginHint": "Sinyal anlık görüntüsü için giriş yap.",
       "noSnapshotForChart": "Bu grafik için signal_dashboard satırı yok — üst çubukla eşleşen motor hedefi ekleyin/açın veya borsa/segment/sembol/aralığı hizalayın.",
+      "listEmpty": "Henüz signal_dashboard satırı yok — motor hedeflerini açıp worker’ı çalıştırın, ardından yenileyin.",
+      "listHint": "Ayrıntı için satıra tıklayın. Satır rengi durumu yansıtır (LONG / SHORT / nötr); hata satırlarında kırmızı çerçeve vardır.",
+      "backToList": "← Tüm sinyaller",
+      "chartBadge": "Grafik",
+      "strengthShort": "PG {{value}}",
       "autoRefreshCheckbox": "Bu sekmedeyken verileri otomatik yenile",
       "autoRefreshActive": "Otomatik yenileme açık: motor anlık görüntüleri ~{{seconds}} sn’de bir çekilir.",
       "autoRefreshHint": "Anlık görüntüyü periyodik çekmek için yukarıdaki kutuyu işaretleyin."

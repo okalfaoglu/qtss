@@ -1430,6 +1430,21 @@ export default function App() {
     );
   }, [engineSnapshots, barExchange, barSegment, barSymbol, barInterval]);
 
+  const signalDashboardSnapshots = useMemo(() => {
+    return engineSnapshots
+      .filter((s) => s.engine_kind === "signal_dashboard")
+      .slice()
+      .sort((a, b) => {
+        const ex = a.exchange.localeCompare(b.exchange);
+        if (ex !== 0) return ex;
+        const seg = a.segment.localeCompare(b.segment);
+        if (seg !== 0) return seg;
+        const sym = a.symbol.localeCompare(b.symbol);
+        if (sym !== 0) return sym;
+        return a.interval.localeCompare(b.interval);
+      });
+  }, [engineSnapshots]);
+
   /** Süpürme okları: öncelik `trading_range` yükü; yoksa `signal_dashboard` (aynı turda yazılan süpürme alanları). */
   const sweepMarkersPayload = useMemo(
     () => dbTradingRangeSnapshot?.payload ?? dbSignalDashboardSnapshot?.payload ?? null,
@@ -3945,7 +3960,10 @@ export default function App() {
                   {enginePanelErr ? <p className="err">{enginePanelErr}</p> : null}
                   {token ? (
                     <div style={{ marginTop: "0.55rem" }}>
-                      <SignalDashboardDrawerPanel snapshot={dbSignalDashboardSnapshot} />
+                      <SignalDashboardDrawerPanel
+                        snapshots={signalDashboardSnapshots}
+                        chartMatchedEngineSymbolId={dbSignalDashboardSnapshot?.engine_symbol_id ?? null}
+                      />
                     </div>
                   ) : (
                     <p className="muted" style={{ marginTop: "0.45rem" }}>
