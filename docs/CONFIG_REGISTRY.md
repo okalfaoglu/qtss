@@ -32,6 +32,16 @@ Bu dosya FAZ **11.3** ile uyumludur. Bu repoda `system_config` DDL + tohumlar ta
 
 **Worker — `notify_outbox`:** Her turda `qtss_ai::load_notify_config_merged` (outbox da `telegram_*` satırlarını kullanır).
 
+**Worker — `engine_symbol_ingest` (`market_bars` history + gap/stale):**
+
+| `config_key` | `value` örneği | Env yedeği | Açıklama |
+|--------------|----------------|------------|-----------|
+| `engine_ingest_tick_secs` | `{"secs":180}` | `QTSS_ENGINE_INGEST_TICK_SECS` | Tam tarama aralığı (saniye); `resolve_worker_tick_secs`, min 60. |
+| `engine_ingest_min_bars` | `{"value":2000}` | `QTSS_ENGINE_INGEST_MIN_BARS` | Hedef başına minimum mum; REST backfill eşiği; `resolve_system_u64`, clamp 120–50000. |
+| `engine_ingest_gap_window` | `{"value":2000}` | `QTSS_ENGINE_INGEST_GAP_WINDOW` | Gap taraması penceresi (son N mum); clamp 100–20000. |
+
+Tohum: migration `0004_worker_engine_ingest_system_config.sql`. Öncelik: `QTSS_CONFIG_ENV_OVERRIDES=1` iken env, aksi halde `system_config`, sonra env, sonra varsayılan (`qtss_storage::config_tick`).
+
 ## Admin API
 
 - `GET/POST/DELETE /api/v1/admin/system-config` — `?module=` filtresi; **admin** rolü.
