@@ -10,7 +10,7 @@
 //! Uyarı: Şema dosyayla uyumsuzsa bu araç hatayı gizler; yalnızca dosya yorum/satır sonu
 //! gibi değişikliklerde veya yanlışlıkla düzenlenmiş migration’larda checksum uyumsuzluğunu giderir.
 //!
-//! **Önemli:** Aynı sürüm numarası (`0014_*.sql`) birden fazla dosyada kullanılamaz — SQLx tek checksum tutar;
+//! **Önemli:** Aynı sürüm numarası (`0002_*.sql` vb.) birden fazla dosyada kullanılamaz — SQLx tek checksum tutar;
 //! ikinci dosya birincinin özetini ezer ve `migrate` sürekli hata verir. Tam kural ve sürüm tablosu: `docs/QTSS_CURSOR_DEV_GUIDE.md` §6.
 
 use std::collections::HashMap;

@@ -1,6 +1,6 @@
 # QTSS — Yapılandırma kayıt defteri (`system_config` / `app_config`)
 
-Bu dosya FAZ **11.3** ile uyumludur. Bu repoda `system_config` şeması **`0044_system_config.sql`** ile gelir; geniş tüm idempotent tohumlar **`0058_system_config_runtime_seeds.sql`**. Her `NNNN_*.sql` sürüm numarası **yalnızca bir** dosyada kullanılmalıdır (`ls migrations/0013*.sql` tek satır olmalı).
+Bu dosya FAZ **11.3** ile uyumludur. Bu repoda `system_config` DDL + tohumlar tarihsel olarak `0044_*` / `0058_*` migrasyon dosyalarındaydı; **güncel tek dosya:** `migrations/0001_qtss_baseline.sql` içinde `-- >>> merged from: 0044_system_config.sql` ve `0058_system_config_runtime_seeds.sql` bölümleri. Yeni migrasyon eklerken `migrations/README.md` kurallarına bakın.
 
 ## `app_config` (mevcut `0001_init`)
 

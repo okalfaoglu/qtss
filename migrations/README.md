@@ -2,29 +2,35 @@
 
 Applied at API/worker startup via `qtss_storage::run_migrations` (SQLx).
 
-## Inventory (this checkout)
+## Current layout (squashed baseline)
 
-Source of truth:
+The historical chain (`0001` … `0063`) was merged into a **single** file for simpler deploys and fewer checksum edges:
 
-```bash
-ls migrations/*.sql | sort
-```
+- **`0001_qtss_baseline.sql`** — full schema + seeds + alters, in the same order as the old numbered files.
 
-**Count:** (see command above). Refresh with:
+**Regenerate** (after editing split files in a branch, or restoring from VCS history):
 
 ```bash
-ls migrations/*.sql | sort
+# From repo root; requires Python 3
+python3 scripts/squash_migrations_into_one.py
+# Windows (if python3 not on PATH):
+py -3 scripts/squash_migrations_into_one.py
 ```
 
-## Full deployment line (extended schema)
+The script expects at least one `NNNN_*.sql` input **other than** `0001_qtss_baseline.sql`. If only the baseline file exists, it prints instructions and exits successfully (nothing to do).
 
-Downstream / full-tree clones may continue beyond this minimal inventory (AI tables, notify outbox, extended worker schemas, etc.). The master guide (`docs/QTSS_MASTER_DEV_GUIDE.md`) and `docs/CONFIG_REGISTRY.md` describe that chain. **Do not renumber** existing applied migrations; add the next free prefix only.
+To re-squash from git history, check out the old `migrations/*.sql` set (move the current baseline aside if it blocks checkout), run the script, then commit.
 
-**This checkout — `0013`:** `ai_approval_requests`, `ai_decisions` (+ `approval_request_id`), taktik/operasyonel/portföy/yönüm tabloları. CI: `cargo test -p qtss-storage --test migrations_apply` (`DATABASE_URL`).
+## Breaking change
 
-**Çakışma:** Veritabanında zaten başka bir PR’den `ai_decisions` / `0042_*` zinciri varsa **`0013` uygulama** — yalnızca `ALTER TABLE ai_decisions ADD COLUMN approval_request_id ...` gibi ek bir migration ile genişletin; tabloları ikinci kez `CREATE` etmeyin.
+Databases that already applied the **old** multi-file chain (`_sqlx_migrations` with versions 2–63) are **not** compatible with this single `0001` baseline (checksum and version sequence differ).
+
+**New environments:** empty database → run API/worker → migration applies once.
+
+**Existing environments:** either keep the pre-squash migration files (restore from git before squash commit) or **drop and recreate** the database and re-seed as needed.
 
 ## Rules (summary)
 
-- One numeric prefix per file; never edit an already-applied migration — add a new file.
-- After adding a file, update this README table and run `qtss-sync-sqlx-checksums` if your workflow uses offline SQLx query data.
+- One numeric prefix per file in the folder (after squash: typically only `0001_*.sql`).
+- Do not edit an already-applied migration in production; add a new numbered file or re-squash with a DB reset.
+- If your workflow uses offline SQLx query data, refresh it after schema changes (`qtss-sync-sqlx-checksums` / project conventions).
