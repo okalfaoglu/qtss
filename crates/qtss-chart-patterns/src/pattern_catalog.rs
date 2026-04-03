@@ -24,6 +24,14 @@ pub enum PatternId {
     ConvergingTriangle = 11,
     DescendingTriangleContracting = 12,
     AscendingTriangleContracting = 13,
+    DoubleTop = 14,
+    DoubleBottom = 15,
+    HeadAndShoulders = 16,
+    InverseHeadAndShoulders = 17,
+    TripleTop = 18,
+    TripleBottom = 19,
+    BullishFlag = 20,
+    BearishFlag = 21,
 }
 
 impl PatternId {
@@ -43,6 +51,14 @@ impl PatternId {
             11 => Some(Self::ConvergingTriangle),
             12 => Some(Self::DescendingTriangleContracting),
             13 => Some(Self::AscendingTriangleContracting),
+            14 => Some(Self::DoubleTop),
+            15 => Some(Self::DoubleBottom),
+            16 => Some(Self::HeadAndShoulders),
+            17 => Some(Self::InverseHeadAndShoulders),
+            18 => Some(Self::TripleTop),
+            19 => Some(Self::TripleBottom),
+            20 => Some(Self::BullishFlag),
+            21 => Some(Self::BearishFlag),
             _ => None,
         }
     }
@@ -71,6 +87,14 @@ pub fn pattern_name_by_id(id: i32) -> &'static str {
         11 => "Converging Triangle",
         12 => "Descending Triangle (Contracting)",
         13 => "Ascending Triangle (Contracting)",
+        14 => "Double Top",
+        15 => "Double Bottom",
+        16 => "Head and Shoulders",
+        17 => "Inverse Head and Shoulders",
+        18 => "Triple Top",
+        19 => "Triple Bottom",
+        20 => "Bullish Flag",
+        21 => "Bearish Flag",
         _ => "Error",
     }
 }

@@ -16,6 +16,7 @@ pub mod apex;
 mod dashboard_v1;
 mod dashboard_v2_envelope;
 pub mod failure_swing;
+pub mod formations;
 mod formation_trade_levels;
 mod find;
 mod ohlc;
@@ -29,6 +30,12 @@ mod zigzag;
 pub use apex::{compute_apex_bar, compute_apex_from_outcome, ApexResult};
 pub use failure_swing::{
     check_breakout_volume, detect_failure_swing, BreakoutVolumeResult, FailureSwingResult,
+};
+pub use formations::{
+    detect_double_top, detect_double_bottom, detect_head_and_shoulders,
+    detect_inverse_head_and_shoulders, detect_triple_top, detect_triple_bottom,
+    detect_bullish_flag, detect_bearish_flag, scan_formations,
+    FormationMatch, FormationParams,
 };
 pub use pattern_catalog::{pattern_name_by_id, PatternId};
 
@@ -92,7 +99,7 @@ pub fn line_price_at_bar_index(
 /// `basechartpatterns.getPatternNameById` ile **kimlik eşlemesi** ([`pattern_name_by_id`] ile aynı tablo).
 #[must_use]
 pub fn pattern_name_by_acp_id(id: u8) -> Option<&'static str> {
-    if !(1..=13).contains(&id) {
+    if !(1..=21).contains(&id) {
         return None;
     }
     Some(pattern_name_by_id(id as i32))
@@ -200,7 +207,7 @@ pub fn channel_six_pattern_drawing_batch(
     } else {
         THEME_LIGHT_RGB.as_slice()
     };
-    let ci = if (1..=13).contains(&id) {
+    let ci = if (1..=21).contains(&id) {
         (id as usize - 1) % theme.len()
     } else {
         0
@@ -208,7 +215,7 @@ pub fn channel_six_pattern_drawing_batch(
     let (r, g, b) = theme[ci];
     let color_hex = Some(rgb_to_hex(r, g, b));
     let zigzag_hex = color_hex.clone();
-    let name = if (1..=13).contains(&id) {
+    let name = if (1..=21).contains(&id) {
         pattern_name_by_acp_id(id as u8).unwrap_or("Pattern")
     } else {
         "Pattern"
@@ -269,7 +276,7 @@ pub fn channel_six_pattern_drawing_batch(
 
     PatternDrawingBatch {
         batch_id: Uuid::new_v4(),
-        pattern_type_id: (1..=13).contains(&id).then_some(id as u8),
+        pattern_type_id: (1..=21).contains(&id).then_some(id as u8),
         pattern_name: Some(name),
         commands,
     }
