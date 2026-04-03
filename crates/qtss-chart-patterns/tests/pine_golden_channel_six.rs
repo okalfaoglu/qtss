@@ -78,9 +78,6 @@ struct GoldenRequest {
     size_filters: Option<SizeFilters>,
     ignore_if_entry_crossed: Option<bool>,
 
-    ratio_diff_enabled: Option<bool>,
-    ratio_diff_max: Option<f64>,
-
     max_matches: Option<usize>,
 }
 
@@ -235,8 +232,6 @@ fn run_channel_six_at_step(
     let avoid_overlap = req.avoid_overlap.unwrap_or(true);
     let size_filters = req.size_filters.clone().unwrap_or_default();
     let ignore_if_entry_crossed = req.ignore_if_entry_crossed.unwrap_or(false);
-    let ratio_diff_enabled = req.ratio_diff_enabled.unwrap_or(false);
-    let ratio_diff_max = req.ratio_diff_max.unwrap_or(1.0);
     let max_matches = req.max_matches.unwrap_or(1).max(1);
 
     let scan_params = SixPivotScanParams {
@@ -249,8 +244,6 @@ fn run_channel_six_at_step(
         lower_direction,
         size_filters,
         ignore_if_entry_crossed,
-        ratio_diff_enabled,
-        ratio_diff_max,
     };
 
     let allowed_pattern_ids = req.allowed_pattern_ids.clone().unwrap_or_default();

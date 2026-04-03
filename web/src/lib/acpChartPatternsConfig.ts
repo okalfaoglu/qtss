@@ -182,8 +182,6 @@ export const DEFAULT_ACP_CONFIG: AcpChartPatternsConfig = {
     upper_direction: 1,
     lower_direction: -1,
     ignore_if_entry_crossed: false,
-    ratio_diff_enabled: false,
-    ratio_diff_max: 1.0,
     /** Grafik (sembol/TF) yüklendiğinde ve TF değişince kanal taraması; ACP çizimi için gerekli. */
     auto_scan_on_timeframe_change: true,
     size_filters: { ...DEFAULT_SIZE_FILTERS },

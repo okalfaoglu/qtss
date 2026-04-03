@@ -10,9 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::line_price_at_bar_index;
 use crate::ohlc::OhlcBar;
 use crate::resolve::resolve_pattern_type_id;
-use crate::scan::{
-    check_bar_ratio, get_ratio_diff, inspect_pick_best_three_point_line, inspect_two_point_line,
-};
+use crate::scan::{check_bar_ratio, inspect_pick_best_three_point_line, inspect_two_point_line};
 use crate::zigzag::{next_level_from_zigzag, pivots_chronological, ZigzagLite, ZigzagPivot};
 
 /// `BTreeMap` bar indeksine göre sıralı OHLC → zigzag.
@@ -169,39 +167,6 @@ pub struct SixPivotScanParams {
     /// Pine `ScanProperties.ignoreIfEntryCrossed` — son mum kapanışı üst/alt çizgi bandının dışındaysa elenir.
     #[serde(default)]
     pub ignore_if_entry_crossed: bool,
-    /// Pine `ratioDiffEnabled` — üst üçlü (`p1,p3,p5`) ve alt üçlü (`p2,p4,p6`) için `getRatioDiff` üst sınırı.
-    #[serde(default)]
-    pub ratio_diff_enabled: bool,
-    /// Pine `ratioDiff` (eşik); `getRatioDiff` ≤ bu değer (satır başına fiyat eğimi farkı).
-    #[serde(default = "default_ratio_diff_max")]
-    pub ratio_diff_max: f64,
-}
-
-fn default_ratio_diff_max() -> f64 {
-    1.0
-}
-
-/// Pine `find` — `ratioDiffEnabled` iken `getRatioDiff` üst/alt üçlü pivotlarda `ratioDiff` eşiğini aşmamalı.
-#[inline]
-fn ratio_diff_ok_for_window(p: &[PivotTriple], n: usize, params: &SixPivotScanParams) -> bool {
-    if !params.ratio_diff_enabled {
-        return true;
-    }
-    let (b0, pr0) = (p[0].0, p[0].1);
-    let (b1, pr1) = (p[1].0, p[1].1);
-    let (b2, pr2) = (p[2].0, p[2].1);
-    let (b3, pr3) = (p[3].0, p[3].1);
-    let (b4, pr4) = (p[4].0, p[4].1);
-    let ru = get_ratio_diff((b0, pr0), (b2, pr2), (b4, pr4));
-    if !ru.map(|v| v <= params.ratio_diff_max).unwrap_or(false) {
-        return false;
-    }
-    if n == 6 {
-        let (b5, pr5) = (p[5].0, p[5].1);
-        let rl = get_ratio_diff((b1, pr1), (b3, pr3), (b5, pr5));
-        return rl.map(|v| v <= params.ratio_diff_max).unwrap_or(false);
-    }
-    true
 }
 
 impl Default for SixPivotScanParams {
@@ -216,8 +181,6 @@ impl Default for SixPivotScanParams {
             lower_direction: -1.0,
             size_filters: SizeFilters::default(),
             ignore_if_entry_crossed: false,
-            ratio_diff_enabled: false,
-            ratio_diff_max: default_ratio_diff_max(),
         }
     }
 }
@@ -276,10 +239,6 @@ pub fn scan_six_alternating_pivots(
         return None;
     }
     if n == 6 && !check_bar_ratio(b1, b3, b5, params.bar_ratio_enabled, params.bar_ratio_limit) {
-        return None;
-    }
-
-    if !ratio_diff_ok_for_window(&p, n, params) {
         return None;
     }
 
@@ -566,14 +525,6 @@ fn try_scan_six_window(
         });
     }
 
-    if !ratio_diff_ok_for_window(&p, n, scan_params) {
-        return Err(ChannelSixReject {
-            code: ChannelSixRejectCode::RatioDiff,
-            have_pivots: None,
-            need_pivots: None,
-        });
-    }
-
     // Pine `find` — `avoidOverlap` / `existingPattern` (henüz `inspect` öncesi).
     let current_start = p[0].0;
     if window_filter.avoid_overlap {
@@ -777,8 +728,6 @@ pub enum ChannelSixRejectCode {
     LastPivotDirection,
     /// Pine `SizeFilters.checkSize`.
     SizeFilter,
-    /// Pine `ratioDiffEnabled` — `getRatioDiff` (üst/alt üçlü) `ratioDiff` eşiğini aştı.
-    RatioDiff,
     /// Pine `ignoreIfEntryCrossed` — son `close` kanal bandında değil.
     EntryNotInChannel,
 }
@@ -863,7 +812,6 @@ pub fn analyze_channel_six_from_bars(
             };
         } else {
             let max_skip = pivot_tail_skip_max.min(ch.len().saturating_sub(need));
-            let mut found_any_on_level = false;
             for skip in 0..=max_skip {
                 let Some(six) = n_pivots_chrono_tail_skip(&zz, need, skip) else {
                     break;
@@ -898,7 +846,6 @@ pub fn analyze_channel_six_from_bars(
                             };
                         }
                         outcomes.push(outcome);
-                        found_any_on_level = true;
                         if window_filter.avoid_overlap {
                             let mn = six.iter().map(|(b, _, _)| *b).min().unwrap_or(0);
                             let mx = six.iter().map(|(b, _, _)| *b).max().unwrap_or(0);
@@ -917,10 +864,7 @@ pub fn analyze_channel_six_from_bars(
                     }
                 }
             }
-            // Pine parity: once we have a valid match for this zigzag config/level, stop climbing further levels.
-            if found_any_on_level {
-                break 'levels;
-            }
+            // Pine `getZigzagAndPattern`: her `find` sonrası `mlzigzag.nextlevel()` — eşleşme olsa da üst zigzag seviyeleri denenir.
         }
         zz = next_level_from_zigzag(&zz);
         if zz.pivots.len() < scan_params.number_of_pivots {
@@ -1136,31 +1080,4 @@ mod tests {
         assert_eq!(err.code, ChannelSixRejectCode::PatternNotAllowed);
     }
 
-    #[test]
-    fn ratio_diff_rejects_bent_upper_triple_when_enabled() {
-        // Üst üç tepe doğrusal değil: (0,100)->(10,100)->(20,130) → getRatioDiff büyük.
-        let mut m = BTreeMap::new();
-        for i in 0..=25 {
-            let (k, v) = bar(i, 95.0, 135.0, 70.0, 100.0);
-            m.insert(k, v);
-        }
-        let six: Vec<PivotTriple> = vec![
-            (0, 100.0, 1),
-            (5, 75.0, -1),
-            (10, 100.0, 1),
-            (15, 75.0, -1),
-            (20, 130.0, 1),
-            (25, 75.0, -1),
-        ];
-        let params = SixPivotScanParams {
-            number_of_pivots: 6,
-            bar_ratio_enabled: false,
-            ratio_diff_enabled: true,
-            ratio_diff_max: 0.01,
-            ..SixPivotScanParams::default()
-        };
-        let err = try_scan_six_window(&six, &m, &params, None, &ChannelSixWindowFilter::default())
-            .expect_err("ratio diff");
-        assert_eq!(err.code, ChannelSixRejectCode::RatioDiff);
-    }
 }

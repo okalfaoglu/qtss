@@ -1,6 +1,6 @@
 //! Grafik formasyonları: Pine **Auto Chart Patterns** ile uyumlu **sayısal** parçalar, çizim JSON’u ve doğrusal fiyat.
 //!
-//! **Taşınan (Pine ile aynı kural):** `check_bar_ratio`, `get_ratio_diff`, `ratio_diff_enabled`/`ratio_diff_max` (`find`),
+//! **Taşınan (Pine ile aynı kural):** `check_bar_ratio`, `get_ratio_diff` (Pine `Pattern.ratioDiff` alanı; `find` içinde eşik filtresi yok),
 //! `trend_line_inspect`,
 //! `inspect_pick_best_three_point_line`, `resolve_pattern_type_id`, tema RGB tabloları, `line_price_at_bar_index`,
 //! `pattern_name_by_acp_id`, [`PatternDrawingBatch`](PatternDrawingBatch).

@@ -1076,8 +1076,6 @@ fn default_acp_chart_patterns_json() -> serde_json::Value {
             "upper_direction": 1,
             "lower_direction": -1,
             "ignore_if_entry_crossed": false,
-            "ratio_diff_enabled": false,
-            "ratio_diff_max": 1.0,
             "auto_scan_on_timeframe_change": false,
             "size_filters": {
                 "filter_by_bar": false,
@@ -1192,12 +1190,6 @@ pub struct ChannelSixBody {
     /// Pine `ignoreIfEntryCrossed` — son mum kapanışı kanal bandı dışındaysa elenir.
     #[serde(default)]
     pub ignore_if_entry_crossed: bool,
-    /// Pine `ratioDiffEnabled` — `getRatioDiff` (üçlü tepeler / üçlü dipler) üst sınır denetimi.
-    #[serde(default)]
-    pub ratio_diff_enabled: bool,
-    /// Pine `ratioDiff` eşiği (`getRatioDiff` ≤ bu değer).
-    #[serde(default = "default_ratio_diff_max")]
-    pub ratio_diff_max: f64,
     /// Pine `repaint`: `false` ise en yeni (genelde açık) mum taramaya dahil edilmez — yalnız kapanmış mumlar.
     #[serde(default)]
     pub repaint: bool,
@@ -1260,9 +1252,6 @@ fn default_max_zigzag_levels() -> usize {
 fn default_error_score_ratio_max() -> f64 {
     0.2
 }
-fn default_ratio_diff_max() -> f64 {
-    1.0
-}
 fn default_pattern_line_width() -> u32 {
     2
 }
@@ -1283,8 +1272,6 @@ impl ChannelSixBody {
             lower_direction: self.lower_direction,
             size_filters: self.size_filters.clone(),
             ignore_if_entry_crossed: self.ignore_if_entry_crossed,
-            ratio_diff_enabled: self.ratio_diff_enabled,
-            ratio_diff_max: self.ratio_diff_max,
         }
     }
 }

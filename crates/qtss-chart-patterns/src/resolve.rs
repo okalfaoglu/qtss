@@ -5,7 +5,7 @@
 //! | `getPatternNameById` | [`crate::pattern_name_by_acp_id`](crate::pattern_name_by_acp_id) (`Option`; geçersiz id → `None`, Pine `'Error'`) |
 //! | `resolvePatternName` (açı/alan/isExpanding/isContracting/isChannel dalları) | [`resolve_pattern_type_id`] — `bar_diff` Pine’daki `this.trendLine1.p2.index - this.trendLine2.p1.index` (uzatılmış uçlar) |
 //! | `resolve` (çizgileri `firstIndex`/`lastIndex`’e `get_price` ile uzatma, pivot fiyatlarını çizgiye projeksiyon) | [`crate::channel_six_drawing_hints`](crate::channel_six_drawing_hints) + `try_scan_six_window` içi uç seçimi |
-//! | `find(points, …)` (checkBarRatio, `inspect`, `ratioDiff`/`ratioDiffEnabled`, `allowedPatterns`, `allowedLastPivotDirections`) | [`crate::find::try_scan_six_window`](crate::find::try_scan_six_window) + `scan_six_alternating_pivots`; filtreler [`ChannelSixWindowFilter`](crate::ChannelSixWindowFilter) |
+//! | `find(points, …)` (checkBarRatio, `inspect`, `allowedPatterns`, `allowedLastPivotDirections`; Pine’da `ratioDiff` yalnız Pattern alanı) | [`crate::find::try_scan_six_window`](crate::find::try_scan_six_window) + `scan_six_alternating_pivots`; filtreler [`ChannelSixWindowFilter`](crate::ChannelSixWindowFilter) |
 //! | `find(zigzag, …)` (`offset` ile `get(i+offset)`, `avoidOverlap`, duplicate pivot penceresi) | [`crate::analyze_channel_six_from_bars`](crate::analyze_channel_six_from_bars) — `pivot_tail_skip` / seviye döngüsü Zigzag kronolojik dilimde; `offset` birebir aynı parametre adı değil |
 //!
 //! **Taşınmayan:** `Pattern` nesnesi, `themeColors.shift` döngüsü (renk tema tabloları + batch’te mod), `log.info`, ham `chart.point` dizisi tabanlı `find` imzası — sunucu `OhlcBar` haritası + sonuç `ChannelSixScanOutcome` kullanır.

@@ -21,7 +21,7 @@
 //             ▒▒             ▒
 //@version=6
 // QTSS reference: TradingView publishes this as `Trendoscope/abstractchartpatterns/9`. Logic parity targets
-// `crates/qtss-chart-patterns` (`scan.rs` inspect/checkBarRatio/getRatioDiff, `find.rs` size filters).
+// `crates/qtss-chart-patterns` (`scan.rs` inspect/checkBarRatio/getRatioDiff; `find.rs` size filters). Pine `find` ratioDiff ile filtrelemez.
 
 // @description Library having abstract types and methods for chart pattern implementations
 library('abstractchartpatterns', overlay = true)
