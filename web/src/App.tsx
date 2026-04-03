@@ -1,10 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
-/** Trading Range çekmecesi: grafik katmanı açıkken motor anlık görüntüsü ve olay listesi için yoklama aralığı (ms). */
-const TRADING_RANGE_DRAWER_REFRESH_MS = 20_000;
-/** Sinyal panosu çekmecesi: otomatik yenileme açıkken motor anlık görüntüsü yoklama aralığı (ms). */
-const SIGNAL_DASHBOARD_DRAWER_REFRESH_MS = 20_000;
-import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { binanceKlinesUsesQtssApi, fetchBinanceKlinesAsChartRows } from "./api/binanceKlines";
 import {
@@ -19,7 +13,6 @@ import {
   oauthTokenRefresh,
   scanChannelSix,
   upsertAppConfig,
-  type ChannelSixRejectJson,
   type ChannelSixResponse,
   fetchAuthMe,
   configureApiAuth,
@@ -95,7 +88,6 @@ import { TradeDashboardPanel } from "./components/TradeDashboardPanel";
 import {
   DEFAULT_ELLIOTT_WAVE_CONFIG,
   ELLIOTT_WAVE_CONFIG_KEY,
-  mergePatternMenuOrTf,
   mtfWaveColorsFromConfig,
   mtfZigzagColorsFromConfig,
   normalizeElliottWaveConfig,
@@ -103,10 +95,7 @@ import {
   scaleElliottHexColor,
   type ElliottWaveConfig,
 } from "./lib/elliottWaveAppConfig";
-import {
-  ELLIOTT_PATTERN_MENU_ROWS,
-  type ElliottPatternMenuToggles,
-} from "./lib/elliottPatternMenuCatalog";
+import { ELLIOTT_PATTERN_MENU_ROWS } from "./lib/elliottPatternMenuCatalog";
 import { buildElliottLegendRows } from "./lib/elliottWaveLegend";
 import { buildSwingPivots } from "./lib/elliottImpulseDetect";
 import {
@@ -159,224 +148,29 @@ import { NotificationDrawerPanel } from "./components/NotificationDrawerPanel";
 import { ServerRegistryPanel } from "./components/ServerRegistryPanel";
 import { HelpCrossLink } from "./help/HelpCrossLink";
 import { HelpPanel } from "./help/HelpPanel";
-
-type Theme = "dark" | "light";
-type SettingsTab =
-  | "general"
-  | "dashboard"
-  | "elliott"
-  | "elliott_impulse"
-  | "elliott_corrective"
-  | "acp"
-  | "backtest"
-  | "orders"
-  | "commission"
-  | "engine"
-  | "trading_range"
-  | "signal_dashboard"
-  | "market_context"
-  | "nansen"
-  | "queues"
-  | "notify"
-  | "help"
-  | "setting";
-
-type TradingRangeDrawerSubtab = "main" | "data_entry" | "setup" | "trade_summary";
-
-type ElliottLineStyle = "solid" | "dotted" | "dashed";
-
-/** V2 ham ZigZag overlay katmanları — adapter’daki `zigzagKind` ile eşleşir. */
-function keepElliottZigzagLayer(
-  kind: PatternLayerOverlay["zigzagKind"],
-  c: Pick<ElliottWaveConfig, "show_zigzag_pivot_4h" | "show_zigzag_pivot_1h" | "show_zigzag_pivot_15m">,
-): boolean {
-  if (kind === "elliott_v2_zigzag_macro") return c.show_zigzag_pivot_4h;
-  if (kind === "elliott_v2_zigzag_intermediate") return c.show_zigzag_pivot_1h;
-  if (kind === "elliott_v2_zigzag_micro") return c.show_zigzag_pivot_15m;
-  return true;
-}
-
-/** `market_bars.segment` ile üst çubuk segmentini hizalar. */
-function normalizeMarketSegment(segment: string): string {
-  const s = segment.trim().toLowerCase();
-  if (s === "futures" || s === "usdt_futures" || s === "fapi") return "futures";
-  return s || "spot";
-}
-
-/** Üst çubuk segment `<select>` değeri (`usdt_futures` / `fapi` → futures). */
-function chartToolbarSegmentSelectValue(segment: string): "spot" | "futures" {
-  return normalizeMarketSegment(segment) === "futures" ? "futures" : "spot";
-}
-
-/** V2 ham ZigZag çizgisi (itki/düzeltme katmanları değil). Elliott panel kapalıyken yalnız bunlar çizilir. */
-function isV2RawZigzagKind(kind: PatternLayerOverlay["zigzagKind"] | undefined): boolean {
-  return (
-    kind === "elliott_v2_zigzag_macro" ||
-    kind === "elliott_v2_zigzag_intermediate" ||
-    kind === "elliott_v2_zigzag_micro"
-  );
-}
-
-function patchPatternMenuTf(
-  c: ElliottWaveConfig,
-  tf: "4h" | "1h" | "15m",
-  key: keyof ElliottPatternMenuToggles,
-  checked: boolean,
-): ElliottWaveConfig {
-  const pattern_menu_by_tf = {
-    ...c.pattern_menu_by_tf,
-    [tf]: { ...c.pattern_menu_by_tf[tf], [key]: checked },
-  };
-  const pattern_menu = mergePatternMenuOrTf(pattern_menu_by_tf);
-  return {
-    ...c,
-    pattern_menu_by_tf,
-    pattern_menu,
-    formations: { ...c.formations, impulse: pattern_menu.motive_impulse },
-  };
-}
-
-/** `<input type="color" />` için #RGB → #RRGGBB */
-function elliottColorInputValue(hex: string): string {
-  const t = hex.trim();
-  if (/^#[0-9A-Fa-f]{6}$/i.test(t)) return t.toLowerCase();
-  if (/^#[0-9A-Fa-f]{3}$/i.test(t)) {
-    const a = t.slice(1);
-    const r = a[0]!;
-    const g = a[1]!;
-    const b = a[2]!;
-    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
-  }
-  return "#e53935";
-}
-
-type ChartDefaults = {
-  exchange: string;
-  segment: string;
-  symbol: string;
-  interval: string;
-  limit: string;
-};
-
-function readChartDefaults(): ChartDefaults {
-  return {
-    exchange: import.meta.env.VITE_DEFAULT_EXCHANGE ?? "binance",
-    segment: import.meta.env.VITE_DEFAULT_SEGMENT ?? "spot",
-    symbol: (import.meta.env.VITE_DEFAULT_SYMBOL ?? "BTCUSDT").toUpperCase(),
-    interval: import.meta.env.VITE_DEFAULT_INTERVAL ?? "15m",
-    limit: String(import.meta.env.VITE_DEFAULT_BAR_LIMIT ?? "5000"),
-  };
-}
-
-/** 0 = canlı mum poll kapalı. */
-function readLivePollMs(): number {
-  const raw = import.meta.env.VITE_LIVE_POLL_MS;
-  if (raw === "0" || raw === "false") return 0;
-  const n = parseInt(String(raw ?? "5000"), 10);
-  return Number.isFinite(n) && n >= 0 ? n : 5000;
-}
-
-/** PLAN §4.2: confluence `lot_scale_hint`, `data_sources_considered`, `conflicts[].code` (wire English keys). */
-function formatConfluenceExtras(p: Record<string, unknown>): string {
-  const parts: string[] = [];
-  if (typeof p.lot_scale_hint === "number" && Number.isFinite(p.lot_scale_hint)) {
-    parts.push(`lot_scale ${p.lot_scale_hint.toFixed(2)}`);
-  }
-  const dsc = p.data_sources_considered;
-  if (Array.isArray(dsc) && dsc.length > 0 && dsc.every((x) => typeof x === "string")) {
-    parts.push(`sources ${(dsc as string[]).join(", ")}`);
-  }
-  const raw = p.conflicts;
-  if (Array.isArray(raw)) {
-    const codes = raw
-      .map((x) =>
-        x && typeof x === "object" && typeof (x as Record<string, unknown>).code === "string"
-          ? String((x as Record<string, unknown>).code)
-          : null,
-      )
-      .filter((c): c is string => Boolean(c));
-    const n = codes.length;
-    if (n === 0) {
-      parts.push("conflicts 0");
-    } else {
-      const preview = codes.slice(0, 3).join(", ");
-      parts.push(n > 3 ? `conflicts ${n}: ${preview}…` : `conflicts ${n}: ${preview}`);
-    }
-  }
-  return parts.length ? ` · ${parts.join(" · ")}` : "";
-}
-
-function channelSixRejectMessage(t: TFunction, reject: ChannelSixRejectJson | undefined): string {
-  if (!reject) return t("app.channelReject.missing");
-  switch (reject.code) {
-    case "insufficient_pivots":
-      return t("app.channelReject.insufficientPivots", {
-        have: String(reject.have_pivots ?? "?"),
-        need: String(reject.need_pivots ?? 6),
-      });
-    case "pivot_alternation":
-      return t("app.channelReject.pivotAlternation");
-    case "bar_ratio_upper":
-      return t("app.channelReject.barRatioUpper");
-    case "bar_ratio_lower":
-      return t("app.channelReject.barRatioLower");
-    case "inspect_upper":
-      return t("app.channelReject.inspectUpper");
-    case "inspect_lower":
-      return t("app.channelReject.inspectLower");
-    case "pattern_not_allowed":
-      return t("app.channelReject.patternNotAllowed");
-    case "overlap_ignored":
-      return t("app.channelReject.overlapIgnored");
-    case "duplicate_pivot_window":
-      return t("app.channelReject.duplicatePivotWindow");
-    case "last_pivot_direction":
-      return t("app.channelReject.lastPivotDirection");
-    case "size_filter":
-      return t("app.channelReject.sizeFilter");
-    case "ratio_diff":
-      return t("app.channelReject.ratioDiff");
-    case "entry_not_in_channel":
-      return t("app.channelReject.entryNotInChannel");
-    default:
-      return reject.code;
-  }
-}
-
-/** OAuth access token — Ctrl+F5 / tam yenilemede oturum kalsın diye `localStorage` (Çıkış ile silinir). */
-const ACCESS_TOKEN_STORAGE_KEY = "qtss_access_token";
-const ACCESS_TOKEN_EXP_MS_STORAGE_KEY = "qtss_access_token_exp_ms";
-
-function readStoredAccessToken(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const t = localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
-    return t != null && t.trim() !== "" ? t.trim() : null;
-  } catch {
-    return null;
-  }
-}
-
-function readStoredRefreshToken(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const t = localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
-    return t != null && t.trim() !== "" ? t.trim() : null;
-  } catch {
-    return null;
-  }
-}
-
-function readStoredAccessExpMs(): number | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(ACCESS_TOKEN_EXP_MS_STORAGE_KEY);
-    const n = raw ? Number(raw) : NaN;
-    return Number.isFinite(n) && n > 0 ? n : null;
-  } catch {
-    return null;
-  }
-}
+import {
+  TRADING_RANGE_DRAWER_REFRESH_MS,
+  SIGNAL_DASHBOARD_DRAWER_REFRESH_MS,
+} from "./app/drawerRefreshConstants";
+import type { Theme, SettingsTab, TradingRangeDrawerSubtab, ElliottLineStyle } from "./app/appTypes";
+import { readChartDefaults, readLivePollMs } from "./app/chartEnv";
+import { normalizeMarketSegment, chartToolbarSegmentSelectValue } from "./app/marketSegment";
+import {
+  keepElliottZigzagLayer,
+  isV2RawZigzagKind,
+  patchPatternMenuTf,
+  elliottColorInputValue,
+} from "./app/elliottAppHelpers";
+import { formatConfluenceExtras } from "./app/confluenceFormat";
+import { channelSixRejectMessage } from "./app/channelRejectMessage";
+import {
+  ACCESS_TOKEN_STORAGE_KEY,
+  ACCESS_TOKEN_EXP_MS_STORAGE_KEY,
+  REFRESH_TOKEN_STORAGE_KEY,
+  readStoredAccessToken,
+  readStoredRefreshToken,
+  readStoredAccessExpMs,
+} from "./app/oauthStorage";
 
 export default function App() {
   const { t } = useTranslation();
