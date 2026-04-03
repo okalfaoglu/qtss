@@ -9,8 +9,17 @@ import type { ElliottPatternMenuToggles } from "../lib/elliottPatternMenuCatalog
 /** V2 raw ZigZag overlay kinds — matches adapter `zigzagKind`. */
 export function keepElliottZigzagLayer(
   kind: PatternLayerOverlay["zigzagKind"],
-  c: Pick<ElliottWaveConfig, "show_zigzag_pivot_4h" | "show_zigzag_pivot_1h" | "show_zigzag_pivot_15m">,
+  c: Pick<
+    ElliottWaveConfig,
+    | "show_zigzag_pivot_1w"
+    | "show_zigzag_pivot_1d"
+    | "show_zigzag_pivot_4h"
+    | "show_zigzag_pivot_1h"
+    | "show_zigzag_pivot_15m"
+  >,
 ): boolean {
+  if (kind === "elliott_v2_zigzag_weekly") return c.show_zigzag_pivot_1w;
+  if (kind === "elliott_v2_zigzag_daily") return c.show_zigzag_pivot_1d;
   if (kind === "elliott_v2_zigzag_macro") return c.show_zigzag_pivot_4h;
   if (kind === "elliott_v2_zigzag_intermediate") return c.show_zigzag_pivot_1h;
   if (kind === "elliott_v2_zigzag_micro") return c.show_zigzag_pivot_15m;
@@ -20,6 +29,8 @@ export function keepElliottZigzagLayer(
 /** V2 raw ZigZag polyline (not impulse / corrective drawing layers). */
 export function isV2RawZigzagKind(kind: PatternLayerOverlay["zigzagKind"] | undefined): boolean {
   return (
+    kind === "elliott_v2_zigzag_weekly" ||
+    kind === "elliott_v2_zigzag_daily" ||
     kind === "elliott_v2_zigzag_macro" ||
     kind === "elliott_v2_zigzag_intermediate" ||
     kind === "elliott_v2_zigzag_micro"

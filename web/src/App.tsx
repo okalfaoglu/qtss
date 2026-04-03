@@ -3042,242 +3042,198 @@ export default function App() {
                           </tbody>
                         </table>
                         <p className="muted" style={{ margin: "0.35rem 0 0.25rem", fontSize: "0.72rem" }}>
-                          Grafik çizimi — yalnızca 4H / 1H / 15M (ZigZag pivot, renk, dalga çizgisi, etiket).
+                          Grafik çizimi — 1W / 1D / 4H / 1H / 15M: ZigZag pivot, renk, dalga çizgisi, etiket.
                         </p>
                         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
                           <thead>
                             <tr>
                               <th style={{ textAlign: "left", padding: "0.25rem 0.2rem" }}>Ayar</th>
-                              <th style={{ textAlign: "center", padding: "0.25rem 0.2rem" }}>4H</th>
-                              <th style={{ textAlign: "center", padding: "0.25rem 0.2rem" }}>1H</th>
-                              <th style={{ textAlign: "center", padding: "0.25rem 0.2rem" }}>15M</th>
+                              {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => (
+                                <th key={tfKey} style={{ textAlign: "center", padding: "0.25rem 0.2rem" }}>
+                                  {ELLIOTT_ANALYSIS_TIMEFRAME_LABELS[tfKey]}
+                                </th>
+                              ))}
                             </tr>
                           </thead>
                           <tbody>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>ZigZag (pivot)</td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="checkbox"
-                                  checked={elliottConfig.show_zigzag_pivot_4h}
-                                  onChange={(e) => setElliottConfig((c) => ({ ...c, show_zigzag_pivot_4h: e.target.checked }))}
-                                />
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="checkbox"
-                                  checked={elliottConfig.show_zigzag_pivot_1h}
-                                  onChange={(e) => setElliottConfig((c) => ({ ...c, show_zigzag_pivot_1h: e.target.checked }))}
-                                />
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="checkbox"
-                                  checked={elliottConfig.show_zigzag_pivot_15m}
-                                  onChange={(e) => setElliottConfig((c) => ({ ...c, show_zigzag_pivot_15m: e.target.checked }))}
-                                />
-                              </td>
+                              {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => {
+                                const k = elliottDrawingConfigKeys(tfKey).showZigzagPivot;
+                                return (
+                                  <td key={tfKey} style={{ textAlign: "center" }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={elliottConfig[k] as boolean}
+                                      onChange={(e) => setElliottConfig((c) => ({ ...c, [k]: e.target.checked }))}
+                                    />
+                                  </td>
+                                );
+                              })}
                             </tr>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>ZigZag renk</td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="color"
-                                  className="tv-elliott-color-swatch"
-                                  value={elliottColorInputValue(elliottConfig.mtf_zigzag_color_4h)}
-                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_zigzag_color_4h: e.target.value }))}
-                                />
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="color"
-                                  className="tv-elliott-color-swatch"
-                                  value={elliottColorInputValue(elliottConfig.mtf_zigzag_color_1h)}
-                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_zigzag_color_1h: e.target.value }))}
-                                />
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="color"
-                                  className="tv-elliott-color-swatch"
-                                  value={elliottColorInputValue(elliottConfig.mtf_zigzag_color_15m)}
-                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_zigzag_color_15m: e.target.value }))}
-                                />
-                              </td>
+                              {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => {
+                                const k = elliottDrawingConfigKeys(tfKey).mtfZigzagColor;
+                                return (
+                                  <td key={tfKey} style={{ textAlign: "center" }}>
+                                    <input
+                                      type="color"
+                                      className="tv-elliott-color-swatch"
+                                      value={elliottColorInputValue(elliottConfig[k] as string)}
+                                      onChange={(e) => setElliottConfig((c) => ({ ...c, [k]: e.target.value }))}
+                                    />
+                                  </td>
+                                );
+                              })}
                             </tr>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>ZigZag cizgi tipi</td>
-                              <td style={{ textAlign: "center" }}>
-                                <select
-                                  value={elliottConfig.mtf_zigzag_line_style_4h}
-                                  onChange={(e) =>
-                                    setElliottConfig((c) => ({
-                                      ...c,
-                                      mtf_zigzag_line_style_4h: e.target.value as ElliottLineStyle,
-                                    }))
-                                  }
-                                >
-                                  <option value="solid">Duz</option>
-                                  <option value="dotted">Nokta</option>
-                                  <option value="dashed">Kesik</option>
-                                </select>
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <select
-                                  value={elliottConfig.mtf_zigzag_line_style_1h}
-                                  onChange={(e) =>
-                                    setElliottConfig((c) => ({
-                                      ...c,
-                                      mtf_zigzag_line_style_1h: e.target.value as ElliottLineStyle,
-                                    }))
-                                  }
-                                >
-                                  <option value="solid">Duz</option>
-                                  <option value="dotted">Nokta</option>
-                                  <option value="dashed">Kesik</option>
-                                </select>
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <select
-                                  value={elliottConfig.mtf_zigzag_line_style_15m}
-                                  onChange={(e) =>
-                                    setElliottConfig((c) => ({
-                                      ...c,
-                                      mtf_zigzag_line_style_15m: e.target.value as ElliottLineStyle,
-                                    }))
-                                  }
-                                >
-                                  <option value="solid">Duz</option>
-                                  <option value="dotted">Nokta</option>
-                                  <option value="dashed">Kesik</option>
-                                </select>
-                              </td>
+                              {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => {
+                                const k = elliottDrawingConfigKeys(tfKey).mtfZigzagLineStyle;
+                                return (
+                                  <td key={tfKey} style={{ textAlign: "center" }}>
+                                    <select
+                                      value={elliottConfig[k] as ElliottLineStyle}
+                                      onChange={(e) =>
+                                        setElliottConfig((c) => ({ ...c, [k]: e.target.value as ElliottLineStyle }))
+                                      }
+                                    >
+                                      <option value="solid">Duz</option>
+                                      <option value="dotted">Nokta</option>
+                                      <option value="dashed">Kesik</option>
+                                    </select>
+                                  </td>
+                                );
+                              })}
                             </tr>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>ZigZag kalinligi</td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="number"
-                                  min={1}
-                                  max={6}
-                                  value={elliottConfig.mtf_zigzag_line_width_4h}
-                                  onChange={(e) =>
-                                    setElliottConfig((c) => ({
-                                      ...c,
-                                      mtf_zigzag_line_width_4h: Math.min(6, Math.max(1, parseInt(e.target.value, 10) || 1)),
-                                    }))
-                                  }
-                                  style={{ width: "3.3rem" }}
-                                />
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="number"
-                                  min={1}
-                                  max={6}
-                                  value={elliottConfig.mtf_zigzag_line_width_1h}
-                                  onChange={(e) =>
-                                    setElliottConfig((c) => ({
-                                      ...c,
-                                      mtf_zigzag_line_width_1h: Math.min(6, Math.max(1, parseInt(e.target.value, 10) || 1)),
-                                    }))
-                                  }
-                                  style={{ width: "3.3rem" }}
-                                />
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="number"
-                                  min={1}
-                                  max={6}
-                                  value={elliottConfig.mtf_zigzag_line_width_15m}
-                                  onChange={(e) =>
-                                    setElliottConfig((c) => ({
-                                      ...c,
-                                      mtf_zigzag_line_width_15m: Math.min(6, Math.max(1, parseInt(e.target.value, 10) || 1)),
-                                    }))
-                                  }
-                                  style={{ width: "3.3rem" }}
-                                />
-                              </td>
+                              {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => {
+                                const k = elliottDrawingConfigKeys(tfKey).mtfZigzagLineWidth;
+                                return (
+                                  <td key={tfKey} style={{ textAlign: "center" }}>
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      max={6}
+                                      value={elliottConfig[k] as number}
+                                      onChange={(e) =>
+                                        setElliottConfig((c) => ({
+                                          ...c,
+                                          [k]: Math.min(6, Math.max(1, parseInt(e.target.value, 10) || 1)),
+                                        }))
+                                      }
+                                      style={{ width: "3.3rem" }}
+                                    />
+                                  </td>
+                                );
+                              })}
                             </tr>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>Dalga cizgisi</td>
-                              <td style={{ textAlign: "center" }}><input type="checkbox" checked={elliottConfig.show_line_4h} onChange={(e) => setElliottConfig((c) => ({ ...c, show_line_4h: e.target.checked }))} /></td>
-                              <td style={{ textAlign: "center" }}><input type="checkbox" checked={elliottConfig.show_line_1h} onChange={(e) => setElliottConfig((c) => ({ ...c, show_line_1h: e.target.checked }))} /></td>
-                              <td style={{ textAlign: "center" }}><input type="checkbox" checked={elliottConfig.show_line_15m} onChange={(e) => setElliottConfig((c) => ({ ...c, show_line_15m: e.target.checked }))} /></td>
+                              {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => {
+                                const k = elliottDrawingConfigKeys(tfKey).showLine;
+                                return (
+                                  <td key={tfKey} style={{ textAlign: "center" }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={elliottConfig[k] as boolean}
+                                      onChange={(e) => setElliottConfig((c) => ({ ...c, [k]: e.target.checked }))}
+                                    />
+                                  </td>
+                                );
+                              })}
                             </tr>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>Etiket</td>
-                              <td style={{ textAlign: "center" }}><input type="checkbox" checked={elliottConfig.show_label_4h} onChange={(e) => setElliottConfig((c) => ({ ...c, show_label_4h: e.target.checked }))} /></td>
-                              <td style={{ textAlign: "center" }}><input type="checkbox" checked={elliottConfig.show_label_1h} onChange={(e) => setElliottConfig((c) => ({ ...c, show_label_1h: e.target.checked }))} /></td>
-                              <td style={{ textAlign: "center" }}><input type="checkbox" checked={elliottConfig.show_label_15m} onChange={(e) => setElliottConfig((c) => ({ ...c, show_label_15m: e.target.checked }))} /></td>
+                              {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => {
+                                const k = elliottDrawingConfigKeys(tfKey).showLabel;
+                                return (
+                                  <td key={tfKey} style={{ textAlign: "center" }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={elliottConfig[k] as boolean}
+                                      onChange={(e) => setElliottConfig((c) => ({ ...c, [k]: e.target.checked }))}
+                                    />
+                                  </td>
+                                );
+                              })}
                             </tr>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>Cizgi renk</td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="color"
-                                  className="tv-elliott-color-swatch"
-                                  value={elliottColorInputValue(elliottConfig.mtf_wave_color_4h)}
-                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_wave_color_4h: e.target.value }))}
-                                />
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="color"
-                                  className="tv-elliott-color-swatch"
-                                  value={elliottColorInputValue(elliottConfig.mtf_wave_color_1h)}
-                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_wave_color_1h: e.target.value }))}
-                                />
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="color"
-                                  className="tv-elliott-color-swatch"
-                                  value={elliottColorInputValue(elliottConfig.mtf_wave_color_15m)}
-                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_wave_color_15m: e.target.value }))}
-                                />
-                              </td>
+                              {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => {
+                                const k = elliottDrawingConfigKeys(tfKey).mtfWaveColor;
+                                return (
+                                  <td key={tfKey} style={{ textAlign: "center" }}>
+                                    <input
+                                      type="color"
+                                      className="tv-elliott-color-swatch"
+                                      value={elliottColorInputValue(elliottConfig[k] as string)}
+                                      onChange={(e) => setElliottConfig((c) => ({ ...c, [k]: e.target.value }))}
+                                    />
+                                  </td>
+                                );
+                              })}
                             </tr>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>Etiket renk</td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="color"
-                                  className="tv-elliott-color-swatch"
-                                  value={elliottColorInputValue(elliottConfig.mtf_label_color_4h)}
-                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_label_color_4h: e.target.value }))}
-                                />
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="color"
-                                  className="tv-elliott-color-swatch"
-                                  value={elliottColorInputValue(elliottConfig.mtf_label_color_1h)}
-                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_label_color_1h: e.target.value }))}
-                                />
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="color"
-                                  className="tv-elliott-color-swatch"
-                                  value={elliottColorInputValue(elliottConfig.mtf_label_color_15m)}
-                                  onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_label_color_15m: e.target.value }))}
-                                />
-                              </td>
+                              {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => {
+                                const k = elliottDrawingConfigKeys(tfKey).mtfLabelColor;
+                                return (
+                                  <td key={tfKey} style={{ textAlign: "center" }}>
+                                    <input
+                                      type="color"
+                                      className="tv-elliott-color-swatch"
+                                      value={elliottColorInputValue(elliottConfig[k] as string)}
+                                      onChange={(e) => setElliottConfig((c) => ({ ...c, [k]: e.target.value }))}
+                                    />
+                                  </td>
+                                );
+                              })}
                             </tr>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>Cizgi tipi</td>
-                              <td style={{ textAlign: "center" }}><select value={elliottConfig.mtf_line_style_4h} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_line_style_4h: e.target.value as ElliottLineStyle }))}><option value="solid">Duz</option><option value="dotted">Nokta</option><option value="dashed">Kesik</option></select></td>
-                              <td style={{ textAlign: "center" }}><select value={elliottConfig.mtf_line_style_1h} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_line_style_1h: e.target.value as ElliottLineStyle }))}><option value="solid">Duz</option><option value="dotted">Nokta</option><option value="dashed">Kesik</option></select></td>
-                              <td style={{ textAlign: "center" }}><select value={elliottConfig.mtf_line_style_15m} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_line_style_15m: e.target.value as ElliottLineStyle }))}><option value="solid">Duz</option><option value="dotted">Nokta</option><option value="dashed">Kesik</option></select></td>
+                              {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => {
+                                const k = elliottDrawingConfigKeys(tfKey).mtfLineStyle;
+                                return (
+                                  <td key={tfKey} style={{ textAlign: "center" }}>
+                                    <select
+                                      value={elliottConfig[k] as ElliottLineStyle}
+                                      onChange={(e) =>
+                                        setElliottConfig((c) => ({ ...c, [k]: e.target.value as ElliottLineStyle }))
+                                      }
+                                    >
+                                      <option value="solid">Duz</option>
+                                      <option value="dotted">Nokta</option>
+                                      <option value="dashed">Kesik</option>
+                                    </select>
+                                  </td>
+                                );
+                              })}
                             </tr>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>Cizgi kalinligi</td>
-                              <td style={{ textAlign: "center" }}><input type="number" min={1} max={6} value={elliottConfig.mtf_line_width_4h} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_line_width_4h: Math.min(6, Math.max(1, parseInt(e.target.value, 10) || 1)) }))} style={{ width: "3.3rem" }} /></td>
-                              <td style={{ textAlign: "center" }}><input type="number" min={1} max={6} value={elliottConfig.mtf_line_width_1h} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_line_width_1h: Math.min(6, Math.max(1, parseInt(e.target.value, 10) || 1)) }))} style={{ width: "3.3rem" }} /></td>
-                              <td style={{ textAlign: "center" }}><input type="number" min={1} max={6} value={elliottConfig.mtf_line_width_15m} onChange={(e) => setElliottConfig((c) => ({ ...c, mtf_line_width_15m: Math.min(6, Math.max(1, parseInt(e.target.value, 10) || 1)) }))} style={{ width: "3.3rem" }} /></td>
+                              {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => {
+                                const k = elliottDrawingConfigKeys(tfKey).mtfLineWidth;
+                                return (
+                                  <td key={tfKey} style={{ textAlign: "center" }}>
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      max={6}
+                                      value={elliottConfig[k] as number}
+                                      onChange={(e) =>
+                                        setElliottConfig((c) => ({
+                                          ...c,
+                                          [k]: Math.min(6, Math.max(1, parseInt(e.target.value, 10) || 1)),
+                                        }))
+                                      }
+                                      style={{ width: "3.3rem" }}
+                                    />
+                                  </td>
+                                );
+                              })}
                             </tr>
                           </tbody>
                         </table>
