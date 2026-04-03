@@ -261,29 +261,6 @@ export function AcpTrendoscopeSettingsCard({
             <span className="muted">Verify bar ratio</span>
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: "0.35rem", marginTop: "1.25rem" }}>
-            <input
-              type="checkbox"
-              checked={value.scanning.ratio_diff_enabled}
-              onChange={(e) => setScan({ ratio_diff_enabled: e.target.checked })}
-            />
-            <span className="muted" title="Pine ratioDiffEnabled — üçlü tepe/dip eğim tutarlılığı (getRatioDiff).">
-              Ratio diff filter
-            </span>
-          </label>
-          <label>
-            <span className="muted" style={{ display: "block", fontSize: "0.75rem" }}>
-              ratio_diff_max (Pine ratioDiff)
-            </span>
-            <input
-              className="mono"
-              type="number"
-              step="0.01"
-              min={0.000001}
-              value={value.scanning.ratio_diff_max}
-              onChange={(e) => setScan({ ratio_diff_max: parseFloat(e.target.value) || 1 })}
-            />
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: "0.35rem", marginTop: "1.25rem" }}>
             <input type="checkbox" checked={value.scanning.avoid_overlap} onChange={(e) => setScan({ avoid_overlap: e.target.checked })} />
             <span className="muted">Avoid overlap</span>
           </label>

@@ -159,7 +159,6 @@
       "duplicatePivotWindow": "Yinelenen pivot penceresi.",
       "lastPivotDirection": "Son pivot yönü desenle uyumsuz.",
       "sizeFilter": "Kanal boyut süzgeci adayı eledi.",
-      "ratioDiff": "Üst/alt çizgi uzunluk oranı aralık dışında.",
       "entryNotInChannel": "Giriş mumu kanalın içinde değil."
     },
     "channelScan": {

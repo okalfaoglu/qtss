@@ -29,8 +29,6 @@ export function channelSixRejectMessage(t: TFunction, reject: ChannelSixRejectJs
       return t("app.channelReject.lastPivotDirection");
     case "size_filter":
       return t("app.channelReject.sizeFilter");
-    case "ratio_diff":
-      return t("app.channelReject.ratioDiff");
     case "entry_not_in_channel":
       return t("app.channelReject.entryNotInChannel");
     default:

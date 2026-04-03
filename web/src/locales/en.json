@@ -159,7 +159,6 @@
       "duplicatePivotWindow": "Duplicate pivot window.",
       "lastPivotDirection": "Last pivot direction incompatible with pattern.",
       "sizeFilter": "Channel size filter rejected candidate.",
-      "ratioDiff": "Upper/lower line length ratio out of range.",
       "entryNotInChannel": "Entry bar is not inside the channel."
     },
     "channelScan": {

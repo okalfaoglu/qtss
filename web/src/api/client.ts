@@ -628,7 +628,6 @@ export type ChannelSixRejectCode =
   | "duplicate_pivot_window"
   | "last_pivot_direction"
   | "size_filter"
-  | "ratio_diff"
   | "entry_not_in_channel";
 
 export type ChannelSixRejectJson = {

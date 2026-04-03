@@ -2,11 +2,6 @@
 -- Fresh databases only (or drop _sqlx_migrations / full DB reset).
 -- Regenerate: python3 scripts/squash_migrations_into_one.py
 
--- >>> merged from: 0001_qtss_baseline.sql
--- QTSS baseline: single migration squashed from historical NNNN_*.sql chain.
--- Fresh databases only (or drop _sqlx_migrations / full DB reset).
--- Regenerate: python3 scripts/squash_migrations_into_one.py
-
 -- >>> merged from: 0001_init.sql
 -- QTSS çekirdek şema: tek kurum (şimdilik), RBAC, config, ledger rollup, copy-trade, backtest.
 
@@ -519,19 +514,6 @@ ON CONFLICT (code) DO NOTHING;
 CREATE INDEX IF NOT EXISTS idx_bar_intervals_active ON bar_intervals (is_active, sort_order);
 
 COMMENT ON TABLE bar_intervals IS 'OHLC mum aralığı kataloğu; market_bars / engine_symbols FK ile tekrarlayan metin azaltılır.';
-
--- ACP tarama: Pine `ratioDiffEnabled` / `ratioDiff` — GUI varsayılanı ile hizalı (`analysis.rs` `default_acp_chart_patterns_json`).
-UPDATE app_config
-SET value = jsonb_set(
-    value,
-    '{scanning}',
-    coalesce(value->'scanning', '{}'::jsonb)
-      || '{"ratio_diff_enabled": false, "ratio_diff_max": 1.0}'::jsonb,
-    true
-  ),
-  updated_at = now()
-WHERE key = 'acp_chart_patterns'
-  AND (value->'scanning'->'ratio_diff_enabled' IS NULL);
 
 CREATE TABLE IF NOT EXISTS engine_symbols (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1352,18 +1334,6 @@ ON CONFLICT (code) DO NOTHING;
 CREATE INDEX IF NOT EXISTS idx_bar_intervals_active ON bar_intervals (is_active, sort_order);
 
 COMMENT ON TABLE bar_intervals IS 'OHLC mum aralığı kataloğu; market_bars / engine_symbols FK ile tekrarlayan metin azaltılır.';
-
-UPDATE app_config
-SET value = jsonb_set(
-    value,
-    '{scanning}',
-    coalesce(value->'scanning', '{}'::jsonb)
-      || '{"ratio_diff_enabled": false, "ratio_diff_max": 1.0}'::jsonb,
-    true
-  ),
-  updated_at = now()
-WHERE key = 'acp_chart_patterns'
-  AND (value->'scanning'->'ratio_diff_enabled' IS NULL);
 
 UPDATE market_bars mb
 SET bar_interval_id = bi.id
@@ -2216,91 +2186,5 @@ VALUES
     'Seconds between Binance catalog sync runs (minimum enforced in code).',
     false
   )
-ON CONFLICT (module, config_key) DO NOTHING;
-
-
--- >>> merged from: 0002_notify_telegram_system_config.sql
--- Default `system_config` rows for Telegram (`qtss-ai` `apply_notify_telegram_system_config`).
--- Empty `value` keeps Telegram off until admin fills token + chat_id (non-empty strings required).
-
-INSERT INTO system_config (module, config_key, value, schema_version, description, is_secret)
-VALUES
-    (
-        'notify',
-        'telegram_bot_token',
-        '{"value": ""}'::jsonb,
-        1,
-        'Telegram BotFather token',
-        true
-    ),
-    (
-        'notify',
-        'telegram_chat_id',
-        '{"value": ""}'::jsonb,
-        1,
-        'Telegram target chat/channel id',
-        false
-    )
-ON CONFLICT (module, config_key) DO NOTHING;
-
--- >>> merged from: 0003_engine_symbol_ingestion_state.sql
--- Per engine_symbols target: worker-maintained market_bars coverage, gaps, backfill timestamps.
-CREATE TABLE IF NOT EXISTS engine_symbol_ingestion_state (
-    engine_symbol_id UUID PRIMARY KEY REFERENCES engine_symbols (id) ON DELETE CASCADE,
-    bar_row_count INTEGER NOT NULL DEFAULT 0,
-    min_open_time TIMESTAMPTZ,
-    max_open_time TIMESTAMPTZ,
-    gap_count INTEGER NOT NULL DEFAULT 0,
-    max_gap_seconds INTEGER,
-    last_backfill_at TIMESTAMPTZ,
-    last_health_check_at TIMESTAMPTZ,
-    last_error TEXT,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_engine_symbol_ingestion_gap
-    ON engine_symbol_ingestion_state (gap_count)
-    WHERE gap_count > 0;
-
-COMMENT ON TABLE engine_symbol_ingestion_state IS
-    'Worker: market_bars row count, min/max open_time, recent gap estimate, last REST backfill and health check per engine_symbols row.';
-COMMENT ON TABLE engine_symbols IS
-    'Watched symbols with processing potential (spot or futures). Worker keeps market_bars history (REST) and live closed klines (WS) aligned per row for Binance.';
-
--- >>> merged from: 0004_worker_engine_ingest_system_config.sql
--- Engine symbol market_bars ingest loop: prefer `system_config` (env fallback; `QTSS_CONFIG_ENV_OVERRIDES=1` → env wins).
-INSERT INTO system_config (module, config_key, value, description)
-VALUES
-    (
-        'worker',
-        'engine_ingest_tick_secs',
-        '{"secs":180}'::jsonb,
-        'engine_symbol_ingest_loop sleep between full passes (seconds); env QTSS_ENGINE_INGEST_TICK_SECS; min 60 in worker.'
-    ),
-    (
-        'worker',
-        'engine_ingest_min_bars',
-        '{"value":2000}'::jsonb,
-        'REST backfill target floor per engine_symbols row (market_bars count); env QTSS_ENGINE_INGEST_MIN_BARS; clamp 120–50000.'
-    ),
-    (
-        'worker',
-        'engine_ingest_gap_window',
-        '{"value":2000}'::jsonb,
-        'Trailing bar count for gap scan (newest window); env QTSS_ENGINE_INGEST_GAP_WINDOW; clamp 100–20000.'
-    )
-ON CONFLICT (module, config_key) DO NOTHING;
-
--- >>> merged from: 0005_api_web_dev_proxy_target.sql
--- Vite dev/preview: proxy target for /api, /oauth, /health (qtss-api base URL reachable from the Node process).
--- Read by web/vite.config.ts when DATABASE_URL is set. Env override: QTSS_CONFIG_ENV_OVERRIDES=1 + QTSS_API_PROXY_TARGET.
-INSERT INTO system_config (module, config_key, value, description, is_secret)
-VALUES (
-        'api',
-        'web_dev_proxy_target',
-        '{"value":"http://127.0.0.1:8080"}'::jsonb,
-        'Vite proxy upstream (qtss-api). Set to WSL IP:8080 if preview runs on Windows and API runs in WSL.',
-        false
-    )
 ON CONFLICT (module, config_key) DO NOTHING;
 
