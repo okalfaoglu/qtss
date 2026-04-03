@@ -2042,6 +2042,13 @@ export default function App() {
     settingsQuery.length === 0 ||
     terms.some((t) => t.toLocaleLowerCase("tr-TR").includes(settingsQuery));
 
+  const drawerLoggedIn = Boolean(token?.trim());
+  useEffect(() => {
+    if (!drawerLoggedIn && drawerTab !== "general") {
+      setDrawerTab("general");
+    }
+  }, [drawerLoggedIn, drawerTab]);
+
   const jumpToHelp = useCallback((topicId: string) => {
     setDrawerOpen(true);
     setDrawerTab("help");
@@ -2275,15 +2282,18 @@ export default function App() {
               </button>
             </div>
             <div className="tv-drawer__body">
-              <div className="tv-settings__quick-search">
-                <input
-                  className="tv-topstrip__input"
-                  value={drawerSearch}
-                  onChange={(e) => setDrawerSearch(e.target.value)}
-                  placeholder={t("app.drawerPanel.searchPlaceholder")}
-                  aria-label={t("app.drawerPanel.searchInputAria")}
-                />
-              </div>
+              {drawerLoggedIn ? (
+                <div className="tv-settings__quick-search">
+                  <input
+                    className="tv-topstrip__input"
+                    value={drawerSearch}
+                    onChange={(e) => setDrawerSearch(e.target.value)}
+                    placeholder={t("app.drawerPanel.searchPlaceholder")}
+                    aria-label={t("app.drawerPanel.searchInputAria")}
+                  />
+                </div>
+              ) : null}
+              {drawerLoggedIn ? (
               <div className="tv-settings__tabs" role="tablist" aria-label={t("app.drawerPanel.tablistAria")}>
                 <button
                   type="button"
@@ -2424,7 +2434,8 @@ export default function App() {
                   {t("drawer.setting")}
                 </button>
               </div>
-              {isElliottDrawerGroup ? (
+              ) : null}
+              {drawerLoggedIn && isElliottDrawerGroup ? (
                 <div
                   className="tv-settings__tabs tv-settings__subtabs"
                   role="tablist"
