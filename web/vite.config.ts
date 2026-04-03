@@ -32,15 +32,42 @@ function qtssApiProxyTargetFromEnv(mode: string): string {
   return "http://127.0.0.1:8080";
 }
 
+/** One proxy entry per path so each `http-proxy` instance gets its own `error` listener. */
+function qtssApiProxyEntry(mode: string): ProxyOptions {
+  const target = qtssApiProxyTargetFromEnv(mode);
+  return {
+    target,
+    changeOrigin: true,
+    configure(proxy) {
+      proxy.on("error", (err, _req, res) => {
+        if (!res || typeof (res as ServerResponse).writeHead !== "function") return;
+        const r = res as ServerResponse;
+        if (r.headersSent) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        r.writeHead(502, { "Content-Type": "application/json; charset=utf-8" });
+        r.end(
+          JSON.stringify({
+            error: "proxy_upstream_unreachable",
+            error_description: `Vite proxy could not reach qtss-api at ${target} (${msg}). Set QTSS_API_PROXY_TARGET in web/.env to a URL reachable from the Node process (e.g. if preview runs on Windows and qtss-api runs in WSL, use the WSL Ethernet IP:8080, not 127.0.0.1).`,
+          }),
+        );
+      });
+    },
+  };
+}
+
+function qtssApiProxy(mode: string): Record<string, ProxyOptions> {
+  return {
+    "/api": qtssApiProxyEntry(mode),
+    "/oauth": qtssApiProxyEntry(mode),
+    "/health": qtssApiProxyEntry(mode),
+  };
+}
+
 export default defineConfig(({ mode }) => {
   const binanceProxyTarget = binanceProxyTargetFromEnv(mode);
   const binanceFapiProxyTarget = binanceFapiProxyTargetFromEnv(mode);
-  const qtssApiProxyTarget = qtssApiProxyTargetFromEnv(mode);
-  const qtssApiProxy = {
-    "/api": { target: qtssApiProxyTarget, changeOrigin: true },
-    "/oauth": { target: qtssApiProxyTarget, changeOrigin: true },
-    "/health": { target: qtssApiProxyTarget, changeOrigin: true },
-  } as const;
+  const qtssApiProxyMap = qtssApiProxy(mode);
   return {
     plugins: [react()],
     build: {
@@ -66,7 +93,7 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       proxy: {
-        ...qtssApiProxy,
+        ...qtssApiProxyMap,
         "/__binance_fapi": {
           target: binanceFapiProxyTarget,
           changeOrigin: true,
@@ -80,9 +107,10 @@ export default defineConfig(({ mode }) => {
       },
     },
     preview: {
+      host: true,
       port: 4173,
       proxy: {
-        ...qtssApiProxy,
+        ...qtssApiProxyMap,
         "/__binance_fapi": {
           target: binanceFapiProxyTarget,
           changeOrigin: true,
