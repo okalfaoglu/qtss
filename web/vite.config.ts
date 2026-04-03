@@ -1,5 +1,6 @@
+import type { ServerResponse } from "node:http";
 import react from "@vitejs/plugin-react";
-import { loadEnv } from "vite";
+import { loadEnv, type ProxyOptions } from "vite";
 import { defineConfig } from "vitest/config";
 
 /** Vite sunucusunun `/__binance` → hedef köprü tabanı (coğrafi kısıtta özelleştirilir). */
