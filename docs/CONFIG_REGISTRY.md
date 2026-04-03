@@ -40,7 +40,7 @@ Bu dosya FAZ **11.3** ile uyumludur. Bu repoda `system_config` DDL + tohumlar ta
 | `engine_ingest_min_bars` | `{"value":2000}` | `QTSS_ENGINE_INGEST_MIN_BARS` | Hedef başına minimum mum; REST backfill eşiği; `resolve_system_u64`, clamp 120–50000. |
 | `engine_ingest_gap_window` | `{"value":2000}` | `QTSS_ENGINE_INGEST_GAP_WINDOW` | Gap taraması penceresi (son N mum); clamp 100–20000. |
 
-Tohum: migration `0004_worker_engine_ingest_system_config.sql`. Öncelik: `QTSS_CONFIG_ENV_OVERRIDES=1` iken env, aksi halde `system_config`, sonra env, sonra varsayılan (`qtss_storage::config_tick`).
+Tohum: `0001_qtss_baseline.sql` içinde `-- >>> merged from: 0004_worker_engine_ingest_system_config.sql` bölümü. Öncelik: `QTSS_CONFIG_ENV_OVERRIDES=1` iken env, aksi halde `system_config`, sonra env, sonra varsayılan (`qtss_storage::config_tick`).
 
 ### `api` — Vite dev/preview proxy (Node)
 
@@ -48,7 +48,7 @@ Tohum: migration `0004_worker_engine_ingest_system_config.sql`. Öncelik: `QTSS_
 |--------------|----------------|------------|-----------|
 | `web_dev_proxy_target` | `{"value":"http://127.0.0.1:8080"}` | `QTSS_API_PROXY_TARGET` (önce `QTSS_CONFIG_ENV_OVERRIDES=1`) | `npm run dev` / `preview` sırasında `/api`, `/oauth`, `/health` proxy hedefi. Vite sürecinde `DATABASE_URL` gerekir. |
 
-Tohum: `migrations/0005_api_web_dev_proxy_target.sql`.
+Tohum: `0001_qtss_baseline.sql` içinde `-- >>> merged from: 0005_api_web_dev_proxy_target.sql` bölümü.
 
 ## Admin API
 

@@ -481,15 +481,25 @@ struct MarketContextTechnical {
 }
 
 /// Birleşik tek-hedef görünüm: TA snapshot’ları + `confluence` + ilgili `data_snapshots` (F7 / PLAN Phase C).
+/// When no `engine_symbols` row matches, `found` is `false` and remaining fields are omitted or empty (HTTP 200 — avoids browser 404 noise).
 #[derive(Serialize)]
 struct MarketContextLatestResponse {
-    pub engine_symbol_id: Uuid,
-    pub exchange: String,
-    pub segment: String,
-    pub symbol: String,
-    pub interval: String,
-    pub technical: MarketContextTechnical,
+    pub found: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_symbol_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exchange: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub technical: Option<MarketContextTechnical>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub confluence: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context_data_snapshots: Vec<DataSnapshotRow>,
 }
 
@@ -518,12 +528,20 @@ async fn get_market_context_latest_api(
         .filter(|s| !s.is_empty());
     let matches =
         list_engine_symbols_matching(&st.pool, sym_in, interval, exchange, segment).await?;
-    let row = matches.into_iter().next().ok_or_else(|| {
-        ApiError::not_found(format!(
-            "no engine_symbols row for symbol={} (optional interval/exchange/segment filters)",
-            sym_in.to_uppercase()
-        ))
-    })?;
+    let Some(row) = matches.into_iter().next() else {
+        let sym_u = sym_in.to_uppercase();
+        return Ok(Json(MarketContextLatestResponse {
+            found: false,
+            engine_symbol_id: None,
+            exchange: exchange.map(|s| s.to_string()),
+            segment: segment.map(|s| s.to_string()),
+            symbol: Some(sym_u),
+            interval: interval.map(|s| s.to_string()),
+            technical: None,
+            confluence: None,
+            context_data_snapshots: vec![],
+        }));
+    };
     let id = row.id;
     let signal_dashboard =
         fetch_analysis_snapshot_payload(&st.pool, id, "signal_dashboard").await?;
@@ -536,15 +554,16 @@ async fn get_market_context_latest_api(
         }
     }
     Ok(Json(MarketContextLatestResponse {
-        engine_symbol_id: id,
-        exchange: row.exchange,
-        segment: row.segment,
-        symbol: row.symbol,
-        interval: row.interval,
-        technical: MarketContextTechnical {
+        found: true,
+        engine_symbol_id: Some(id),
+        exchange: Some(row.exchange),
+        segment: Some(row.segment),
+        symbol: Some(row.symbol),
+        interval: Some(row.interval),
+        technical: Some(MarketContextTechnical {
             signal_dashboard,
             trading_range,
-        },
+        }),
         confluence,
         context_data_snapshots,
     }))

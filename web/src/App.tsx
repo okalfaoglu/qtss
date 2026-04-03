@@ -23,6 +23,7 @@ import {
   fetchDataSnapshots,
   fetchExternalFetchSources,
   fetchMarketContextLatest,
+  marketContextLatestHasEngineRow,
   fetchMarketContextSummary,
   fetchOnchainSignalsBreakdown,
   fetchConfluenceSnapshotsLatest,
@@ -4416,9 +4417,11 @@ export default function App() {
                             {!barSymbol.trim() ? (
                               <span>Üst çubukta sembol seçin.</span>
                             ) : !marketContext ? (
+                              <span>Market context yüklenemedi (ağ veya oturum).</span>
+                            ) : !marketContextLatestHasEngineRow(marketContext) ? (
                               <span>
-                                Bu exchange/segment/symbol/interval için <code>engine_symbols</code> yok veya API 404 —
-                                motor hedefini ekleyin.
+                                Bu exchange/segment/symbol/interval için <code>engine_symbols</code> satırı yok — Motor
+                                sekmesinden hedef ekleyin.
                               </span>
                             ) : (
                               <>
@@ -4477,10 +4480,10 @@ export default function App() {
                                     </div>
                                   );
                                 })()}
-                                {marketContext.context_data_snapshots.length === 0 ? (
+                                {(marketContext.context_data_snapshots ?? []).length === 0 ? (
                                   <div className="muted">context data_snapshots: yok</div>
                                 ) : (
-                                  marketContext.context_data_snapshots.map((row) => (
+                                  (marketContext.context_data_snapshots ?? []).map((row) => (
                                     <div key={row.source_key} style={{ marginBottom: "0.25rem" }}>
                                       ctx <strong>{row.source_key}</strong>
                                       {row.error ? <span className="err"> {row.error}</span> : null}
@@ -4637,8 +4640,10 @@ export default function App() {
                         {!barSymbol.trim() ? (
                           <span>Sembol seçin — üst çubuktan.</span>
                         ) : !contextTabSingle ? (
+                          <span>Özet yüklenemedi (ağ veya oturum).</span>
+                        ) : !marketContextLatestHasEngineRow(contextTabSingle) ? (
                           <span>
-                            Bu hedef için <code>engine_symbols</code> yok veya 404 — Motor sekmesinden hedef ekleyin.
+                            Bu hedef için <code>engine_symbols</code> satırı yok — Motor sekmesinden hedef ekleyin.
                           </span>
                         ) : (
                           <>
@@ -4716,10 +4721,10 @@ export default function App() {
                                 </div>
                               );
                             })()}
-                            {contextTabSingle.context_data_snapshots.length === 0 ? (
+                            {(contextTabSingle.context_data_snapshots ?? []).length === 0 ? (
                               <div className="muted">İlgili data_snapshots: yok</div>
                             ) : (
-                              contextTabSingle.context_data_snapshots.map((row) => (
+                              (contextTabSingle.context_data_snapshots ?? []).map((row) => (
                                 <div key={row.source_key} style={{ marginBottom: "0.22rem" }}>
                                   <strong>{row.source_key}</strong>
                                   {row.error ? <span className="err"> {row.error}</span> : null} · {row.computed_at}

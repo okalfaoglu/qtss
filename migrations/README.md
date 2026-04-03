@@ -4,15 +4,13 @@ Applied at API/worker startup via `qtss_storage::run_migrations` (SQLx).
 
 ## Current layout (squashed baseline)
 
-The historical chain (`0001` … `0063`) was merged into a **single** file for simpler deploys and fewer checksum edges:
+Tek dosya:
 
-- **`0001_qtss_baseline.sql`** — full schema + seeds + alters, in the same order as the old numbered files.
-- **`0002_notify_telegram_system_config.sql`** — placeholder `notify.telegram_bot_token` / `notify.telegram_chat_id` (empty until configured).
-- **`0003_engine_symbol_ingestion_state.sql`** — `engine_symbol_ingestion_state` (worker `market_bars` health per `engine_symbols` row).
-- **`0004_worker_engine_ingest_system_config.sql`** — `system_config` seeds for `worker.engine_ingest_*` (tick, min bars, gap window).
-- **`0005_api_web_dev_proxy_target.sql`** — `system_config` `api.web_dev_proxy_target` (Vite `/api` `/oauth` `/health` proxy; read when `DATABASE_URL` is set in the Node process).
+- **`0001_qtss_baseline.sql`** — tüm şema + tohumlar + sonradan eklenen parçalar (`-- >>> merged from: NNNN_*.sql` bölüm başlıklarıyla). Eski zincir `0001`…`0063` ve ayrı `0002`…`0005` parçaları burada birleşiktir.
 
-**Regenerate** (after editing split files in a branch, or restoring from VCS history):
+Yeni şema değişikliği: geçici olarak `0002_yeni.sql` ekleyip `python3 scripts/squash_migrations_into_one.py` ile tekrar tek dosyaya indir (veya üretimde zaten uygulanmış baseline’ı elleme — yeni numaralı dosya + squash / dokümantasyondaki reset kuralları).
+
+**Regenerate** (split dosyalar varken veya git’ten eski `migrations/*.sql` seti geri alındıktan sonra):
 
 ```bash
 # From repo root; requires Python 3
@@ -21,7 +19,7 @@ python3 scripts/squash_migrations_into_one.py
 py -3 scripts/squash_migrations_into_one.py
 ```
 
-The script expects at least one `NNNN_*.sql` input **other than** `0001_qtss_baseline.sql`. If only the baseline file exists, it prints instructions and exits successfully (nothing to do).
+The script expects at least one `NNNN_*.sql` input **other than** `0001_qtss_baseline.sql`. Yalnız `0001_qtss_baseline.sql` varsa talimat yazıp çıkar (nothing to do).
 
 To re-squash from git history, check out the old `migrations/*.sql` set (move the current baseline aside if it blocks checkout), run the script, then commit.
 
@@ -35,6 +33,6 @@ Databases that already applied the **old** multi-file chain (`_sqlx_migrations` 
 
 ## Rules (summary)
 
-- One numeric prefix per file in the folder (e.g. `0001_*.sql`, `0002_*.sql`, …).
-- Do not edit an already-applied migration in production; add a new numbered file or re-squash with a DB reset.
+- Normal durumda dizinde **tek** `0001_qtss_baseline.sql` olur. Geçici çalışmada birden fazla `NNNN_*.sql` varken aynı numara iki dosyada kullanılamaz.
+- Üretimde uygulanmış baseline satırını değiştirme; yeni delta için yeni numaralı dosya + squash veya yeni boş DB ile baseline yenileme.
 - If your workflow uses offline SQLx query data, refresh it after schema changes (`qtss-sync-sqlx-checksums` / project conventions).

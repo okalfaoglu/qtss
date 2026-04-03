@@ -1041,18 +1041,36 @@ export async function fetchExternalFetchSources(accessToken: string): Promise<Ex
 
 /** PLAN F7 Phase C — tek hedef için TA + confluence + ilgili `data_snapshots`. */
 export type MarketContextLatestApiResponse = {
+  /** `false` when no matching `engine_symbols` row (HTTP 200; older APIs omitted this — treat as true if `engine_symbol_id` is set). */
+  found?: boolean;
+  engine_symbol_id?: string;
+  exchange?: string;
+  segment?: string;
+  symbol?: string;
+  interval?: string;
+  technical?: {
+    signal_dashboard: unknown | null;
+    trading_range: unknown | null;
+  };
+  confluence?: unknown | null;
+  context_data_snapshots?: DataSnapshotApiRow[];
+};
+
+/** True when API returned a matching `engine_symbols` row (supports legacy JSON without `found`). */
+export function marketContextLatestHasEngineRow(
+  r: MarketContextLatestApiResponse | null | undefined,
+): r is MarketContextLatestApiResponse & {
   engine_symbol_id: string;
   exchange: string;
   segment: string;
   symbol: string;
   interval: string;
-  technical: {
-    signal_dashboard: unknown | null;
-    trading_range: unknown | null;
-  };
-  confluence: unknown | null;
-  context_data_snapshots: DataSnapshotApiRow[];
-};
+  technical: NonNullable<MarketContextLatestApiResponse["technical"]>;
+} {
+  if (!r) return false;
+  if (r.found === false) return false;
+  return Boolean(r.engine_symbol_id?.trim() && r.technical);
+}
 
 export async function fetchMarketContextLatest(
   accessToken: string,
@@ -1065,7 +1083,6 @@ export async function fetchMarketContextLatest(
   if (q.segment?.trim()) params.set("segment", q.segment.trim().toLowerCase());
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/market-context/latest?${params}`, accessToken, {});
   const t = await r.text();
-  if (r.status === 404) return null;
   if (!r.ok) throwQtssApiError("market-context/latest", r, t);
   return JSON.parse(t) as MarketContextLatestApiResponse;
 }
