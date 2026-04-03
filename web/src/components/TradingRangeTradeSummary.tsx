@@ -1,11 +1,16 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { EngineSnapshotJoinedApiRow, EngineSymbolApiRow } from "../api/client";
+import { TradingRangeEngineEvalDialog } from "./TradingRangeEngineEvalDialog";
+import type { EngineTargetLookup } from "../lib/engineTargetMatch";
 import type { RangeSetupFromEvents } from "../lib/rangeSetupsFromEvents";
 import { setupPnlPct, setupPnlPctAfterFees } from "../lib/rangeSetupsFromEvents";
 
 type Props = {
   setups: RangeSetupFromEvents[];
   takerFraction: number | null;
+  engineSnapshots: EngineSnapshotJoinedApiRow[];
+  engineSymbols: EngineSymbolApiRow[];
 };
 
 function maxAbsPnL(setups: RangeSetupFromEvents[], takerFraction: number | null): number {
@@ -71,8 +76,9 @@ function PnlMeter({
   );
 }
 
-export function TradingRangeTradeSummary({ setups, takerFraction }: Props) {
+export function TradingRangeTradeSummary({ setups, takerFraction, engineSnapshots, engineSymbols }: Props) {
   const { t } = useTranslation();
+  const [evalTarget, setEvalTarget] = useState<EngineTargetLookup | null>(null);
   const maxAbs = useMemo(() => maxAbsPnL(setups, takerFraction), [setups, takerFraction]);
 
   if (setups.length === 0) {
@@ -85,6 +91,13 @@ export function TradingRangeTradeSummary({ setups, takerFraction }: Props) {
 
   return (
     <div className="tv-tr-ts-root">
+      <TradingRangeEngineEvalDialog
+        open={evalTarget != null}
+        target={evalTarget}
+        engineSnapshots={engineSnapshots}
+        engineSymbols={engineSymbols}
+        onClose={() => setEvalTarget(null)}
+      />
       <div className="tv-tr-ts-cards">
         {setups.map((row) => {
           const pnl = setupPnlPct(row);
@@ -100,7 +113,6 @@ export function TradingRangeTradeSummary({ setups, takerFraction }: Props) {
               : "—";
           const sideClass =
             row.side === "short" ? "tv-tr-ts-card--short" : "tv-tr-ts-card--long";
-          const venueLine = `${row.exchange} · ${row.segment} · ${row.symbol} · ${row.interval}`;
           return (
             <article key={row.id} className={`tv-tr-ts-card ${sideClass}`}>
               <header className="tv-tr-ts-card-head">
@@ -116,7 +128,23 @@ export function TradingRangeTradeSummary({ setups, takerFraction }: Props) {
                 </span>
               </header>
               <p className="mono muted" style={{ fontSize: "0.65rem", margin: "0.2rem 0 0.35rem", lineHeight: 1.35 }}>
-                {venueLine}
+                {row.exchange} · {row.segment} ·{" "}
+                <button
+                  type="button"
+                  className="tv-tr-ts-symbol-btn"
+                  title={t("app.tradingRangeSetup.symbolOpenEval")}
+                  onClick={() =>
+                    setEvalTarget({
+                      exchange: row.exchange,
+                      segment: row.segment,
+                      symbol: row.symbol,
+                      interval: row.interval,
+                    })
+                  }
+                >
+                  {row.symbol}
+                </button>{" "}
+                · {row.interval}
               </p>
               <div className="tv-tr-ts-flow">
                 <div className="tv-tr-ts-flow-col">
@@ -238,7 +266,21 @@ export function TradingRangeTradeSummary({ setups, takerFraction }: Props) {
                       {row.segment}
                     </td>
                     <td style={{ padding: "0.18rem 0.35rem", whiteSpace: "nowrap" }}>
-                      {row.symbol}
+                      <button
+                        type="button"
+                        className="tv-tr-ts-symbol-btn"
+                        title={t("app.tradingRangeSetup.symbolOpenEval")}
+                        onClick={() =>
+                          setEvalTarget({
+                            exchange: row.exchange,
+                            segment: row.segment,
+                            symbol: row.symbol,
+                            interval: row.interval,
+                          })
+                        }
+                      >
+                        {row.symbol}
+                      </button>
                     </td>
                     <td style={{ padding: "0.18rem 0.35rem", whiteSpace: "nowrap" }}>
                       {row.interval}

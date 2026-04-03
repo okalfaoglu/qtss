@@ -1,9 +1,14 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { RangeSignalEventApiRow } from "../api/client";
+import type { EngineSnapshotJoinedApiRow, EngineSymbolApiRow, RangeSignalEventApiRow } from "../api/client";
+import { TradingRangeEngineEvalDialog } from "./TradingRangeEngineEvalDialog";
+import type { EngineTargetLookup } from "../lib/engineTargetMatch";
 import { payloadOptionalNumber } from "../lib/parseRangeSignalPayload";
 
 type Props = {
   events: RangeSignalEventApiRow[];
+  engineSnapshots: EngineSnapshotJoinedApiRow[];
+  engineSymbols: EngineSymbolApiRow[];
 };
 
 function formatPx(n: number | null): string {
@@ -19,8 +24,9 @@ function eventBadgeClass(kind: string): string {
   return "tv-tr-setup-badge tv-tr-setup-badge--other";
 }
 
-export function TradingRangeSetupTable({ events }: Props) {
+export function TradingRangeSetupTable({ events, engineSnapshots, engineSymbols }: Props) {
   const { t } = useTranslation();
+  const [evalTarget, setEvalTarget] = useState<EngineTargetLookup | null>(null);
 
   if (events.length === 0) {
     return (
@@ -32,6 +38,13 @@ export function TradingRangeSetupTable({ events }: Props) {
 
   return (
     <div className="tv-tr-setup-wrap">
+      <TradingRangeEngineEvalDialog
+        open={evalTarget != null}
+        target={evalTarget}
+        engineSnapshots={engineSnapshots}
+        engineSymbols={engineSymbols}
+        onClose={() => setEvalTarget(null)}
+      />
       <table className="tv-tr-setup-table">
         <thead>
           <tr>
@@ -60,7 +73,23 @@ export function TradingRangeSetupTable({ events }: Props) {
                 </td>
                 <td className="tv-tr-setup-mono">{ev.exchange}</td>
                 <td className="tv-tr-setup-mono">{ev.segment}</td>
-                <td className="tv-tr-setup-mono tv-tr-setup-symbol">{ev.symbol}</td>
+                <td className="tv-tr-setup-mono tv-tr-setup-symbol">
+                  <button
+                    type="button"
+                    className="tv-tr-setup-symbol-btn"
+                    title={t("app.tradingRangeEventsSetup.symbolOpenEval")}
+                    onClick={() =>
+                      setEvalTarget({
+                        exchange: ev.exchange,
+                        segment: ev.segment,
+                        symbol: ev.symbol,
+                        interval: ev.interval,
+                      })
+                    }
+                  >
+                    {ev.symbol}
+                  </button>
+                </td>
                 <td className="tv-tr-setup-mono">{ev.interval}</td>
                 <td className="tv-tr-setup-enter">
                   <span className="tv-tr-setup-enter-px">{formatPx(enter)}</span>

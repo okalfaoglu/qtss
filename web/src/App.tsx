@@ -3877,7 +3877,11 @@ export default function App() {
                             <HelpCrossLink topicId="engine-range-signals" onOpen={jumpToHelp} label="SSS" />
                           </p>
                           {token ? (
-                            <TradingRangeSetupTable events={engineRangeSignals} />
+                            <TradingRangeSetupTable
+                              events={engineRangeSignals}
+                              engineSnapshots={engineSnapshots}
+                              engineSymbols={engineSymbols}
+                            />
                           ) : (
                             <p className="muted">{t("app.tradingRangeDrawer.loginHint")}</p>
                           )}
@@ -3897,6 +3901,8 @@ export default function App() {
                             <TradingRangeTradeSummary
                               setups={chartRangeSetups}
                               takerFraction={tradingRangeTakerFraction}
+                              engineSnapshots={engineSnapshots}
+                              engineSymbols={engineSymbols}
                             />
                           ) : (
                             <p className="muted">{t("app.tradingRangeDrawer.loginHint")}</p>
