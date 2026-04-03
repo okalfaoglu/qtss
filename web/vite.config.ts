@@ -22,19 +22,8 @@ function binanceFapiProxyTargetFromEnv(mode: string): string {
   return "https://fapi.binance.com";
 }
 
-/** `qtss-api` base URL for Vite dev/preview proxies (`/api`, `/oauth`, `/health`). Not exposed to the browser bundle. */
-function qtssApiProxyTargetFromEnv(mode: string): string {
-  const env = loadEnv(mode, process.cwd(), "");
-  const raw = env.QTSS_API_PROXY_TARGET?.trim() ?? "";
-  if (raw && /^https?:\/\//i.test(raw)) {
-    return raw.replace(/\/$/, "");
-  }
-  return "http://127.0.0.1:8080";
-}
-
 /** One proxy entry per path so each `http-proxy` instance gets its own `error` listener. */
-function qtssApiProxyEntry(mode: string): ProxyOptions {
-  const target = qtssApiProxyTargetFromEnv(mode);
+function qtssApiProxyEntry(target: string): ProxyOptions {
   return {
     target,
     changeOrigin: true,
@@ -48,7 +37,7 @@ function qtssApiProxyEntry(mode: string): ProxyOptions {
         r.end(
           JSON.stringify({
             error: "proxy_upstream_unreachable",
-            error_description: `Vite proxy could not reach qtss-api at ${target} (${msg}). Set QTSS_API_PROXY_TARGET in web/.env to a URL reachable from the Node process (e.g. if preview runs on Windows and qtss-api runs in WSL, use the WSL Ethernet IP:8080, not 127.0.0.1).`,
+            error_description: `Vite proxy could not reach qtss-api at ${target} (${msg}). Set system_config api.web_dev_proxy_target (or QTSS_API_PROXY_TARGET when QTSS_CONFIG_ENV_OVERRIDES=1). Ensure DATABASE_URL is set in the Vite process so the config can be read from PostgreSQL.`,
           }),
         );
       });
@@ -56,18 +45,21 @@ function qtssApiProxyEntry(mode: string): ProxyOptions {
   };
 }
 
-function qtssApiProxy(mode: string): Record<string, ProxyOptions> {
+function qtssApiProxyMapForTarget(target: string): Record<string, ProxyOptions> {
+  const entry = qtssApiProxyEntry(target);
   return {
-    "/api": qtssApiProxyEntry(mode),
-    "/oauth": qtssApiProxyEntry(mode),
-    "/health": qtssApiProxyEntry(mode),
+    "/api": entry,
+    "/oauth": entry,
+    "/health": entry,
   };
 }
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(async ({ mode }) => {
+  const { resolveQtssApiProxyTarget } = await import("./scripts/resolveQtssApiProxyTarget.mjs");
+  const qtssApiProxyTarget = await resolveQtssApiProxyTarget(mode);
   const binanceProxyTarget = binanceProxyTargetFromEnv(mode);
   const binanceFapiProxyTarget = binanceFapiProxyTargetFromEnv(mode);
-  const qtssApiProxyMap = qtssApiProxy(mode);
+  const qtssApiProxyMap = qtssApiProxyMapForTarget(qtssApiProxyTarget);
   return {
     plugins: [react()],
     build: {

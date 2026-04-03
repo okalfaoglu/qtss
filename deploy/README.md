@@ -122,7 +122,7 @@ Node **18+** gerekir. `setup-web-rocky9.sh` Node 16 gibi eski sürüm görürse 
 
 ### 2. Ortam (`web/.env`)
 
-`web/.env.example` → `web/.env`. **Zorunlu:** `VITE_OAUTH_CLIENT_SECRET`, `VITE_DEV_PASSWORD` (seed ile aynı). `QTSS_API_PROXY_TARGET` yalnız Vite proxy içindir; API farklı host/port’taysa ayarlayın (`deploy/systemd/qtss-web.service.example` içinde de verilebilir).
+`web/.env.example` → `web/.env`. **Zorunlu:** `VITE_OAUTH_CLIENT_SECRET`, `VITE_DEV_PASSWORD` (seed ile aynı). Vite proxy hedefi: PostgreSQL `system_config` `api.web_dev_proxy_target` (`DATABASE_URL` ile okunur); acil durumda `QTSS_CONFIG_ENV_OVERRIDES=1` + `QTSS_API_PROXY_TARGET`. systemd: `deploy/systemd/qtss-web.service.example`.
 
 ### 3. Elle derleme ve önizleme
 
@@ -140,7 +140,7 @@ Ağdan erişim: `http://<sunucu>:4173/` (`0.0.0.0` dinler). Yerelde denemek: `np
 ```bash
 sudo cp /app/qtss/deploy/systemd/qtss-web.service.example /etc/systemd/system/qtss-web.service
 sudo nano /etc/systemd/system/qtss-web.service
-# WorkingDirectory, QTSS_API_PROXY_TARGET, gerekirse npm yolu (/usr/bin/npm)
+# WorkingDirectory, DATABASE_URL (Vite reads api.web_dev_proxy_target), gerekirse npm yolu (/usr/bin/npm)
 sudo systemctl daemon-reload
 sudo systemctl enable --now qtss-web
 journalctl -u qtss-web -f

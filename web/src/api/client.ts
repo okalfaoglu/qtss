@@ -228,7 +228,7 @@ export async function fetchWebOAuthBootstrap(): Promise<WebOAuthBootstrapApi> {
   if (!r.ok) {
     const emptyServerError = r.status >= 500 && !t.trim();
     const hint = emptyServerError
-      ? " (Often: qtss-api not running, wrong VITE_API_BASE / QTSS_API_PROXY_TARGET, or reverse proxy returning an empty 5xx. Check API logs.)"
+      ? " (Often: qtss-api not running, wrong VITE_API_BASE, system_config api.web_dev_proxy_target / Vite DATABASE_URL, or reverse proxy empty 5xx. Check API logs.)"
       : "";
     throwQtssApiError("bootstrap/web-oauth-client", r, t, hint);
   }

@@ -10,6 +10,7 @@ The historical chain (`0001` … `0063`) was merged into a **single** file for s
 - **`0002_notify_telegram_system_config.sql`** — placeholder `notify.telegram_bot_token` / `notify.telegram_chat_id` (empty until configured).
 - **`0003_engine_symbol_ingestion_state.sql`** — `engine_symbol_ingestion_state` (worker `market_bars` health per `engine_symbols` row).
 - **`0004_worker_engine_ingest_system_config.sql`** — `system_config` seeds for `worker.engine_ingest_*` (tick, min bars, gap window).
+- **`0005_api_web_dev_proxy_target.sql`** — `system_config` `api.web_dev_proxy_target` (Vite `/api` `/oauth` `/health` proxy; read when `DATABASE_URL` is set in the Node process).
 
 **Regenerate** (after editing split files in a branch, or restoring from VCS history):
 

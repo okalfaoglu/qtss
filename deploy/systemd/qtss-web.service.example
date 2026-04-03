@@ -9,8 +9,9 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/app/qtss/web
 Environment=NODE_ENV=production
-# Where `qtss-api` listens (same machine). Used only by Vite preview proxy, not sent to browsers.
-Environment=QTSS_API_PROXY_TARGET=http://127.0.0.1:8080
+# Vite reads `system_config` `api.web_dev_proxy_target` when DATABASE_URL is set (same DB as qtss-api).
+Environment=DATABASE_URL=postgres://qtss:CHANGEME@127.0.0.1:5432/qtss
+# Optional: QTSS_CONFIG_ENV_OVERRIDES=1 and QTSS_API_PROXY_TARGET=... to bypass DB for the proxy target.
 ExecStart=/usr/bin/npm run preview:bind
 Restart=on-failure
 RestartSec=3

@@ -42,6 +42,14 @@ Bu dosya FAZ **11.3** ile uyumludur. Bu repoda `system_config` DDL + tohumlar ta
 
 Tohum: migration `0004_worker_engine_ingest_system_config.sql`. Öncelik: `QTSS_CONFIG_ENV_OVERRIDES=1` iken env, aksi halde `system_config`, sonra env, sonra varsayılan (`qtss_storage::config_tick`).
 
+### `api` — Vite dev/preview proxy (Node)
+
+| `config_key` | `value` örneği | Env yedeği | Açıklama |
+|--------------|----------------|------------|-----------|
+| `web_dev_proxy_target` | `{"value":"http://127.0.0.1:8080"}` | `QTSS_API_PROXY_TARGET` (önce `QTSS_CONFIG_ENV_OVERRIDES=1`) | `npm run dev` / `preview` sırasında `/api`, `/oauth`, `/health` proxy hedefi. Vite sürecinde `DATABASE_URL` gerekir. |
+
+Tohum: `migrations/0005_api_web_dev_proxy_target.sql`.
+
 ## Admin API
 
 - `GET/POST/DELETE /api/v1/admin/system-config` — `?module=` filtresi; **admin** rolü.
