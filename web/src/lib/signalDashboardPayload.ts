@@ -130,11 +130,25 @@ function classifyStatusDisplay(valueStr: string): DashboardValueTone {
 }
 
 function classifyTrendDisplay(valueStr: string): DashboardValueTone {
+  const u = valueStr.trim().toUpperCase();
+  if (u === "LONG") return "bull";
+  if (u === "SHORT") return "bear";
   const v = valueStr.trim().toLowerCase();
   if (v === "up" || v === "yukarı" || v === "yukari") return "bull";
   if (v === "down" || v === "aşağı" || v === "asagi") return "bear";
   if (v === "off" || v === "closed" || v === "kapalı" || v === "kapali" || v === "none") return "muted";
   return "default";
+}
+
+/** UI copy: show LONG/SHORT instead of worker `up`/`down` (and TR equivalents) for trend axes. */
+export function trendAxisDisplayAsLongShort(raw: string): string {
+  if (raw === "—") return raw;
+  const t = raw.trim();
+  if (!t) return raw;
+  const v = t.toLowerCase();
+  if (v === "up" || v === "yukarı" || v === "yukari") return "LONG";
+  if (v === "down" || v === "aşağı" || v === "asagi") return "SHORT";
+  return t;
 }
 
 function classifyMomentumDisplay(valueStr: string): DashboardValueTone {

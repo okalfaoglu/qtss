@@ -9,6 +9,7 @@ import {
   pickDashboardNum,
   pickDashboardStr,
   signalDashboardRowAccent,
+  trendAxisDisplayAsLongShort,
   type DashboardValueTone,
   type SignalDashboardPayload,
 } from "../lib/signalDashboardPayload";
@@ -64,7 +65,7 @@ function listRowSecondary(snapshot: EngineSnapshotJoinedApiRow): {
         : "—";
   return {
     status: pickDashboardStr(v2?.status, p.durum),
-    localTrend: pickDashboardStr(v2?.local_trend, p.yerel_trend),
+    localTrend: trendAxisDisplayAsLongShort(pickDashboardStr(v2?.local_trend, p.yerel_trend)),
     positionStrength: posStr,
   };
 }
@@ -211,8 +212,14 @@ function SignalDashboardDetailBody({ snapshot }: { snapshot: EngineSnapshotJoine
           {rk("statusModelRaw", pickDashboardStr(v2?.status_model_raw, p.durum_model_raw))}
           {rk("directionPolicyDb", p.signal_direction_mode ?? "—")}
           {rk("directionEffective", p.signal_direction_effective ?? "—")}
-          {rk("localTrend", pickDashboardStr(v2?.local_trend, p.yerel_trend))}
-          {rk("globalTrend", pickDashboardStr(v2?.global_trend, p.global_trend))}
+          {rk(
+            "localTrend",
+            trendAxisDisplayAsLongShort(pickDashboardStr(v2?.local_trend, p.yerel_trend)),
+          )}
+          {rk(
+            "globalTrend",
+            trendAxisDisplayAsLongShort(pickDashboardStr(v2?.global_trend, p.global_trend)),
+          )}
           {rk("marketMode", pickDashboardStr(v2?.market_mode, p.piyasa_modu))}
           {rk("entryMode", pickDashboardStr(v2?.entry_mode, p.giris_modu))}
           {rk(

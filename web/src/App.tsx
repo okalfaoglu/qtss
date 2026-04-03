@@ -144,6 +144,7 @@ import {
   pickDashboardBool,
   pickDashboardNum,
   pickDashboardStr,
+  trendAxisDisplayAsLongShort,
   type SignalDashboardPayload,
 } from "./lib/signalDashboardPayload";
 import { canAdmin, canOps, type AuthSession } from "./lib/rbac";
@@ -4833,8 +4834,12 @@ export default function App() {
                                 v2?.market_mode,
                                 typeof d?.piyasa_modu === "string" ? d.piyasa_modu : undefined,
                               );
-                              const yerel = pickDashboardStr(v2?.local_trend, p?.yerel_trend);
-                              const gbl = pickDashboardStr(v2?.global_trend, p?.global_trend);
+                              const yerel = trendAxisDisplayAsLongShort(
+                                pickDashboardStr(v2?.local_trend, p?.yerel_trend),
+                              );
+                              const gbl = trendAxisDisplayAsLongShort(
+                                pickDashboardStr(v2?.global_trend, p?.global_trend),
+                              );
                               return (
                                 <div style={{ marginBottom: "0.3rem" }}>
                                   TA: <strong>durum</strong> {durum} · <strong>piyasa_modu</strong> {piyasa}
