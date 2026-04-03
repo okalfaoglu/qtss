@@ -3664,9 +3664,6 @@ export default function App() {
                       ) : null}
                       {tradingRangeSubtab === "setup" ? (
                         <div className="card">
-                          <p className="tv-drawer__section-head" style={{ marginBottom: "0.25rem" }}>
-                            {t("app.tradingRangeEventsSetup.sectionTitle")}
-                          </p>
                           <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.4rem", lineHeight: 1.45 }}>
                             {t("app.tradingRangeEventsSetup.intro")}{" "}
                             <HelpCrossLink topicId="engine-range-signals" onOpen={jumpToHelp} label="SSS" />
@@ -3678,6 +3675,8 @@ export default function App() {
                                 engineSnapshots={engineSnapshots}
                                 toolbarExchange={barExchange}
                                 toolbarSegment={barSegment}
+                                toolbarSymbol={barSymbol}
+                                toolbarInterval={barInterval}
                               />
                               <p
                                 className="tv-drawer__section-head"

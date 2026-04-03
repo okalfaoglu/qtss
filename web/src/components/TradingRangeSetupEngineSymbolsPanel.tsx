@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { EngineSnapshotJoinedApiRow, EngineSymbolApiRow } from "../api/client";
-import type { EngineTargetLookup } from "../lib/engineTargetMatch";
+import { normalizeEngineMarketSegment, type EngineTargetLookup } from "../lib/engineTargetMatch";
 import {
   classifyTradingRangeSnapshotRow,
   engineSymbolMatchesToolbarVenue,
@@ -14,6 +14,8 @@ type Props = {
   engineSnapshots: EngineSnapshotJoinedApiRow[];
   toolbarExchange: string;
   toolbarSegment: string;
+  toolbarSymbol: string;
+  toolbarInterval: string;
 };
 
 function targetFromSymbolRow(row: EngineSymbolApiRow): EngineTargetLookup {
@@ -30,21 +32,28 @@ export function TradingRangeSetupEngineSymbolsPanel({
   engineSnapshots,
   toolbarExchange,
   toolbarSegment,
+  toolbarSymbol,
+  toolbarInterval,
 }: Props) {
   const { t } = useTranslation();
   const [evalTarget, setEvalTarget] = useState<EngineTargetLookup | null>(null);
 
   const rows = useMemo(() => {
     return engineSymbols
-      .filter((r) => engineSymbolMatchesToolbarVenue(r, toolbarExchange, toolbarSegment))
       .slice()
       .sort((a, b) => {
         if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+        const ex = a.exchange.localeCompare(b.exchange);
+        if (ex !== 0) return ex;
+        const seg = normalizeEngineMarketSegment(a.segment).localeCompare(
+          normalizeEngineMarketSegment(b.segment),
+        );
+        if (seg !== 0) return seg;
         const sym = a.symbol.localeCompare(b.symbol);
         if (sym !== 0) return sym;
         return a.interval.localeCompare(b.interval);
       });
-  }, [engineSymbols, toolbarExchange, toolbarSegment]);
+  }, [engineSymbols]);
 
   return (
     <div className="tv-tr-eng-setup">
@@ -60,12 +69,17 @@ export function TradingRangeSetupEngineSymbolsPanel({
       </p>
       {rows.length === 0 ? (
         <p className="muted" style={{ fontSize: "0.72rem", margin: 0 }}>
-          {t("app.tradingRangeEventsSetup.engineListEmptyVenue")}
+          {t("app.tradingRangeEventsSetup.engineListEmptyGlobal")}
         </p>
       ) : (
         <div className="tv-tr-eng-list" role="list">
           {rows.map((row) => {
             const target = targetFromSymbolRow(row);
+            const venueMatch = engineSymbolMatchesToolbarVenue(row, toolbarExchange, toolbarSegment);
+            const chartMatch =
+              venueMatch &&
+              row.symbol.trim().toUpperCase() === toolbarSymbol.trim().toUpperCase() &&
+              row.interval.trim() === toolbarInterval.trim();
             const trSnap = findTradingRangeSnapshotForTarget(engineSnapshots, target);
             const cl = classifyTradingRangeSnapshotRow(trSnap);
             let rowClass = "tv-tr-eng-list__row tv-tr-eng-list__row--muted";
@@ -112,6 +126,7 @@ export function TradingRangeSetupEngineSymbolsPanel({
             }
             const symU = row.symbol.trim().toUpperCase();
             const disabled = !row.enabled;
+            const venueLine = `${row.exchange.trim()}/${normalizeEngineMarketSegment(row.segment)}`;
             return (
               <button
                 key={row.id}
@@ -123,7 +138,9 @@ export function TradingRangeSetupEngineSymbolsPanel({
                     ? t("app.tradingRangeEventsSetup.engineRowDisabledHint")
                     : t("app.tradingRangeEventsSetup.engineRowOpenHint")
                 }
-                className={`${rowClass}${disabled ? " tv-tr-eng-list__row--disabled" : ""}`}
+                className={`${rowClass}${disabled ? " tv-tr-eng-list__row--disabled" : ""}${
+                  chartMatch ? " tv-tr-eng-list__row--chart-full" : venueMatch ? " tv-tr-eng-list__row--chart-venue" : ""
+                }`}
                 onClick={() => {
                   if (!disabled) setEvalTarget(target);
                 }}
@@ -131,9 +148,17 @@ export function TradingRangeSetupEngineSymbolsPanel({
                 <div className="tv-tr-eng-list__row-top">
                   <span className="mono tv-tr-eng-list__sym">{symU}</span>
                   <span className="mono muted tv-tr-eng-list__iv">{row.interval}</span>
+                  {chartMatch ? (
+                    <span className="tv-tr-eng-list__pill-chart">{t("app.tradingRangeEventsSetup.badgeChartTarget")}</span>
+                  ) : venueMatch ? (
+                    <span className="tv-tr-eng-list__pill-venue">{t("app.tradingRangeEventsSetup.badgeToolbarVenue")}</span>
+                  ) : null}
                   {!row.enabled ? (
                     <span className="tv-tr-eng-list__pill-off">{t("app.tradingRangeEventsSetup.badgeDisabled")}</span>
                   ) : null}
+                </div>
+                <div className="muted mono tv-tr-eng-list__venue-line" style={{ fontSize: "0.62rem" }}>
+                  {venueLine}
                 </div>
                 <div className="muted mono tv-tr-eng-list__meta" style={{ fontSize: "0.65rem" }}>
                   {row.label?.trim() || "—"}

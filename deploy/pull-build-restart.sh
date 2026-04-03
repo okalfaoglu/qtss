@@ -11,7 +11,9 @@
 #   SKIP_WEB=1          — skip npm build
 #   SKIP_RESTART=1      — skip systemctl restart
 #   GIT_REMOTE          — default: origin
-#   GIT_PULL_ARGS       — extra args for git pull (default: --ff-only)
+#   GIT_PULL_REBASE=1   — after fetch, `git rebase origin/<branch>` (local commits replay on top)
+#   GIT_PULL_MERGE=1    — after fetch, `git merge --no-edit origin/<branch>` (merge commit if needed)
+#   (default)           — `git merge --ff-only` only; fails if branches diverged — see deploy README note
 #   SUDO                — default: sudo (use "" if root)
 #   CARGO_PACKAGES      — default: "-p qtss-api -p qtss-worker"; empty string = full workspace
 set -euo pipefail
@@ -21,11 +23,6 @@ cd "$ROOT"
 
 SUDO="${SUDO:-sudo}"
 REMOTE="${GIT_REMOTE:-origin}"
-PULL_ARGS=(--ff-only)
-if [[ -n "${GIT_PULL_ARGS:-}" ]]; then
-  # shellcheck disable=SC2206
-  PULL_ARGS=(${GIT_PULL_ARGS})
-fi
 UNITS="${QTSS_SYSTEMD_UNITS:-qtss-api qtss-worker qtss-web}"
 # unset → api+worker; CARGO_PACKAGES="" → entire workspace; else use verbatim
 if [[ -z "${CARGO_PACKAGES+x}" ]]; then
@@ -39,8 +36,28 @@ fi
 log() { printf '%s\n' "$*"; }
 
 if [[ "${SKIP_GIT:-0}" != "1" ]]; then
-  log "==> git: pull ${REMOTE} ($(git rev-parse --abbrev-ref HEAD))"
-  git pull "${REMOTE}" "${PULL_ARGS[@]}"
+  BR=$(git rev-parse --abbrev-ref HEAD)
+  UPSTREAM="${REMOTE}/${BR}"
+  log "==> git: fetch ${REMOTE} (${BR})"
+  git fetch "${REMOTE}"
+  if [[ "${GIT_PULL_REBASE:-0}" == "1" ]]; then
+    log "==> git: rebase onto ${UPSTREAM}"
+    git rebase "${UPSTREAM}"
+  elif [[ "${GIT_PULL_MERGE:-0}" == "1" ]]; then
+    log "==> git: merge ${UPSTREAM}"
+    git merge --no-edit "${UPSTREAM}"
+  else
+    if ! git merge --ff-only "${UPSTREAM}"; then
+      log ""
+      log "Git: fast-forward not possible (divergent branches). Typical on a server after a local commit that was never pushed."
+      log "Pick one:"
+      log "  1) Discard local commits and match GitHub:  git fetch ${REMOTE} && git reset --hard ${UPSTREAM} && chmod +x deploy/pull-build-restart.sh"
+      log "  2) Replay local on top of remote:        GIT_PULL_REBASE=1 $0"
+      log "  3) Merge remote into local:               GIT_PULL_MERGE=1 $0"
+      log ""
+      exit 1
+    fi
+  fi
 else
   log "==> git: skipped (SKIP_GIT=1)"
 fi

@@ -151,3 +151,19 @@ journalctl -u qtss-web -f
 ### 5. nginx (isteğe bağlı)
 
 İsterseniz `web/dist`’i nginx `root` yapıp `location /api/`, `/oauth/`, `/health` için `proxy_pass` ile backend’e yönlendirin; grafik için `/__binance` köprüsü gerekirse aynı mantıkla Binance hedefine proxy eklenir — ayrıntı için `web/vite.config.ts` ile hizalayın.
+
+### 6. `deploy/pull-build-restart.sh` ve sunucuda dallanma
+
+Betik varsayılan olarak `git fetch` + `git merge --ff-only origin/<mevcut dal>` kullanır. Sunucuda root ile yapılan ve **push edilmeyen** yerel commit (ör. yalnızca `chmod +x`) varken GitHub’da `main` ilerlediyse dallar ayrılır ve fast-forward olmaz.
+
+**Yalnızca GitHub’daki kodla birebir eşitlemek istiyorsanız** (çoğu deploy sunucusu):
+
+```bash
+cd /app/qtss
+git fetch origin
+git reset --hard origin/main
+chmod +x deploy/pull-build-restart.sh
+```
+
+Yerel commit’i koruyup üste almak için: `GIT_PULL_REBASE=1 ./deploy/pull-build-restart.sh`  
+Birleştirmek için: `GIT_PULL_MERGE=1 ./deploy/pull-build-restart.sh`
