@@ -6,7 +6,6 @@
  * 3) QTSS_API_PROXY_TARGET
  * 4) http://127.0.0.1:8080
  */
-import postgres from "postgres";
 import { loadEnv } from "vite";
 
 const ENV_KEY = "QTSS_API_PROXY_TARGET";
@@ -60,6 +59,7 @@ export async function resolveQtssApiProxyTarget(mode) {
   const dbUrl = env.DATABASE_URL?.trim() || env.QTSS_DATABASE_URL?.trim() || "";
 
   if (dbUrl) {
+    const { default: postgres } = await import("postgres");
     const sql = postgres(dbUrl, { max: 1 });
     try {
       const rows = await sql`
