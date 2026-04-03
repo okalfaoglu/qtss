@@ -155,6 +155,26 @@ export function AcpTrendoscopeSettingsCard({
           Tarama (scanning)
         </summary>
         <div className="tv-acp__grid" style={{ marginTop: "0.5rem" }}>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.35rem",
+              gridColumn: "1 / -1",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={value.scanning.auto_scan_on_timeframe_change}
+              onChange={(e) => setScan({ auto_scan_on_timeframe_change: e.target.checked })}
+            />
+            <span
+              className="muted"
+              title="Sembol veya üst şeritteki timeframe (interval) değişince kanal (ACP) taramasını otomatik çalıştırır; grafik yüklendiğinde de tetiklenir."
+            >
+              ACP Analiz
+            </span>
+          </label>
           <label>
             <span className="muted" style={{ display: "block", fontSize: "0.75rem" }}>
               Pivot sayısı
@@ -268,24 +288,6 @@ export function AcpTrendoscopeSettingsCard({
             <input type="checkbox" checked={value.scanning.repaint} onChange={(e) => setScan({ repaint: e.target.checked })} />
             <span className="muted" title="Açık: son (oluşan) mum taramada kullanılır. Kapalı: TV gibi yalnız kapanmış mumlar.">
               Repaint (açık mum)
-            </span>
-          </label>
-          <label
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "0.35rem",
-              marginTop: "1.25rem",
-              gridColumn: "1 / -1",
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={value.scanning.auto_scan_on_timeframe_change}
-              onChange={(e) => setScan({ auto_scan_on_timeframe_change: e.target.checked })}
-            />
-            <span className="muted" title="Üst şeritteki timeframe (interval) her değiştiğinde kanal taramasını otomatik çalıştırır.">
-              Timeframe değişince otomatik kanal taraması
             </span>
           </label>
           <label>

@@ -534,7 +534,7 @@ export function runElliottEngineV2(input: ElliottEngineInputV2): ElliottEngineOu
   const states: ElliottEngineOutputV2["states"] = {};
   const zigzagParamsByTf: Partial<Record<Timeframe, ZigzagParams>> = {};
 
-  const ordered: Timeframe[] = ["4h", "1h", "15m"];
+  const ordered: Timeframe[] = ["1w", "1d", "4h", "1h", "15m"];
   for (const tf of ordered) {
     const rows = input.byTimeframe[tf];
     if (!rows?.length) continue;

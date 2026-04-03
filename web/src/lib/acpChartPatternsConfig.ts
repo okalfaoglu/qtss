@@ -46,7 +46,7 @@ export type AcpScanning = {
   lower_direction: number;
   /** Pine `ScanProperties.ignoreIfEntryCrossed`. */
   ignore_if_entry_crossed: boolean;
-  /** Açıkken üst şerit timeframe değişince kanal taraması otomatik çalışır. */
+  /** ACP Analiz: sembol / timeframe değişince (ve grafik yüklendiğinde) kanal taraması otomatik. */
   auto_scan_on_timeframe_change: boolean;
   size_filters: AcpSizeFilters;
 };
@@ -178,7 +178,7 @@ export const DEFAULT_ACP_CONFIG: AcpChartPatternsConfig = {
     upper_direction: 1,
     lower_direction: -1,
     ignore_if_entry_crossed: false,
-    /** Grafik (sembol/TF) yüklendiğinde ve TF değişince kanal taraması; ACP çizimi için gerekli. */
+    /** ACP Analiz — grafik yüklendiğinde ve sembol/TF değişince kanal taraması. */
     auto_scan_on_timeframe_change: true,
     size_filters: { ...DEFAULT_SIZE_FILTERS },
   },

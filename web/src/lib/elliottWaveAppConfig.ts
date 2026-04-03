@@ -9,50 +9,47 @@ import {
 
 export type { ElliottPatternMenuToggles };
 
-/** Dalga türü anahtarları — her TF için ayrı açılıp kapatılır (motor + çizim). */
-export type ElliottPatternMenuByTf = {
-  "4h": ElliottPatternMenuToggles;
-  "1h": ElliottPatternMenuToggles;
-  "15m": ElliottPatternMenuToggles;
+/** Motor + desen menüsü sütunları (kaba → ince). Grafik çizim katmanı hâlâ 4h/1h/15m. */
+export const ELLIOTT_ANALYSIS_TIMEFRAMES = ["1w", "1d", "4h", "1h", "15m"] as const;
+export type ElliottAnalysisTimeframe = (typeof ELLIOTT_ANALYSIS_TIMEFRAMES)[number];
+
+export const ELLIOTT_ANALYSIS_TIMEFRAME_LABELS: Record<ElliottAnalysisTimeframe, string> = {
+  "1w": "1W",
+  "1d": "1D",
+  "4h": "4H",
+  "1h": "1H",
+  "15m": "15M",
 };
+
+/** Dalga türü anahtarları — her TF için ayrı açılıp kapatılır (motor + çizim). */
+export type ElliottPatternMenuByTf = Record<ElliottAnalysisTimeframe, ElliottPatternMenuToggles>;
 
 export function defaultPatternMenuByTf(base?: ElliottPatternMenuToggles): ElliottPatternMenuByTf {
   const m = { ...DEFAULT_ELLIOTT_PATTERN_MENU, ...base };
-  return { "4h": { ...m }, "1h": { ...m }, "15m": { ...m } };
+  return {
+    "1w": { ...m },
+    "1d": { ...m },
+    "4h": { ...m },
+    "1h": { ...m },
+    "15m": { ...m },
+  };
 }
 
 /** Geriye dönük: tek `pattern_menu` alanını «herhangi bir TF açık mı?» olarak birleştirir. */
 export function mergePatternMenuOrTf(m: ElliottPatternMenuByTf): ElliottPatternMenuToggles {
   return {
-    motive_impulse:
-      m["4h"].motive_impulse || m["1h"].motive_impulse || m["15m"].motive_impulse,
-    motive_diagonal_leading:
-      m["4h"].motive_diagonal_leading ||
-      m["1h"].motive_diagonal_leading ||
-      m["15m"].motive_diagonal_leading,
-    motive_diagonal_ending:
-      m["4h"].motive_diagonal_ending ||
-      m["1h"].motive_diagonal_ending ||
-      m["15m"].motive_diagonal_ending,
-    corrective_zigzag:
-      m["4h"].corrective_zigzag || m["1h"].corrective_zigzag || m["15m"].corrective_zigzag,
-    corrective_flat:
-      m["4h"].corrective_flat || m["1h"].corrective_flat || m["15m"].corrective_flat,
-    corrective_triangle:
-      m["4h"].corrective_triangle || m["1h"].corrective_triangle || m["15m"].corrective_triangle,
-    corrective_complex_double:
-      m["4h"].corrective_complex_double ||
-      m["1h"].corrective_complex_double ||
-      m["15m"].corrective_complex_double,
-    corrective_complex_triple:
-      m["4h"].corrective_complex_triple ||
-      m["1h"].corrective_complex_triple ||
-      m["15m"].corrective_complex_triple,
+    motive_impulse: ELLIOTT_ANALYSIS_TIMEFRAMES.some((tf) => m[tf].motive_impulse),
+    motive_diagonal_leading: ELLIOTT_ANALYSIS_TIMEFRAMES.some((tf) => m[tf].motive_diagonal_leading),
+    motive_diagonal_ending: ELLIOTT_ANALYSIS_TIMEFRAMES.some((tf) => m[tf].motive_diagonal_ending),
+    corrective_zigzag: ELLIOTT_ANALYSIS_TIMEFRAMES.some((tf) => m[tf].corrective_zigzag),
+    corrective_flat: ELLIOTT_ANALYSIS_TIMEFRAMES.some((tf) => m[tf].corrective_flat),
+    corrective_triangle: ELLIOTT_ANALYSIS_TIMEFRAMES.some((tf) => m[tf].corrective_triangle),
+    corrective_complex_double: ELLIOTT_ANALYSIS_TIMEFRAMES.some((tf) => m[tf].corrective_complex_double),
+    corrective_complex_triple: ELLIOTT_ANALYSIS_TIMEFRAMES.some((tf) => m[tf].corrective_complex_triple),
   };
 }
 
-
-export function patternMenuForTf(c: ElliottWaveConfig, tf: keyof ElliottPatternMenuByTf): ElliottPatternMenuToggles {
+export function patternMenuForTf(c: ElliottWaveConfig, tf: ElliottAnalysisTimeframe): ElliottPatternMenuToggles {
   return { ...DEFAULT_ELLIOTT_PATTERN_MENU, ...c.pattern_menu_by_tf[tf] };
 }
 
@@ -125,6 +122,8 @@ export type ElliottWaveConfig = {
    * İleri formasyon projeksiyonu (ABC / sonraki itki segmentleri; tavsiye değil).
    * Ana itki açıkken ve analiz varsa son mumdan itibaren çizilir.
    */
+  show_projection_1w: boolean;
+  show_projection_1d: boolean;
   show_projection_4h: boolean;
   show_projection_1h: boolean;
   show_projection_15m: boolean;
@@ -160,6 +159,10 @@ export type ElliottWaveConfig = {
   elliott_zigzag_depth_1h: number;
   /** Elliott V2 ZigZag depth — 15M MTF. */
   elliott_zigzag_depth_15m: number;
+  /** Elliott V2 ZigZag depth — 1D MTF (motor; grafik katmanı ayrı). */
+  elliott_zigzag_depth_1d: number;
+  /** Elliott V2 ZigZag depth — 1W MTF (motor; grafik katmanı ayrı). */
+  elliott_zigzag_depth_1w: number;
   /** @deprecated Eski alan; normalize `elliott_zigzag_depth` ile doldurulur. */
   swing_depth: number;
   max_pivot_windows: number;
@@ -239,6 +242,8 @@ export const DEFAULT_ELLIOTT_WAVE_CONFIG: ElliottWaveConfig = {
   formations: {
     impulse: true,
   },
+  show_projection_1w: false,
+  show_projection_1d: false,
   show_projection_4h: false,
   show_projection_1h: false,
   show_projection_15m: false,
@@ -252,6 +257,8 @@ export const DEFAULT_ELLIOTT_WAVE_CONFIG: ElliottWaveConfig = {
   elliott_zigzag_depth_4h: 21,
   elliott_zigzag_depth_1h: 21,
   elliott_zigzag_depth_15m: 21,
+  elliott_zigzag_depth_1d: 21,
+  elliott_zigzag_depth_1w: 21,
   swing_depth: 21,
   max_pivot_windows: 120,
   pattern_menu: { ...DEFAULT_ELLIOTT_PATTERN_MENU },
@@ -331,6 +338,8 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
   const elliott_zigzag_depth_4h = zzDepth("elliott_zigzag_depth_4h");
   const elliott_zigzag_depth_1h = zzDepth("elliott_zigzag_depth_1h");
   const elliott_zigzag_depth_15m = zzDepth("elliott_zigzag_depth_15m");
+  const elliott_zigzag_depth_1d = zzDepth("elliott_zigzag_depth_1d");
+  const elliott_zigzag_depth_1w = zzDepth("elliott_zigzag_depth_1w");
 
   const max_pivot_windows =
     typeof raw.max_pivot_windows === "number" && Number.isFinite(raw.max_pivot_windows)
@@ -346,6 +355,13 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
     if (legacyShowProj === false) return false;
     return base[key];
   };
+  const projTriCoarse = (key: "show_projection_1w" | "show_projection_1d") => {
+    const v = raw[key];
+    if (typeof v === "boolean") return v;
+    return base[key];
+  };
+  const show_projection_1w = projTriCoarse("show_projection_1w");
+  const show_projection_1d = projTriCoarse("show_projection_1d");
   const show_projection_4h = projTri("show_projection_4h");
   const show_projection_1h = projTri("show_projection_1h");
   const show_projection_15m = projTri("show_projection_15m");
@@ -410,7 +426,7 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
   let pattern_menu_by_tf = defaultPatternMenuByTf(pattern_menu);
   const pmTfRaw = raw.pattern_menu_by_tf;
   if (isRecord(pmTfRaw)) {
-    const tfPatch = (tf: keyof ElliottPatternMenuByTf) => {
+    const tfPatch = (tf: ElliottAnalysisTimeframe) => {
       const o = pmTfRaw[tf];
       if (!isRecord(o)) return pattern_menu_by_tf[tf];
       const legacyDiag = typeof o["motive_diagonal"] === "boolean" ? o["motive_diagonal"] : undefined;
@@ -442,11 +458,9 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
         corrective_complex_triple: z("corrective_complex_triple"),
       };
     };
-    pattern_menu_by_tf = {
-      "4h": tfPatch("4h"),
-      "1h": tfPatch("1h"),
-      "15m": tfPatch("15m"),
-    };
+    pattern_menu_by_tf = Object.fromEntries(
+      ELLIOTT_ANALYSIS_TIMEFRAMES.map((tf) => [tf, tfPatch(tf)]),
+    ) as ElliottPatternMenuByTf;
   }
 
   pattern_menu = mergePatternMenuOrTf(pattern_menu_by_tf);
@@ -497,6 +511,8 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
     version: 1,
     enabled,
     formations,
+    show_projection_1w,
+    show_projection_1d,
     show_projection_4h,
     show_projection_1h,
     show_projection_15m,
@@ -510,6 +526,8 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
     elliott_zigzag_depth_4h,
     elliott_zigzag_depth_1h,
     elliott_zigzag_depth_15m,
+    elliott_zigzag_depth_1d,
+    elliott_zigzag_depth_1w,
     swing_depth,
     max_pivot_windows,
     pattern_menu,

@@ -620,6 +620,8 @@ export function TvChartPane({
     if (fitSessionKey !== lastFitSessionKeyRef.current) {
       lastFitSessionKeyRef.current = fitSessionKey;
       chart.timeScale().fitContent();
+      // Yeni sembol yüklendiğinde önceki serilerin (ör. BTC çizgileri) bıraktığı fiyat aralığını sıfırla.
+      series.priceScale().applyOptions({ autoScale: true });
     }
     extendTimeScaleForElliottProjection(chart, data, patternLayers ?? null);
   }, [bars, pivotMarkers, patternLayers, pivotLabelMarkers, patternLabelMarkers, fitSessionKey, theme]);

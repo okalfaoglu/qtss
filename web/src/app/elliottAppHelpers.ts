@@ -1,6 +1,7 @@
 import type { PatternLayerOverlay } from "../lib/patternDrawingBatchOverlay";
 import {
   mergePatternMenuOrTf,
+  type ElliottAnalysisTimeframe,
   type ElliottWaveConfig,
 } from "../lib/elliottWaveAppConfig";
 import type { ElliottPatternMenuToggles } from "../lib/elliottPatternMenuCatalog";
@@ -27,7 +28,7 @@ export function isV2RawZigzagKind(kind: PatternLayerOverlay["zigzagKind"] | unde
 
 export function patchPatternMenuTf(
   c: ElliottWaveConfig,
-  tf: "4h" | "1h" | "15m",
+  tf: ElliottAnalysisTimeframe,
   key: keyof ElliottPatternMenuToggles,
   checked: boolean,
 ): ElliottWaveConfig {

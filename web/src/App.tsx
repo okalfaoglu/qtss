@@ -71,9 +71,6 @@ import {
 } from "./lib/patternDrawingBatchOverlay";
 import { ChannelScanMatchesTable } from "./components/ChannelScanMatchesTable";
 import { AiDecisionsPanel } from "./components/AiDecisionsPanel";
-import { AiDashboardPanel } from "./components/AiDashboardPanel";
-import { AiPerformancePanel } from "./components/AiPerformancePanel";
-import { AiSettingsPanel } from "./components/AiSettingsPanel";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import { OperationsQueuesPanel } from "./components/OperationsQueuesPanel";
 import i18n from "./i18n";
@@ -91,7 +88,10 @@ import { SignalDashboardDrawerPanel } from "./components/SignalDashboardDrawerPa
 import { TradeDashboardPanel } from "./components/TradeDashboardPanel";
 import {
   DEFAULT_ELLIOTT_WAVE_CONFIG,
+  ELLIOTT_ANALYSIS_TIMEFRAMES,
+  ELLIOTT_ANALYSIS_TIMEFRAME_LABELS,
   ELLIOTT_WAVE_CONFIG_KEY,
+  defaultPatternMenuByTf,
   mtfWaveColorsFromConfig,
   mtfZigzagColorsFromConfig,
   normalizeElliottWaveConfig,
@@ -105,9 +105,11 @@ import { buildSwingPivots } from "./lib/elliottImpulseDetect";
 import {
   buildElliottProjectionOverlayV2,
   buildMtfFramesV2,
+  chartIntervalToAnchorTimeframe,
   runElliottEngineV2,
   v2ToChartOverlays,
   type OhlcV2,
+  type Timeframe,
 } from "./lib/elliottEngineV2";
 import {
   ACP_CHART_PATTERNS_CONFIG_KEY,
@@ -157,7 +159,7 @@ import {
   TRADING_RANGE_DRAWER_REFRESH_MS,
   SIGNAL_DASHBOARD_DRAWER_REFRESH_MS,
 } from "./app/drawerRefreshConstants";
-import type { Theme, SettingsTab, TradingRangeDrawerSubtab, AiDrawerSubtab, ElliottLineStyle } from "./app/appTypes";
+import type { Theme, SettingsTab, TradingRangeDrawerSubtab, ElliottLineStyle } from "./app/appTypes";
 import { readChartDefaults, readLivePollMs } from "./app/chartEnv";
 import { normalizeMarketSegment, chartToolbarSegmentSelectValue } from "./app/marketSegment";
 import {
@@ -189,7 +191,6 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<SettingsTab>("general");
   const [tradingRangeSubtab, setTradingRangeSubtab] = useState<TradingRangeDrawerSubtab>("main");
-  const [aiSubtab, setAiSubtab] = useState<AiDrawerSubtab>("ai_dashboard");
   const [drawerSearch, setDrawerSearch] = useState("");
   const [helpFocusId, setHelpFocusId] = useState<string | null>(null);
   const isElliottDrawerGroup =
@@ -354,6 +355,8 @@ export default function App() {
 
   /** Aynı anda birden fazla yükleme: yalnızca son isteğin cevabı `setBars` uygular (BTC→ETH yarışı). */
   const chartLoadSeqRef = useRef(0);
+  /** Sembol değişimi / temizleme sonrası biten eski `channel-six` cevabı `setLastChannelScan` ile grafiği bozmasın. */
+  const channelScanEpochRef = useRef(0);
   const livePollEpochRef = useRef(0);
   const symbolSuggestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -372,6 +375,8 @@ export default function App() {
   const runChannelSixScanWithBars = useCallback(
     async (barsInput: ChartOhlcRow[]) => {
       if (!token || !barsInput.length) return;
+      channelScanEpochRef.current += 1;
+      const scanEpoch = channelScanEpochRef.current;
       setChannelScanError("");
       setChannelScanJson("");
       setChannelScanLoading(true);
@@ -382,6 +387,7 @@ export default function App() {
           acpConfig.scanning.repaint,
         );
         if (!scanWindow.length) {
+          if (scanEpoch !== channelScanEpochRef.current) return;
           setChannelScanError(
             acpConfig.scanning.repaint
               ? t("app.channelScan.errorInsufficientRepaint")
@@ -397,6 +403,7 @@ export default function App() {
         const payload = chartOhlcRowsToScanBars(scanWindow);
         const base = acpConfigToChannelSixOptions(acpConfig, theme);
         const res = await scanChannelSix(token, { bars: payload, ...(base as Record<string, unknown>) });
+        if (scanEpoch !== channelScanEpochRef.current) return;
         setLastChannelScan(res);
         setLastChannelScanBars(scanWindow.slice());
         setChannelScanJson(JSON.stringify(res, null, 2));
@@ -479,13 +486,17 @@ export default function App() {
           );
         }
       } catch (e) {
-        setChannelScanError(String(e));
-        setLastChannelScan(null);
-        setLastChannelScanBars(null);
-        setChannelScanSummary("");
-        setChannelScanHoverTitle("");
+        if (scanEpoch === channelScanEpochRef.current) {
+          setChannelScanError(String(e));
+          setLastChannelScan(null);
+          setLastChannelScanBars(null);
+          setChannelScanSummary("");
+          setChannelScanHoverTitle("");
+        }
       } finally {
-        setChannelScanLoading(false);
+        if (scanEpoch === channelScanEpochRef.current) {
+          setChannelScanLoading(false);
+        }
       }
     },
     [t, i18n.language, token, acpConfig, theme],
@@ -504,11 +515,7 @@ export default function App() {
     ...DEFAULT_ELLIOTT_WAVE_CONFIG,
     formations: { ...DEFAULT_ELLIOTT_WAVE_CONFIG.formations },
     pattern_menu: { ...DEFAULT_ELLIOTT_WAVE_CONFIG.pattern_menu },
-    pattern_menu_by_tf: {
-      "4h": { ...DEFAULT_ELLIOTT_WAVE_CONFIG.pattern_menu_by_tf["4h"] },
-      "1h": { ...DEFAULT_ELLIOTT_WAVE_CONFIG.pattern_menu_by_tf["1h"] },
-      "15m": { ...DEFAULT_ELLIOTT_WAVE_CONFIG.pattern_menu_by_tf["15m"] },
-    },
+    pattern_menu_by_tf: defaultPatternMenuByTf(),
   }));
   const [elliottLoadErr, setElliottLoadErr] = useState("");
   const [elliottSaveErr, setElliottSaveErr] = useState("");
@@ -570,9 +577,7 @@ export default function App() {
   const [showDbOpenPositionLine, setShowDbOpenPositionLine] = useState(true);
   const [signalDashboardAutoRefresh, setSignalDashboardAutoRefresh] = useState(false);
   const [tradingRangeAutoRefresh, setTradingRangeAutoRefresh] = useState(false);
-  const [elliottV2Frames, setElliottV2Frames] = useState<
-    Partial<Record<"15m" | "1h" | "4h", OhlcV2[]>> | null
-  >(null);
+  const [elliottV2Frames, setElliottV2Frames] = useState<Partial<Record<Timeframe, OhlcV2[]>> | null>(null);
   const ohlcFromBinance = useMemo(
     () => chartUsesBinanceRestForOhlc(chartOhlcMode, token, barExchange, barSegment),
     [chartOhlcMode, token, barExchange, barSegment],
@@ -687,16 +692,23 @@ export default function App() {
 
   /** Grafik intervali ile aynı TF’nin ZigZag derinliği (panel swing sayımı). */
   const chartElliottZigzagDepth = useMemo(() => {
+    const iv = barInterval.trim().toLowerCase();
     const raw =
-      barInterval === "4h"
-        ? elliottConfig.elliott_zigzag_depth_4h
-        : barInterval === "1h"
-          ? elliottConfig.elliott_zigzag_depth_1h
-          : elliottConfig.elliott_zigzag_depth_15m;
+      iv === "1w" || iv === "1wk"
+        ? elliottConfig.elliott_zigzag_depth_1w
+        : iv === "1d" || iv === "d"
+          ? elliottConfig.elliott_zigzag_depth_1d
+          : iv === "4h"
+            ? elliottConfig.elliott_zigzag_depth_4h
+            : iv === "1h"
+              ? elliottConfig.elliott_zigzag_depth_1h
+              : elliottConfig.elliott_zigzag_depth_15m;
     const d = Math.floor(raw);
     return Math.min(100, Math.max(2, Number.isFinite(d) ? d : 21));
   }, [
     barInterval,
+    elliottConfig.elliott_zigzag_depth_1w,
+    elliottConfig.elliott_zigzag_depth_1d,
     elliottConfig.elliott_zigzag_depth_4h,
     elliottConfig.elliott_zigzag_depth_1h,
     elliottConfig.elliott_zigzag_depth_15m,
@@ -734,13 +746,13 @@ export default function App() {
     let alive = true;
     const run = async () => {
       try {
-        if (ohlcFromBinance && !bars?.length) {
+        if (!bars?.length) {
           if (alive) setElliottV2Frames(null);
           return;
         }
         const lim = Math.min(50_000, Math.max(120, parseInt(barLimit, 10) || 500));
-        const intervals: Array<"15m" | "1h" | "4h"> = ["15m", "1h", "4h"];
-        const byTf: Partial<Record<"15m" | "1h" | "4h", OhlcV2[]>> = {};
+        const intervals: Timeframe[] = ["15m", "1h", "4h", "1d", "1w"];
+        const byTf: Partial<Record<Timeframe, OhlcV2[]>> = {};
         const chronoMain = bars?.length ? chartOhlcRowsSortedChrono(bars) : [];
         const rangeStartMs =
           chronoMain.length > 0 ? new Date(chronoMain[0]!.open_time).getTime() : null;
@@ -812,7 +824,7 @@ export default function App() {
     if (!bars?.length) return null;
     const anchorRows = toOhlcV2(bars);
     if (!anchorRows.length) return null;
-    const tf = barInterval === "4h" ? "4h" : barInterval === "1h" ? "1h" : "15m";
+    const tf = chartIntervalToAnchorTimeframe(barInterval);
     const fallback = buildMtfFramesV2(anchorRows, tf);
     const byTimeframe =
       elliottV2Frames && Object.keys(elliottV2Frames).length ? elliottV2Frames : fallback;
@@ -824,6 +836,8 @@ export default function App() {
         backstep: 3,
       },
       zigzagDepthByTimeframe: {
+        "1w": Math.min(100, Math.max(2, Math.floor(elliottConfig.elliott_zigzag_depth_1w))),
+        "1d": Math.min(100, Math.max(2, Math.floor(elliottConfig.elliott_zigzag_depth_1d))),
         "4h": Math.min(100, Math.max(2, Math.floor(elliottConfig.elliott_zigzag_depth_4h))),
         "1h": Math.min(100, Math.max(2, Math.floor(elliottConfig.elliott_zigzag_depth_1h))),
         "15m": Math.min(100, Math.max(2, Math.floor(elliottConfig.elliott_zigzag_depth_15m))),
@@ -837,6 +851,8 @@ export default function App() {
     elliottConfig.elliott_zigzag_depth_15m,
     elliottConfig.elliott_zigzag_depth_1h,
     elliottConfig.elliott_zigzag_depth_4h,
+    elliottConfig.elliott_zigzag_depth_1d,
+    elliottConfig.elliott_zigzag_depth_1w,
     elliottConfig.max_pivot_windows,
     elliottConfig.pattern_menu_by_tf,
     elliottV2Frames,
@@ -1142,10 +1158,14 @@ export default function App() {
 
   const anyElliottProjection = useMemo(
     () =>
+      elliottConfig.show_projection_1w ||
+      elliottConfig.show_projection_1d ||
       elliottConfig.show_projection_4h ||
       elliottConfig.show_projection_1h ||
       elliottConfig.show_projection_15m,
     [
+      elliottConfig.show_projection_1w,
+      elliottConfig.show_projection_1d,
       elliottConfig.show_projection_15m,
       elliottConfig.show_projection_1h,
       elliottConfig.show_projection_4h,
@@ -1391,6 +1411,8 @@ export default function App() {
   }, [lastChannelScan, channelScanOverlayBars, theme, multiOverlay?.pivotLabels?.length]);
 
   const clearChannelScanUi = useCallback(() => {
+    channelScanEpochRef.current += 1;
+    setChannelScanLoading(false);
     setLastChannelScan(null);
     setLastChannelScanBars(null);
     setChannelScanSummary("");
@@ -1722,6 +1744,7 @@ export default function App() {
   const loadChartFromToolbar = useCallback(async () => {
     const seq = ++chartLoadSeqRef.current;
     clearChannelScanUi();
+    setElliottV2Frames(null);
     setBarsError("");
     setBarsLoading(true);
     setBars(null);
@@ -2423,16 +2446,6 @@ export default function App() {
                 <button
                   type="button"
                   role="tab"
-                  aria-selected={drawerTab === "ai"}
-                  className={`tv-settings__tab ${drawerTab === "ai" ? "is-active" : ""}`}
-                  onClick={() => setDrawerTab("ai")}
-                  style={drawerTab === "ai" ? { borderColor: "#ce93d8" } : undefined}
-                >
-                  AI
-                </button>
-                <button
-                  type="button"
-                  role="tab"
                   aria-selected={drawerTab === "notify"}
                   className={`tv-settings__tab ${drawerTab === "notify" ? "is-active" : ""}`}
                   onClick={() => setDrawerTab("notify")}
@@ -2788,10 +2801,10 @@ export default function App() {
                         }}
                       >
                         <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }}>
-                          Sol sütun: dalga / katman türü; üstte timeframe: 4H / 1H / 15M. «ZigZag (depth)» her TF için
-                          ZigZag fraktal penceresi (mum). «ZigZag (pivot)» ham pivot hattıdır; «Dalga çizgisi» itki ve
-                          düzeltme segmentleri için geçerlidir. «Gelecek Dalga (Tahmin)» yalnızca o anki grafik
-                          periyodunun sütunu için çizilir (ör. 1H mumda 1H kutusu).
+                          Sol sütun: dalga / katman türü; üst sıra: 1W, 1D, 4H, 1H, 15M — Elliott V2 motoru ve desen
+                          menüsü. «ZigZag (depth)» bu beş TF için motor ZigZag penceresi. Alttaki tablo yalnızca 4H / 1H /
+                          15M grafik katmanı (pivot, renk, dalga çizgisi) içindir. «Gelecek Dalga (Tahmin)» grafikte
+                          şimdilik 4H / 1H / 15M ile çizilir; 1W / 1D kutuları ayar olarak saklanır.
                         </p>
                         <div className="tv-elliott-panel__row" style={{ marginBottom: "0.35rem" }}>
                           <label className="tv-elliott-panel__toggle">
@@ -2812,9 +2825,14 @@ export default function App() {
                           <thead>
                             <tr>
                               <th style={{ textAlign: "left", padding: "0.25rem 0.2rem" }}>Ayar</th>
-                              <th style={{ textAlign: "center", padding: "0.25rem 0.2rem" }}>4H</th>
-                              <th style={{ textAlign: "center", padding: "0.25rem 0.2rem" }}>1H</th>
-                              <th style={{ textAlign: "center", padding: "0.25rem 0.2rem" }}>15M</th>
+                              {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => (
+                                <th
+                                  key={tfKey}
+                                  style={{ textAlign: "center", padding: "0.25rem 0.2rem" }}
+                                >
+                                  {ELLIOTT_ANALYSIS_TIMEFRAME_LABELS[tfKey]}
+                                </th>
+                              ))}
                             </tr>
                           </thead>
                           <tbody>
@@ -2822,7 +2840,7 @@ export default function App() {
                               row.type === "label" ? (
                                 <tr key={row.id}>
                                   <td
-                                    colSpan={4}
+                                    colSpan={6}
                                     style={{
                                       padding: "0.28rem 0.2rem",
                                       paddingLeft: `${0.35 + row.depth * 0.65}rem`,
@@ -2849,33 +2867,19 @@ export default function App() {
                                       </span>
                                     ) : null}
                                   </td>
-                                  <td style={{ textAlign: "center" }}>
-                                    <input
-                                      type="checkbox"
-                                      checked={elliottConfig.pattern_menu_by_tf["4h"][row.id]}
-                                      onChange={(e) =>
-                                        setElliottConfig((c) => patchPatternMenuTf(c, "4h", row.id, e.target.checked))
-                                      }
-                                    />
-                                  </td>
-                                  <td style={{ textAlign: "center" }}>
-                                    <input
-                                      type="checkbox"
-                                      checked={elliottConfig.pattern_menu_by_tf["1h"][row.id]}
-                                      onChange={(e) =>
-                                        setElliottConfig((c) => patchPatternMenuTf(c, "1h", row.id, e.target.checked))
-                                      }
-                                    />
-                                  </td>
-                                  <td style={{ textAlign: "center" }}>
-                                    <input
-                                      type="checkbox"
-                                      checked={elliottConfig.pattern_menu_by_tf["15m"][row.id]}
-                                      onChange={(e) =>
-                                        setElliottConfig((c) => patchPatternMenuTf(c, "15m", row.id, e.target.checked))
-                                      }
-                                    />
-                                  </td>
+                                  {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => (
+                                    <td key={tfKey} style={{ textAlign: "center" }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={elliottConfig.pattern_menu_by_tf[tfKey][row.id]}
+                                        onChange={(e) =>
+                                          setElliottConfig((c) =>
+                                            patchPatternMenuTf(c, tfKey, row.id, e.target.checked),
+                                          )
+                                        }
+                                      />
+                                    </td>
+                                  ))}
                                 </tr>
                               ),
                             )}
@@ -2886,93 +2890,95 @@ export default function App() {
                                   — İleri Fib projeksiyon
                                 </span>
                               </td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="checkbox"
-                                  checked={elliottConfig.show_projection_4h}
-                                  disabled={!elliottConfig.enabled || !elliottConfig.pattern_menu_by_tf["4h"].motive_impulse}
-                                  onChange={(e) =>
-                                    setElliottConfig((c) => ({ ...c, show_projection_4h: e.target.checked }))
-                                  }
-                                />
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="checkbox"
-                                  checked={elliottConfig.show_projection_1h}
-                                  disabled={!elliottConfig.enabled || !elliottConfig.pattern_menu_by_tf["1h"].motive_impulse}
-                                  onChange={(e) =>
-                                    setElliottConfig((c) => ({ ...c, show_projection_1h: e.target.checked }))
-                                  }
-                                />
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="checkbox"
-                                  checked={elliottConfig.show_projection_15m}
-                                  disabled={!elliottConfig.enabled || !elliottConfig.pattern_menu_by_tf["15m"].motive_impulse}
-                                  onChange={(e) =>
-                                    setElliottConfig((c) => ({ ...c, show_projection_15m: e.target.checked }))
-                                  }
-                                />
-                              </td>
+                              {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => {
+                                const projKey =
+                                  tfKey === "1w"
+                                    ? ("show_projection_1w" as const)
+                                    : tfKey === "1d"
+                                      ? ("show_projection_1d" as const)
+                                      : tfKey === "4h"
+                                        ? ("show_projection_4h" as const)
+                                        : tfKey === "1h"
+                                          ? ("show_projection_1h" as const)
+                                          : ("show_projection_15m" as const);
+                                return (
+                                  <td key={tfKey} style={{ textAlign: "center" }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={elliottConfig[projKey]}
+                                      disabled={
+                                        !elliottConfig.enabled ||
+                                        !elliottConfig.pattern_menu_by_tf[tfKey].motive_impulse
+                                      }
+                                      onChange={(e) =>
+                                        setElliottConfig((c) => ({ ...c, [projKey]: e.target.checked }))
+                                      }
+                                    />
+                                  </td>
+                                );
+                              })}
                             </tr>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>ZigZag (depth)</td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="number"
-                                  min={2}
-                                  max={100}
-                                  className="tv-topstrip__input mono"
-                                  style={{ maxWidth: "4.25rem" }}
-                                  title="ZigZag depth — 4H (her iki yanda mum)"
-                                  value={elliottConfig.elliott_zigzag_depth_4h}
-                                  onChange={(e) => {
-                                    const n = parseInt(e.target.value, 10);
-                                    const z = Math.min(100, Math.max(2, Number.isFinite(n) ? n : 21));
-                                    setElliottConfig((prev) => ({
-                                      ...prev,
-                                      elliott_zigzag_depth_4h: z,
-                                      elliott_zigzag_depth: z,
-                                      swing_depth: z,
-                                    }));
-                                  }}
-                                />
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="number"
-                                  min={2}
-                                  max={100}
-                                  className="tv-topstrip__input mono"
-                                  style={{ maxWidth: "4.25rem" }}
-                                  title="ZigZag depth — 1H"
-                                  value={elliottConfig.elliott_zigzag_depth_1h}
-                                  onChange={(e) => {
-                                    const n = parseInt(e.target.value, 10);
-                                    const z = Math.min(100, Math.max(2, Number.isFinite(n) ? n : 21));
-                                    setElliottConfig((prev) => ({ ...prev, elliott_zigzag_depth_1h: z }));
-                                  }}
-                                />
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <input
-                                  type="number"
-                                  min={2}
-                                  max={100}
-                                  className="tv-topstrip__input mono"
-                                  style={{ maxWidth: "4.25rem" }}
-                                  title="ZigZag depth — 15M"
-                                  value={elliottConfig.elliott_zigzag_depth_15m}
-                                  onChange={(e) => {
-                                    const n = parseInt(e.target.value, 10);
-                                    const z = Math.min(100, Math.max(2, Number.isFinite(n) ? n : 21));
-                                    setElliottConfig((prev) => ({ ...prev, elliott_zigzag_depth_15m: z }));
-                                  }}
-                                />
-                              </td>
+                              {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => (
+                                <td key={tfKey} style={{ textAlign: "center" }}>
+                                  <input
+                                    type="number"
+                                    min={2}
+                                    max={100}
+                                    className="tv-topstrip__input mono"
+                                    style={{ maxWidth: "4.25rem" }}
+                                    title={`ZigZag depth — ${ELLIOTT_ANALYSIS_TIMEFRAME_LABELS[tfKey]}`}
+                                    value={
+                                      tfKey === "1w"
+                                        ? elliottConfig.elliott_zigzag_depth_1w
+                                        : tfKey === "1d"
+                                          ? elliottConfig.elliott_zigzag_depth_1d
+                                          : tfKey === "4h"
+                                            ? elliottConfig.elliott_zigzag_depth_4h
+                                            : tfKey === "1h"
+                                              ? elliottConfig.elliott_zigzag_depth_1h
+                                              : elliottConfig.elliott_zigzag_depth_15m
+                                    }
+                                    onChange={(e) => {
+                                      const n = parseInt(e.target.value, 10);
+                                      const z = Math.min(100, Math.max(2, Number.isFinite(n) ? n : 21));
+                                      setElliottConfig((prev) =>
+                                        tfKey === "1w"
+                                          ? { ...prev, elliott_zigzag_depth_1w: z }
+                                          : tfKey === "1d"
+                                            ? { ...prev, elliott_zigzag_depth_1d: z }
+                                            : tfKey === "4h"
+                                              ? {
+                                                  ...prev,
+                                                  elliott_zigzag_depth_4h: z,
+                                                  elliott_zigzag_depth: z,
+                                                  swing_depth: z,
+                                                }
+                                              : tfKey === "1h"
+                                                ? { ...prev, elliott_zigzag_depth_1h: z }
+                                                : { ...prev, elliott_zigzag_depth_15m: z },
+                                      );
+                                    }}
+                                  />
+                                </td>
+                              ))}
                             </tr>
+                          </tbody>
+                        </table>
+                        <p className="muted" style={{ margin: "0.35rem 0 0.25rem", fontSize: "0.72rem" }}>
+                          Grafik çizimi — yalnızca 4H / 1H / 15M (ZigZag pivot, renk, dalga çizgisi, etiket).
+                        </p>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
+                          <thead>
+                            <tr>
+                              <th style={{ textAlign: "left", padding: "0.25rem 0.2rem" }}>Ayar</th>
+                              <th style={{ textAlign: "center", padding: "0.25rem 0.2rem" }}>4H</th>
+                              <th style={{ textAlign: "center", padding: "0.25rem 0.2rem" }}>1H</th>
+                              <th style={{ textAlign: "center", padding: "0.25rem 0.2rem" }}>15M</th>
+                            </tr>
+                          </thead>
+                          <tbody>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>ZigZag (pivot)</td>
                               <td style={{ textAlign: "center" }}>
@@ -5158,6 +5164,7 @@ export default function App() {
                     "notify",
                     "outbox",
                     "bildirim",
+                    "ai",
                     "onay",
                     "approval",
                     "ops",
@@ -5169,64 +5176,21 @@ export default function App() {
                       canAdmin={rbacIsAdmin}
                     />
                   ) : null}
-                </>
-              ) : null}
-
-              {drawerTab === "ai" ? (
-                <>
-                  <div
-                    className="tv-settings__tabs tv-settings__subtabs tv-settings__subtabs--cols-4"
-                    role="tablist"
-                    aria-label="AI alt sekmeleri"
-                  >
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={aiSubtab === "ai_dashboard"}
-                      className={`tv-settings__tab ${aiSubtab === "ai_dashboard" ? "is-active" : ""}`}
-                      onClick={() => setAiSubtab("ai_dashboard")}
-                    >
-                      {t("ai.subtab.dashboard")}
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={aiSubtab === "ai_decisions"}
-                      className={`tv-settings__tab ${aiSubtab === "ai_decisions" ? "is-active" : ""}`}
-                      onClick={() => setAiSubtab("ai_decisions")}
-                    >
-                      {t("ai.subtab.decisions")}
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={aiSubtab === "ai_performance"}
-                      className={`tv-settings__tab ${aiSubtab === "ai_performance" ? "is-active" : ""}`}
-                      onClick={() => setAiSubtab("ai_performance")}
-                    >
-                      {t("ai.subtab.performance")}
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={aiSubtab === "ai_settings"}
-                      className={`tv-settings__tab ${aiSubtab === "ai_settings" ? "is-active" : ""}`}
-                      onClick={() => setAiSubtab("ai_settings")}
-                    >
-                      {t("ai.subtab.settings")}
-                    </button>
-                  </div>
-                  {aiSubtab === "ai_dashboard" ? (
-                    <AiDashboardPanel accessToken={token} />
-                  ) : null}
-                  {aiSubtab === "ai_decisions" ? (
+                  {matchesSetting(
+                    "kuyruk",
+                    "queue",
+                    "notify",
+                    "outbox",
+                    "bildirim",
+                    "ai",
+                    "karar",
+                    "decision",
+                    "onay",
+                    "approval",
+                    "ops",
+                    "worker",
+                  ) ? (
                     <AiDecisionsPanel accessToken={token} canAdmin={rbacIsAdmin} />
-                  ) : null}
-                  {aiSubtab === "ai_performance" ? (
-                    <AiPerformancePanel accessToken={token} />
-                  ) : null}
-                  {aiSubtab === "ai_settings" ? (
-                    <AiSettingsPanel accessToken={token} canAdmin={rbacIsAdmin} />
                   ) : null}
                 </>
               ) : null}

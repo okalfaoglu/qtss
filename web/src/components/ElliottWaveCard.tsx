@@ -17,7 +17,10 @@ import {
 } from "../lib/elliottRulesCatalog";
 import { buildSwingPivots } from "../lib/elliottImpulseDetect";
 import type { ChartOhlcRow } from "../lib/marketBarsToCandles";
-import type { ElliottWaveConfig } from "../lib/elliottWaveAppConfig";
+import {
+  ELLIOTT_ANALYSIS_TIMEFRAMES,
+  type ElliottWaveConfig,
+} from "../lib/elliottWaveAppConfig";
 
 function elliottHexForColorInput(hex: string): string {
   const t = hex.trim();
@@ -129,22 +132,21 @@ export function ElliottWaveCard({
   }, [bars, value.enabled, effectiveSwingDepth]);
 
   const v2StateNote = v2Output
-    ? [
-        v2Output.hierarchy.macro ? `4h:${v2Output.hierarchy.macro.decision}` : null,
-        v2Output.hierarchy.intermediate ? `1h:${v2Output.hierarchy.intermediate.decision}` : null,
-        v2Output.hierarchy.micro ? `15m:${v2Output.hierarchy.micro.decision}` : null,
-      ]
+    ? ELLIOTT_ANALYSIS_TIMEFRAMES.map((tf) => {
+        const s = v2Output.states[tf];
+        return s ? `${tf}:${s.decision}` : null;
+      })
         .filter(Boolean)
         .join(" · ")
     : "";
   const v2FailedChecks = useMemo(() => {
-    const order = [v2Output?.hierarchy.macro, v2Output?.hierarchy.intermediate, v2Output?.hierarchy.micro];
+    const order = ELLIOTT_ANALYSIS_TIMEFRAMES.map((tf) => v2Output?.states[tf]);
     const first = order.find((s) => s?.impulse?.checks?.length);
     if (!first?.impulse) return [];
     return first.impulse.checks.filter((c) => !c.passed);
   }, [v2Output]);
   const v2AllChecks = useMemo(() => {
-    const order = [v2Output?.hierarchy.macro, v2Output?.hierarchy.intermediate, v2Output?.hierarchy.micro];
+    const order = ELLIOTT_ANALYSIS_TIMEFRAMES.map((tf) => v2Output?.states[tf]);
     const first = order.find((s) => s?.impulse?.checks?.length);
     return first?.impulse?.checks ?? [];
   }, [v2Output]);
@@ -307,12 +309,7 @@ export function ElliottWaveCard({
     return wxy?.passed || xz?.passed ? "combination✓" : "combination?";
   }, []);
   const v2Rows = useMemo(
-    () =>
-      [
-        { tf: "4h", s: v2Output?.hierarchy.macro },
-        { tf: "1h", s: v2Output?.hierarchy.intermediate },
-        { tf: "15m", s: v2Output?.hierarchy.micro },
-      ],
+    () => ELLIOTT_ANALYSIS_TIMEFRAMES.map((tf) => ({ tf, s: v2Output?.states[tf] })),
     [v2Output],
   );
 
@@ -323,7 +320,39 @@ export function ElliottWaveCard({
         ACP <code>zigzag[]</code> kanal/tarama içindir; Elliott ZigZag TF başına derinlik (Ana Elliott sekmesindeki tablo
         ile aynı alanlar).
       </p>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.35rem" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "0.35rem" }}>
+        <label className="muted tv-elliott-panel__field" style={{ margin: 0 }}>
+          <span style={{ fontSize: "0.7rem" }}>ZigZag depth 1W</span>
+          <input
+            type="number"
+            min={2}
+            max={100}
+            title="Fraktal penceresi — 1W MTF"
+            value={value.elliott_zigzag_depth_1w}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              const z = Math.min(100, Math.max(2, Number.isFinite(n) ? n : 21));
+              onChange({ ...value, elliott_zigzag_depth_1w: z });
+            }}
+            className="mono"
+          />
+        </label>
+        <label className="muted tv-elliott-panel__field" style={{ margin: 0 }}>
+          <span style={{ fontSize: "0.7rem" }}>ZigZag depth 1D</span>
+          <input
+            type="number"
+            min={2}
+            max={100}
+            title="Fraktal penceresi — 1D MTF"
+            value={value.elliott_zigzag_depth_1d}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              const z = Math.min(100, Math.max(2, Number.isFinite(n) ? n : 21));
+              onChange({ ...value, elliott_zigzag_depth_1d: z });
+            }}
+            className="mono"
+          />
+        </label>
         <label className="muted tv-elliott-panel__field" style={{ margin: 0 }}>
           <span style={{ fontSize: "0.7rem" }}>ZigZag depth 4H</span>
           <input
@@ -412,7 +441,13 @@ export function ElliottWaveCard({
                 checked={value.show_projection_alt_scenario}
                 disabled={
                   !value.enabled ||
-                  !(value.show_projection_4h || value.show_projection_1h || value.show_projection_15m)
+                  !(
+                    value.show_projection_1w ||
+                    value.show_projection_1d ||
+                    value.show_projection_4h ||
+                    value.show_projection_1h ||
+                    value.show_projection_15m
+                  )
                 }
                 onChange={(e) => onChange({ ...value, show_projection_alt_scenario: e.target.checked })}
               />
@@ -450,7 +485,9 @@ export function ElliottWaveCard({
           {v2Output ? (
             <>
               <p className="muted" style={{ fontSize: "0.74rem", marginTop: "0.25rem", lineHeight: 1.35 }}>
-                V2 durum: {v2StateNote || "4h:invalid · 1h:invalid · 15m:invalid"}
+                V2 durum:{" "}
+                {v2StateNote ||
+                  "1w:invalid · 1d:invalid · 4h:invalid · 1h:invalid · 15m:invalid"}
               </p>
               {v2FailedChecks.length ? (
                 <p className="err" style={{ fontSize: "0.74rem", marginTop: "0.2rem", lineHeight: 1.35 }}>
@@ -513,7 +550,11 @@ export function ElliottWaveCard({
             style={{ marginTop: "0.15rem", display: "grid", gap: "0.45rem" }}
           >
             {showImpulseUi &&
-            (value.show_projection_4h || value.show_projection_1h || value.show_projection_15m) ? (
+            (value.show_projection_1w ||
+              value.show_projection_1d ||
+              value.show_projection_4h ||
+              value.show_projection_1h ||
+              value.show_projection_15m) ? (
               <label className="muted tv-elliott-panel__field" style={{ alignItems: "center" }}>
                 <input
                   type="checkbox"

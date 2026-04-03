@@ -1,4 +1,4 @@
-export type Timeframe = "15m" | "1h" | "4h";
+export type Timeframe = "15m" | "1h" | "4h" | "1d" | "1w";
 
 import type { ElliottPatternMenuToggles } from "../elliottPatternMenuCatalog";
 

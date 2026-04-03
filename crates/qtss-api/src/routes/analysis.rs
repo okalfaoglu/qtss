@@ -967,6 +967,8 @@ fn default_elliott_wave_json() -> serde_json::Value {
         "subdivision_levels": 1,
         "swing_depth": 3,
         "max_pivot_windows": 120,
+        "show_projection_1w": false,
+        "show_projection_1d": false,
         "show_projection_4h": false,
         "show_projection_1h": false,
         "show_projection_15m": false,
@@ -987,6 +989,26 @@ fn default_elliott_wave_json() -> serde_json::Value {
             "corrective_complex_triple": true
         },
         "pattern_menu_by_tf": {
+            "1w": {
+                "motive_impulse": true,
+                "motive_diagonal_leading": true,
+                "motive_diagonal_ending": true,
+                "corrective_zigzag": true,
+                "corrective_flat": true,
+                "corrective_triangle": true,
+                "corrective_complex_double": true,
+                "corrective_complex_triple": true
+            },
+            "1d": {
+                "motive_impulse": true,
+                "motive_diagonal_leading": true,
+                "motive_diagonal_ending": true,
+                "corrective_zigzag": true,
+                "corrective_flat": true,
+                "corrective_triangle": true,
+                "corrective_complex_double": true,
+                "corrective_complex_triple": true
+            },
             "4h": {
                 "motive_impulse": true,
                 "motive_diagonal_leading": true,
