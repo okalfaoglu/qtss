@@ -216,6 +216,7 @@ fn run_channel_six_at_step(
                 low: b.low,
                 close: b.close,
                 bar_index: j as i64,
+                volume: None,
             },
         );
     }

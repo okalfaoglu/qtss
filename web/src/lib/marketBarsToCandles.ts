@@ -2,7 +2,7 @@ import type { CandlestickData, UTCTimestamp } from "lightweight-charts";
 import type { MarketBarRow } from "../api/client";
 
 /** Grafik için minimum OHLC (API `MarketBarRow` ile uyumlu). */
-export type ChartOhlcRow = Pick<MarketBarRow, "open_time" | "open" | "high" | "low" | "close">;
+export type ChartOhlcRow = Pick<MarketBarRow, "open_time" | "open" | "high" | "low" | "close" | "volume">;
 
 /** API `open_time` ISO → saniye; mumlar zamana göre artan, aynı saniyede tekil. */
 export function marketBarsToCandles(rows: ChartOhlcRow[] | null | undefined): CandlestickData<UTCTimestamp>[] {

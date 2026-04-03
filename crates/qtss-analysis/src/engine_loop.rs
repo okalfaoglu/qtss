@@ -1046,6 +1046,7 @@ async fn run_engines_for_symbol(
                 low: d_to_f(r.low),
                 close: d_to_f(r.close),
                 bar_index: i as i64,
+                volume: Some(d_to_f(r.volume)),
             })
             .collect();
 

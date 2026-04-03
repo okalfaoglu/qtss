@@ -7,6 +7,7 @@ export type OhlcBarJson = {
   high: number;
   low: number;
   close: number;
+  volume?: number;
 };
 
 function num(x: string | number): number {
@@ -37,6 +38,9 @@ export function chartOhlcRowsToScanBars(rows: ChartOhlcRow[]): OhlcBarJson[] {
     const h = num(r.high);
     const l = num(r.low);
     const c = num(r.close);
-    return { bar_index: j, open: o, high: h, low: l, close: c };
+    const v = "volume" in r ? num((r as Record<string, unknown>).volume as string | number) : NaN;
+    const bar: OhlcBarJson = { bar_index: j, open: o, high: h, low: l, close: c };
+    if (Number.isFinite(v) && v > 0) bar.volume = v;
+    return bar;
   });
 }

@@ -12,8 +12,10 @@
 //! **Trendoscope/utils:** `Theme.getColors` → [`THEME_DARK_RGB`]/[`THEME_LIGHT_RGB`] (`theme` modülü); `Line.get_price` → [`line_price_at_bar_index`].
 //! `check_overflow` / `get_trend_series` ayrı fonksiyon olarak yok; `trend_line_inspect` ve zigzag akışı ile örtüşür.
 
+pub mod apex;
 mod dashboard_v1;
 mod dashboard_v2_envelope;
+pub mod failure_swing;
 mod formation_trade_levels;
 mod find;
 mod ohlc;
@@ -24,6 +26,10 @@ mod theme;
 mod trading_range;
 mod zigzag;
 
+pub use apex::{compute_apex_bar, compute_apex_from_outcome, ApexResult};
+pub use failure_swing::{
+    check_breakout_volume, detect_failure_swing, BreakoutVolumeResult, FailureSwingResult,
+};
 pub use pattern_catalog::{pattern_name_by_id, PatternId};
 
 pub use dashboard_v1::{

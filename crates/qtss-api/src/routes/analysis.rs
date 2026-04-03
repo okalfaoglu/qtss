@@ -14,9 +14,11 @@ use uuid::Uuid;
 
 use qtss_chart_patterns::{
     analyze_channel_six_from_bars, channel_six_drawing_hints, channel_six_pattern_drawing_batch,
-    compute_formation_trade_levels, pattern_name_by_acp_id, ChannelSixDrawingHints,
-    ChannelSixReject, ChannelSixScanOutcome, ChannelSixWindowFilter, FormationTradeLevels,
-    OhlcBar, PatternDrawingBatch, SixPivotScanParams, SizeFilters,
+    check_breakout_volume, compute_apex_from_outcome, compute_formation_trade_levels,
+    detect_failure_swing, pattern_name_by_acp_id, ApexResult, BreakoutVolumeResult,
+    ChannelSixDrawingHints, ChannelSixReject, ChannelSixScanOutcome, ChannelSixWindowFilter,
+    FailureSwingResult, FormationTradeLevels, OhlcBar, PatternDrawingBatch, SixPivotScanParams,
+    SizeFilters,
 };
 use qtss_common::{log_business, QtssLogLevel};
 use qtss_storage::{
@@ -1309,6 +1311,12 @@ struct PatternMatchPayload {
     pattern_drawing_batch: PatternDrawingBatch,
     #[serde(skip_serializing_if = "Option::is_none")]
     formation_trade_levels: Option<FormationTradeLevels>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    apex: Option<ApexResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_swing: Option<FailureSwingResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    breakout_volume: Option<BreakoutVolumeResult>,
 }
 
 #[derive(Serialize)]
@@ -1475,6 +1483,9 @@ async fn channel_six_scan(
                 None
             };
             let formation_trade_levels = compute_formation_trade_levels(o, ref_bar, ref_close);
+            let apex = compute_apex_from_outcome(o, ref_bar, 0.75);
+            let failure_swing = detect_failure_swing(o, &map, 0.85);
+            let breakout_volume = check_breakout_volume(&map, ref_bar, 20, 1.5);
             PatternMatchPayload {
                 outcome: o.clone(),
                 pattern_name,
@@ -1485,6 +1496,9 @@ async fn channel_six_scan(
                     body.zigzag_line_width,
                 ),
                 formation_trade_levels,
+                apex,
+                failure_swing,
+                breakout_volume,
             }
         })
         .collect();

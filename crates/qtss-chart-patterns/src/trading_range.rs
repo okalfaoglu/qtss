@@ -727,6 +727,7 @@ mod tests {
             low: l,
             close: c,
             bar_index: i,
+            volume: None,
         }
     }
 

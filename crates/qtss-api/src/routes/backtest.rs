@@ -203,6 +203,7 @@ impl Strategy for TradingRangeDurum {
             low: decimal_to_f64(bar.low),
             close: decimal_to_f64(bar.close),
             bar_index: idx,
+            volume: None,
         });
         let need = self.params.lookback.max(5) + 2;
         if self.ohlc.len() < need {

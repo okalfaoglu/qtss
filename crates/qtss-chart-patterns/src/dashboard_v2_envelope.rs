@@ -114,6 +114,7 @@ mod tests {
             low: c - 0.5,
             close: c,
             bar_index: i,
+            volume: None,
         }
     }
 

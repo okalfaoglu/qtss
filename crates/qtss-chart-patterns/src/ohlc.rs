@@ -29,4 +29,7 @@ pub struct OhlcBar {
     pub low: f64,
     pub close: f64,
     pub bar_index: i64,
+    /// Mum hacmi. `None` ise hacim verisi mevcut değil (eski istemciler / birim testler).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f64>,
 }
