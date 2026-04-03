@@ -20,11 +20,12 @@
 //            ▒▒▒▒▒         ▒▒▒▒▒      ██║   ██║  ██║███████╗██║ ╚████║██████╔╝╚██████╔╝███████║╚██████╗╚██████╔╝██║     ███████╗
 //             ▒▒             ▒
 //@version=6
+// QTSS reference: TradingView publishes this as `Trendoscope/abstractchartpatterns/9`. Logic parity targets
+// `crates/qtss-chart-patterns` (`scan.rs` inspect/checkBarRatio/getRatioDiff, `find.rs` size filters).
 
 // @description Library having abstract types and methods for chart pattern implementations
 library('abstractchartpatterns', overlay = true)
 
-// import Trendoscope/ZigzagLite/2 as zg
 import Trendoscope/LineWrapper/2 as wr
 import Trendoscope/ohlc/3 as o
 
@@ -60,7 +61,7 @@ export type DrawingProperties
 // @field patternColor Individual pattern color. Lines and labels will be using this color.
 // @field ratioDiff Difference between trendLine1 and trendLine2 ratios
 // @field zigzagLine Internal zigzag line drawing Object
-// @field pivotLabels array containning Pivot labels
+// @field pivotLabels array containing Pivot labels
 // @field patternLabel pattern label Object
 // @field patternType integer representing the pattern type
 // @field patternName Type of pattern in string
@@ -105,6 +106,7 @@ export type SizeFilters
 // @field allowedPatterns array of bool encoding the allowed pattern types.
 // @field allowedLastPivotDirections array of int representing allowed last pivot direction for each pattern types
 // @field themeColors color array of themes to be used.
+// @field filters size filters for `checkSize` (bar / percent span).
 export type ScanProperties
 	int offset = 0
 	int numberOfPivots = 5
@@ -253,7 +255,7 @@ export method erase(Pattern this) =>
 // @function push Pattern object to the array by keeping maxItems limit
 // @param this array of Pattern objects
 // @param p Pattern object to be added to array
-// @oaram maxItems Max number of items the array can hold
+// @param maxItems Max number of items the array can hold
 // @returns Current Pattern array
 export method push(array<Pattern> this, Pattern p, int maxItems) =>
     this.push(p)

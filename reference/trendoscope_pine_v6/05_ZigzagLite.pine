@@ -20,6 +20,9 @@
 //            ▒▒▒▒▒         ▒▒▒▒▒      ██║   ██║  ██║███████╗██║ ╚████║██████╔╝╚██████╔╝███████║╚██████╗╚██████╔╝██║     ███████╗
 //             ▒▒             ▒
 //@version=6
+// QTSS reference: TradingView `Trendoscope/ZigzagLite/3`. Calculation parity: `crates/qtss-chart-patterns/src/zigzag.rs`
+// (`ZigzagLite`, `calculate_bar`, `next_level_from_zigzag`). Drawing helpers below are TV-only (not ported to LWC).
+
 // @description Lighter version of the Zigzag Library. Without indicators and sub-component divisions
 library('ZigzagLite', overlay = true)
 import Trendoscope/arrays/2
@@ -32,7 +35,6 @@ import Trendoscope/arrays/2
 // @field pLowBar represents number of bar back the pivot Low occurred.
 // @field pHigh Pivot High Price
 // @field pLow Pivot Low Price
-// @field indicators Array of Indicators - allows to add multiple
 export type PivotCandle
 	float _high = high
 	float _low = low
@@ -125,7 +127,7 @@ export type ZigzagDrawing
 // @type Object which holds complete zigzag drawing objects and properties - polyline version
 // @field zigzag Zigzag object which holds the calculations.
 // @field properties ZigzagProperties object which is used for setting the display styles of zigzag
-// @field zigzaglabels array<label> that contains the zigzag labels
+// @field zigzagLabels array<label> that contains the zigzag labels
 // @field zigzagLine polyline object of zigzag lines
 export type ZigzagDrawingPL
 	Zigzag zigzag

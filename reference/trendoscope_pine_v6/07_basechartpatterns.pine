@@ -20,6 +20,8 @@
 //            ▒▒▒▒▒         ▒▒▒▒▒      ██║   ██║  ██║███████╗██║ ╚████║██████╔╝╚██████╔╝███████║╚██████╗╚██████╔╝██║     ███████╗
 //             ▒▒             ▒
 //@version=6
+// QTSS reference: TradingView publishes this as `Trendoscope/basechartpatterns/8`. Parity: `resolve.rs`,
+// `find.rs` (getPatternNameById, resolve/resolvePatternName, zigzag find window / overlap / allowedPatterns).
 
 // @description Library having complete chart pattern implementation
 library('basechartpatterns', overlay = true)
@@ -108,7 +110,7 @@ method resolve(p.Pattern this, p.ScanProperties properties) =>
 // @param points array of chart.point objects
 // @param properties ScanProperties object
 // @param dProperties DrawingProperties object
-// @param array of OHLC values.
+// @param ohlcArray optional OHLC series (single-bar push from indicator) for inspect
 // @returns Flag indicating if the pattern is valid, Current Pattern object
 export method find(array<chart.point> points, p.ScanProperties properties, p.DrawingProperties dProperties, array<o.OHLC> ohlcArray = na) =>
     validPattern = properties.numberOfPivots == 6 ? p.checkBarRatio(points.get(1), points.get(3), points.get(5), properties) and p.checkBarRatio(points.get(0), points.get(2), points.get(4), properties) : p.checkBarRatio(points.get(0), points.get(2), points.get(4), properties)
@@ -152,12 +154,12 @@ export method find(array<chart.point> points, p.ScanProperties properties, p.Dra
             validPattern
     [validPattern, currentPattern]
 
-// @function Find patterns based on the currect zigzag object but will not store them in the pattern array.
+// @function Find patterns based on the current zigzag object but will not store them in the pattern array.
 // @param this Zigzag object containing pivots
 // @param properties ScanProperties object
 // @param dProperties DrawingProperties object
-// @param patterns Array of Pattern objects
-// @param array of OHLC values.
+// @param patterns Array of Pattern objects (avoidOverlap / duplicate pivot checks)
+// @param ohlcArray optional OHLC series for inspect
 // @returns Flag indicating if the pattern is valid, Current Pattern object
 export method find(zg.Zigzag this, p.ScanProperties properties, p.DrawingProperties dProperties, array<p.Pattern> patterns = na, array<o.OHLC> ohlcArray = na) =>
     p6 = this.zigzagPivots.get(0 + properties.offset).point.copy()

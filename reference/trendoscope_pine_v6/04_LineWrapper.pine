@@ -20,8 +20,10 @@
 //            ▒▒▒▒▒         ▒▒▒▒▒      ██║   ██║  ██║███████╗██║ ╚████║██████╔╝╚██████╔╝███████║╚██████╗╚██████╔╝██║     ███████╗
 //             ▒▒             ▒
 //@version=6
+// QTSS reference: TradingView `Trendoscope/LineWrapper/2`. `get_price` matches Rust `line_price_at_bar_index`
+// (`crates/qtss-chart-patterns/src/lib.rs`) and web `linePriceAtBarIndex` in `patternDrawingBatchOverlay.ts`.
 
-// @description Wrapper Type for Line. Useful when you want to store the line details without drawing them. Can also be used in scnearios where you collect lines to be drawn and draw together towards the end.
+// @description Wrapper Type for Line. Useful when you want to store the line details without drawing them. Can also be used in scenarios where you collect lines to be drawn and draw together towards the end.
 library('LineWrapper', overlay = true)
 
 // @type Line Wrapper object
@@ -84,7 +86,7 @@ export method delete(Line this) =>
 
 // @function get line price based on bar
 // @param this (series Line) Line object.
-// @param bar (series/int) bar at which line price need to be calculated
+// @param bar bar index at which line price should be calculated
 // @returns line price at given bar.
 export method get_price(Line this, int bar) =>
     stepPerBar = (this.p2.price - this.p1.price) / (this.p2.index - this.p1.index)

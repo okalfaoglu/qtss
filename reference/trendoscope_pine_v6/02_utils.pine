@@ -20,11 +20,14 @@
 //            ▒▒▒▒▒         ▒▒▒▒▒      ██║   ██║  ██║███████╗██║ ╚████║██████╔╝╚██████╔╝███████║╚██████╗╚██████╔╝██║     ███████╗
 //             ▒▒             ▒
 //@version=6
+// QTSS reference: TradingView `Trendoscope/utils/1`. Theme RGB arrays are golden-tested in
+// `crates/qtss-chart-patterns/src/theme.rs` (`theme_dark_matches_trendoscope_utils_v6`, light variant).
+
 // @description Few essentials captured together (subset of arrayutils)
 library('utils', overlay = true)
 // @function finds difference between two timestamps
 // @param timeStart start timestamp
-// @param endTime end timestamp
+// @param timeEnd end timestamp (default `timenow`)
 // @returns [days, hours, minutes, seconds, milliseconds]
 export timer(int timeStart, int timeEnd = timenow) =>
     timeDiff = math.abs(timeEnd - timeStart)
@@ -40,11 +43,11 @@ export timer(int timeStart, int timeEnd = timenow) =>
     tHours = hours % 24
     [days, tHours, tMinutes, tSeconds, tmSeconds]
 
-// @function finds difference between two timestamps
-// @param pivots pivots array
-// @param barArray pivot bar array
-// @param dir direction for which overflow need to be checked
-// @returns bool overflow
+// @function Tests whether pivot prices cross a chord line between first/last pivot (overflow along dir).
+// @param pivots pivot prices
+// @param barArray pivot bar indices
+// @param dir direction filter (+1 / -1)
+// @returns true if any pivot violates the line
 export method check_overflow(array<float> pivots, array<float> barArray, int dir) =>
     cBar = int(barArray.first())
     aBar = int(barArray.last())
