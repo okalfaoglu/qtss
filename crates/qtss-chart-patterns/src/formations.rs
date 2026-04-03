@@ -38,6 +38,9 @@ pub struct FormationMatch {
     pub target_price: Option<f64>,
     /// Kalite skoru (0.0–1.0). Pivot simetri, fiyat yakınlığı, hacim gibi faktörlere göre.
     pub quality: f64,
+    /// Faz 3: Hacim analizi (volume divergence, breakout teyidi, pivot volumes).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_analysis: Option<crate::volume_analysis::FormationVolumeAnalysis>,
 }
 
 /// Formasyon tespiti için yapılandırma parametreleri.
@@ -171,6 +174,7 @@ pub fn detect_double_top(pivots: &[PivotTriple], params: &FormationParams) -> Op
         height,
         target_price: Some(target),
         quality,
+        volume_analysis: None,
     })
 }
 
@@ -237,6 +241,7 @@ pub fn detect_double_bottom(
         height,
         target_price: Some(target),
         quality,
+        volume_analysis: None,
     })
 }
 
@@ -330,6 +335,7 @@ pub fn detect_head_and_shoulders(
         height,
         target_price: Some(target),
         quality,
+        volume_analysis: None,
     })
 }
 
@@ -419,6 +425,7 @@ pub fn detect_inverse_head_and_shoulders(
         height,
         target_price: Some(target),
         quality,
+        volume_analysis: None,
     })
 }
 
@@ -499,6 +506,7 @@ pub fn detect_triple_top(
         height,
         target_price: Some(target),
         quality,
+        volume_analysis: None,
     })
 }
 
@@ -577,6 +585,7 @@ pub fn detect_triple_bottom(
         height,
         target_price: Some(target),
         quality,
+        volume_analysis: None,
     })
 }
 
@@ -664,6 +673,7 @@ pub fn detect_bullish_flag(
         height: pole_height,
         target_price: Some(target),
         quality,
+        volume_analysis: None,
     })
 }
 
@@ -747,6 +757,7 @@ pub fn detect_bearish_flag(
         height: pole_height,
         target_price: Some(target),
         quality,
+        volume_analysis: None,
     })
 }
 
@@ -754,6 +765,7 @@ pub fn detect_bearish_flag(
 
 /// Verilen pivotları tüm Faz 2 formasyonlarına karşı tarar.
 /// Eşleşen tüm formasyonları döndürür (birden fazla olabilir).
+/// Faz 3: Hacim verisi varsa her eşleşmeye volume analizi eklenir.
 #[must_use]
 pub fn scan_formations(
     pivots: &[PivotTriple],
@@ -785,6 +797,21 @@ pub fn scan_formations(
     }
     if let Some(m) = detect_bearish_flag(pivots, bars, params) {
         results.push(m);
+    }
+
+    // Faz 3: Hacim analizi ekleme
+    if !results.is_empty() {
+        let bar_map: std::collections::BTreeMap<i64, OhlcBar> =
+            bars.iter().map(|b| (b.bar_index, *b)).collect();
+        let has_volume = bars.iter().any(|b| b.volume.is_some());
+        if has_volume {
+            let last_bar = bar_map.keys().next_back().copied().unwrap_or(0);
+            for m in &mut results {
+                m.volume_analysis = Some(crate::volume_analysis::analyze_formation_volume(
+                    &m.pivots, &bar_map, last_bar, 20, 1.5,
+                ));
+            }
+        }
     }
 
     results
