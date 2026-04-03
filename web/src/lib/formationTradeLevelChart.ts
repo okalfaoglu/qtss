@@ -90,16 +90,18 @@ const ROW_PALETTE = ["#26a69a", "#7e57c2", "#ff9800", "#42a5f5", "#ec407a", "#66
 export function buildFormationTradeLevelSpecs(
   res: ChannelSixResponse | null,
   scanBarsChrono: ChartOhlcRow[],
-  options?: { offsetBars?: number; halfWidthBars?: number },
+  options?: { offsetBars?: number; halfWidthBars?: number; onlyMatchRowIndex?: number },
 ): TradeLevelLineSpec[] {
   if (!res?.matched || !scanBarsChrono.length) return [];
   const offsetBars = options?.offsetBars ?? 4;
   const halfWidthBars = Math.max(1, options?.halfWidthBars ?? 2);
+  const onlyRow = options?.onlyMatchRowIndex;
 
   const rows = matchPayloads(res);
   const specs: TradeLevelLineSpec[] = [];
 
   for (let i = 0; i < rows.length; i++) {
+    if (onlyRow !== undefined && i !== onlyRow) continue;
     const m = rows[i]!;
     const levels = formationLevelsForMatchRow(res, m, i);
     if (!levels) continue;

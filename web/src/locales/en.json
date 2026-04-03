@@ -27,65 +27,6 @@
     "tacticalSection": "Tactical directive",
     "load": "Load"
   },
-  "ai": {
-    "loginPrompt": "Sign in to access the AI panel.",
-    "refresh": "Refresh",
-    "subtab": {
-      "dashboard": "Overview",
-      "decisions": "Decisions",
-      "performance": "Performance",
-      "settings": "Settings"
-    },
-    "col": {
-      "time": "Time",
-      "layer": "Layer",
-      "symbol": "Symbol",
-      "status": "Status",
-      "confidence": "Confidence"
-    },
-    "dashboard": {
-      "title": "AI Overview",
-      "pendingAlert": "{{count}} decision(s) awaiting approval",
-      "tactical": "Tactical",
-      "operational": "Operational",
-      "strategic": "Strategic",
-      "activePortfolio": "Active portfolio directive",
-      "riskBudget": "Risk budget",
-      "maxPositions": "Max positions",
-      "regime": "Regime",
-      "validUntil": "Valid until",
-      "recentDecisions": "Recent decisions"
-    },
-    "performance": {
-      "title": "AI Performance",
-      "allLayers": "All layers",
-      "totalDecisions": "Total decisions",
-      "approvalRate": "Approval rate",
-      "errorRate": "Error rate",
-      "bySymbol": "By symbol",
-      "total": "Total",
-      "approved": "Approved",
-      "applied": "Applied",
-      "errors": "Errors",
-      "last": "Last",
-      "decisionDetail": "Decision detail",
-      "clickToLoad": "Click a row to load details"
-    },
-    "settings": {
-      "title": "AI Settings",
-      "loading": "Loading...",
-      "notConfigured": "AI configuration not found. Check the ai_engine_config key in the app_config table.",
-      "engineOn": "AI engine ACTIVE",
-      "engineOff": "AI engine OFF",
-      "minConfidence": "Min confidence",
-      "decisionTTL": "Decision TTL",
-      "autoApprove": "Auto-approve",
-      "disabled": "Disabled",
-      "locale": "Locale",
-      "layerConfig": "Layer configuration",
-      "adminOnly": "Admin role required for configuration changes."
-    }
-  },
   "drawer": {
     "help": "Help",
     "tradingRange": "Trading Range",
@@ -235,7 +176,9 @@
       "scanning": "Scanning…",
       "drawerSectionTitle": "Channel six scan",
       "drawerIntro": "Latest server scan for the current chart window. Open the top-bar summary or expand JSON in Settings.",
-      "drawerFootnote": "Tune ACP / Trendoscope settings on the ACP tab; scan uses the same bar window as the chart toolbar."
+      "drawerFootnote": "Tune ACP / Trendoscope settings on the ACP tab; scan uses the same bar window as the chart toolbar.",
+      "onlyLiveRobotTradeTargets": "On chart, show only live robot formation targets (entry / SL / TPs)",
+      "onlyLiveRobotTradeTargetsAria": "Show entry and target lines only for the live robot match row"
     },
     "drawings": {
       "cleared": "Drawings cleared."

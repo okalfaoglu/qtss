@@ -78,6 +78,7 @@ import i18n from "./i18n";
 import { mergeChartOhlcRowsByOpenTime } from "./lib/mergeChartOhlcRows";
 import type { ChartOhlcRow } from "./lib/marketBarsToCandles";
 import { chartOhlcRowsToScanBars, chartOhlcRowsSortedChrono } from "./lib/chartRowsToOhlcBars";
+import { isLiveRobotSignal } from "./lib/channelSixLiveSignal";
 import { AcpTrendoscopeSettingsCard } from "./components/AcpTrendoscopeSettingsCard";
 import { ChartToolbar, type ChartTool } from "./components/ChartToolbar";
 import { ProfitCalculator } from "./components/ProfitCalculator";
@@ -349,6 +350,8 @@ export default function App() {
   const [lastChannelScan, setLastChannelScan] = useState<ChannelSixResponse | null>(null);
   /** OHLC window sent to the last successful `scanChannelSix` call — keeps `bar_index` aligned after live poll. */
   const [lastChannelScanBars, setLastChannelScanBars] = useState<ChartOhlcRow[] | null>(null);
+  /** When set, chart Enter/SL/TP ticks only for `live_robot_match_index` if that row is a live robot window. */
+  const [tradeTargetsOnlyLiveRobot, setTradeTargetsOnlyLiveRobot] = useState(false);
   const [channelScanSummary, setChannelScanSummary] = useState<string>("");
   const [channelScanHoverTitle, setChannelScanHoverTitle] = useState<string>("");
   /** Sembol/interval tam yükleme sonrası artar — TvChartPane yalnızca bu değişince `fitContent`. */
@@ -1189,10 +1192,38 @@ export default function App() {
     return scanLen > 0 ? lastChannelScanBars.slice(-scanLen) : lastChannelScanBars;
   }, [lastChannelScan, lastChannelScanBars]);
 
+  const liveRobotTradeTargetsRowIndex = useMemo(() => {
+    const res = lastChannelScan;
+    if (!res?.matched) return null;
+    const idx = res.live_robot_match_index;
+    if (typeof idx !== "number" || idx < 0 || !Number.isInteger(idx)) return null;
+    if (res.pattern_matches?.length) {
+      if (idx >= res.pattern_matches.length) return null;
+      const o = res.pattern_matches[idx]!.outcome;
+      return isLiveRobotSignal(o) ? idx : null;
+    }
+    if (res.outcome) {
+      if (idx !== 0) return null;
+      return isLiveRobotSignal(res.outcome) ? 0 : null;
+    }
+    return null;
+  }, [lastChannelScan]);
+
   const formationTradeLevelSpecs = useMemo(() => {
     if (!lastChannelScan?.matched || !channelScanOverlayBars?.length) return [];
-    return buildFormationTradeLevelSpecs(lastChannelScan, channelScanOverlayBars);
-  }, [lastChannelScan, channelScanOverlayBars]);
+    const onlyRow =
+      tradeTargetsOnlyLiveRobot && liveRobotTradeTargetsRowIndex != null
+        ? liveRobotTradeTargetsRowIndex
+        : undefined;
+    return buildFormationTradeLevelSpecs(lastChannelScan, channelScanOverlayBars, {
+      onlyMatchRowIndex: onlyRow,
+    });
+  }, [
+    lastChannelScan,
+    channelScanOverlayBars,
+    tradeTargetsOnlyLiveRobot,
+    liveRobotTradeTargetsRowIndex,
+  ]);
 
   const multiOverlay = useMemo(() => {
     if (!lastChannelScan?.matched) return null;
@@ -3403,6 +3434,27 @@ export default function App() {
                       </p>
                       {channelScanLoading ? <p className="muted">{t("app.channelScan.scanning")}</p> : null}
                       {channelScanError ? <p className="err">{channelScanError}</p> : null}
+                      {lastChannelScan?.matched && liveRobotTradeTargetsRowIndex != null ? (
+                        <label
+                          className="muted"
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "0.4rem",
+                            fontSize: "0.8rem",
+                            marginBottom: "0.4rem",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={tradeTargetsOnlyLiveRobot}
+                            onChange={(e) => setTradeTargetsOnlyLiveRobot(e.target.checked)}
+                            aria-label={t("app.channelScan.onlyLiveRobotTradeTargetsAria")}
+                          />
+                          {t("app.channelScan.onlyLiveRobotTradeTargets")}
+                        </label>
+                      ) : null}
                       {lastChannelScan?.matched ? <ChannelScanMatchesTable res={lastChannelScan} /> : null}
                       {channelScanSummary ? (
                         <p className="muted" style={{ fontSize: "0.75rem", marginTop: "0.5rem" }}>
