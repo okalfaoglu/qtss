@@ -295,7 +295,6 @@ export function v2ToChartOverlays(
   out: ElliottEngineOutputV2,
   patternMenuByTf: ElliottPatternMenuByTf | undefined,
   waveColors?: ElliottMtfWaveColors,
-  showHistorical = false,
   styleOptions?: {
     showLines?: TfTriBool;
     showLabels?: TfTriBool;
@@ -485,28 +484,73 @@ export function v2ToChartOverlays(
     }
   }
 
-  if (showHistorical) {
-    for (const { tf, kind } of histMap) {
-      if (!showLines[tf]) continue;
-      const s = out.states[tf];
-      if (!s?.historicalImpulses?.length) continue;
-      const mainStart = s.impulse?.pivots[0]?.index ?? Number.NaN;
-      const mainEnd = s.impulse?.pivots[5]?.index ?? Number.NaN;
-      const m = menuTf(tf);
-      for (const hi of s.historicalImpulses) {
-        const hs = hi.pivots[0].index;
-        const he = hi.pivots[5].index;
-        if (hs === mainStart && he === mainEnd) continue;
-        if (!showImpulseOverlay(m, hi)) continue;
+  for (const { tf, kind } of histMap) {
+    if (!showLines[tf]) continue;
+    const s = out.states[tf];
+    if (!s?.historicalImpulses?.length) continue;
+    const mainStart = s.impulse?.pivots[0]?.index ?? Number.NaN;
+    const mainEnd = s.impulse?.pivots[5]?.index ?? Number.NaN;
+    const m = menuTf(tf);
+    const waveKind = waveKindByTf[tf];
+    const extras = s.historicalImpulseExtras ?? [];
+    for (let hiIdx = 0; hiIdx < s.historicalImpulses.length; hiIdx++) {
+      const hi = s.historicalImpulses[hiIdx]!;
+      const hs = hi.pivots[0].index;
+      const he = hi.pivots[5].index;
+      if (hs === mainStart && he === mainEnd) continue;
+      if (!showImpulseOverlay(m, hi)) continue;
+      layers.push({
+        upper: [],
+        lower: [],
+        zigzag: toPts(hi.pivots),
+        zigzagKind: kind,
+        zigzagLineColor: wc[tf],
+        zigzagLineStyle: lineStyles[tf],
+        zigzagLineWidth: lineWidths[tf],
+      });
+      if (showLabels[tf]) labels.push(...waveLabels(tf, { ...s, impulse: hi }, wc, labelColors));
+
+      const ex = extras[hiIdx];
+      if (!ex) continue;
+
+      if (showLines[tf] && ex.wave2 && showCorrectiveOverlay(m, ex.wave2)) {
+        const p = ex.wave2.path?.length ? ex.wave2.path : ex.wave2.pivots;
         layers.push({
           upper: [],
           lower: [],
-          zigzag: toPts(hi.pivots),
-          zigzagKind: kind,
+          zigzag: toPts(p),
+          zigzagKind: waveKind,
           zigzagLineColor: wc[tf],
           zigzagLineStyle: lineStyles[tf],
           zigzagLineWidth: lineWidths[tf],
         });
+        if (showLabels[tf]) labels.push(...correctiveLabels(ex.wave2, "wave2", tf, wc, labelColors));
+      }
+      if (showLines[tf] && ex.wave4 && showCorrectiveOverlay(m, ex.wave4)) {
+        const p = ex.wave4.path?.length ? ex.wave4.path : ex.wave4.pivots;
+        layers.push({
+          upper: [],
+          lower: [],
+          zigzag: toPts(p),
+          zigzagKind: waveKind,
+          zigzagLineColor: wc[tf],
+          zigzagLineStyle: lineStyles[tf],
+          zigzagLineWidth: lineWidths[tf],
+        });
+        if (showLabels[tf]) labels.push(...correctiveLabels(ex.wave4, "wave4", tf, wc, labelColors));
+      }
+      if (showLines[tf] && ex.postImpulseAbc && showCorrectiveOverlay(m, ex.postImpulseAbc)) {
+        const linePivots = postImpulseAbcLinePivots(ex.postImpulseAbc);
+        layers.push({
+          upper: [],
+          lower: [],
+          zigzag: toPts(linePivots),
+          zigzagKind: "elliott_v2_post_abc",
+          zigzagLineColor: wc[tf],
+          zigzagLineStyle: lineStyles[tf],
+          zigzagLineWidth: Math.max(1, lineWidths[tf] - 1),
+        });
+        if (showLabels[tf]) labels.push(...correctiveLabels(ex.postImpulseAbc, "post", tf, wc, labelColors));
       }
     }
   }

@@ -453,15 +453,6 @@ export function ElliottWaveCard({
               />
               <span>İkinci projeksiyon senaryosu (uzatılmış 3. dalga ※)</span>
             </label>
-            <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
-              <input
-                type="checkbox"
-                checked={value.show_historical_waves}
-                disabled={!value.enabled}
-                onChange={(e) => onChange({ ...value, show_historical_waves: e.target.checked })}
-              />
-              <span>Geçmişte Elliott itki ara (tarihsel 1–5 katmanı)</span>
-            </label>
           </>
         ) : null}
         {value.enabled ? (

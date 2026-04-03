@@ -14,11 +14,9 @@ use uuid::Uuid;
 
 use qtss_chart_patterns::{
     analyze_channel_six_from_bars, channel_six_drawing_hints, channel_six_pattern_drawing_batch,
-    check_breakout_volume, compute_apex_from_outcome, compute_formation_trade_levels,
-    detect_failure_swing, pattern_name_by_acp_id, ApexResult, BreakoutVolumeResult,
-    ChannelSixDrawingHints, ChannelSixReject, ChannelSixScanOutcome, ChannelSixWindowFilter,
-    FailureSwingResult, FormationMatch, FormationParams, FormationTradeLevels, OhlcBar,
-    PatternDrawingBatch, SixPivotScanParams, SizeFilters,
+    compute_formation_trade_levels, pattern_name_by_acp_id, ChannelSixDrawingHints,
+    ChannelSixReject, ChannelSixScanOutcome, ChannelSixWindowFilter, FormationTradeLevels,
+    OhlcBar, PatternDrawingBatch, SixPivotScanParams, SizeFilters,
 };
 use qtss_common::{log_business, QtssLogLevel};
 use qtss_storage::{
@@ -975,7 +973,7 @@ fn default_elliott_wave_json() -> serde_json::Value {
         "show_projection_4h": false,
         "show_projection_1h": false,
         "show_projection_15m": false,
-        "show_historical_waves": false,
+        "show_historical_waves": true,
         "show_nested_formations": true,
         "show_projection_alt_scenario": true,
         "projection_multi_corrective_scenarios": false,
@@ -1311,12 +1309,6 @@ struct PatternMatchPayload {
     pattern_drawing_batch: PatternDrawingBatch,
     #[serde(skip_serializing_if = "Option::is_none")]
     formation_trade_levels: Option<FormationTradeLevels>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    apex: Option<ApexResult>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    failure_swing: Option<FailureSwingResult>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    breakout_volume: Option<BreakoutVolumeResult>,
 }
 
 #[derive(Serialize)]
@@ -1346,9 +1338,6 @@ struct ChannelSixResponse {
     /// First match only: same as `pattern_matches[0].formation_trade_levels` when present.
     #[serde(skip_serializing_if = "Option::is_none")]
     formation_trade_levels: Option<FormationTradeLevels>,
-    /// Faz 2 formasyonları (Double Top/Bottom, H&S, Triple, Flag) — zigzag pivotlarından tespit.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    formations: Vec<FormationMatch>,
 }
 
 async fn channel_six_scan(
@@ -1480,15 +1469,12 @@ async fn channel_six_scan(
         .iter()
         .map(|o| {
             let id = o.scan.pattern_type_id;
-            let pattern_name = if (1..=21).contains(&id) {
+            let pattern_name = if (1..=13).contains(&id) {
                 pattern_name_by_acp_id(id as u8)
             } else {
                 None
             };
             let formation_trade_levels = compute_formation_trade_levels(o, ref_bar, ref_close);
-            let apex = compute_apex_from_outcome(o, ref_bar, 0.75);
-            let failure_swing = detect_failure_swing(o, &map, 0.85);
-            let breakout_volume = check_breakout_volume(&map, ref_bar, 20, 1.5);
             PatternMatchPayload {
                 outcome: o.clone(),
                 pattern_name,
@@ -1499,9 +1485,6 @@ async fn channel_six_scan(
                     body.zigzag_line_width,
                 ),
                 formation_trade_levels,
-                apex,
-                failure_swing,
-                breakout_volume,
             }
         })
         .collect();
@@ -1515,7 +1498,7 @@ async fn channel_six_scan(
     let drawing = first.map(channel_six_drawing_hints);
     let pattern_name = first.and_then(|o| {
         let id = o.scan.pattern_type_id;
-        if (1..=21).contains(&id) {
+        if (1..=13).contains(&id) {
             pattern_name_by_acp_id(id as u8)
         } else {
             None
@@ -1529,20 +1512,7 @@ async fn channel_six_scan(
         .first()
         .and_then(|p| p.formation_trade_levels.clone());
 
-    // Faz 2: zigzag pivotlarından klasik formasyonları tara
-    let formations = {
-        use qtss_chart_patterns::{scan_formations, zigzag_from_ohlc_bars, pivots_chronological};
-        let zz = zigzag_from_ohlc_bars(&map, 8, 50, 0);
-        let chrono = pivots_chronological(&zz);
-        let pivot_triples: Vec<(i64, f64, i32)> = chrono
-            .iter()
-            .map(|p| (p.point.index, p.point.price, p.dir))
-            .collect();
-        let bars_vec: Vec<OhlcBar> = map.values().copied().collect();
-        scan_formations(&pivot_triples, &bars_vec, &FormationParams::default())
-    };
-
-    let matched = !all_outcomes.is_empty() || !formations.is_empty();
+    let matched = !all_outcomes.is_empty();
     (
         StatusCode::OK,
         Json(ChannelSixResponse {
@@ -1559,7 +1529,6 @@ async fn channel_six_scan(
             repaint,
             live_robot_match_index,
             formation_trade_levels,
-            formations,
         }),
     )
         .into_response()

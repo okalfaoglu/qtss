@@ -927,7 +927,6 @@ export default function App() {
       elliottV2Output,
       elliottConfig.pattern_menu_by_tf,
       mtfWaveColorsFromConfig(elliottConfig),
-      elliottConfig.show_historical_waves,
       {
         showLines: lineVisibility,
         showLabels: labelVisibility,
@@ -991,7 +990,6 @@ export default function App() {
     elliottConfig.show_zigzag_pivot_15m,
     elliottConfig.show_zigzag_pivot_1h,
     elliottConfig.show_zigzag_pivot_4h,
-    elliottConfig.show_historical_waves,
     elliottConfig.show_nested_formations,
     elliottConfig.show_line_1w,
     elliottConfig.show_line_1d,

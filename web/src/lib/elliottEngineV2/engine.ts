@@ -497,6 +497,25 @@ function runForTf(tf: Timeframe, rows: OhlcV2[], input: ElliottEngineInputV2): T
     // Same menu as wave-1 nested: w4–w1 overlap is invalid for standard but valid for diagonal (§2.5.3.4).
     wave5NestedImpulse = detectNestedImpulseInLeg(pivots, p4, p5, nestedImpulseOpts, rows, input.zigzag);
   }
+
+  const historicalImpulseExtras = historicalImpulses.map((hi) => {
+    const raw = detectImpulseCorrectionsV2(pivots, hi, menu);
+    const dir = hi.direction;
+    return {
+      wave2: addTriangleLegProof(
+        addFlatStructureProof(addZigzagMotiveProof(raw.wave2), "wave2", dir),
+        "wave2",
+        dir,
+      ),
+      wave4: addTriangleLegProof(
+        addFlatStructureProof(addZigzagMotiveProof(raw.wave4), "wave4", dir),
+        "wave4",
+        dir,
+      ),
+      postImpulseAbc: raw.postImpulseAbc,
+    };
+  });
+
   const core = {
     timeframe: tf,
     pivots,
@@ -507,6 +526,7 @@ function runForTf(tf: Timeframe, rows: OhlcV2[], input: ElliottEngineInputV2): T
     wave4NestedCorrective,
     wave5NestedImpulse,
     historicalImpulses,
+    historicalImpulseExtras,
     wave2: addTriangleLegProof(
       addFlatStructureProof(
         addZigzagMotiveProof(corr.wave2),

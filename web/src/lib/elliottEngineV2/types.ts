@@ -89,6 +89,14 @@ export type TimeframeStateV2 = {
   wave5NestedImpulse: ImpulseCountV2 | null;
   /** Geçmişte bulunan ek itki adayları (çakışmasız, yeniye yakın öncelik). */
   historicalImpulses?: ImpulseCountV2[];
+  /**
+   * `historicalImpulses[i]` ile aynı indeks: menüde seçili düzeltme kalıplarıyla bulunan dalga 2 / 4 / +ABC.
+   */
+  historicalImpulseExtras?: Array<{
+    wave2: CorrectiveCountV2 | null;
+    wave4: CorrectiveCountV2 | null;
+    postImpulseAbc: CorrectiveCountV2 | null;
+  }>;
   wave2: CorrectiveCountV2 | null;
   wave4: CorrectiveCountV2 | null;
   postImpulseAbc: CorrectiveCountV2 | null;

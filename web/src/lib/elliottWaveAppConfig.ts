@@ -125,7 +125,10 @@ export type ElliottWaveConfig = {
   show_projection_4h: boolean;
   show_projection_1h: boolean;
   show_projection_15m: boolean;
-  /** Geçmiş verilerde Elliott itki yapıları ara ve grafikte göster (ince katman). */
+  /**
+   * @deprecated Her zaman açık: geçmiş itkılar ve menüde seçili düzeltmeler grafikte süzülür.
+   * JSON uyumluluğu için saklanır; normalize her zaman `true` yazar.
+   */
   show_historical_waves: boolean;
   /** Ana itkı içindeki alt itkı (1/3/5) ve dalga 2/4 içi mikro a–b–c çizimleri. */
   show_nested_formations: boolean;
@@ -307,7 +310,7 @@ export const DEFAULT_ELLIOTT_WAVE_CONFIG: ElliottWaveConfig = {
   show_projection_4h: false,
   show_projection_1h: false,
   show_projection_15m: false,
-  show_historical_waves: false,
+  show_historical_waves: true,
   show_nested_formations: true,
   show_projection_alt_scenario: true,
   projection_multi_corrective_scenarios: false,
@@ -445,8 +448,7 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
   const show_projection_4h = projTri("show_projection_4h");
   const show_projection_1h = projTri("show_projection_1h");
   const show_projection_15m = projTri("show_projection_15m");
-  const show_historical_waves =
-    typeof raw.show_historical_waves === "boolean" ? raw.show_historical_waves : base.show_historical_waves;
+  const show_historical_waves = true;
   const show_nested_formations =
     typeof raw.show_nested_formations === "boolean" ? raw.show_nested_formations : base.show_nested_formations;
 
