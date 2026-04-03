@@ -140,6 +140,7 @@ import { canAdmin, canOps, type AuthSession } from "./lib/rbac";
 import type { SeriesMarker, UTCTimestamp } from "lightweight-charts";
 import { BacktestRunCard } from "./components/BacktestRunCard";
 import { OrdersAndFillsCard } from "./components/OrdersAndFillsCard";
+import { TradingRangeSetupEngineSymbolsPanel } from "./components/TradingRangeSetupEngineSymbolsPanel";
 import { TradingRangeSetupTable } from "./components/TradingRangeSetupTable";
 import { TradingRangeTradeSummary } from "./components/TradingRangeTradeSummary";
 import { TradingRangeFuturesQuickTrade } from "./components/TradingRangeFuturesQuickTrade";
@@ -3671,11 +3672,25 @@ export default function App() {
                             <HelpCrossLink topicId="engine-range-signals" onOpen={jumpToHelp} label="SSS" />
                           </p>
                           {token ? (
-                            <TradingRangeSetupTable
-                              events={engineRangeSignals}
-                              engineSnapshots={engineSnapshots}
-                              engineSymbols={engineSymbols}
-                            />
+                            <>
+                              <TradingRangeSetupEngineSymbolsPanel
+                                engineSymbols={engineSymbols}
+                                engineSnapshots={engineSnapshots}
+                                toolbarExchange={barExchange}
+                                toolbarSegment={barSegment}
+                              />
+                              <p
+                                className="tv-drawer__section-head"
+                                style={{ marginTop: "0.55rem", marginBottom: "0.25rem" }}
+                              >
+                                {t("app.tradingRangeEventsSetup.eventsSubhead")}
+                              </p>
+                              <TradingRangeSetupTable
+                                events={engineRangeSignals}
+                                engineSnapshots={engineSnapshots}
+                                engineSymbols={engineSymbols}
+                              />
+                            </>
                           ) : (
                             <p className="muted">{t("app.tradingRangeDrawer.loginHint")}</p>
                           )}

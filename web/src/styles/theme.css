@@ -2216,6 +2216,100 @@ input[type="color"].tv-elliott-color-swatch:focus-visible {
   padding: 0 0.35rem 0.55rem;
 }
 
+/* Trading Range Setup — engine_symbols list (toolbar venue) */
+.tv-tr-eng-setup {
+  margin-bottom: 0.35rem;
+}
+
+.tv-tr-eng-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.38rem;
+  max-height: min(40vh, 18rem);
+  overflow: auto;
+  padding-right: 0.12rem;
+}
+
+.tv-tr-eng-list__row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 8px;
+  padding: 0.4rem 0.48rem;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-left-width: 4px;
+  background: color-mix(in srgb, var(--card) 93%, var(--bg));
+  color: var(--fg);
+  font: inherit;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.tv-tr-eng-list__row:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--card) 86%, var(--accent) 7%);
+  border-color: color-mix(in srgb, var(--border) 50%, var(--accent) 25%);
+}
+
+.tv-tr-eng-list__row--ok {
+  border-left-color: #22c55e;
+}
+
+.tv-tr-eng-list__row--error {
+  border-left-color: #f87171;
+}
+
+.tv-tr-eng-list__row--muted {
+  border-left-color: color-mix(in srgb, var(--muted) 45%, transparent);
+}
+
+.tv-tr-eng-list__row--disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.tv-tr-eng-list__row-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.tv-tr-eng-list__sym {
+  font-weight: 700;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+.tv-tr-eng-list__iv {
+  font-size: 0.68rem;
+}
+
+.tv-tr-eng-list__pill-off {
+  flex-shrink: 0;
+  font-size: 0.55rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.06rem 0.32rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--muted) 22%, transparent);
+  color: var(--muted);
+}
+
+.tv-tr-eng-list__meta {
+  margin-top: 0.06rem;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.tv-tr-eng-list__summary {
+  margin-top: 0.22rem;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--fg) 88%, var(--muted));
+}
+
 /* Trading Range Setup — renkli olay tablosu (çekmece) */
 .tv-tr-setup-wrap {
   max-height: min(52vh, 22rem);

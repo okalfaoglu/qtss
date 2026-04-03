@@ -8,6 +8,7 @@ import {
 } from "../lib/engineTargetMatch";
 import {
   parseSignalDashboardV2,
+  pickDashboardNum,
   pickDashboardStr,
   trendAxisDisplayAsLongShort,
   type SignalDashboardPayload,
@@ -95,6 +96,38 @@ export function TradingRangeEngineEvalDialog({
     };
   }, [dashSnap]);
 
+  const dashSetupLevels = useMemo(() => {
+    if (!dashSnap?.payload || typeof dashSnap.payload !== "object") return null;
+    const raw = dashSnap.payload as Record<string, unknown>;
+    if (raw.reason === "insufficient_bars") return { insufficient: true as const };
+    const p = dashSnap.payload as SignalDashboardPayload;
+    const v2 = parseSignalDashboardV2(raw.signal_dashboard_v2);
+    const vol =
+      v2?.volatility_pct != null && Number.isFinite(v2.volatility_pct)
+        ? v2.volatility_pct.toFixed(2)
+        : p.oynaklik_pct != null
+          ? p.oynaklik_pct.toFixed(2)
+          : "—";
+    return {
+      insufficient: false as const,
+      entry: pickDashboardNum(v2?.entry_price ?? undefined, p.giris_gercek ?? undefined),
+      stop: pickDashboardNum(v2?.stop_initial ?? undefined, p.stop_ilk ?? undefined),
+      tp: pickDashboardNum(v2?.take_profit_initial ?? undefined, p.kar_al_ilk ?? undefined),
+      stopTrail: pickDashboardNum(v2?.stop_trail ?? undefined, p.stop_trail_aktif ?? undefined),
+      tpDyn: pickDashboardNum(v2?.take_profit_dynamic ?? undefined, p.kar_al_dinamik ?? undefined),
+      vol,
+      m1: pickDashboardStr(v2?.momentum_rsi, p.momentum_1),
+      m2: pickDashboardStr(v2?.momentum_roc, p.momentum_2),
+      pos:
+        v2?.position_strength_10 != null
+          ? `${v2.position_strength_10} / 10`
+          : p.pozisyon_gucu_10 != null
+            ? `${p.pozisyon_gucu_10} / 10`
+            : "—",
+      atr: p.atr != null && typeof p.atr === "number" && Number.isFinite(p.atr) ? p.atr.toFixed(4) : "—",
+    };
+  }, [dashSnap]);
+
   const venue = target
     ? `${target.exchange}/${normalizeEngineMarketSegment(target.segment)} · ${target.interval}`
     : "";
@@ -123,6 +156,42 @@ export function TradingRangeEngineEvalDialog({
             {t("app.tradingRangeEngineEval.close")}
           </button>
         </header>
+
+        <section className="tv-engine-eval-dialog__section">
+          <h3 className="tv-engine-eval-dialog__h">{t("app.tradingRangeEngineEval.sectionSetupLevels")}</h3>
+          {!dashSnap ? (
+            <p className="muted tv-engine-eval-dialog__empty">{t("app.tradingRangeEngineEval.noSignalDashboard")}</p>
+          ) : dashSnap.error ? (
+            <p className="err tv-engine-eval-dialog__empty">{dashSnap.error}</p>
+          ) : !dashSetupLevels ? (
+            <p className="muted tv-engine-eval-dialog__empty">{t("app.tradingRangeEngineEval.payloadEmpty")}</p>
+          ) : dashSetupLevels.insufficient ? (
+            <p className="muted tv-engine-eval-dialog__empty">{t("app.tradingRangeEngineEval.insufficientBars")}</p>
+          ) : (
+            <dl className="tv-engine-eval-dialog__dl">
+              <dt className="muted">{t("app.signalDashboard.row.entryActual")}</dt>
+              <dd className="mono">{dashSetupLevels.entry}</dd>
+              <dt className="muted">{t("app.signalDashboard.row.stopInitial")}</dt>
+              <dd className="mono">{dashSetupLevels.stop}</dd>
+              <dt className="muted">{t("app.signalDashboard.row.takeProfitInitial")}</dt>
+              <dd className="mono">{dashSetupLevels.tp}</dd>
+              <dt className="muted">{t("app.signalDashboard.row.stopTrailActive")}</dt>
+              <dd className="mono">{dashSetupLevels.stopTrail}</dd>
+              <dt className="muted">{t("app.signalDashboard.row.takeProfitDynamic")}</dt>
+              <dd className="mono">{dashSetupLevels.tpDyn}</dd>
+              <dt className="muted">{t("app.signalDashboard.row.positionStrength")}</dt>
+              <dd className="mono">{dashSetupLevels.pos}</dd>
+              <dt className="muted">{t("app.signalDashboard.row.volatilityPct")}</dt>
+              <dd className="mono">{dashSetupLevels.vol}</dd>
+              <dt className="muted">{t("app.signalDashboard.row.momentum1")}</dt>
+              <dd className="mono">{dashSetupLevels.m1}</dd>
+              <dt className="muted">{t("app.signalDashboard.row.momentum2")}</dt>
+              <dd className="mono">{dashSetupLevels.m2}</dd>
+              <dt className="muted">{t("app.signalDashboard.row.atr")}</dt>
+              <dd className="mono">{dashSetupLevels.atr}</dd>
+            </dl>
+          )}
+        </section>
 
         <section className="tv-engine-eval-dialog__section">
           <h3 className="tv-engine-eval-dialog__h">{t("app.tradingRangeEngineEval.sectionMotor")}</h3>

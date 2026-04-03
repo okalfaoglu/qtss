@@ -43,6 +43,8 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     build: {
+      /** Default 500 — main `index-*.js` stays larger after splitting only react + charts; not an error. */
+      chunkSizeWarningLimit: 700,
       rollupOptions: {
         output: {
           manualChunks(id) {
