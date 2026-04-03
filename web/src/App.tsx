@@ -170,6 +170,8 @@ import {
   isV2RawZigzagKind,
   patchPatternMenuTf,
   elliottColorInputValue,
+  elliottAnalysisTimeframeColumnCheckboxState,
+  setElliottAnalysisTimeframeColumnEnabled,
 } from "./app/elliottAppHelpers";
 import { formatConfluenceExtras } from "./app/confluenceFormat";
 import { channelSixRejectMessage } from "./app/channelRejectMessage";
@@ -2875,9 +2877,10 @@ export default function App() {
                       >
                         <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }}>
                           Sol sütun: dalga / katman türü; üst sıra: 1W, 1D, 4H, 1H, 15M — Elliott V2 motoru ve desen
-                          menüsü. «ZigZag (depth)» bu beş TF için motor ZigZag penceresi. Alttaki tablo yalnızca 4H / 1H /
-                          15M grafik katmanı (pivot, renk, dalga çizgisi) içindir. «Gelecek Dalga (Tahmin)» grafikte
-                          şimdilik 4H / 1H / 15M ile çizilir; 1W / 1D kutuları ayar olarak saklanır.
+                          menüsü. «Bu TF — hepsi» satırı: o sütundaki dalga türleri, projeksiyon ve (alttaki tabloda)
+                          dalga/ZigZag görünürlüğünü tek tıkta açar veya kapatır; ZigZag depth ve renk/çizgi değerleri
+                          değişmez. «ZigZag (depth)» beş TF için motor penceresi. «Grafik çizimi» tablosu aynı TF’ler için
+                          pivot, renk ve çizgi ayrıntılarıdır.
                         </p>
                         <div className="tv-elliott-panel__row" style={{ marginBottom: "0.35rem" }}>
                           <label className="tv-elliott-panel__toggle">
@@ -2909,6 +2912,32 @@ export default function App() {
                             </tr>
                           </thead>
                           <tbody>
+                            <tr>
+                              <td style={{ padding: "0.2rem", fontWeight: 650 }}>Bu TF — hepsi</td>
+                              {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => {
+                                const { checked, indeterminate } = elliottAnalysisTimeframeColumnCheckboxState(
+                                  elliottConfig,
+                                  tfKey,
+                                );
+                                return (
+                                  <td key={tfKey} style={{ textAlign: "center" }}>
+                                    <input
+                                      type="checkbox"
+                                      ref={(el) => {
+                                        if (el) el.indeterminate = indeterminate;
+                                      }}
+                                      checked={checked}
+                                      title={`${ELLIOTT_ANALYSIS_TIMEFRAME_LABELS[tfKey]}: dalga türleri + projeksiyon + grafik görünürlüğü`}
+                                      onChange={(e) =>
+                                        setElliottConfig((c) =>
+                                          setElliottAnalysisTimeframeColumnEnabled(c, tfKey, e.target.checked),
+                                        )
+                                      }
+                                    />
+                                  </td>
+                                );
+                              })}
+                            </tr>
                             {ELLIOTT_PATTERN_MENU_ROWS.map((row) =>
                               row.type === "label" ? (
                                 <tr key={row.id}>
@@ -3054,6 +3083,32 @@ export default function App() {
                             </tr>
                           </thead>
                           <tbody>
+                            <tr>
+                              <td style={{ padding: "0.2rem", fontWeight: 650 }}>Bu TF — hepsi</td>
+                              {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => {
+                                const { checked, indeterminate } = elliottAnalysisTimeframeColumnCheckboxState(
+                                  elliottConfig,
+                                  tfKey,
+                                );
+                                return (
+                                  <td key={tfKey} style={{ textAlign: "center" }}>
+                                    <input
+                                      type="checkbox"
+                                      ref={(el) => {
+                                        if (el) el.indeterminate = indeterminate;
+                                      }}
+                                      checked={checked}
+                                      title={`${ELLIOTT_ANALYSIS_TIMEFRAME_LABELS[tfKey]}: üstteki tablo ile aynı — dalga türleri + projeksiyon + bu tablodaki görünürlük`}
+                                      onChange={(e) =>
+                                        setElliottConfig((c) =>
+                                          setElliottAnalysisTimeframeColumnEnabled(c, tfKey, e.target.checked),
+                                        )
+                                      }
+                                    />
+                                  </td>
+                                );
+                              })}
+                            </tr>
                             <tr>
                               <td style={{ padding: "0.2rem" }}>ZigZag (pivot)</td>
                               {ELLIOTT_ANALYSIS_TIMEFRAMES.map((tfKey) => {

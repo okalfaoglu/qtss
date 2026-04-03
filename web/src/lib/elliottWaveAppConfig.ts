@@ -261,6 +261,14 @@ export function elliottDrawingConfigKeys(tf: ElliottAnalysisTimeframe): {
   };
 }
 
+export function elliottProjectionConfigKey(tf: ElliottAnalysisTimeframe): keyof ElliottWaveConfig {
+  if (tf === "1w") return "show_projection_1w";
+  if (tf === "1d") return "show_projection_1d";
+  if (tf === "4h") return "show_projection_4h";
+  if (tf === "1h") return "show_projection_1h";
+  return "show_projection_15m";
+}
+
 export function mtfWaveColorsFromConfig(
   c: Pick<
     ElliottWaveConfig,
