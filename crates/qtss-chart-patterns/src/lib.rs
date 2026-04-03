@@ -14,6 +14,7 @@
 
 mod dashboard_v1;
 mod dashboard_v2_envelope;
+mod formation_trade_levels;
 mod find;
 mod ohlc;
 mod pattern_catalog;
@@ -30,6 +31,9 @@ pub use dashboard_v1::{
     SignalDirectionPolicy,
 };
 pub use dashboard_v2_envelope::{signal_dashboard_v2_envelope_from_v1, SignalDashboardV2Envelope};
+pub use formation_trade_levels::{
+    compute_formation_trade_levels, FormationTakeProfit, FormationTradeLevels, FormationTradeSide,
+};
 pub use find::{
     analyze_channel_six_from_bars, channel_six_drawing_hints, last_six_pivots_chrono,
     scan_six_alternating_pivots, six_pivots_chrono_tail_skip, try_scan_channel_six_from_bars,

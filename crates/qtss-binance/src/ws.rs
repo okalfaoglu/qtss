@@ -101,7 +101,10 @@ pub fn public_usdm_combined_streams_url(stream_paths: &[String]) -> String {
 /// Tam URL ile TLS WebSocket açar (işçi / test için).
 #[cfg(test)]
 mod combined_url_tests {
-    use super::{public_spot_combined_kline_url, public_usdm_combined_kline_url};
+    use super::{
+        kline_stream_path, public_spot_combined_kline_url, public_usdm_combined_kline_url,
+        public_usdm_combined_streams_url,
+    };
 
     #[test]
     fn spot_combined_streams_joined() {

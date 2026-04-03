@@ -636,17 +636,39 @@ export type ChannelSixRejectJson = {
   need_pivots?: number;
 };
 
+/** ACP literature-style entry / SL / TP hints (`qtss-chart-patterns` `formation_trade_levels`). */
+export type FormationTradeSideJson = "long" | "short";
+
+export type FormationTakeProfitJson = {
+  id: string;
+  price: number;
+  note: string;
+};
+
+export type FormationTradeLevelsJson = {
+  pattern_type_id: number;
+  side: FormationTradeSideJson;
+  entry: number;
+  stop_loss: number;
+  take_profits: FormationTakeProfitJson[];
+  band_upper_at_bar: number;
+  band_lower_at_bar: number;
+  reference_bar: number;
+  method: string;
+};
+
 export type PatternMatchPayloadJson = {
   outcome: ChannelSixOutcomeJson;
   pattern_name?: string;
   pattern_drawing_batch?: PatternDrawingBatchJson;
+  formation_trade_levels?: FormationTradeLevelsJson;
 };
 
 export type ChannelSixResponse = {
   matched: boolean;
   bar_count: number;
   zigzag_pivot_count: number;
-  /** İstekteki `repaint` yansıması (Pine açık mum). */
+  /** İstekteki `repaint` yansıması (Pine: açık mum). */
   repaint?: boolean;
   reject?: ChannelSixRejectJson;
   outcome?: ChannelSixOutcomeJson;
@@ -657,6 +679,8 @@ export type ChannelSixResponse = {
   /** `pattern_matches` içinde `pivot_tail_skip === 0` ve `zigzag_level === 0` olan ilk satırın indeksi — robot / canlı sinyal. */
   live_robot_match_index?: number | null;
   used_zigzag?: { length: number; depth: number };
+  /** İlk eşleşme ile aynı: `pattern_matches[0].formation_trade_levels`. */
+  formation_trade_levels?: FormationTradeLevelsJson;
 };
 
 export type PatternDrawingTimePrice = {

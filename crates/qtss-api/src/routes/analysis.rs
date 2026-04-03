@@ -14,8 +14,9 @@ use uuid::Uuid;
 
 use qtss_chart_patterns::{
     analyze_channel_six_from_bars, channel_six_drawing_hints, channel_six_pattern_drawing_batch,
-    pattern_name_by_acp_id, ChannelSixDrawingHints, ChannelSixReject, ChannelSixScanOutcome,
-    ChannelSixWindowFilter, OhlcBar, PatternDrawingBatch, SixPivotScanParams, SizeFilters,
+    compute_formation_trade_levels, pattern_name_by_acp_id, ChannelSixDrawingHints,
+    ChannelSixReject, ChannelSixScanOutcome, ChannelSixWindowFilter, FormationTradeLevels,
+    OhlcBar, PatternDrawingBatch, SixPivotScanParams, SizeFilters,
 };
 use qtss_common::{log_business, QtssLogLevel};
 use qtss_storage::{
@@ -1300,12 +1301,14 @@ impl ChannelSixBody {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct PatternMatchPayload {
     outcome: ChannelSixScanOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     pattern_name: Option<&'static str>,
     pattern_drawing_batch: PatternDrawingBatch,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    formation_trade_levels: Option<FormationTradeLevels>,
 }
 
 #[derive(Serialize)]
@@ -1332,6 +1335,9 @@ struct ChannelSixResponse {
     /// `pattern_matches` içinde canlı/robot adayı: `pivot_tail_skip == 0` ve `zigzag_level == 0` olan ilk eşleşme.
     #[serde(skip_serializing_if = "Option::is_none")]
     live_robot_match_index: Option<usize>,
+    /// First match only: same as `pattern_matches[0].formation_trade_levels` when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    formation_trade_levels: Option<FormationTradeLevels>,
 }
 
 async fn channel_six_scan(
@@ -1453,6 +1459,12 @@ async fn channel_six_scan(
         None
     };
 
+    let (ref_bar, ref_close) = map
+        .keys()
+        .next_back()
+        .and_then(|k| map.get(k).map(|b| (*k, b.close)))
+        .unwrap_or((0_i64, 0.0));
+
     let pattern_matches: Vec<PatternMatchPayload> = all_outcomes
         .iter()
         .map(|o| {
@@ -1462,6 +1474,7 @@ async fn channel_six_scan(
             } else {
                 None
             };
+            let formation_trade_levels = compute_formation_trade_levels(o, ref_bar, ref_close);
             PatternMatchPayload {
                 outcome: o.clone(),
                 pattern_name,
@@ -1471,6 +1484,7 @@ async fn channel_six_scan(
                     body.pattern_line_width,
                     body.zigzag_line_width,
                 ),
+                formation_trade_levels,
             }
         })
         .collect();
@@ -1494,6 +1508,10 @@ async fn channel_six_scan(
         .first()
         .map(|p| p.pattern_drawing_batch.clone());
 
+    let formation_trade_levels = pattern_matches
+        .first()
+        .and_then(|p| p.formation_trade_levels.clone());
+
     let matched = !all_outcomes.is_empty();
     (
         StatusCode::OK,
@@ -1510,6 +1528,7 @@ async fn channel_six_scan(
             used_zigzag,
             repaint,
             live_robot_match_index,
+            formation_trade_levels,
         }),
     )
         .into_response()
