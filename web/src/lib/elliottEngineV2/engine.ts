@@ -498,6 +498,11 @@ function runForTf(tf: Timeframe, rows: OhlcV2[], input: ElliottEngineInputV2): T
     wave5NestedImpulse = detectNestedImpulseInLeg(pivots, p4, p5, nestedImpulseOpts, rows, input.zigzag);
   }
 
+  /**
+   * Geçmiş itkılar için dalga 2/4 yerel (p1–p2, p3–p4) kalır. `postImpulseAbc` üretilmez: motor `p5` sonrası
+   * tüm zigzag sonuna kadar `findCorrectiveBetween` çağırır; geçmişte bitmiş bir 5’te bu “son” grafik sağ ucudur,
+   * çizgi yüzlerce muma yayılıp örümcek ağı yapar. Ana itkı sağda bittiğinde aynı mantık kısa kalır.
+   */
   const historicalImpulseExtras = historicalImpulses.map((hi) => {
     const raw = detectImpulseCorrectionsV2(pivots, hi, menu);
     const dir = hi.direction;
@@ -512,7 +517,7 @@ function runForTf(tf: Timeframe, rows: OhlcV2[], input: ElliottEngineInputV2): T
         "wave4",
         dir,
       ),
-      postImpulseAbc: raw.postImpulseAbc,
+      postImpulseAbc: null,
     };
   });
 

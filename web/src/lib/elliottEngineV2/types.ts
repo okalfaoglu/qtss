@@ -90,7 +90,8 @@ export type TimeframeStateV2 = {
   /** Geçmişte bulunan ek itki adayları (çakışmasız, yeniye yakın öncelik). */
   historicalImpulses?: ImpulseCountV2[];
   /**
-   * `historicalImpulses[i]` ile aynı indeks: menüde seçili düzeltme kalıplarıyla bulunan dalga 2 / 4 / +ABC.
+   * `historicalImpulses[i]` ile aynı indeks: dalga 2 / 4 (p1–p2, p3–p4 aralığında).
+   * `postImpulseAbc` her zaman null — geçmiş itkı için +ABC uç noktası grafik son pivotuna bağlanırdı.
    */
   historicalImpulseExtras?: Array<{
     wave2: CorrectiveCountV2 | null;
