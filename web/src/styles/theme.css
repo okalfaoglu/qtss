@@ -2290,6 +2290,24 @@ input[type="color"].tv-elliott-color-swatch:focus-visible {
   color: color-mix(in srgb, var(--accent) 55%, var(--fg));
 }
 
+.tv-tr-setup-symbol-btn {
+  font: inherit;
+  font-weight: 700;
+  font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
+  color: color-mix(in srgb, var(--accent) 55%, var(--fg));
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 0.12em;
+}
+
+.tv-tr-setup-symbol-btn:hover {
+  color: var(--accent);
+}
+
 .tv-tr-setup-enter {
   min-width: 7.5rem;
 }
@@ -2357,6 +2375,113 @@ input[type="color"].tv-elliott-color-swatch:focus-visible {
 
 .tv-tr-setup-empty {
   padding: 0.5rem 0;
+}
+
+/* Motor evaluation dialog (Trading Range setup / trade summary symbol click) */
+.tv-engine-eval-dialog {
+  border: none;
+  padding: 0;
+  max-width: calc(100vw - 1.5rem);
+  width: min(34rem, 100%);
+  background: transparent;
+}
+
+.tv-engine-eval-dialog::backdrop {
+  background: color-mix(in srgb, #000 52%, transparent);
+}
+
+.tv-engine-eval-dialog__panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.85rem 1rem 1rem;
+  max-height: min(85vh, 38rem);
+  overflow: auto;
+}
+
+.tv-engine-eval-dialog__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.tv-engine-eval-dialog__title {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.tv-engine-eval-dialog__venue {
+  margin: 0.12rem 0 0;
+  font-size: 0.68rem;
+}
+
+.tv-engine-eval-dialog__close {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+}
+
+.tv-engine-eval-dialog__section {
+  margin-top: 0.5rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+}
+
+.tv-engine-eval-dialog__section:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.tv-engine-eval-dialog__h {
+  margin: 0 0 0.32rem 0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tv-engine-eval-dialog__dl {
+  display: grid;
+  grid-template-columns: minmax(0, 44%) minmax(0, 56%);
+  gap: 0.2rem 0.65rem;
+  margin: 0;
+  font-size: 0.69rem;
+  line-height: 1.35;
+}
+
+.tv-engine-eval-dialog__dl dt {
+  margin: 0;
+}
+
+.tv-engine-eval-dialog__dl dd {
+  margin: 0;
+}
+
+.tv-engine-eval-dialog__empty {
+  margin: 0;
+  font-size: 0.69rem;
+}
+
+.tv-tr-ts-symbol-btn {
+  font: inherit;
+  font-size: inherit;
+  font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
+  color: color-mix(in srgb, var(--accent) 42%, var(--muted));
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  text-underline-offset: 0.12em;
+}
+
+.tv-tr-ts-symbol-btn:hover {
+  color: var(--accent);
 }
 
 /* Trading Range — trade summary cards + PnL meters */

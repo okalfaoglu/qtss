@@ -46,12 +46,12 @@ export function TradingRangeEngineEvalDialog({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    if (open) {
+    if (open && target) {
       if (!el.open) el.showModal();
     } else if (el.open) {
       el.close();
     }
-  }, [open]);
+  }, [open, target]);
 
   const motorRow = useMemo(() => {
     if (!target) return null;
@@ -95,10 +95,10 @@ export function TradingRangeEngineEvalDialog({
     };
   }, [dashSnap]);
 
-  if (!target) return null;
-
-  const venue = `${target.exchange}/${normalizeEngineMarketSegment(target.segment)} · ${target.interval}`;
-  const symU = target.symbol.trim().toUpperCase();
+  const venue = target
+    ? `${target.exchange}/${normalizeEngineMarketSegment(target.segment)} · ${target.interval}`
+    : "";
+  const symU = target ? target.symbol.trim().toUpperCase() : "";
 
   return (
     <dialog
@@ -112,6 +112,7 @@ export function TradingRangeEngineEvalDialog({
         if (e.target === e.currentTarget) onClose();
       }}
     >
+      {target ? (
       <div className="tv-engine-eval-dialog__panel" onClick={(e) => e.stopPropagation()}>
         <header className="tv-engine-eval-dialog__head">
           <div>
@@ -240,6 +241,7 @@ export function TradingRangeEngineEvalDialog({
           )}
         </section>
       </div>
+      ) : null}
     </dialog>
   );
 }
