@@ -9,7 +9,7 @@ import {
 
 export type { ElliottPatternMenuToggles };
 
-/** Motor + desen menüsü sütunları (kaba → ince). Grafik çizim katmanı hâlâ 4h/1h/15m. */
+/** Motor + desen menüsü + grafik çizim sütunları (kaba → ince: 1W … 15M). */
 export const ELLIOTT_ANALYSIS_TIMEFRAMES = ["1w", "1d", "4h", "1h", "15m"] as const;
 export type ElliottAnalysisTimeframe = (typeof ELLIOTT_ANALYSIS_TIMEFRAMES)[number];
 
@@ -55,14 +55,12 @@ export function patternMenuForTf(c: ElliottWaveConfig, tf: ElliottAnalysisTimefr
 
 export const ELLIOTT_WAVE_CONFIG_KEY = "elliott_wave";
 
-/** Grafik: 4h / 1h / 15m Elliott çizgileri (menüden özelleştirilebilir). */
-export type ElliottMtfWaveColors = {
-  "4h": string;
-  "1h": string;
-  "15m": string;
-};
+/** Grafik: tüm analiz TF’leri için dalga / zigzag renk haritası. */
+export type ElliottMtfWaveColors = Record<ElliottAnalysisTimeframe, string>;
 
 export const DEFAULT_ELLIOTT_MTF_WAVE_COLORS: ElliottMtfWaveColors = {
+  "1w": "#8e24aa",
+  "1d": "#5d4037",
   "4h": "#e53935",
   "1h": "#43a047",
   "15m": "#fb8c00",
@@ -174,49 +172,78 @@ export type ElliottWaveConfig = {
   /** Dalga türleri — TF başına (motor + hangi çizimlerin üretileceği). */
   pattern_menu_by_tf: ElliottPatternMenuByTf;
   /** MTF ZigZag + dalga çizgileri rengi (hex). */
+  mtf_wave_color_1w: string;
+  mtf_wave_color_1d: string;
   mtf_wave_color_4h: string;
   mtf_wave_color_1h: string;
   mtf_wave_color_15m: string;
   /** MTF etiket rengi (hex). */
+  mtf_label_color_1w: string;
+  mtf_label_color_1d: string;
   mtf_label_color_4h: string;
   mtf_label_color_1h: string;
   mtf_label_color_15m: string;
   /** MTF çizgi görünürlüğü. */
+  show_line_1w: boolean;
+  show_line_1d: boolean;
   show_line_4h: boolean;
   show_line_1h: boolean;
   show_line_15m: boolean;
   /** MTF etiket görünürlüğü. */
+  show_label_1w: boolean;
+  show_label_1d: boolean;
   show_label_4h: boolean;
   show_label_1h: boolean;
   show_label_15m: boolean;
   /** MTF çizgi tipi. */
+  mtf_line_style_1w: "solid" | "dotted" | "dashed";
+  mtf_line_style_1d: "solid" | "dotted" | "dashed";
   mtf_line_style_4h: "solid" | "dotted" | "dashed";
   mtf_line_style_1h: "solid" | "dotted" | "dashed";
   mtf_line_style_15m: "solid" | "dotted" | "dashed";
   /** MTF çizgi kalınlığı. */
+  mtf_line_width_1w: number;
+  mtf_line_width_1d: number;
   mtf_line_width_4h: number;
   mtf_line_width_1h: number;
   mtf_line_width_15m: number;
   /** Ham ZigZag pivot çizgisi — TF başına görünürlük (DB). */
+  show_zigzag_pivot_1w: boolean;
+  show_zigzag_pivot_1d: boolean;
   show_zigzag_pivot_4h: boolean;
   show_zigzag_pivot_1h: boolean;
   show_zigzag_pivot_15m: boolean;
   /** Ham ZigZag çizgi rengi (dalga çizgilerinden bağımsız). */
+  mtf_zigzag_color_1w: string;
+  mtf_zigzag_color_1d: string;
   mtf_zigzag_color_4h: string;
   mtf_zigzag_color_1h: string;
   mtf_zigzag_color_15m: string;
+  mtf_zigzag_line_style_1w: "solid" | "dotted" | "dashed";
+  mtf_zigzag_line_style_1d: "solid" | "dotted" | "dashed";
   mtf_zigzag_line_style_4h: "solid" | "dotted" | "dashed";
   mtf_zigzag_line_style_1h: "solid" | "dotted" | "dashed";
   mtf_zigzag_line_style_15m: "solid" | "dotted" | "dashed";
+  mtf_zigzag_line_width_1w: number;
+  mtf_zigzag_line_width_1d: number;
   mtf_zigzag_line_width_4h: number;
   mtf_zigzag_line_width_1h: number;
   mtf_zigzag_line_width_15m: number;
 };
 
 export function mtfWaveColorsFromConfig(
-  c: Pick<ElliottWaveConfig, "mtf_wave_color_4h" | "mtf_wave_color_1h" | "mtf_wave_color_15m">,
+  c: Pick<
+    ElliottWaveConfig,
+    | "mtf_wave_color_1w"
+    | "mtf_wave_color_1d"
+    | "mtf_wave_color_4h"
+    | "mtf_wave_color_1h"
+    | "mtf_wave_color_15m"
+  >,
 ): ElliottMtfWaveColors {
   return {
+    "1w": sanitizeElliottHexColor(c.mtf_wave_color_1w, DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1w"]),
+    "1d": sanitizeElliottHexColor(c.mtf_wave_color_1d, DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1d"]),
     "4h": sanitizeElliottHexColor(c.mtf_wave_color_4h, DEFAULT_ELLIOTT_MTF_WAVE_COLORS["4h"]),
     "1h": sanitizeElliottHexColor(c.mtf_wave_color_1h, DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1h"]),
     "15m": sanitizeElliottHexColor(c.mtf_wave_color_15m, DEFAULT_ELLIOTT_MTF_WAVE_COLORS["15m"]),
@@ -226,10 +253,16 @@ export function mtfWaveColorsFromConfig(
 export function mtfZigzagColorsFromConfig(
   c: Pick<
     ElliottWaveConfig,
-    "mtf_zigzag_color_4h" | "mtf_zigzag_color_1h" | "mtf_zigzag_color_15m"
+    | "mtf_zigzag_color_1w"
+    | "mtf_zigzag_color_1d"
+    | "mtf_zigzag_color_4h"
+    | "mtf_zigzag_color_1h"
+    | "mtf_zigzag_color_15m"
   >,
 ): ElliottMtfWaveColors {
   return {
+    "1w": sanitizeElliottHexColor(c.mtf_zigzag_color_1w, DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1w"]),
+    "1d": sanitizeElliottHexColor(c.mtf_zigzag_color_1d, DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1d"]),
     "4h": sanitizeElliottHexColor(c.mtf_zigzag_color_4h, DEFAULT_ELLIOTT_MTF_WAVE_COLORS["4h"]),
     "1h": sanitizeElliottHexColor(c.mtf_zigzag_color_1h, DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1h"]),
     "15m": sanitizeElliottHexColor(c.mtf_zigzag_color_15m, DEFAULT_ELLIOTT_MTF_WAVE_COLORS["15m"]),
@@ -263,33 +296,53 @@ export const DEFAULT_ELLIOTT_WAVE_CONFIG: ElliottWaveConfig = {
   max_pivot_windows: 120,
   pattern_menu: { ...DEFAULT_ELLIOTT_PATTERN_MENU },
   pattern_menu_by_tf: defaultPatternMenuByTf(),
+  mtf_wave_color_1w: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1w"],
+  mtf_wave_color_1d: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1d"],
   mtf_wave_color_4h: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["4h"],
   mtf_wave_color_1h: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1h"],
   mtf_wave_color_15m: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["15m"],
+  mtf_label_color_1w: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1w"],
+  mtf_label_color_1d: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1d"],
   mtf_label_color_4h: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["4h"],
   mtf_label_color_1h: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1h"],
   mtf_label_color_15m: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["15m"],
+  show_line_1w: true,
+  show_line_1d: true,
   show_line_4h: true,
   show_line_1h: true,
   show_line_15m: true,
+  show_label_1w: true,
+  show_label_1d: true,
   show_label_4h: true,
   show_label_1h: true,
   show_label_15m: true,
+  mtf_line_style_1w: "solid",
+  mtf_line_style_1d: "dashed",
   mtf_line_style_4h: "solid",
   mtf_line_style_1h: "dashed",
   mtf_line_style_15m: "dotted",
+  mtf_line_width_1w: 5,
+  mtf_line_width_1d: 4,
   mtf_line_width_4h: 4,
   mtf_line_width_1h: 3,
   mtf_line_width_15m: 2,
+  show_zigzag_pivot_1w: true,
+  show_zigzag_pivot_1d: true,
   show_zigzag_pivot_4h: true,
   show_zigzag_pivot_1h: true,
   show_zigzag_pivot_15m: true,
+  mtf_zigzag_color_1w: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1w"],
+  mtf_zigzag_color_1d: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1d"],
   mtf_zigzag_color_4h: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["4h"],
   mtf_zigzag_color_1h: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["1h"],
   mtf_zigzag_color_15m: DEFAULT_ELLIOTT_MTF_WAVE_COLORS["15m"],
+  mtf_zigzag_line_style_1w: "dotted",
+  mtf_zigzag_line_style_1d: "dotted",
   mtf_zigzag_line_style_4h: "dotted",
   mtf_zigzag_line_style_1h: "dotted",
   mtf_zigzag_line_style_15m: "dotted",
+  mtf_zigzag_line_width_1w: 2,
+  mtf_zigzag_line_width_1d: 2,
   mtf_zigzag_line_width_4h: 2,
   mtf_zigzag_line_width_1h: 2,
   mtf_zigzag_line_width_15m: 2,
@@ -467,15 +520,23 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
   // UI: ayrı "formations.impulse" — herhangi bir TF'de itki açıksa true.
   formations.impulse = pattern_menu.motive_impulse;
 
+  const mtf_wave_color_1w = sanitizeElliottHexColor(raw.mtf_wave_color_1w, base.mtf_wave_color_1w);
+  const mtf_wave_color_1d = sanitizeElliottHexColor(raw.mtf_wave_color_1d, base.mtf_wave_color_1d);
   const mtf_wave_color_4h = sanitizeElliottHexColor(raw.mtf_wave_color_4h, base.mtf_wave_color_4h);
   const mtf_wave_color_1h = sanitizeElliottHexColor(raw.mtf_wave_color_1h, base.mtf_wave_color_1h);
   const mtf_wave_color_15m = sanitizeElliottHexColor(raw.mtf_wave_color_15m, base.mtf_wave_color_15m);
+  const mtf_label_color_1w = sanitizeElliottHexColor(raw.mtf_label_color_1w, base.mtf_label_color_1w);
+  const mtf_label_color_1d = sanitizeElliottHexColor(raw.mtf_label_color_1d, base.mtf_label_color_1d);
   const mtf_label_color_4h = sanitizeElliottHexColor(raw.mtf_label_color_4h, base.mtf_label_color_4h);
   const mtf_label_color_1h = sanitizeElliottHexColor(raw.mtf_label_color_1h, base.mtf_label_color_1h);
   const mtf_label_color_15m = sanitizeElliottHexColor(raw.mtf_label_color_15m, base.mtf_label_color_15m);
+  const show_line_1w = typeof raw.show_line_1w === "boolean" ? raw.show_line_1w : base.show_line_1w;
+  const show_line_1d = typeof raw.show_line_1d === "boolean" ? raw.show_line_1d : base.show_line_1d;
   const show_line_4h = typeof raw.show_line_4h === "boolean" ? raw.show_line_4h : base.show_line_4h;
   const show_line_1h = typeof raw.show_line_1h === "boolean" ? raw.show_line_1h : base.show_line_1h;
   const show_line_15m = typeof raw.show_line_15m === "boolean" ? raw.show_line_15m : base.show_line_15m;
+  const show_label_1w = typeof raw.show_label_1w === "boolean" ? raw.show_label_1w : base.show_label_1w;
+  const show_label_1d = typeof raw.show_label_1d === "boolean" ? raw.show_label_1d : base.show_label_1d;
   const show_label_4h = typeof raw.show_label_4h === "boolean" ? raw.show_label_4h : base.show_label_4h;
   const show_label_1h = typeof raw.show_label_1h === "boolean" ? raw.show_label_1h : base.show_label_1h;
   const show_label_15m = typeof raw.show_label_15m === "boolean" ? raw.show_label_15m : base.show_label_15m;
@@ -483,13 +544,21 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
     v === "solid" || v === "dotted" || v === "dashed" ? v : d;
   const lineWidth = (v: unknown, d: number) =>
     typeof v === "number" && Number.isFinite(v) ? Math.min(6, Math.max(1, Math.round(v))) : d;
+  const mtf_line_style_1w = lineStyle(raw.mtf_line_style_1w, base.mtf_line_style_1w);
+  const mtf_line_style_1d = lineStyle(raw.mtf_line_style_1d, base.mtf_line_style_1d);
   const mtf_line_style_4h = lineStyle(raw.mtf_line_style_4h, base.mtf_line_style_4h);
   const mtf_line_style_1h = lineStyle(raw.mtf_line_style_1h, base.mtf_line_style_1h);
   const mtf_line_style_15m = lineStyle(raw.mtf_line_style_15m, base.mtf_line_style_15m);
+  const mtf_line_width_1w = lineWidth(raw.mtf_line_width_1w, base.mtf_line_width_1w);
+  const mtf_line_width_1d = lineWidth(raw.mtf_line_width_1d, base.mtf_line_width_1d);
   const mtf_line_width_4h = lineWidth(raw.mtf_line_width_4h, base.mtf_line_width_4h);
   const mtf_line_width_1h = lineWidth(raw.mtf_line_width_1h, base.mtf_line_width_1h);
   const mtf_line_width_15m = lineWidth(raw.mtf_line_width_15m, base.mtf_line_width_15m);
 
+  const show_zigzag_pivot_1w =
+    typeof raw.show_zigzag_pivot_1w === "boolean" ? raw.show_zigzag_pivot_1w : base.show_zigzag_pivot_1w;
+  const show_zigzag_pivot_1d =
+    typeof raw.show_zigzag_pivot_1d === "boolean" ? raw.show_zigzag_pivot_1d : base.show_zigzag_pivot_1d;
   const show_zigzag_pivot_4h =
     typeof raw.show_zigzag_pivot_4h === "boolean" ? raw.show_zigzag_pivot_4h : base.show_zigzag_pivot_4h;
   const show_zigzag_pivot_1h =
@@ -497,12 +566,18 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
   const show_zigzag_pivot_15m =
     typeof raw.show_zigzag_pivot_15m === "boolean" ? raw.show_zigzag_pivot_15m : base.show_zigzag_pivot_15m;
 
+  const mtf_zigzag_color_1w = sanitizeElliottHexColor(raw.mtf_zigzag_color_1w, base.mtf_zigzag_color_1w);
+  const mtf_zigzag_color_1d = sanitizeElliottHexColor(raw.mtf_zigzag_color_1d, base.mtf_zigzag_color_1d);
   const mtf_zigzag_color_4h = sanitizeElliottHexColor(raw.mtf_zigzag_color_4h, base.mtf_zigzag_color_4h);
   const mtf_zigzag_color_1h = sanitizeElliottHexColor(raw.mtf_zigzag_color_1h, base.mtf_zigzag_color_1h);
   const mtf_zigzag_color_15m = sanitizeElliottHexColor(raw.mtf_zigzag_color_15m, base.mtf_zigzag_color_15m);
+  const mtf_zigzag_line_style_1w = lineStyle(raw.mtf_zigzag_line_style_1w, base.mtf_zigzag_line_style_1w);
+  const mtf_zigzag_line_style_1d = lineStyle(raw.mtf_zigzag_line_style_1d, base.mtf_zigzag_line_style_1d);
   const mtf_zigzag_line_style_4h = lineStyle(raw.mtf_zigzag_line_style_4h, base.mtf_zigzag_line_style_4h);
   const mtf_zigzag_line_style_1h = lineStyle(raw.mtf_zigzag_line_style_1h, base.mtf_zigzag_line_style_1h);
   const mtf_zigzag_line_style_15m = lineStyle(raw.mtf_zigzag_line_style_15m, base.mtf_zigzag_line_style_15m);
+  const mtf_zigzag_line_width_1w = lineWidth(raw.mtf_zigzag_line_width_1w, base.mtf_zigzag_line_width_1w);
+  const mtf_zigzag_line_width_1d = lineWidth(raw.mtf_zigzag_line_width_1d, base.mtf_zigzag_line_width_1d);
   const mtf_zigzag_line_width_4h = lineWidth(raw.mtf_zigzag_line_width_4h, base.mtf_zigzag_line_width_4h);
   const mtf_zigzag_line_width_1h = lineWidth(raw.mtf_zigzag_line_width_1h, base.mtf_zigzag_line_width_1h);
   const mtf_zigzag_line_width_15m = lineWidth(raw.mtf_zigzag_line_width_15m, base.mtf_zigzag_line_width_15m);
@@ -532,33 +607,53 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
     max_pivot_windows,
     pattern_menu,
     pattern_menu_by_tf,
+    mtf_wave_color_1w,
+    mtf_wave_color_1d,
     mtf_wave_color_4h,
     mtf_wave_color_1h,
     mtf_wave_color_15m,
+    mtf_label_color_1w,
+    mtf_label_color_1d,
     mtf_label_color_4h,
     mtf_label_color_1h,
     mtf_label_color_15m,
+    show_line_1w,
+    show_line_1d,
     show_line_4h,
     show_line_1h,
     show_line_15m,
+    show_label_1w,
+    show_label_1d,
     show_label_4h,
     show_label_1h,
     show_label_15m,
+    mtf_line_style_1w,
+    mtf_line_style_1d,
     mtf_line_style_4h,
     mtf_line_style_1h,
     mtf_line_style_15m,
+    mtf_line_width_1w,
+    mtf_line_width_1d,
     mtf_line_width_4h,
     mtf_line_width_1h,
     mtf_line_width_15m,
+    show_zigzag_pivot_1w,
+    show_zigzag_pivot_1d,
     show_zigzag_pivot_4h,
     show_zigzag_pivot_1h,
     show_zigzag_pivot_15m,
+    mtf_zigzag_color_1w,
+    mtf_zigzag_color_1d,
     mtf_zigzag_color_4h,
     mtf_zigzag_color_1h,
     mtf_zigzag_color_15m,
+    mtf_zigzag_line_style_1w,
+    mtf_zigzag_line_style_1d,
     mtf_zigzag_line_style_4h,
     mtf_zigzag_line_style_1h,
     mtf_zigzag_line_style_15m,
+    mtf_zigzag_line_width_1w,
+    mtf_zigzag_line_width_1d,
     mtf_zigzag_line_width_4h,
     mtf_zigzag_line_width_1h,
     mtf_zigzag_line_width_15m,

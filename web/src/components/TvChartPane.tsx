@@ -151,6 +151,10 @@ function zigzagLineOptions(
     /** Dalga 2/4 içi a–b–c (ana itkı segmenti içinde). */
     case "elliott_abc_sub":
       return applyOverride({ color: "#ffcc80", lineWidth: 2, lineStyle: LineStyle.Dashed });
+    case "elliott_v2_weekly":
+      return applyOverride({ color: "#6A1B9A", lineWidth: 5, lineStyle: LineStyle.Solid });
+    case "elliott_v2_daily":
+      return applyOverride({ color: "#4E342E", lineWidth: 4, lineStyle: LineStyle.Solid });
     case "elliott_v2_macro":
       return applyOverride({ color: "#1E88E5", lineWidth: 4, lineStyle: LineStyle.Solid });
     case "elliott_v2_intermediate":
@@ -159,12 +163,20 @@ function zigzagLineOptions(
       return applyOverride({ color: "#FB8C00", lineWidth: 2, lineStyle: LineStyle.Dotted });
     case "elliott_v2_post_abc":
       return applyOverride({ color: "#FB8C00", lineWidth: 2, lineStyle: LineStyle.Dashed });
+    case "elliott_v2_zigzag_weekly":
+      return applyOverride({ color: "#CE93D8", lineWidth: 2, lineStyle: LineStyle.Dashed });
+    case "elliott_v2_zigzag_daily":
+      return applyOverride({ color: "#BCAAA4", lineWidth: 2, lineStyle: LineStyle.Dashed });
     case "elliott_v2_zigzag_macro":
       return applyOverride({ color: "#90CAF9", lineWidth: 2, lineStyle: LineStyle.Dashed });
     case "elliott_v2_zigzag_intermediate":
       return applyOverride({ color: "#A5D6A7", lineWidth: 2, lineStyle: LineStyle.Dashed });
     case "elliott_v2_zigzag_micro":
       return applyOverride({ color: "#FFCC80", lineWidth: 1, lineStyle: LineStyle.Dashed });
+    case "elliott_v2_hist_weekly":
+      return applyOverride({ color: "#B39DDB", lineWidth: 2, lineStyle: LineStyle.Dotted });
+    case "elliott_v2_hist_daily":
+      return applyOverride({ color: "#A1887F", lineWidth: 2, lineStyle: LineStyle.Dotted });
     case "elliott_v2_hist_macro":
       return applyOverride({ color: "#64B5F6", lineWidth: 2, lineStyle: LineStyle.Dotted });
     case "elliott_v2_hist_intermediate":

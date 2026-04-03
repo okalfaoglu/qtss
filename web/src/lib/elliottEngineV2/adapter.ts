@@ -11,7 +11,14 @@ import {
 } from "../elliottPatternMenuCatalog";
 import { patternMenuAllowsFlatAbc, patternMenuAllowsZigzagAbc } from "./corrective";
 import type { PatternLayerOverlay } from "../patternDrawingBatchOverlay";
-import type { CorrectiveCountV2, ElliottEngineOutputV2, ImpulseCountV2, TimeframeStateV2, ZigzagPivot } from "./types";
+import type {
+  CorrectiveCountV2,
+  ElliottEngineOutputV2,
+  ImpulseCountV2,
+  Timeframe,
+  TimeframeStateV2,
+  ZigzagPivot,
+} from "./types";
 import { extendZigzagPivotsForChartLine } from "./zigzag";
 
 function mergePatternMenu(m?: ElliottPatternMenuToggles): ElliottPatternMenuToggles {
@@ -49,10 +56,29 @@ function showCorrectiveOverlay(menu: ElliottPatternMenuToggles, c: CorrectiveCou
 }
 
 type Pt = { time: UTCTimestamp; value: number };
-type TfKey = "4h" | "1h" | "15m";
-type TfTriBool = Record<TfKey, boolean>;
-type TfTriStyle = Record<TfKey, "solid" | "dotted" | "dashed">;
-type TfTriWidth = Record<TfKey, number>;
+type TfTriBool = Record<Timeframe, boolean>;
+type TfTriStyle = Record<Timeframe, "solid" | "dotted" | "dashed">;
+type TfTriWidth = Record<Timeframe, number>;
+
+const CHART_TF_ORDER: Timeframe[] = ["1w", "1d", "4h", "1h", "15m"];
+
+function triBoolDefault(on: boolean): TfTriBool {
+  return { "1w": on, "1d": on, "4h": on, "1h": on, "15m": on };
+}
+
+function triStyleDefault(
+  a: "solid" | "dotted" | "dashed",
+  b: "solid" | "dotted" | "dashed",
+  c: "solid" | "dotted" | "dashed",
+  d: "solid" | "dotted" | "dashed",
+  e: "solid" | "dotted" | "dashed",
+): TfTriStyle {
+  return { "1w": a, "1d": b, "4h": c, "1h": d, "15m": e };
+}
+
+function triWidthDefault(a: number, b: number, c: number, d: number, e: number): TfTriWidth {
+  return { "1w": a, "1d": b, "4h": c, "1h": d, "15m": e };
+}
 
 function toPts(p: ZigzagPivot[]): Pt[] {
   return p.map((x) => ({ time: x.time as UTCTimestamp, value: x.price }));
@@ -89,8 +115,9 @@ export function correctiveLabelAnchors(c: CorrectiveCountV2): { pts: ZigzagPivot
   return { pts: tail.slice(0, n), labels: labels.slice(0, n) };
 }
 
-function impulseLabelsByTf(tf: "4h" | "1h" | "15m"): string[] {
-  if (tf === "4h") return ["①", "②", "③", "④", "⑤"];
+function impulseLabelsByTf(tf: Timeframe): string[] {
+  if (tf === "1w") return ["\u2160", "\u2161", "\u2162", "\u2163", "\u2164"];
+  if (tf === "1d" || tf === "4h") return ["①", "②", "③", "④", "⑤"];
   if (tf === "1h") return ["(1)", "(2)", "(3)", "(4)", "(5)"];
   return ["i", "ii", "iii", "iv", "v"];
 }
@@ -101,18 +128,18 @@ function toCircledUpperLetter(ch: string): string {
   return String.fromCharCode(9398 + (code - 65)); // Ⓐ..Ⓩ
 }
 
-function correctiveSymbolByTf(tf: "4h" | "1h" | "15m", raw: string): string {
+function correctiveSymbolByTf(tf: Timeframe, raw: string): string {
   const t = (raw ?? "").trim();
   if (!t) return "a";
-  if (tf === "4h") return toCircledUpperLetter(t[0] ?? "A");
+  if (tf === "15m") return (t[0] ?? "a").toLowerCase();
   if (tf === "1h") return `(${(t[0] ?? "A").toUpperCase()})`;
-  return (t[0] ?? "a").toLowerCase();
+  return toCircledUpperLetter(t[0] ?? "A");
 }
 
-function correctiveRolePrefix(role: "wave2" | "wave4" | "post", tf: "4h" | "1h" | "15m"): string {
+function correctiveRolePrefix(role: "wave2" | "wave4" | "post", tf: Timeframe): string {
   if (role === "post") return "+";
-  if (role === "wave2") return tf === "4h" ? "②" : tf === "1h" ? "(2)" : "ii";
-  return tf === "4h" ? "④" : tf === "1h" ? "(4)" : "iv";
+  if (role === "wave2") return tf === "1h" ? "(2)" : tf === "15m" ? "ii" : "②";
+  return tf === "1h" ? "(4)" : tf === "15m" ? "iv" : "④";
 }
 
 /** Ana dalga rengini açarak iç (dalga 1 alt itkı) çizgisini ayırır. */
@@ -132,7 +159,7 @@ function nestedImpulseMarkers(
   names: [string, string, string, string, string],
   wc: ElliottMtfWaveColors,
   labelColors: ElliottMtfWaveColors,
-  tf: TfKey,
+  tf: Timeframe,
 ): SeriesMarker<UTCTimestamp>[] {
   const [, p1, p2, p3, p4, p5] = nested.pivots;
   const pts = [p1, p2, p3, p4, p5];
@@ -150,7 +177,7 @@ function nestedImpulseMarkers(
 function correctiveNestedLegLabels(
   c: CorrectiveCountV2,
   role: "wave2" | "wave4",
-  tf: TfKey,
+  tf: Timeframe,
   wc: ElliottMtfWaveColors,
   labelColors: ElliottMtfWaveColors,
 ): SeriesMarker<UTCTimestamp>[] {
@@ -170,7 +197,7 @@ function correctiveNestedLegLabels(
 }
 
 function waveLabels(
-  tf: TfKey,
+  tf: Timeframe,
   s: TimeframeStateV2,
   wc: ElliottMtfWaveColors,
   labelColors: ElliottMtfWaveColors,
@@ -207,8 +234,8 @@ function isNestedLabel(text: string): boolean {
 
 function isMainImpulseLabel(text: string): boolean {
   const t = (text ?? "").trim();
-  // 4h: circled numbers; 1h: (1)..(5); 15m: i..v
   return (
+    ["\u2160", "\u2161", "\u2162", "\u2163", "\u2164"].includes(t) ||
     ["①", "②", "③", "④", "⑤"].includes(t) ||
     /^\([1-5]\)$/.test(t) ||
     ["i", "ii", "iii", "iv", "v"].includes(t)
@@ -245,7 +272,7 @@ function mergeMarkersAtSameTime(markers: SeriesMarker<UTCTimestamp>[]): SeriesMa
 function correctiveLabels(
   c: CorrectiveCountV2,
   role: "wave2" | "wave4" | "post",
-  tf: TfKey,
+  tf: Timeframe,
   wc: ElliottMtfWaveColors,
   labelColors: ElliottMtfWaveColors,
 ): SeriesMarker<UTCTimestamp>[] {
@@ -286,37 +313,48 @@ export function v2ToChartOverlays(
   layers: PatternLayerOverlay[];
   waveLabels: SeriesMarker<UTCTimestamp>[];
 } {
-  const menuTf = (tf: TfKey): ElliottPatternMenuToggles =>
+  const menuTf = (tf: Timeframe): ElliottPatternMenuToggles =>
     mergePatternMenu(patternMenuByTf?.[tf]);
   const wc = waveColors ?? DEFAULT_ELLIOTT_MTF_WAVE_COLORS;
-  const showLines = styleOptions?.showLines ?? { "4h": true, "1h": true, "15m": true };
-  const showLabels = styleOptions?.showLabels ?? { "4h": true, "1h": true, "15m": true };
+  const showLines = styleOptions?.showLines ?? triBoolDefault(true);
+  const showLabels = styleOptions?.showLabels ?? triBoolDefault(true);
   const labelColors = styleOptions?.labelColors ?? wc;
-  const lineStyles = styleOptions?.lineStyles ?? { "4h": "solid", "1h": "dashed", "15m": "dotted" };
-  const lineWidths = styleOptions?.lineWidths ?? { "4h": 4, "1h": 3, "15m": 2 };
-  const showZigzagPivots = styleOptions?.showZigzagPivots ?? { "4h": true, "1h": true, "15m": true };
+  const lineStyles =
+    styleOptions?.lineStyles ?? triStyleDefault("solid", "solid", "solid", "dashed", "dotted");
+  const lineWidths = styleOptions?.lineWidths ?? triWidthDefault(4, 4, 4, 3, 2);
+  const showZigzagPivots = styleOptions?.showZigzagPivots ?? triBoolDefault(true);
   const zigzagColors = styleOptions?.zigzagColors ?? wc;
-  const zigzagLineStyles = styleOptions?.zigzagLineStyles ?? { "4h": "dotted", "1h": "dotted", "15m": "dotted" };
-  const zigzagLineWidths = styleOptions?.zigzagLineWidths ?? { "4h": 2, "1h": 2, "15m": 2 };
+  const zigzagLineStyles =
+    styleOptions?.zigzagLineStyles ?? triStyleDefault("dotted", "dotted", "dotted", "dotted", "dotted");
+  const zigzagLineWidths = styleOptions?.zigzagLineWidths ?? triWidthDefault(2, 2, 2, 2, 2);
   const showNestedFormations = styleOptions?.showNestedFormations ?? true;
   const layers: PatternLayerOverlay[] = [];
   const labels: SeriesMarker<UTCTimestamp>[] = [];
 
-  const map: Array<{ tf: "4h" | "1h" | "15m"; kind: PatternLayerOverlay["zigzagKind"] }> = [
-    { tf: "4h", kind: "elliott_v2_macro" },
-    { tf: "1h", kind: "elliott_v2_intermediate" },
-    { tf: "15m", kind: "elliott_v2_micro" },
-  ];
-  const histMap: Array<{ tf: "4h" | "1h" | "15m"; kind: PatternLayerOverlay["zigzagKind"] }> = [
-    { tf: "4h", kind: "elliott_v2_hist_macro" },
-    { tf: "1h", kind: "elliott_v2_hist_intermediate" },
-    { tf: "15m", kind: "elliott_v2_hist_micro" },
-  ];
-  const zigMap: Array<{ tf: "4h" | "1h" | "15m"; kind: PatternLayerOverlay["zigzagKind"] }> = [
-    { tf: "4h", kind: "elliott_v2_zigzag_macro" },
-    { tf: "1h", kind: "elliott_v2_zigzag_intermediate" },
-    { tf: "15m", kind: "elliott_v2_zigzag_micro" },
-  ];
+  const waveKindByTf: Record<Timeframe, PatternLayerOverlay["zigzagKind"]> = {
+    "1w": "elliott_v2_weekly",
+    "1d": "elliott_v2_daily",
+    "4h": "elliott_v2_macro",
+    "1h": "elliott_v2_intermediate",
+    "15m": "elliott_v2_micro",
+  };
+  const histKindByTf: Record<Timeframe, PatternLayerOverlay["zigzagKind"]> = {
+    "1w": "elliott_v2_hist_weekly",
+    "1d": "elliott_v2_hist_daily",
+    "4h": "elliott_v2_hist_macro",
+    "1h": "elliott_v2_hist_intermediate",
+    "15m": "elliott_v2_hist_micro",
+  };
+  const zigKindByTf: Record<Timeframe, PatternLayerOverlay["zigzagKind"]> = {
+    "1w": "elliott_v2_zigzag_weekly",
+    "1d": "elliott_v2_zigzag_daily",
+    "4h": "elliott_v2_zigzag_macro",
+    "1h": "elliott_v2_zigzag_intermediate",
+    "15m": "elliott_v2_zigzag_micro",
+  };
+  const map = CHART_TF_ORDER.map((tf) => ({ tf, kind: waveKindByTf[tf] }));
+  const histMap = CHART_TF_ORDER.map((tf) => ({ tf, kind: histKindByTf[tf] }));
+  const zigMap = CHART_TF_ORDER.map((tf) => ({ tf, kind: zigKindByTf[tf] }));
 
   for (const { tf, kind } of zigMap) {
     if (!showZigzagPivots[tf]) continue;
