@@ -1038,7 +1038,7 @@ fn default_acp_chart_patterns_json() -> serde_json::Value {
         "version": 1,
         "ohlc": { "open": "open", "high": "high", "low": "low", "close": "close" },
         "zigzag": [
-            { "enabled": true, "length": 8, "depth": 21 },
+            { "enabled": true, "length": 8, "depth": 55 },
             { "enabled": false, "length": 13, "depth": 34 },
             { "enabled": false, "length": 21, "depth": 21 },
             { "enabled": false, "length": 34, "depth": 13 }
@@ -1048,7 +1048,7 @@ fn default_acp_chart_patterns_json() -> serde_json::Value {
             "error_threshold_percent": 20,
             "flat_threshold_percent": 20,
             "verify_bar_ratio": true,
-            "bar_ratio_limit": 0.25,
+            "bar_ratio_limit": 0.382,
             "avoid_overlap": true,
             "repaint": false,
             "last_pivot_direction": "both",
@@ -1218,7 +1218,7 @@ fn default_true() -> bool {
     true
 }
 fn default_bar_ratio_limit() -> f64 {
-    0.25
+    0.382
 }
 fn default_flat_ratio() -> f64 {
     0.2

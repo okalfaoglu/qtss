@@ -20,6 +20,7 @@
 //            ▒▒▒▒▒         ▒▒▒▒▒      ██║   ██║  ██║███████╗██║ ╚████║██████╔╝╚██████╔╝███████║╚██████╗╚██████╔╝██║     ███████╗
 //             ▒▒             ▒
 //@version=6
+// QTSS reference: matches TradingView "ACP [Trendoscope®]" imports (ZigzagLite/3, abstractchartpatterns/9, basechartpatterns/8).
 
 import Trendoscope/utils/1 as ut
 import Trendoscope/ohlc/3 as o

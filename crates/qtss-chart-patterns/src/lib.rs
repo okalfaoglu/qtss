@@ -206,21 +206,22 @@ pub fn channel_six_pattern_drawing_batch(
     .to_string();
 
     let mut commands = Vec::with_capacity(11);
+    // Pine `Pattern.draw()` → `Line.draw()` with default `extend = extend.none` (LineWrapper).
     commands.push(DrawingCommand::TrendLine {
         p1: time_price_bar(hints.upper[0].bar_index, hints.upper[0].price),
         p2: time_price_bar(hints.upper[1].bar_index, hints.upper[1].price),
         line_width: pattern_line_width,
         color_hex: color_hex.clone(),
-        extend: TrendLineExtend::Both,
-        extend_bars: default_trend_extend_bars(),
+        extend: TrendLineExtend::None,
+        extend_bars: 0,
     });
     commands.push(DrawingCommand::TrendLine {
         p1: time_price_bar(hints.lower[0].bar_index, hints.lower[0].price),
         p2: time_price_bar(hints.lower[1].bar_index, hints.lower[1].price),
         line_width: pattern_line_width,
         color_hex: color_hex.clone(),
-        extend: TrendLineExtend::Both,
-        extend_bars: default_trend_extend_bars(),
+        extend: TrendLineExtend::None,
+        extend_bars: 0,
     });
     let zz: Vec<TimePrice> = outcome
         .pivots

@@ -223,7 +223,7 @@ export function AcpTrendoscopeSettingsCard({
               min={0.01}
               max={0.99}
               value={value.scanning.bar_ratio_limit}
-                  onChange={(e) => setScan({ bar_ratio_limit: parseFloat(e.target.value) || 0.25 })}
+                  onChange={(e) => setScan({ bar_ratio_limit: parseFloat(e.target.value) || 0.382 })}
             />
             <div style={{ display: "flex", gap: "0.35rem", marginTop: "0.35rem", flexWrap: "wrap" }}>
               <button

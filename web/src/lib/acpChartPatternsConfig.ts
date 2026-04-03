@@ -128,12 +128,11 @@ export const ACP_PATTERN_ROWS: { id: number; label: string }[] = [
 ];
 
 /**
- * Pine `useZigzag1..4` fabrika varsayılanı — yalnız zigzag1 açık.
- * `depth: 55` çok seyrek pivot üretip 6’lı pencerede sık `insufficient_pivots` veriyordu;
- * varsayılan **21** daha fazla pivot = daha fazla aday (derinlik ACP kartından yükseltilebilir).
+ * Pine `useZigzag1..4` — TV göstergesi `zigzagLength1` / `depth1` (yalnız zigzag1 açık).
+ * Daha az pivot gerekirse derinlik ACP ayarından düşürülebilir.
  */
 const FALLBACK_ZIGZAG: AcpZigzagRow[] = [
-  { enabled: true, length: 8, depth: 21 },
+  { enabled: true, length: 8, depth: 55 },
   { enabled: false, length: 13, depth: 34 },
   { enabled: false, length: 21, depth: 21 },
   { enabled: false, length: 34, depth: 13 },
@@ -173,7 +172,7 @@ export const DEFAULT_ACP_CONFIG: AcpChartPatternsConfig = {
     error_threshold_percent: 20,
     flat_threshold_percent: 20,
     verify_bar_ratio: true,
-    bar_ratio_limit: 0.25,
+    bar_ratio_limit: 0.382,
     avoid_overlap: true,
     repaint: false,
     last_pivot_direction: "both",
@@ -271,7 +270,7 @@ export function normalizeAcpChartPatternsConfig(raw: unknown): AcpChartPatternsC
     error_threshold_percent: clamp(asNum(scanIn?.error_threshold_percent, 20), 1, 100),
     flat_threshold_percent: clamp(asNum(scanIn?.flat_threshold_percent, 20), 1, 100),
     verify_bar_ratio: asBool(scanIn?.verify_bar_ratio, true),
-    bar_ratio_limit: clamp(asNum(scanIn?.bar_ratio_limit, 0.25), 0.01, 0.99),
+    bar_ratio_limit: clamp(asNum(scanIn?.bar_ratio_limit, 0.382), 0.01, 0.99),
     avoid_overlap: asBool(scanIn?.avoid_overlap, true),
     repaint: asBool(scanIn?.repaint, false),
     last_pivot_direction,

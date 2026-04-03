@@ -277,7 +277,7 @@ VALUES (
         "error_threshold_percent": 20,
         "flat_threshold_percent": 20,
         "verify_bar_ratio": true,
-        "bar_ratio_limit": 0.25,
+        "bar_ratio_limit": 0.382,
         "avoid_overlap": true,
         "repaint": false,
         "pivot_tail_skip_max": 0,

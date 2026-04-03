@@ -1167,7 +1167,13 @@ export default function App() {
     if (!lastChannelScan?.matched) return null;
     const scanBars = channelScanOverlayBars;
     if (!scanBars?.length) return null;
-    const fromMatches = buildMultiPatternOverlayFromScan(lastChannelScan, scanBars, acpConfig.display);
+    const chartChrono = bars?.length ? chartOhlcRowsSortedChrono(bars) : [];
+    const fromMatches = buildMultiPatternOverlayFromScan(
+      lastChannelScan,
+      scanBars,
+      acpConfig.display,
+      chartChrono.length ? chartChrono : undefined,
+    );
     if (fromMatches) {
       return fromMatches;
     }
@@ -1183,7 +1189,7 @@ export default function App() {
       }
     }
     return fromMatches;
-  }, [lastChannelScan, channelScanOverlayBars, acpConfig.display]);
+  }, [lastChannelScan, channelScanOverlayBars, acpConfig.display, bars]);
 
   const dbTradingRangeSnapshot = useMemo(() => {
     if (!engineSnapshots.length) return null;

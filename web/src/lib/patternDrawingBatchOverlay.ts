@@ -1,5 +1,5 @@
 import type { SeriesMarker, UTCTimestamp } from "lightweight-charts";
-import type { ChannelSixResponse, PatternDrawingBatchJson } from "../api/client";
+import type { ChannelSixResponse, PatternDrawingBatchJson, PatternDrawingCommandJson } from "../api/client";
 import type { ChartOhlcRow } from "./marketBarsToCandles";
 import { filterDrawingBatchForDisplay, type AcpDisplay } from "./acpChartPatternsConfig";
 
@@ -18,13 +18,38 @@ function rowTime(row: ChartOhlcRow): UTCTimestamp | null {
   return Number.isFinite(t) ? (t as UTCTimestamp) : null;
 }
 
+/** Pine `LineWrapper.get_price` — same formula as Rust `line_price_at_bar_index`. */
+function linePriceAtBarIndex(
+  p1Bar: number,
+  p1Price: number,
+  p2Bar: number,
+  p2Price: number,
+  bar: number,
+): number | null {
+  const d = p2Bar - p1Bar;
+  if (d === 0) return null;
+  return p1Price + ((bar - p1Bar) * (p2Price - p1Price)) / d;
+}
+
+function chartOpenTimeLookup(chartChrono: ChartOhlcRow[]): Map<string, ChartOhlcRow> {
+  const m = new Map<string, ChartOhlcRow>();
+  for (const r of chartChrono) {
+    m.set(r.open_time, r);
+  }
+  return m;
+}
+
 function toPoint(
   /** Tarama API’sine gönderilen sıralı mum dilimi (`bar_index` 0 = bu dizinin ilk satırı). */
-  barsChrono: ChartOhlcRow[],
+  scanBarsChrono: ChartOhlcRow[],
   p: { time_ms: number; price: number; bar_index?: number },
+  /** When set, use the chart row with the same `open_time` as the scan row so LWC times match candle `setData` exactly. */
+  chartByTime: Map<string, ChartOhlcRow> | null,
 ): { time: UTCTimestamp; value: number } | null {
-  if (typeof p.bar_index === "number" && p.bar_index >= 0 && p.bar_index < barsChrono.length) {
-    const t = rowTime(barsChrono[p.bar_index]);
+  if (typeof p.bar_index === "number" && p.bar_index >= 0 && p.bar_index < scanBarsChrono.length) {
+    const scanRow = scanBarsChrono[Math.floor(p.bar_index)]!;
+    const row = chartByTime?.get(scanRow.open_time) ?? scanRow;
+    const t = rowTime(row);
     if (t != null) return { time: t, value: p.price };
   }
   // Yedek: Rust `time_ms = bar_index * 60_000` yalnızca 1 dk bar uzayı için anlamlı; mümkünse bar_index ile hizalı dilim kullanın.
@@ -32,11 +57,65 @@ function toPoint(
   return Number.isFinite(t) ? ({ time: t as UTCTimestamp, value: p.price } as const) : null;
 }
 
+function trendLineToSortedPair(
+  cmd: Extract<PatternDrawingCommandJson, { kind: "trend_line" }>,
+  scanBars: ChartOhlcRow[],
+  chartByTime: Map<string, ChartOhlcRow> | null,
+): [{ time: UTCTimestamp; value: number }, { time: UTCTimestamp; value: number }] | null {
+  const ext = cmd.extend ?? "none";
+  const extBars = Math.max(0, Math.floor(cmd.extend_bars ?? 0));
+  const useExtend =
+    extBars > 0 && (ext === "both" || ext === "left" || ext === "right") && scanBars.length > 0;
+
+  if (
+    !useExtend ||
+    typeof cmd.p1.bar_index !== "number" ||
+    typeof cmd.p2.bar_index !== "number"
+  ) {
+    const a = toPoint(scanBars, cmd.p1, chartByTime);
+    const b = toPoint(scanBars, cmd.p2, chartByTime);
+    if (!a || !b) return null;
+    return a.time <= b.time ? [a, b] : [b, a];
+  }
+
+  const i1 = Math.floor(cmd.p1.bar_index);
+  const i2 = Math.floor(cmd.p2.bar_index);
+  const pr1 = cmd.p1.price;
+  const pr2 = cmd.p2.price;
+  let left = Math.min(i1, i2);
+  let right = Math.max(i1, i2);
+  if (ext === "both" || ext === "left") left = Math.max(0, left - extBars);
+  if (ext === "both" || ext === "right") right = Math.min(scanBars.length - 1, right + extBars);
+
+  const yL = linePriceAtBarIndex(i1, pr1, i2, pr2, left);
+  const yR = linePriceAtBarIndex(i1, pr1, i2, pr2, right);
+  if (yL == null || yR == null) return null;
+
+  const pL = toPoint(
+    scanBars,
+    { time_ms: cmd.p1.time_ms, price: yL, bar_index: left },
+    chartByTime,
+  );
+  const pR = toPoint(
+    scanBars,
+    { time_ms: cmd.p2.time_ms, price: yR, bar_index: right },
+    chartByTime,
+  );
+  if (!pL || !pR) return null;
+  return pL.time <= pR.time ? [pL, pR] : [pR, pL];
+}
+
 export function patternDrawingBatchToOverlay(
   barsChrono: ChartOhlcRow[],
   batch: PatternDrawingBatchJson | undefined,
+  /** Full chart series (chrono); optional but recommended so line times match candlestick `time` keys after live updates. */
+  chartBarsChrono?: ChartOhlcRow[] | null,
 ): PatternBatchOverlay | null {
   if (!batch || !barsChrono.length) return null;
+  const chartByTime =
+    chartBarsChrono?.length && chartBarsChrono.length > 0
+      ? chartOpenTimeLookup(chartBarsChrono)
+      : null;
   const trend: Array<{ time: UTCTimestamp; value: number }[]> = [];
   let zigzag: { time: UTCTimestamp; value: number }[] = [];
   const pivotLabels: SeriesMarker<UTCTimestamp>[] = [];
@@ -44,18 +123,19 @@ export function patternDrawingBatchToOverlay(
 
   for (const cmd of batch.commands) {
     if (cmd.kind === "trend_line") {
-      const a = toPoint(barsChrono, cmd.p1);
-      const b = toPoint(barsChrono, cmd.p2);
-      if (a && b) trend.push(a.time <= b.time ? [a, b] : [b, a]);
+      const pair = trendLineToSortedPair(cmd, barsChrono, chartByTime);
+      if (pair) trend.push(pair);
       continue;
     }
     if (cmd.kind === "zigzag_polyline") {
-      zigzag = cmd.points.map((p) => toPoint(barsChrono, p)).filter((x): x is { time: UTCTimestamp; value: number } => !!x);
+      zigzag = cmd.points
+        .map((p) => toPoint(barsChrono, p, chartByTime))
+        .filter((x): x is { time: UTCTimestamp; value: number } => !!x);
       zigzag.sort((x, y) => (x.time as number) - (y.time as number));
       continue;
     }
     if (cmd.kind === "pivot_label") {
-      const p = toPoint(barsChrono, cmd.at);
+      const p = toPoint(barsChrono, cmd.at, chartByTime);
       if (!p) continue;
       const pos =
         cmd.anchor === "low" ? "belowBar" : cmd.anchor === "high" ? "aboveBar" : "inBar";
@@ -69,7 +149,7 @@ export function patternDrawingBatchToOverlay(
       continue;
     }
     if (cmd.kind === "pattern_label") {
-      const p = toPoint(barsChrono, cmd.at);
+      const p = toPoint(barsChrono, cmd.at, chartByTime);
       if (!p) continue;
       patternLabels.push({
         time: p.time,
@@ -162,6 +242,8 @@ export function buildMultiPatternOverlayFromScan(
   res: ChannelSixResponse | null,
   barsChrono: ChartOhlcRow[],
   display: AcpDisplay,
+  /** Same as `patternDrawingBatchToOverlay` — full chart OHLC for `open_time` alignment with LWC candles. */
+  chartBarsChrono?: ChartOhlcRow[] | null,
 ): MultiPatternChartOverlay | null {
   if (!res?.matched || !barsChrono.length) return null;
 
@@ -189,7 +271,7 @@ export function buildMultiPatternOverlayFromScan(
     if (!raw) continue;
     const filtered = filterDrawingBatchForDisplay(raw, display);
     if (!filtered) continue;
-    const o = patternDrawingBatchToOverlay(barsChrono, filtered);
+    const o = patternDrawingBatchToOverlay(barsChrono, filtered, chartBarsChrono);
     if (!o) continue;
     pivotLabels = mergeSortedMarkers(pivotLabels, o.pivotLabels);
     patternLabels = mergeSortedMarkers(patternLabels, o.patternLabels);

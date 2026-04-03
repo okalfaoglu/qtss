@@ -127,6 +127,7 @@ mod tests {
             atr_period: 14,
             atr_sma_period: 20,
             require_range_regime: false,
+            ..Default::default()
         };
         let tr = analyze_trading_range(&v, &p);
         let d = compute_signal_dashboard_v1(&v, &tr);
@@ -145,6 +146,7 @@ mod tests {
             atr_period: 14,
             atr_sma_period: 20,
             require_range_regime: false,
+            ..Default::default()
         };
         let tr = analyze_trading_range(&v, &p);
         let mut d = compute_signal_dashboard_v1(&v, &tr);
