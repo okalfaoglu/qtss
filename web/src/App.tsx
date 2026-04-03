@@ -94,6 +94,7 @@ import {
   ELLIOTT_ANALYSIS_TIMEFRAME_LABELS,
   ELLIOTT_WAVE_CONFIG_KEY,
   defaultPatternMenuByTf,
+  elliottDrawingConfigKeys,
   mtfWaveColorsFromConfig,
   mtfZigzagColorsFromConfig,
   normalizeElliottWaveConfig,
@@ -865,47 +866,63 @@ export default function App() {
 
   const elliottChartBundle = useMemo(() => {
     if (!elliottV2Output) return null;
-    const lineVisibility = {
+    const lineVisibility: Record<Timeframe, boolean> = {
+      "1w": elliottConfig.show_line_1w,
+      "1d": elliottConfig.show_line_1d,
       "4h": elliottConfig.show_line_4h,
       "1h": elliottConfig.show_line_1h,
       "15m": elliottConfig.show_line_15m,
-    } as const;
-    const labelVisibility = {
+    };
+    const labelVisibility: Record<Timeframe, boolean> = {
+      "1w": elliottConfig.show_label_1w,
+      "1d": elliottConfig.show_label_1d,
       "4h": elliottConfig.show_label_4h,
       "1h": elliottConfig.show_label_1h,
       "15m": elliottConfig.show_label_15m,
-    } as const;
-    const labelColors = {
+    };
+    const labelColors: Record<Timeframe, string> = {
+      "1w": elliottConfig.mtf_label_color_1w,
+      "1d": elliottConfig.mtf_label_color_1d,
       "4h": elliottConfig.mtf_label_color_4h,
       "1h": elliottConfig.mtf_label_color_1h,
       "15m": elliottConfig.mtf_label_color_15m,
-    } as const;
-    const lineStyles = {
+    };
+    const lineStyles: Record<Timeframe, "solid" | "dotted" | "dashed"> = {
+      "1w": elliottConfig.mtf_line_style_1w,
+      "1d": elliottConfig.mtf_line_style_1d,
       "4h": elliottConfig.mtf_line_style_4h,
       "1h": elliottConfig.mtf_line_style_1h,
       "15m": elliottConfig.mtf_line_style_15m,
-    } as const;
-    const lineWidths = {
+    };
+    const lineWidths: Record<Timeframe, number> = {
+      "1w": elliottConfig.mtf_line_width_1w,
+      "1d": elliottConfig.mtf_line_width_1d,
       "4h": elliottConfig.mtf_line_width_4h,
       "1h": elliottConfig.mtf_line_width_1h,
       "15m": elliottConfig.mtf_line_width_15m,
-    } as const;
-    const zigzagVisibility = {
+    };
+    const zigzagVisibility: Record<Timeframe, boolean> = {
+      "1w": elliottConfig.show_zigzag_pivot_1w,
+      "1d": elliottConfig.show_zigzag_pivot_1d,
       "4h": elliottConfig.show_zigzag_pivot_4h,
       "1h": elliottConfig.show_zigzag_pivot_1h,
       "15m": elliottConfig.show_zigzag_pivot_15m,
-    } as const;
+    };
     const zzColors = mtfZigzagColorsFromConfig(elliottConfig);
-    const zigzagLineStyles = {
+    const zigzagLineStyles: Record<Timeframe, "solid" | "dotted" | "dashed"> = {
+      "1w": elliottConfig.mtf_zigzag_line_style_1w,
+      "1d": elliottConfig.mtf_zigzag_line_style_1d,
       "4h": elliottConfig.mtf_zigzag_line_style_4h,
       "1h": elliottConfig.mtf_zigzag_line_style_1h,
       "15m": elliottConfig.mtf_zigzag_line_style_15m,
-    } as const;
-    const zigzagLineWidths = {
+    };
+    const zigzagLineWidths: Record<Timeframe, number> = {
+      "1w": elliottConfig.mtf_zigzag_line_width_1w,
+      "1d": elliottConfig.mtf_zigzag_line_width_1d,
       "4h": elliottConfig.mtf_zigzag_line_width_4h,
       "1h": elliottConfig.mtf_zigzag_line_width_1h,
       "15m": elliottConfig.mtf_zigzag_line_width_15m,
-    } as const;
+    };
     const full = v2ToChartOverlays(
       elliottV2Output,
       elliottConfig.pattern_menu_by_tf,
@@ -933,36 +950,56 @@ export default function App() {
     return full;
   }, [
     elliottConfig.enabled,
+    elliottConfig.mtf_wave_color_1w,
+    elliottConfig.mtf_wave_color_1d,
     elliottConfig.mtf_wave_color_15m,
     elliottConfig.mtf_wave_color_1h,
     elliottConfig.mtf_wave_color_4h,
+    elliottConfig.mtf_label_color_1w,
+    elliottConfig.mtf_label_color_1d,
     elliottConfig.mtf_label_color_15m,
     elliottConfig.mtf_label_color_1h,
     elliottConfig.mtf_label_color_4h,
+    elliottConfig.mtf_line_style_1w,
+    elliottConfig.mtf_line_style_1d,
     elliottConfig.mtf_line_style_15m,
     elliottConfig.mtf_line_style_1h,
     elliottConfig.mtf_line_style_4h,
+    elliottConfig.mtf_line_width_1w,
+    elliottConfig.mtf_line_width_1d,
     elliottConfig.mtf_line_width_15m,
     elliottConfig.mtf_line_width_1h,
     elliottConfig.mtf_line_width_4h,
     elliottConfig.pattern_menu_by_tf,
+    elliottConfig.mtf_zigzag_color_1w,
+    elliottConfig.mtf_zigzag_color_1d,
     elliottConfig.mtf_zigzag_color_15m,
     elliottConfig.mtf_zigzag_color_1h,
     elliottConfig.mtf_zigzag_color_4h,
+    elliottConfig.mtf_zigzag_line_style_1w,
+    elliottConfig.mtf_zigzag_line_style_1d,
     elliottConfig.mtf_zigzag_line_style_15m,
     elliottConfig.mtf_zigzag_line_style_1h,
     elliottConfig.mtf_zigzag_line_style_4h,
+    elliottConfig.mtf_zigzag_line_width_1w,
+    elliottConfig.mtf_zigzag_line_width_1d,
     elliottConfig.mtf_zigzag_line_width_15m,
     elliottConfig.mtf_zigzag_line_width_1h,
     elliottConfig.mtf_zigzag_line_width_4h,
+    elliottConfig.show_zigzag_pivot_1w,
+    elliottConfig.show_zigzag_pivot_1d,
     elliottConfig.show_zigzag_pivot_15m,
     elliottConfig.show_zigzag_pivot_1h,
     elliottConfig.show_zigzag_pivot_4h,
     elliottConfig.show_historical_waves,
     elliottConfig.show_nested_formations,
+    elliottConfig.show_line_1w,
+    elliottConfig.show_line_1d,
     elliottConfig.show_line_15m,
     elliottConfig.show_line_1h,
     elliottConfig.show_line_4h,
+    elliottConfig.show_label_1w,
+    elliottConfig.show_label_1d,
     elliottConfig.show_label_15m,
     elliottConfig.show_label_1h,
     elliottConfig.show_label_4h,

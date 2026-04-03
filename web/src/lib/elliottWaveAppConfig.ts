@@ -231,6 +231,33 @@ export type ElliottWaveConfig = {
   mtf_zigzag_line_width_15m: number;
 };
 
+/** Chart drawing table: config keys per analysis timeframe (suffix matches `ElliottAnalysisTimeframe`). */
+export function elliottDrawingConfigKeys(tf: ElliottAnalysisTimeframe): {
+  showZigzagPivot: keyof ElliottWaveConfig;
+  mtfZigzagColor: keyof ElliottWaveConfig;
+  mtfZigzagLineStyle: keyof ElliottWaveConfig;
+  mtfZigzagLineWidth: keyof ElliottWaveConfig;
+  showLine: keyof ElliottWaveConfig;
+  showLabel: keyof ElliottWaveConfig;
+  mtfWaveColor: keyof ElliottWaveConfig;
+  mtfLabelColor: keyof ElliottWaveConfig;
+  mtfLineStyle: keyof ElliottWaveConfig;
+  mtfLineWidth: keyof ElliottWaveConfig;
+} {
+  return {
+    showZigzagPivot: `show_zigzag_pivot_${tf}` as keyof ElliottWaveConfig,
+    mtfZigzagColor: `mtf_zigzag_color_${tf}` as keyof ElliottWaveConfig,
+    mtfZigzagLineStyle: `mtf_zigzag_line_style_${tf}` as keyof ElliottWaveConfig,
+    mtfZigzagLineWidth: `mtf_zigzag_line_width_${tf}` as keyof ElliottWaveConfig,
+    showLine: `show_line_${tf}` as keyof ElliottWaveConfig,
+    showLabel: `show_label_${tf}` as keyof ElliottWaveConfig,
+    mtfWaveColor: `mtf_wave_color_${tf}` as keyof ElliottWaveConfig,
+    mtfLabelColor: `mtf_label_color_${tf}` as keyof ElliottWaveConfig,
+    mtfLineStyle: `mtf_line_style_${tf}` as keyof ElliottWaveConfig,
+    mtfLineWidth: `mtf_line_width_${tf}` as keyof ElliottWaveConfig,
+  };
+}
+
 export function mtfWaveColorsFromConfig(
   c: Pick<
     ElliottWaveConfig,
