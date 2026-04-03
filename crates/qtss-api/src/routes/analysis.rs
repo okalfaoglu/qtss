@@ -1209,7 +1209,9 @@ pub struct PatternBarRange {
 pub struct ZigzagConfigInput {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default = "default_zigzag_length")]
     pub length: usize,
+    #[serde(default = "default_zigzag_max_pivots")]
     pub depth: usize,
 }
 

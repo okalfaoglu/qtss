@@ -136,7 +136,7 @@ export function AcpTrendoscopeSettingsCard({
                   className="mono"
                   type="number"
                   min={1}
-                  max={250}
+                  max={500}
                   value={z.depth}
                   onChange={(e) => setZigRow(i, { depth: parseInt(e.target.value, 10) || 1 })}
                   style={{ width: "3.5rem" }}

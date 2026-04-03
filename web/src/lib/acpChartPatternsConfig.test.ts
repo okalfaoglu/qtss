@@ -5,6 +5,7 @@ import {
   acpAllowedLastPivotDirections,
   acpConfigToChannelSixOptions,
   acpEnabledPatternIds,
+  acpPrimaryZigzagRow,
   filterDrawingBatchForDisplay,
   normalizeAcpChartPatternsConfig,
   patternIdsFromPatternGroups,
@@ -110,6 +111,16 @@ describe("acpConfigToChannelSixOptions", () => {
     const opts = acpConfigToChannelSixOptions(cfg, "dark");
     expect(opts.allowed_pattern_ids).toBeDefined();
     expect((opts.allowed_pattern_ids as number[]).includes(1)).toBe(false);
+  });
+
+  it("mirrors primary enabled zigzag length/depth as zigzag_length and zigzag_max_pivots", () => {
+    const cfg = structuredClone(DEFAULT_ACP_CONFIG);
+    cfg.zigzag[0] = { enabled: true, length: 13, depth: 34 };
+    cfg.zigzag[1] = { enabled: false, length: 99, depth: 99 };
+    const opts = acpConfigToChannelSixOptions(cfg, "dark");
+    expect(opts.zigzag_length).toBe(13);
+    expect(opts.zigzag_max_pivots).toBe(34);
+    expect(acpPrimaryZigzagRow(cfg).length).toBe(13);
   });
 });
 

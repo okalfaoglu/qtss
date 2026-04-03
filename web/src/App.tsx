@@ -2488,78 +2488,86 @@ export default function App() {
                       <p className="muted" style={{ fontSize: "0.75rem", marginBottom: "0.35rem" }}>
                         {t("drawer.sessionHint")}
                       </p>
-                      <div
-                        style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: "0.35rem",
-                          marginBottom: "0.35rem",
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          void tryDevLogin();
                         }}
+                        style={{ marginBottom: "0.35rem" }}
                       >
-                        <label className="muted" style={{ fontSize: "0.72rem" }}>
-                          {t("drawer.loginEmail")}
-                          <input
-                            type="email"
-                            autoComplete="username"
-                            value={loginEmail}
-                            onChange={(e) => setLoginEmail(e.target.value)}
-                            className="theme-toggle"
-                            style={{
-                              display: "block",
-                              width: "100%",
-                              maxWidth: "22rem",
-                              marginTop: "0.2rem",
-                              padding: "0.25rem 0.4rem",
-                            }}
-                          />
-                        </label>
-                        <label className="muted" style={{ fontSize: "0.72rem" }}>
-                          {t("drawer.loginPassword")}
-                          <input
-                            type="password"
-                            autoComplete="current-password"
-                            value={loginPassword}
-                            onChange={(e) => setLoginPassword(e.target.value)}
-                            className="theme-toggle"
-                            style={{
-                              display: "block",
-                              width: "100%",
-                              maxWidth: "22rem",
-                              marginTop: "0.2rem",
-                              padding: "0.25rem 0.4rem",
-                            }}
-                          />
-                        </label>
-                      </div>
-                      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
-                        <LanguageSwitcher
-                          accessToken={token}
-                          onLocalePatched={(code) => {
-                            setAuthSession((prev) =>
-                              prev ? { ...prev, preferredLocale: code } : prev,
-                            );
-                          }}
-                        />
-                        <button type="button" className="theme-toggle" onClick={tryDevLogin}>
-                          {t("drawer.loginTry")}
-                        </button>
-                        <button type="button" className="theme-toggle" onClick={refreshConfig} disabled={!token || configLoading}>
-                          {configLoading ? t("drawer.configLoading") : t("drawer.configRefresh")}
-                        </button>
-                        <button
-                          type="button"
-                          className="theme-toggle"
-                          disabled={!token}
-                          onClick={() => {
-                            setToken(null);
-                            setAuthSession(null);
-                            setConfigPreview("");
-                            setAuthMeErr("");
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "0.35rem",
+                            marginBottom: "0.35rem",
                           }}
                         >
-                          {t("drawer.logout")}
-                        </button>
-                      </div>
+                          <label className="muted" style={{ fontSize: "0.72rem" }}>
+                            {t("drawer.loginEmail")}
+                            <input
+                              type="email"
+                              autoComplete="username"
+                              value={loginEmail}
+                              onChange={(e) => setLoginEmail(e.target.value)}
+                              className="theme-toggle"
+                              style={{
+                                display: "block",
+                                width: "100%",
+                                maxWidth: "22rem",
+                                marginTop: "0.2rem",
+                                padding: "0.25rem 0.4rem",
+                              }}
+                            />
+                          </label>
+                          <label className="muted" style={{ fontSize: "0.72rem" }}>
+                            {t("drawer.loginPassword")}
+                            <input
+                              type="password"
+                              autoComplete="current-password"
+                              value={loginPassword}
+                              onChange={(e) => setLoginPassword(e.target.value)}
+                              className="theme-toggle"
+                              style={{
+                                display: "block",
+                                width: "100%",
+                                maxWidth: "22rem",
+                                marginTop: "0.2rem",
+                                padding: "0.25rem 0.4rem",
+                              }}
+                            />
+                          </label>
+                        </div>
+                        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+                          <LanguageSwitcher
+                            accessToken={token}
+                            onLocalePatched={(code) => {
+                              setAuthSession((prev) =>
+                                prev ? { ...prev, preferredLocale: code } : prev,
+                              );
+                            }}
+                          />
+                          <button type="submit" className="theme-toggle">
+                            {t("drawer.loginTry")}
+                          </button>
+                          <button type="button" className="theme-toggle" onClick={refreshConfig} disabled={!token || configLoading}>
+                            {configLoading ? t("drawer.configLoading") : t("drawer.configRefresh")}
+                          </button>
+                          <button
+                            type="button"
+                            className="theme-toggle"
+                            disabled={!token}
+                            onClick={() => {
+                              setToken(null);
+                              setAuthSession(null);
+                              setConfigPreview("");
+                              setAuthMeErr("");
+                            }}
+                          >
+                            {t("drawer.logout")}
+                          </button>
+                        </div>
+                      </form>
                       {authMeLoading ? (
                         <p className="muted" style={{ marginTop: "0.35rem" }}>
                           {t("drawer.rolesLoading")}

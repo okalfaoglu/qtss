@@ -428,6 +428,13 @@ export function acpEnabledPatternIds(cfg: AcpChartPatternsConfig): number[] | un
   return ids;
 }
 
+/** İlk `enabled` zigzag satırı; yoksa liste başı — `channel-six` yedek `zigzag_length` / `zigzag_max_pivots` ile aynı değerler. */
+export function acpPrimaryZigzagRow(cfg: AcpChartPatternsConfig): AcpZigzagRow {
+  const rows = cfg.zigzag;
+  const on = rows.find((z) => z.enabled);
+  return on ?? rows[0] ?? { enabled: true, length: 5, depth: 55 };
+}
+
 /** Kanal taraması gövdesi (bars hariç). `appTheme` grafik teması — TV display.theme yerine uygulama tercihi. */
 export function acpConfigToChannelSixOptions(
   cfg: AcpChartPatternsConfig,
@@ -437,12 +444,16 @@ export function acpConfigToChannelSixOptions(
   const d = cfg.display;
   const allowedIds = acpEnabledPatternIds(cfg);
   const lastDirs = acpAllowedLastPivotDirections(cfg);
+  const primary = acpPrimaryZigzagRow(cfg);
   return {
     zigzag_configs: cfg.zigzag.map((z) => ({
       enabled: z.enabled,
       length: z.length,
       depth: z.depth,
     })),
+    /** API yedek yolu (`zigzag_configs` içinde hiç `enabled` yoksa) — seçili satırın length/depth ile hizalı olsun. */
+    zigzag_length: primary.length,
+    zigzag_max_pivots: primary.depth,
     number_of_pivots: s.number_of_pivots,
     bar_ratio_enabled: s.verify_bar_ratio,
     bar_ratio_limit: s.bar_ratio_limit,
