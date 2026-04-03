@@ -1345,12 +1345,9 @@ export default function App() {
     const elayers = elayersRaw.filter((l) => keepElliottZigzagLayer(l.zigzagKind, elliottConfig));
     const proj = elliottProjectionLayers;
     const eAll = proj.length ? [...elayers, ...proj] : [...elayers];
-    let inner: PatternLayerOverlay[];
-    if (!eAll.length) inner = acp.slice(0, cap);
-    else {
-      const room = Math.max(0, cap - eAll.length);
-      inner = [...acp.slice(0, room), ...eAll].slice(0, cap);
-    }
+    // ACP first: old logic reserved only (cap - eAll.length) slots for ACP, so many Elliott layers
+    // could leave zero room and hide channel / formation lines entirely.
+    let inner = [...acp, ...eAll].slice(0, cap);
     const dbPre: PatternLayerOverlay[] = [];
     if (dbTradingRangeLayer) dbPre.push(dbTradingRangeLayer);
     if (dbOpenPositionLayer) dbPre.push(dbOpenPositionLayer);
