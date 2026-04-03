@@ -71,6 +71,9 @@ import {
 } from "./lib/patternDrawingBatchOverlay";
 import { ChannelScanMatchesTable } from "./components/ChannelScanMatchesTable";
 import { AiDecisionsPanel } from "./components/AiDecisionsPanel";
+import { AiDashboardPanel } from "./components/AiDashboardPanel";
+import { AiPerformancePanel } from "./components/AiPerformancePanel";
+import { AiSettingsPanel } from "./components/AiSettingsPanel";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import { OperationsQueuesPanel } from "./components/OperationsQueuesPanel";
 import i18n from "./i18n";
@@ -154,7 +157,7 @@ import {
   TRADING_RANGE_DRAWER_REFRESH_MS,
   SIGNAL_DASHBOARD_DRAWER_REFRESH_MS,
 } from "./app/drawerRefreshConstants";
-import type { Theme, SettingsTab, TradingRangeDrawerSubtab, ElliottLineStyle } from "./app/appTypes";
+import type { Theme, SettingsTab, TradingRangeDrawerSubtab, AiDrawerSubtab, ElliottLineStyle } from "./app/appTypes";
 import { readChartDefaults, readLivePollMs } from "./app/chartEnv";
 import { normalizeMarketSegment, chartToolbarSegmentSelectValue } from "./app/marketSegment";
 import {
@@ -186,6 +189,7 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<SettingsTab>("general");
   const [tradingRangeSubtab, setTradingRangeSubtab] = useState<TradingRangeDrawerSubtab>("main");
+  const [aiSubtab, setAiSubtab] = useState<AiDrawerSubtab>("ai_dashboard");
   const [drawerSearch, setDrawerSearch] = useState("");
   const [helpFocusId, setHelpFocusId] = useState<string | null>(null);
   const isElliottDrawerGroup =
@@ -2415,6 +2419,16 @@ export default function App() {
                   onClick={() => setDrawerTab("queues")}
                 >
                   {t("drawer.queues")}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={drawerTab === "ai"}
+                  className={`tv-settings__tab ${drawerTab === "ai" ? "is-active" : ""}`}
+                  onClick={() => setDrawerTab("ai")}
+                  style={drawerTab === "ai" ? { borderColor: "#ce93d8" } : undefined}
+                >
+                  AI
                 </button>
                 <button
                   type="button"

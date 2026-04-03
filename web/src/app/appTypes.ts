@@ -16,10 +16,13 @@ export type SettingsTab =
   | "market_context"
   | "nansen"
   | "queues"
+  | "ai"
   | "notify"
   | "help"
   | "setting";
 
 export type TradingRangeDrawerSubtab = "main" | "data_entry" | "setup" | "trade_summary";
+
+export type AiDrawerSubtab = "ai_dashboard" | "ai_decisions" | "ai_performance" | "ai_settings";
 
 export type ElliottLineStyle = "solid" | "dotted" | "dashed";
