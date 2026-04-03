@@ -32,7 +32,7 @@ fn json_config_string(v: &serde_json::Value) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-fn bootstrap_gate(headers: &HeaderMap) -> Result<(), StatusCode> {
+fn bootstrap_gate(headers: &HeaderMap) -> Result<(), Response> {
     let expected = std::env::var("QTSS_WEB_OAUTH_BOOTSTRAP_TOKEN")
         .ok()
         .map(|s| s.trim().to_string())
@@ -48,7 +48,17 @@ fn bootstrap_gate(headers: &HeaderMap) -> Result<(), StatusCode> {
     if got == exp.as_str() {
         Ok(())
     } else {
-        Err(StatusCode::FORBIDDEN)
+        Err(
+            (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "bootstrap_forbidden",
+                    "error_description":
+                        "X-QTSS-Bootstrap-Token must match QTSS_WEB_OAUTH_BOOTSTRAP_TOKEN on the API. Set the same value in web VITE_WEB_OAUTH_BOOTSTRAP_TOKEN, or remove both env vars for open bootstrap."
+                })),
+            )
+                .into_response(),
+        )
     }
 }
 
@@ -56,8 +66,8 @@ async fn get_web_oauth_bootstrap(
     State(state): State<SharedState>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(code) = bootstrap_gate(&headers) {
-        return code.into_response();
+    if let Err(res) = bootstrap_gate(&headers) {
+        return res;
     }
 
     let repo = SystemConfigRepository::new(state.pool.clone());
