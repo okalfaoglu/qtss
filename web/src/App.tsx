@@ -69,6 +69,7 @@ import {
   type PatternLayerOverlay,
   type MultiPatternChartOverlay,
 } from "./lib/patternDrawingBatchOverlay";
+import { buildFormationTradeLevelSpecs } from "./lib/formationTradeLevelChart";
 import { ChannelScanMatchesTable } from "./components/ChannelScanMatchesTable";
 import { AiDecisionsPanel } from "./components/AiDecisionsPanel";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
@@ -1188,6 +1189,11 @@ export default function App() {
     return scanLen > 0 ? lastChannelScanBars.slice(-scanLen) : lastChannelScanBars;
   }, [lastChannelScan, lastChannelScanBars]);
 
+  const formationTradeLevelSpecs = useMemo(() => {
+    if (!lastChannelScan?.matched || !channelScanOverlayBars?.length) return [];
+    return buildFormationTradeLevelSpecs(lastChannelScan, channelScanOverlayBars);
+  }, [lastChannelScan, channelScanOverlayBars]);
+
   const multiOverlay = useMemo(() => {
     if (!lastChannelScan?.matched) return null;
     const scanBars = channelScanOverlayBars;
@@ -2284,6 +2290,7 @@ export default function App() {
             patternLayers={mergedPatternLayers.length ? mergedPatternLayers : null}
             pivotLabelMarkers={mergedPivotLabelMarkers.length ? mergedPivotLabelMarkers : null}
             patternLabelMarkers={chartPatternLabelMarkers}
+            tradeLevelSpecs={formationTradeLevelSpecs.length ? formationTradeLevelSpecs : null}
           />
         </main>
       </div>

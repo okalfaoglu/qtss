@@ -42,6 +42,10 @@ import {
 } from "../lib/chartTimeScaleNav";
 import { marketBarsToCandles, type ChartOhlcRow } from "../lib/marketBarsToCandles";
 import type { PatternLayerOverlay, ZigzagLayerKind } from "../lib/patternDrawingBatchOverlay";
+import {
+  maxUnixTimeFromTradeLevelSpecs,
+  type TradeLevelLineSpec,
+} from "../lib/formationTradeLevelChart";
 import type { ChartTool } from "./ChartToolbar";
 
 type LinePoint = { time: UTCTimestamp; value: number };
@@ -87,6 +91,7 @@ function extendTimeScaleForElliottProjection(
   chart: IChartApi,
   candles: CandlestickData<UTCTimestamp>[],
   layers: PatternLayerOverlay[] | null | undefined,
+  extraFutureUnixTime?: number | null,
 ): void {
   const ts = chart.timeScale();
   if (!candles.length) {
@@ -104,6 +109,9 @@ function extendTimeScaleForElliottProjection(
         if (Number.isFinite(t) && t > maxProj) maxProj = t;
       }
     }
+  }
+  if (extraFutureUnixTime != null && Number.isFinite(extraFutureUnixTime) && extraFutureUnixTime > maxProj) {
+    maxProj = extraFutureUnixTime;
   }
   if (maxProj <= lastT) {
     ts.applyOptions({ rightOffset: 0 });
@@ -202,6 +210,8 @@ type Props = {
   patternLayers?: PatternLayerOverlay[] | null;
   pivotLabelMarkers?: SeriesMarker<UTCTimestamp>[] | null;
   patternLabelMarkers?: SeriesMarker<UTCTimestamp>[] | null;
+  /** Short horizontal segments + labels for ACP entry / SL / TP (right of formation). */
+  tradeLevelSpecs?: TradeLevelLineSpec[] | null;
 };
 
 type UserDrawing =
@@ -264,6 +274,7 @@ export function TvChartPane({
   patternLayers,
   pivotLabelMarkers,
   patternLabelMarkers,
+  tradeLevelSpecs,
 }: Props) {
   const mergeAndSortMarkers = (
     base: SeriesMarker<UTCTimestamp>[] | null | undefined,
@@ -281,6 +292,7 @@ export function TvChartPane({
   const lowerRefs = useRef<ISeriesApi<"Line">[]>([]);
   const zigRefs = useRef<ISeriesApi<"Line">[]>([]);
   const drawSeriesRefs = useRef<ISeriesApi<"Line">[]>([]);
+  const tradeLevelSeriesRefs = useRef<ISeriesApi<"Line">[]>([]);
   const userDrawingsRef = useRef<UserDrawing[]>([]);
   const pendingPointRef = useRef<{ time: number; price: number } | null>(null);
   const barsRef = useRef(bars);
@@ -293,6 +305,8 @@ export function TvChartPane({
   pivotLabelMarkersRef.current = pivotLabelMarkers ?? [];
   const patternLabelMarkersRef = useRef(patternLabelMarkers ?? []);
   patternLabelMarkersRef.current = patternLabelMarkers ?? [];
+  const tradeLevelSpecsRef = useRef<TradeLevelLineSpec[]>([]);
+  tradeLevelSpecsRef.current = tradeLevelSpecs ?? [];
   const lastFitSessionKeyRef = useRef<number | undefined>(undefined);
   const activeToolRef = useRef<ChartTool>(activeTool);
   activeToolRef.current = activeTool;
@@ -334,6 +348,30 @@ export function TvChartPane({
   const clearUserDrawSeries = (chart: IChartApi) => {
     for (const s of drawSeriesRefs.current) chart.removeSeries(s);
     drawSeriesRefs.current = [];
+  };
+
+  const clearTradeLevelSeries = (chart: IChartApi) => {
+    for (const s of tradeLevelSeriesRefs.current) chart.removeSeries(s);
+    tradeLevelSeriesRefs.current = [];
+  };
+
+  const applyTradeLevelSpecs = (chart: IChartApi, specs: TradeLevelLineSpec[]) => {
+    clearTradeLevelSeries(chart);
+    for (const sp of specs) {
+      const mc = sp.marker.color;
+      const lineColor =
+        typeof mc === "string" && (mc.startsWith("#") || mc.startsWith("rgb")) ? mc : "#78909c";
+      const s = chart.addLineSeries({
+        color: lineColor,
+        lineWidth: 2,
+        lineStyle: LineStyle.Solid,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      s.setData(lineSeriesDataStrictAsc([...sp.segment]));
+      s.setMarkers([sp.marker]);
+      tradeLevelSeriesRefs.current.push(s);
+    }
   };
 
   const applyUserDrawings = (
@@ -546,12 +584,14 @@ export function TvChartPane({
       series.setData(data);
       applyPatternLayers(uppers, lowers, zigs, layersRef.current ?? []);
       applyUserDrawings(chart, data, theme);
+      applyTradeLevelSpecs(chart, tradeLevelSpecsRef.current);
       series.setMarkers(
         mergeAndSortMarkers(markersRef.current, pivotLabelMarkersRef.current, patternLabelMarkersRef.current),
       );
       if (data.length > 0) {
         chart.timeScale().fitContent();
-        extendTimeScaleForElliottProjection(chart, data, layersRef.current ?? null);
+        const tradeMax = maxUnixTimeFromTradeLevelSpecs(tradeLevelSpecsRef.current);
+        extendTimeScaleForElliottProjection(chart, data, layersRef.current ?? null, tradeMax);
       }
     };
     syncData();
@@ -598,6 +638,7 @@ export function TvChartPane({
       chart.unsubscribeClick(onClick);
       ro.disconnect();
       clearUserDrawSeries(chart);
+      clearTradeLevelSeries(chart);
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
@@ -615,6 +656,7 @@ export function TvChartPane({
     series.setData(data);
     applyPatternLayers(upperRefs.current, lowerRefs.current, zigRefs.current, patternLayers, theme);
     applyUserDrawings(chart, data, theme);
+    applyTradeLevelSpecs(chart, tradeLevelSpecs ?? []);
     series.setMarkers(mergeAndSortMarkers(pivotMarkers, pivotLabelMarkers, patternLabelMarkers));
     if (data.length === 0) return;
     if (fitSessionKey !== lastFitSessionKeyRef.current) {
@@ -623,8 +665,18 @@ export function TvChartPane({
       // Yeni sembol yüklendiğinde önceki serilerin (ör. BTC çizgileri) bıraktığı fiyat aralığını sıfırla.
       series.priceScale().applyOptions({ autoScale: true });
     }
-    extendTimeScaleForElliottProjection(chart, data, patternLayers ?? null);
-  }, [bars, pivotMarkers, patternLayers, pivotLabelMarkers, patternLabelMarkers, fitSessionKey, theme]);
+    const tradeMax = maxUnixTimeFromTradeLevelSpecs(tradeLevelSpecs ?? []);
+    extendTimeScaleForElliottProjection(chart, data, patternLayers ?? null, tradeMax);
+  }, [
+    bars,
+    pivotMarkers,
+    patternLayers,
+    pivotLabelMarkers,
+    patternLabelMarkers,
+    tradeLevelSpecs,
+    fitSessionKey,
+    theme,
+  ]);
 
   useEffect(() => {
     const chart = chartRef.current;

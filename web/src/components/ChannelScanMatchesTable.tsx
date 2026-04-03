@@ -1,12 +1,27 @@
 import type { ChannelSixResponse, PatternMatchPayloadJson } from "../api/client";
 import { isLiveRobotSignal, outcomePivotBarRange } from "../lib/channelSixLiveSignal";
+import { formationLevelsForMatchRow } from "../lib/formationTradeLevelChart";
 
 function matchRows(res: ChannelSixResponse): PatternMatchPayloadJson[] {
   if (res.pattern_matches?.length) return res.pattern_matches;
   if (res.outcome) {
-    return [{ outcome: res.outcome, pattern_name: res.pattern_name, pattern_drawing_batch: res.pattern_drawing_batch }];
+    return [
+      {
+        outcome: res.outcome,
+        pattern_name: res.pattern_name,
+        pattern_drawing_batch: res.pattern_drawing_batch,
+        formation_trade_levels: res.formation_trade_levels,
+      },
+    ];
   }
   return [];
+}
+
+function formatLevelPrice(n: number): string {
+  const a = Math.abs(n);
+  if (a >= 10_000) return n.toFixed(2);
+  if (a >= 1) return n.toFixed(4);
+  return n.toFixed(6);
 }
 
 /**
@@ -39,6 +54,9 @@ export function ChannelScanMatchesTable({ res }: { res: ChannelSixResponse }) {
               <th style={{ padding: "0.2rem 0.4rem" }} title="0 = en güncel 6/5 pivot penceresi">skip</th>
               <th style={{ padding: "0.2rem 0.4rem" }}>zz lvl</th>
               <th style={{ padding: "0.2rem 0.4rem" }}>bar aralığı</th>
+              <th style={{ padding: "0.2rem 0.4rem" }}>Enter</th>
+              <th style={{ padding: "0.2rem 0.4rem" }}>SL</th>
+              <th style={{ padding: "0.2rem 0.4rem" }}>TP</th>
               <th style={{ padding: "0.2rem 0.4rem" }}>robot</th>
             </tr>
           </thead>
@@ -50,6 +68,11 @@ export function ChannelScanMatchesTable({ res }: { res: ChannelSixResponse }) {
               const live = isLiveRobotSignal(o);
               const apiPick = res.live_robot_match_index;
               const robotRow = typeof apiPick === "number" && apiPick === i;
+              const levels = formationLevelsForMatchRow(res, m, i);
+              const tpCell =
+                levels && levels.take_profits.length
+                  ? levels.take_profits.map((tp) => `${tp.id}: ${formatLevelPrice(tp.price)}`).join("; ")
+                  : "—";
               return (
                 <tr
                   key={i}
@@ -65,6 +88,15 @@ export function ChannelScanMatchesTable({ res }: { res: ChannelSixResponse }) {
                   <td style={{ padding: "0.25rem 0.4rem" }}>{o.zigzag_level ?? 0}</td>
                   <td style={{ padding: "0.25rem 0.4rem" }}>
                     {br ? `${br.min} … ${br.max}` : "—"}
+                  </td>
+                  <td style={{ padding: "0.25rem 0.4rem" }}>
+                    {levels ? formatLevelPrice(levels.entry) : "—"}
+                  </td>
+                  <td style={{ padding: "0.25rem 0.4rem" }}>
+                    {levels ? formatLevelPrice(levels.stop_loss) : "—"}
+                  </td>
+                  <td style={{ padding: "0.25rem 0.4rem", maxWidth: "14rem", wordBreak: "break-word" }}>
+                    {tpCell}
                   </td>
                   <td style={{ padding: "0.25rem 0.4rem" }}>{live ? "canlı" : "—"}</td>
                 </tr>
