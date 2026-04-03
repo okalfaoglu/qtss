@@ -5158,7 +5158,6 @@ export default function App() {
                     "notify",
                     "outbox",
                     "bildirim",
-                    "ai",
                     "onay",
                     "approval",
                     "ops",
@@ -5170,21 +5169,64 @@ export default function App() {
                       canAdmin={rbacIsAdmin}
                     />
                   ) : null}
-                  {matchesSetting(
-                    "kuyruk",
-                    "queue",
-                    "notify",
-                    "outbox",
-                    "bildirim",
-                    "ai",
-                    "karar",
-                    "decision",
-                    "onay",
-                    "approval",
-                    "ops",
-                    "worker",
-                  ) ? (
+                </>
+              ) : null}
+
+              {drawerTab === "ai" ? (
+                <>
+                  <div
+                    className="tv-settings__tabs tv-settings__subtabs tv-settings__subtabs--cols-4"
+                    role="tablist"
+                    aria-label="AI alt sekmeleri"
+                  >
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={aiSubtab === "ai_dashboard"}
+                      className={`tv-settings__tab ${aiSubtab === "ai_dashboard" ? "is-active" : ""}`}
+                      onClick={() => setAiSubtab("ai_dashboard")}
+                    >
+                      {t("ai.subtab.dashboard")}
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={aiSubtab === "ai_decisions"}
+                      className={`tv-settings__tab ${aiSubtab === "ai_decisions" ? "is-active" : ""}`}
+                      onClick={() => setAiSubtab("ai_decisions")}
+                    >
+                      {t("ai.subtab.decisions")}
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={aiSubtab === "ai_performance"}
+                      className={`tv-settings__tab ${aiSubtab === "ai_performance" ? "is-active" : ""}`}
+                      onClick={() => setAiSubtab("ai_performance")}
+                    >
+                      {t("ai.subtab.performance")}
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={aiSubtab === "ai_settings"}
+                      className={`tv-settings__tab ${aiSubtab === "ai_settings" ? "is-active" : ""}`}
+                      onClick={() => setAiSubtab("ai_settings")}
+                    >
+                      {t("ai.subtab.settings")}
+                    </button>
+                  </div>
+                  {aiSubtab === "ai_dashboard" ? (
+                    <AiDashboardPanel accessToken={token} />
+                  ) : null}
+                  {aiSubtab === "ai_decisions" ? (
                     <AiDecisionsPanel accessToken={token} canAdmin={rbacIsAdmin} />
+                  ) : null}
+                  {aiSubtab === "ai_performance" ? (
+                    <AiPerformancePanel accessToken={token} />
+                  ) : null}
+                  {aiSubtab === "ai_settings" ? (
+                    <AiSettingsPanel accessToken={token} canAdmin={rbacIsAdmin} />
                   ) : null}
                 </>
               ) : null}

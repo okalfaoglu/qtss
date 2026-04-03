@@ -27,6 +27,65 @@
     "tacticalSection": "Taktik direktif",
     "load": "Yükle"
   },
+  "ai": {
+    "loginPrompt": "AI paneline erişmek için giriş yapın.",
+    "refresh": "Yenile",
+    "subtab": {
+      "dashboard": "Genel Bakış",
+      "decisions": "Kararlar",
+      "performance": "Performans",
+      "settings": "Ayarlar"
+    },
+    "col": {
+      "time": "Saat",
+      "layer": "Katman",
+      "symbol": "Sembol",
+      "status": "Durum",
+      "confidence": "Güven"
+    },
+    "dashboard": {
+      "title": "AI Genel Bakış",
+      "pendingAlert": "{{count}} karar onay bekliyor",
+      "tactical": "Taktik",
+      "operational": "Operasyonel",
+      "strategic": "Stratejik",
+      "activePortfolio": "Aktif portföy direktifi",
+      "riskBudget": "Risk bütçesi",
+      "maxPositions": "Maks pozisyon",
+      "regime": "Rejim",
+      "validUntil": "Geçerlilik",
+      "recentDecisions": "Son kararlar"
+    },
+    "performance": {
+      "title": "AI Performans",
+      "allLayers": "Tüm katmanlar",
+      "totalDecisions": "Toplam karar",
+      "approvalRate": "Onay oranı",
+      "errorRate": "Hata oranı",
+      "bySymbol": "Sembol bazlı",
+      "total": "Toplam",
+      "approved": "Onaylı",
+      "applied": "Uygulandı",
+      "errors": "Hata",
+      "last": "Son",
+      "decisionDetail": "Karar detayı",
+      "clickToLoad": "Detay görmek için satıra tıklayın"
+    },
+    "settings": {
+      "title": "AI Ayarları",
+      "loading": "Yükleniyor...",
+      "notConfigured": "AI yapılandırması bulunamadı. app_config tablosunda ai_engine_config anahtarını kontrol edin.",
+      "engineOn": "AI motoru AKTİF",
+      "engineOff": "AI motoru KAPALI",
+      "minConfidence": "Min güven",
+      "decisionTTL": "Karar TTL",
+      "autoApprove": "Oto-onay",
+      "disabled": "Kapalı",
+      "locale": "Dil",
+      "layerConfig": "Katman yapılandırması",
+      "adminOnly": "Yapılandırma değişiklikleri için admin yetkisi gereklidir."
+    }
+  },
   "drawer": {
     "help": "Yardım",
     "tradingRange": "Trading Range",

@@ -227,11 +227,24 @@ export type MultiPatternChartOverlay = {
   patternLabels: SeriesMarker<UTCTimestamp>[];
 };
 
-function mergeSortedMarkers(
-  acc: SeriesMarker<UTCTimestamp>[],
-  more: SeriesMarker<UTCTimestamp>[],
-): SeriesMarker<UTCTimestamp>[] {
-  return [...acc, ...more].sort((x, y) => (x.time as number) - (y.time as number));
+/** Aynı mumda aynı metin/yön — `pattern_matches` içinde çakışan pencereler üst üste binmesin. */
+function markerDedupeKey(m: SeriesMarker<UTCTimestamp>): string {
+  const pos = typeof m.position === "string" ? m.position : String(m.position ?? "");
+  return `${m.time as number}\0${m.text ?? ""}\0${pos}`;
+}
+
+function sortMarkersByTime(markers: SeriesMarker<UTCTimestamp>[]): SeriesMarker<UTCTimestamp>[] {
+  return [...markers].sort((a, b) => (a.time as number) - (b.time as number));
+}
+
+function acpLayerFingerprint(layer: {
+  upper: { time: UTCTimestamp; value: number }[];
+  lower: { time: UTCTimestamp; value: number }[];
+  zigzag: { time: UTCTimestamp; value: number }[];
+}): string {
+  const seg = (pts: { time: UTCTimestamp; value: number }[]) =>
+    pts.map((p) => `${p.time as number}:${p.value.toFixed(6)}`).join(";");
+  return `${seg(layer.zigzag)}|${seg(layer.upper)}|${seg(layer.lower)}`;
 }
 
 /**
@@ -263,8 +276,11 @@ export function buildMultiPatternOverlayFromScan(
   if (!payloads.length) return null;
 
   const layers: PatternLayerOverlay[] = [];
-  let pivotLabels: SeriesMarker<UTCTimestamp>[] = [];
-  let patternLabels: SeriesMarker<UTCTimestamp>[] = [];
+  const pivotLabels: SeriesMarker<UTCTimestamp>[] = [];
+  const patternLabels: SeriesMarker<UTCTimestamp>[] = [];
+  const pivotSeen = new Set<string>();
+  const patternSeen = new Set<string>();
+  const layerSeen = new Set<string>();
 
   for (const p of payloads) {
     const raw = p.pattern_drawing_batch;
@@ -273,12 +289,25 @@ export function buildMultiPatternOverlayFromScan(
     if (!filtered) continue;
     const o = patternDrawingBatchToOverlay(barsChrono, filtered, chartBarsChrono);
     if (!o) continue;
-    pivotLabels = mergeSortedMarkers(pivotLabels, o.pivotLabels);
-    patternLabels = mergeSortedMarkers(patternLabels, o.patternLabels);
+    for (const m of o.pivotLabels) {
+      const k = markerDedupeKey(m);
+      if (pivotSeen.has(k)) continue;
+      pivotSeen.add(k);
+      pivotLabels.push(m);
+    }
+    for (const m of o.patternLabels) {
+      const k = markerDedupeKey(m);
+      if (patternSeen.has(k)) continue;
+      patternSeen.add(k);
+      patternLabels.push(m);
+    }
     const upper = o.channel?.upper ?? [];
     const lower = o.channel?.lower ?? [];
     const zigzag = o.zigzag ?? [];
     if (upper.length === 0 && lower.length === 0 && zigzag.length === 0) continue;
+    const fp = acpLayerFingerprint({ upper, lower, zigzag });
+    if (layerSeen.has(fp)) continue;
+    layerSeen.add(fp);
     layers.push({ upper, lower, zigzag });
   }
 
@@ -286,5 +315,9 @@ export function buildMultiPatternOverlayFromScan(
     return null;
   }
 
-  return { layers, pivotLabels, patternLabels };
+  return {
+    layers,
+    pivotLabels: sortMarkersByTime(pivotLabels),
+    patternLabels: sortMarkersByTime(patternLabels),
+  };
 }
