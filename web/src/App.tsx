@@ -471,6 +471,31 @@ export default function App() {
               closedNote: closedBarSuffix,
             }) + ` · ${barRatioNote}`,
           );
+        } else if (res.matched && (res.formations?.length ?? 0) > 0) {
+          const fm = res.formations ?? [];
+          const multiNames = fm
+            .slice(0, 8)
+            .map((f) => f.pattern_name)
+            .join(" · ");
+          const multiTail = fm.length > 8 ? "…" : "";
+          const closedBarSuffix = acpConfig.scanning.repaint ? "" : t("app.channelScan.closedBarSuffix");
+          const barRatioNote = !acpConfig.scanning.verify_bar_ratio
+            ? "BR:Off"
+            : Math.abs(acpConfig.scanning.bar_ratio_limit - 0.382) < 1e-6
+              ? "BR:Strict"
+              : Math.abs(acpConfig.scanning.bar_ratio_limit - 0.25) < 1e-6
+                ? "BR:Relaxed"
+                : `BR:${acpConfig.scanning.bar_ratio_limit.toFixed(3)}`;
+          setChannelScanHoverTitle(
+            t("app.channelScan.hoverFormations", { names: `${multiNames}${multiTail}` }),
+          );
+          setChannelScanSummary(
+            t("app.channelScan.summaryFormationsOnly", {
+              count: fm.length,
+              names: `${multiNames}${multiTail}`,
+              closedNote: closedBarSuffix,
+            }) + ` · ${barRatioNote}`,
+          );
         } else {
           setChannelScanHoverTitle("");
           const closedBarSuffix = acpConfig.scanning.repaint ? "" : t("app.channelScan.closedBarSuffix");

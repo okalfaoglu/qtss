@@ -171,6 +171,7 @@
       "closedBarSuffix": " · yalnız kapanmış mumlar",
       "hoverFormations": "Eşleşmeler: {{names}}",
       "summaryMatch": "{{name}} · seç U{{pickUpper}} L{{pickLower}} · pivot {{pivots}}{{skipNote}}{{lvlNote}}{{zzNote}}{{multi}}{{closedNote}}",
+      "summaryFormationsOnly": "{{count}} klasik formasyon: {{names}}{{closedNote}}",
       "noMatchLine": "Eşleşme yok — {{reason}} · mum {{bars}} · pivot {{pivots}}{{closedNote}}",
       "defaultHoverTitle": "Kanal taraması",
       "scanning": "Taranıyor…",

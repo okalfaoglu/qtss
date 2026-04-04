@@ -275,7 +275,8 @@ export function buildMultiPatternOverlayFromScan(
           ]
         : [];
 
-  if (!payloads.length) return null;
+  const hasFormationDrawings = (res.formation_drawing_batches?.length ?? 0) > 0;
+  if (!payloads.length && !hasFormationDrawings) return null;
 
   const layers: PatternLayerOverlay[] = [];
   const pivotLabels: SeriesMarker<UTCTimestamp>[] = [];

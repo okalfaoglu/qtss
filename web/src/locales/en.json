@@ -171,6 +171,7 @@
       "closedBarSuffix": " · closed bars only",
       "hoverFormations": "Matches: {{names}}",
       "summaryMatch": "{{name}} · pick U{{pickUpper}} L{{pickLower}} · pivots {{pivots}}{{skipNote}}{{lvlNote}}{{zzNote}}{{multi}}{{closedNote}}",
+      "summaryFormationsOnly": "{{count}} classic formation(s): {{names}}{{closedNote}}",
       "noMatchLine": "No match — {{reason}} · bars {{bars}} · pivots {{pivots}}{{closedNote}}",
       "defaultHoverTitle": "Channel scan",
       "scanning": "Scanning…",
