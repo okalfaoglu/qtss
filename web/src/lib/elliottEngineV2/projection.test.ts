@@ -107,9 +107,7 @@ describe("buildElliottProjectionOverlayV2", () => {
   });
 
   it("returns formation projection layers when impulse is visible", () => {
-    const out = buildElliottProjectionOverlayV2(engineWithMicro(bullImpulse()), anchorTwoBars, {
-      includeAltScenario: false,
-    });
+    const out = buildElliottProjectionOverlayV2(engineWithMicro(bullImpulse()), anchorTwoBars, {});
     expect(out).not.toBeNull();
     expect(out!.layers.length).toBeGreaterThan(0);
     expect(out!.layers.some((l) => l.zigzagKind?.includes("elliott_projection"))).toBe(true);

@@ -1014,7 +1014,6 @@ export default function App() {
     const lastRow = rows[rows.length - 1]!;
     const wc = mtfWaveColorsFromConfig(elliottConfig);
     const opt = {
-      includeAltScenario: elliottConfig.show_projection_alt_scenario,
       multiCorrectiveScenarios: elliottConfig.projection_multi_corrective_scenarios,
     };
     const out: PatternLayerOverlay[] = [];
@@ -1123,7 +1122,6 @@ export default function App() {
     elliottConfig.mtf_wave_color_4h,
     elliottConfig.pattern_menu_by_tf,
     elliottConfig.projection_multi_corrective_scenarios,
-    elliottConfig.show_projection_alt_scenario,
     elliottConfig.show_projection_15m,
     elliottConfig.show_projection_1h,
     elliottConfig.show_projection_4h,

@@ -975,7 +975,6 @@ fn default_elliott_wave_json() -> serde_json::Value {
         "show_projection_15m": false,
         "show_historical_waves": true,
         "show_nested_formations": true,
-        "show_projection_alt_scenario": true,
         "projection_multi_corrective_scenarios": false,
         "use_acp_zigzag_swing": false,
         "acp_zigzag_row_index": 0,

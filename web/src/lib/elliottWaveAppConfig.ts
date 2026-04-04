@@ -133,11 +133,6 @@ export type ElliottWaveConfig = {
   /** Ana itkı içindeki alt itkı (1/3/5) ve dalga 2/4 içi mikro a–b–c çizimleri. */
   show_nested_formations: boolean;
   /**
-   * İkinci formasyon yolu: alternatif kalibrasyon (uzun 3. dalga tarzı).
-   * Kapalıysa yalnızca birincil yol çizilir.
-   */
-  show_projection_alt_scenario: boolean;
-  /**
    * Formasyon projeksiyonunda zigzag / yassı (ve pivotla eşleşen ABC adayları) ayrı renklerle;
    * A sonrası B–C ve B sonrası C hedefleri kalıba göre süzülür.
    */
@@ -320,7 +315,6 @@ export const DEFAULT_ELLIOTT_WAVE_CONFIG: ElliottWaveConfig = {
   show_projection_15m: false,
   show_historical_waves: true,
   show_nested_formations: true,
-  show_projection_alt_scenario: true,
   projection_multi_corrective_scenarios: false,
   use_acp_zigzag_swing: false,
   acp_zigzag_row_index: 0,

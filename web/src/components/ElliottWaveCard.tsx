@@ -433,28 +433,6 @@ export function ElliottWaveCard({
             : "İtki ve düzeltme dalgaları"}
       </p>
       <div className="tv-elliott-panel__params" style={{ display: "grid", gap: "0.35rem" }}>
-        {showImpulseUi ? (
-          <>
-            <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
-              <input
-                type="checkbox"
-                checked={value.show_projection_alt_scenario}
-                disabled={
-                  !value.enabled ||
-                  !(
-                    value.show_projection_1w ||
-                    value.show_projection_1d ||
-                    value.show_projection_4h ||
-                    value.show_projection_1h ||
-                    value.show_projection_15m
-                  )
-                }
-                onChange={(e) => onChange({ ...value, show_projection_alt_scenario: e.target.checked })}
-              />
-              <span>İkinci projeksiyon senaryosu (uzatılmış 3. dalga ※)</span>
-            </label>
-          </>
-        ) : null}
         {value.enabled ? (
           <label className="muted tv-elliott-panel__field tv-elliott-panel__field--check">
             <input
