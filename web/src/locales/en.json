@@ -566,5 +566,11 @@
       "noTradesInPeriod": "No rows in this period.",
       "clickBarHint": "Click a bar to filter fills/orders for that period."
     }
+  },
+  "ai": {
+    "subtab_dashboard": "Dashboard",
+    "subtab_decisions": "Decisions",
+    "subtab_performance": "Performance",
+    "subtab_settings": "Settings"
   }
 }

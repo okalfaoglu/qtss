@@ -72,6 +72,9 @@ import {
 import { buildFormationTradeLevelSpecs } from "./lib/formationTradeLevelChart";
 import { ChannelScanMatchesTable } from "./components/ChannelScanMatchesTable";
 import { AiDecisionsPanel } from "./components/AiDecisionsPanel";
+import { AiDashboardPanel } from "./components/AiDashboardPanel";
+import { AiPerformancePanel } from "./components/AiPerformancePanel";
+import { AiSettingsPanel } from "./components/AiSettingsPanel";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import { OperationsQueuesPanel } from "./components/OperationsQueuesPanel";
 import i18n from "./i18n";
@@ -161,7 +164,7 @@ import {
   TRADING_RANGE_DRAWER_REFRESH_MS,
   SIGNAL_DASHBOARD_DRAWER_REFRESH_MS,
 } from "./app/drawerRefreshConstants";
-import type { Theme, SettingsTab, TradingRangeDrawerSubtab, ElliottLineStyle } from "./app/appTypes";
+import type { Theme, SettingsTab, TradingRangeDrawerSubtab, ElliottLineStyle, AiDrawerSubtab } from "./app/appTypes";
 import { readChartDefaults, readLivePollMs } from "./app/chartEnv";
 import { normalizeMarketSegment, chartToolbarSegmentSelectValue } from "./app/marketSegment";
 import {
@@ -195,6 +198,7 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<SettingsTab>("general");
   const [tradingRangeSubtab, setTradingRangeSubtab] = useState<TradingRangeDrawerSubtab>("main");
+  const [aiSubtab, setAiSubtab] = useState<AiDrawerSubtab>("ai_dashboard");
   const [drawerSearch, setDrawerSearch] = useState("");
   const [helpFocusId, setHelpFocusId] = useState<string | null>(null);
   const isElliottDrawerGroup =
@@ -1444,9 +1448,9 @@ export default function App() {
     const elayers = elayersRaw.filter((l) => keepElliottZigzagLayer(l.zigzagKind, elliottConfig));
     const proj = elliottProjectionLayers;
     const eAll = proj.length ? [...elayers, ...proj] : [...elayers];
-    // ACP first: old logic reserved only (cap - eAll.length) slots for ACP, so many Elliott layers
-    // could leave zero room and hide channel / formation lines entirely.
-    let inner = [...acp, ...eAll].slice(0, cap);
+    // Elliott first when present: otherwise ACP can fill the cap and hide ZigZag / waves entirely.
+    // When only ACP is needed, eAll is empty and order matches previous behavior.
+    let inner = eAll.length ? [...eAll, ...acp].slice(0, cap) : [...acp].slice(0, cap);
     const dbPre: PatternLayerOverlay[] = [];
     if (dbTradingRangeLayer) dbPre.push(dbTradingRangeLayer);
     if (dbOpenPositionLayer) dbPre.push(dbOpenPositionLayer);
@@ -1456,6 +1460,9 @@ export default function App() {
     elliottChartBundle?.layers,
     elliottProjectionLayers,
     multiOverlay?.layers,
+    elliottConfig.enabled,
+    elliottConfig.show_zigzag_pivot_1w,
+    elliottConfig.show_zigzag_pivot_1d,
     elliottConfig.show_zigzag_pivot_4h,
     elliottConfig.show_zigzag_pivot_1h,
     elliottConfig.show_zigzag_pivot_15m,
@@ -2515,6 +2522,16 @@ export default function App() {
                 <button
                   type="button"
                   role="tab"
+                  aria-selected={drawerTab === "ai"}
+                  className={`tv-settings__tab ${drawerTab === "ai" ? "is-active" : ""}`}
+                  onClick={() => setDrawerTab("ai")}
+                  style={drawerTab === "ai" ? { borderColor: "#a855f7" } : undefined}
+                >
+                  🤖 AI
+                </button>
+                <button
+                  type="button"
+                  role="tab"
                   aria-selected={drawerTab === "notify"}
                   className={`tv-settings__tab ${drawerTab === "notify" ? "is-active" : ""}`}
                   onClick={() => setDrawerTab("notify")}
@@ -2874,7 +2891,11 @@ export default function App() {
                           menüsü. «Bu TF — hepsi» satırı: o sütundaki dalga türleri, projeksiyon ve (alttaki tabloda)
                           dalga/ZigZag görünürlüğünü tek tıkta açar veya kapatır; ZigZag depth ve renk/çizgi değerleri
                           değişmez. «ZigZag (depth)» beş TF için motor penceresi. «Grafik çizimi» tablosu aynı TF’ler için
-                          pivot, renk ve çizgi ayrıntılarıdır.
+                          pivot, renk ve çizgi ayrıntılarıdır.{" "}
+                          <strong>Düzeltme (Zigzag / Flat / Üçgen …)</strong> çizgileri, o TF’de bir{" "}
+                          <strong>itki veya diyagonal</strong> adayı bulunduğunda dalga 2 / 4 / +ABC olarak üretilir; tüm
+                          itkı kutuları kapalıyken yalnızca düzeltmeyi işaretlemek ana dalga çizgisi üretmez. Ham ZigZag
+                          pivot çizgisi itkıdan bağımsızdır.
                         </p>
                         <div className="tv-elliott-panel__row" style={{ marginBottom: "0.35rem" }}>
                           <label className="tv-elliott-panel__toggle">
@@ -5275,22 +5296,35 @@ export default function App() {
                       canAdmin={rbacIsAdmin}
                     />
                   ) : null}
-                  {matchesSetting(
-                    "kuyruk",
-                    "queue",
-                    "notify",
-                    "outbox",
-                    "bildirim",
-                    "ai",
-                    "karar",
-                    "decision",
-                    "onay",
-                    "approval",
-                    "ops",
-                    "worker",
-                  ) ? (
-                    <AiDecisionsPanel accessToken={token} canAdmin={rbacIsAdmin} />
-                  ) : null}
+                </>
+              ) : null}
+
+              {drawerTab === "ai" ? (
+                <>
+                  <div style={{ display: "flex", gap: 4, marginBottom: 8, flexWrap: "wrap" }}>
+                    {(["ai_dashboard", "ai_decisions", "ai_performance", "ai_settings"] as const).map((sub) => (
+                      <button
+                        key={sub}
+                        type="button"
+                        onClick={() => setAiSubtab(sub)}
+                        style={{
+                          padding: "4px 10px",
+                          fontSize: 12,
+                          borderRadius: 4,
+                          border: aiSubtab === sub ? "1.5px solid #a855f7" : "1px solid #555",
+                          background: aiSubtab === sub ? "#a855f720" : "transparent",
+                          color: aiSubtab === sub ? "#a855f7" : "#ccc",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {t(`ai.subtab_${sub.replace("ai_", "")}`)}
+                      </button>
+                    ))}
+                  </div>
+                  {aiSubtab === "ai_dashboard" && <AiDashboardPanel accessToken={token} />}
+                  {aiSubtab === "ai_decisions" && <AiDecisionsPanel accessToken={token} canAdmin={rbacIsAdmin} />}
+                  {aiSubtab === "ai_performance" && <AiPerformancePanel accessToken={token} />}
+                  {aiSubtab === "ai_settings" && <AiSettingsPanel accessToken={token} />}
                 </>
               ) : null}
 

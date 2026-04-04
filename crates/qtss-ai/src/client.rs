@@ -283,6 +283,7 @@ Optional: "position_size_multiplier" (0.0-2.0), "take_profit_pct", "entry_price_
 Context may include `portfolio_directive` from the strategic layer: honor `symbol_weight_0_1`, `preferred_regime`, and `risk_budget_pct` when deciding direction and size.
 Context may include `decision_history` — your recent decisions for this symbol with outcomes. Avoid flip-flopping; if your last decision was recent and the context hasn't materially changed, prefer consistency. Learn from outcomes (profit/loss).
 Context may include `ai_feedback` with past decision outcomes (win_rate, avg_pnl_pct): factor these into confidence calibration.
+Context may include `chart_formations` with detected classic patterns (Double Top/Bottom, Head & Shoulders, Triple Top/Bottom, Flag). Each formation has: pattern_name, neckline, target_price, quality (0-1), volume_analysis (divergence, breakout confirmation). High quality formations with volume confirmation are strong signals. Bearish patterns (Double Top, H&S, Triple Top, Bearish Flag) → sell bias; bullish patterns (Double Bottom, Inverse H&S, Triple Bottom, Bullish Flag) → buy bias. Volume divergence strengthens the signal.
 {criteria}
 Temperature: conservative; output JSON only."#
     )

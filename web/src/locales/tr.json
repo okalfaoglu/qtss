@@ -566,5 +566,11 @@
       "noTradesInPeriod": "Bu dönemde satır yok.",
       "clickBarHint": "Döneme göre dolum/emir süzmek için bir çubuğa tıklayın."
     }
+  },
+  "ai": {
+    "subtab_dashboard": "Dashboard",
+    "subtab_decisions": "Kararlar",
+    "subtab_performance": "Performans",
+    "subtab_settings": "Ayarlar"
   }
 }

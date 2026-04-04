@@ -13,7 +13,8 @@ use chrono::Utc;
 use super::ConfluencePersist;
 use qtss_chart_patterns::{
     analyze_trading_range, compute_signal_dashboard_v1_with_policy,
-    signal_dashboard_v2_envelope_from_v1, OhlcBar, SignalDirectionPolicy, TradingRangeParams,
+    scan_formations, signal_dashboard_v2_envelope_from_v1, zigzag_from_ohlc_bars,
+    pivots_chronological, FormationParams, OhlcBar, SignalDirectionPolicy, TradingRangeParams,
     TradingRangeResult,
 };
 use qtss_ai::load_notify_config_merged;
@@ -1153,6 +1154,45 @@ async fn run_engines_for_symbol(
                 gates,
             )
             .await;
+        }
+
+        // ── Faz 2+3: Klasik formasyonlar (Double Top/Bottom, H&S, Triple, Flag) ──
+        {
+            let bar_map: std::collections::BTreeMap<i64, OhlcBar> =
+                bars.iter().map(|b| (b.bar_index, *b)).collect();
+            let zz = zigzag_from_ohlc_bars(&bar_map, 8, 50, 0);
+            let chrono = pivots_chronological(&zz);
+            let pivot_triples: Vec<(i64, f64, i32)> = chrono
+                .iter()
+                .map(|p| (p.point.index, p.point.price, p.dir))
+                .collect();
+            let formations = scan_formations(&pivot_triples, &bars, &FormationParams::default());
+            if !formations.is_empty() {
+                let payload = json!({
+                    "formations": formations,
+                    "pivot_count": pivot_triples.len(),
+                    "bar_count": bars.len(),
+                });
+                if let Err(e) = upsert_analysis_snapshot(
+                    pool,
+                    t.id,
+                    "formations",
+                    &payload,
+                    last_ot,
+                    Some(n as i32),
+                    None,
+                )
+                .await
+                {
+                    warn!(%e, symbol = %t.symbol, "formations snapshot");
+                } else {
+                    info!(
+                        symbol = %t.symbol,
+                        count = formations.len(),
+                        "formations snapshot"
+                    );
+                }
+            }
         }
     }
 }

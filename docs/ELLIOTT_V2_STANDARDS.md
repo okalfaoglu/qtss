@@ -2,6 +2,8 @@
 
 This document defines naming, coloring, wave labels, hard rules, and ZigZag scope for the Elliott V2 engine.
 
+For a broader **Rules vs Guidelines** checklist and a **code mapping / gap** section (including why corrective-only menu selections may not draw wave 2/4), see [`ELLIOTT_WAVE_RULES_REFERENCE.md`](./ELLIOTT_WAVE_RULES_REFERENCE.md).
+
 ## 1) Timeframe Hierarchy
 
 - Macro: `4h`

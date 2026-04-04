@@ -6,7 +6,9 @@
       "Read(//c/Users/oguzk/**)",
       "Bash(wsl -e bash -c \"which cargo && cargo --version\")",
       "Bash(wsl bash:*)",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(ls /app/qtss/web/src/components/Ai*.tsx)",
+      "Bash(wsl wc:*)"
     ]
   }
 }

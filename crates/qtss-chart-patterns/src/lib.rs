@@ -16,7 +16,7 @@ pub mod apex;
 mod dashboard_v1;
 mod dashboard_v2_envelope;
 pub mod failure_swing;
-mod volume_analysis;
+pub mod volume_analysis;
 pub mod formations;
 mod formation_trade_levels;
 mod find;
@@ -38,6 +38,7 @@ pub use formations::{
     detect_triple_top, scan_formations, FormationMatch, FormationParams,
 };
 pub use pattern_catalog::{pattern_name_by_id, PatternId};
+pub use volume_analysis::{analyze_formation_volume, FormationVolumeAnalysis, PivotVolumeEntry};
 
 pub use dashboard_v1::{
     compute_signal_dashboard_v1, compute_signal_dashboard_v1_with_policy, SignalDashboardV1,
@@ -99,7 +100,7 @@ pub fn line_price_at_bar_index(
 /// `basechartpatterns.getPatternNameById` ile **kimlik eşlemesi** ([`pattern_name_by_id`] ile aynı tablo).
 #[must_use]
 pub fn pattern_name_by_acp_id(id: u8) -> Option<&'static str> {
-    if !(1..=13).contains(&id) {
+    if !(1..=21).contains(&id) {
         return None;
     }
     Some(pattern_name_by_id(id as i32))
@@ -207,7 +208,7 @@ pub fn channel_six_pattern_drawing_batch(
     } else {
         THEME_LIGHT_RGB.as_slice()
     };
-    let ci = if (1..=13).contains(&id) {
+    let ci = if (1..=21).contains(&id) {
         (id as usize - 1) % theme.len()
     } else {
         0
@@ -215,7 +216,7 @@ pub fn channel_six_pattern_drawing_batch(
     let (r, g, b) = theme[ci];
     let color_hex = Some(rgb_to_hex(r, g, b));
     let zigzag_hex = color_hex.clone();
-    let name = if (1..=13).contains(&id) {
+    let name = if (1..=21).contains(&id) {
         pattern_name_by_acp_id(id as u8).unwrap_or("Pattern")
     } else {
         "Pattern"
@@ -276,7 +277,7 @@ pub fn channel_six_pattern_drawing_batch(
 
     PatternDrawingBatch {
         batch_id: Uuid::new_v4(),
-        pattern_type_id: (1..=13).contains(&id).then_some(id as u8),
+        pattern_type_id: (1..=21).contains(&id).then_some(id as u8),
         pattern_name: Some(name),
         commands,
     }
