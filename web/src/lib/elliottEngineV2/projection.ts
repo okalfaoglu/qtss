@@ -74,11 +74,6 @@ function impulseShownInMenu(imp: ImpulseCountV2, menu?: ElliottPatternMenuToggle
 type Pt = { time: UTCTimestamp; value: number };
 
 export type ElliottProjectionV2Options = {
-  /**
-   * Second formation path: alternate Fib calibration (extended wave-3 style).
-   * @default true
-   */
-  includeAltScenario?: boolean;
   /** Multiple zigzag vs flat (and pivot ABC) hypotheses in distinct colors. */
   multiCorrectiveScenarios?: boolean;
 };
@@ -136,24 +131,18 @@ function blendedProjectionPriceBase(imp: ImpulseCountV2, rows: OhlcV2[]): number
 
 type FormationPoint = { time: UTCTimestamp; value: number };
 
-function seg(a: FormationPoint, b: FormationPoint, kind: "elliott_projection" | "elliott_projection_alt", style: "solid" | "dotted" | "dashed", lineColor?: string): PatternLayerOverlay {
+function seg(a: FormationPoint, b: FormationPoint, style: "solid" | "dotted" | "dashed", lineColor?: string): PatternLayerOverlay {
   return {
     upper: [],
     lower: [],
     zigzag: [a, b],
-    zigzagKind: kind,
+    zigzagKind: "elliott_projection",
     zigzagLineColor: lineColor,
     zigzagLineStyle: style,
   };
 }
 
-function horizLevel(
-  fromT: number,
-  toT: number,
-  price: number,
-  kind: "elliott_projection_target" | "elliott_projection_target_alt",
-  lineColor?: string,
-): PatternLayerOverlay {
+function horizLevel(fromT: number, toT: number, price: number, lineColor?: string): PatternLayerOverlay {
   return {
     upper: [
       { time: fromT as UTCTimestamp, value: price },
@@ -161,7 +150,7 @@ function horizLevel(
     ],
     lower: [],
     zigzag: [],
-    zigzagKind: kind,
+    zigzagKind: "elliott_projection_target",
     zigzagLineColor: lineColor,
     zigzagLineStyle: "dotted",
     zigzagLineWidth: 1,
@@ -175,11 +164,8 @@ function buildFormationProjection(params: {
   startPrice: number;
   tf: Timeframe;
   lineColor?: string;
-  alt: boolean;
 }): { layers: PatternLayerOverlay[] } {
-  const { imp, postAbc, startTime, startPrice, tf, lineColor, alt } = params;
-  const kind = alt ? "elliott_projection_alt" : "elliott_projection";
-  const targetKind = alt ? "elliott_projection_target_alt" : "elliott_projection_target";
+  const { imp, postAbc, startTime, startPrice, tf, lineColor } = params;
   const layers: PatternLayerOverlay[] = [];
   const p = imp.pivots;
   const p0 = p[0], p1 = p[1], p2 = p[2], p3 = p[3], p4 = p[4], p5 = p[5];
@@ -220,9 +206,9 @@ function buildFormationProjection(params: {
 
   if (!hasA) {
     // Impulse done -> project full ABC
-    layers.push(seg(w5Pt, aPt, kind, "dashed", lineColor));
-    layers.push(seg(aPt, bPt, kind, "dotted", lineColor));
-    layers.push(seg(bPt, cPt, kind, "dashed", lineColor));
+    layers.push(seg(w5Pt, aPt, "dashed", lineColor));
+    layers.push(seg(aPt, bPt, "dotted", lineColor));
+    layers.push(seg(bPt, cPt, "dashed", lineColor));
   } else if (hasA && !hasB) {
     // A observed -> project B and C from observed A point
     const obsA = postGuide!.a;
@@ -232,8 +218,8 @@ function buildFormationProjection(params: {
     const projC2 = isBull ? projB2 - abObs * 1.0 : projB2 + abObs * 1.0;
     const b2: FormationPoint = { time: tB, value: projB2 };
     const c2: FormationPoint = { time: tC, value: projC2 };
-    layers.push(seg(obsAPt, b2, kind, "dashed", lineColor));
-    layers.push(seg(b2, c2, kind, "dashed", lineColor));
+    layers.push(seg(obsAPt, b2, "dashed", lineColor));
+    layers.push(seg(b2, c2, "dashed", lineColor));
   } else if (hasA && hasB && !hasC) {
     // A and B observed -> project C from observed B
     const obsB = postGuide!.b;
@@ -242,7 +228,7 @@ function buildFormationProjection(params: {
     const abObs = Math.abs(aRef.price - p5.price);
     const projC2 = isBull ? obsBPt.value - abObs * 1.0 : obsBPt.value + abObs * 1.0;
     const c2: FormationPoint = { time: tC, value: projC2 };
-    layers.push(seg(obsBPt, c2, kind, "dashed", lineColor));
+    layers.push(seg(obsBPt, c2, "dashed", lineColor));
   } else {
     // ABC completed -> project new impulse 1-2-3-4-5 from C end (observed)
     const cEnd = postGuide!.patternEnd;
@@ -260,19 +246,19 @@ function buildFormationProjection(params: {
     const p3n: FormationPoint = { time: t3 as UTCTimestamp, value: w3Target };
     const p4n: FormationPoint = { time: t4 as UTCTimestamp, value: w4Target };
     const p5n: FormationPoint = { time: t5 as UTCTimestamp, value: w5Target };
-    layers.push(seg(cEndPt, p1n, kind, "dashed", lineColor));
-    layers.push(seg(p1n, p2n, kind, "dashed", lineColor));
-    layers.push(seg(p2n, p3n, kind, "dashed", lineColor));
-    layers.push(seg(p3n, p4n, kind, "dashed", lineColor));
-    layers.push(seg(p4n, p5n, kind, "dashed", lineColor));
+    layers.push(seg(cEndPt, p1n, "dashed", lineColor));
+    layers.push(seg(p1n, p2n, "dashed", lineColor));
+    layers.push(seg(p2n, p3n, "dashed", lineColor));
+    layers.push(seg(p3n, p4n, "dashed", lineColor));
+    layers.push(seg(p4n, p5n, "dashed", lineColor));
   }
 
   // Target level horizontals + markers for the latest projected points (A/B/C)
   const toT = ((tC as number) + 3600) as UTCTimestamp;
   if (!hasC) {
-    layers.push(horizLevel(startTime, toT as number, aPt.value, targetKind, lineColor));
-    layers.push(horizLevel(startTime, toT as number, bPt.value, targetKind, lineColor));
-    layers.push(horizLevel(startTime, toT as number, cPt.value, targetKind, lineColor));
+    layers.push(horizLevel(startTime, toT as number, aPt.value, lineColor));
+    layers.push(horizLevel(startTime, toT as number, bPt.value, lineColor));
+    layers.push(horizLevel(startTime, toT as number, cPt.value, lineColor));
   }
 
   return { layers };
