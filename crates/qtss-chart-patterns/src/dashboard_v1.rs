@@ -67,6 +67,9 @@ pub struct SignalDashboardV1 {
     /// 0–10
     pub pozisyon_gucu_10: u8,
     pub sistem_aktif: bool,
+    /// Wilder RSI(14) on the last closed bar; UI may show as `KOPUŞ (57.26)`-style context (independent of range-setup string).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rsi_14_last: Option<f64>,
 }
 
 fn closes(bars: &[OhlcBar]) -> Vec<f64> {
@@ -351,6 +354,10 @@ pub fn compute_signal_dashboard_v1_with_policy(
         tr.range_zone
     );
 
+    let rsi_14_last = rsi_last
+        .is_finite()
+        .then(|| (rsi_last * 100.0).round() / 100.0);
+
     SignalDashboardV1 {
         schema_version: 2,
         durum,
@@ -372,6 +379,7 @@ pub fn compute_signal_dashboard_v1_with_policy(
         yapi_kaymasi,
         pozisyon_gucu_10,
         sistem_aktif: true,
+        rsi_14_last,
     }
 }
 

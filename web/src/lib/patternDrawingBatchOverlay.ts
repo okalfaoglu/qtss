@@ -284,6 +284,7 @@ export function buildMultiPatternOverlayFromScan(
   const patternSeen = new Set<string>();
   const layerSeen = new Set<string>();
 
+  // Mevcut kanal/üçgen formasyonları
   for (const p of payloads) {
     const raw = p.pattern_drawing_batch;
     if (!raw) continue;
@@ -311,6 +312,36 @@ export function buildMultiPatternOverlayFromScan(
     if (layerSeen.has(fp)) continue;
     layerSeen.add(fp);
     layers.push({ upper, lower, zigzag });
+  }
+
+  // Faz 2 formasyonları (Double Top/Bottom, H&S, Triple, Flag)
+  if (res.formation_drawing_batches?.length) {
+    for (const batch of res.formation_drawing_batches) {
+      const filtered = filterDrawingBatchForDisplay(batch, display);
+      if (!filtered) continue;
+      const o = patternDrawingBatchToOverlay(barsChrono, filtered, chartBarsChrono);
+      if (!o) continue;
+      for (const m of o.pivotLabels) {
+        const k = markerDedupeKey(m);
+        if (pivotSeen.has(k)) continue;
+        pivotSeen.add(k);
+        pivotLabels.push(m);
+      }
+      for (const m of o.patternLabels) {
+        const k = markerDedupeKey(m);
+        if (patternSeen.has(k)) continue;
+        patternSeen.add(k);
+        patternLabels.push(m);
+      }
+      const upper = o.channel?.upper ?? [];
+      const lower = o.channel?.lower ?? [];
+      const zigzag = o.zigzag ?? [];
+      if (upper.length === 0 && lower.length === 0 && zigzag.length === 0) continue;
+      const fp = acpLayerFingerprint({ upper, lower, zigzag });
+      if (layerSeen.has(fp)) continue;
+      layerSeen.add(fp);
+      layers.push({ upper, lower, zigzag });
+    }
   }
 
   if (layers.length === 0 && pivotLabels.length === 0 && patternLabels.length === 0) {

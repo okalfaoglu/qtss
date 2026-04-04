@@ -9,10 +9,19 @@ import {
   pickDashboardNum,
   pickDashboardStr,
   signalDashboardRowAccent,
-  trendAxisDisplayAsLongShort,
   type DashboardValueTone,
   type SignalDashboardPayload,
 } from "../lib/signalDashboardPayload";
+import {
+  formatDetectionPanel,
+  formatEntryModePanel,
+  formatMarketModePanel,
+  formatMomentumPanel,
+  formatTrendAxisPanel,
+  formatTrendSignalSourcePanel,
+  formatVolatilityPercentPanel,
+  pickRsi14Last,
+} from "../lib/signalDashboardPanelDisplay";
 
 type Props = {
   snapshots: EngineSnapshotJoinedApiRow[];
@@ -39,7 +48,10 @@ function valueClassName(tone: DashboardValueTone): string {
   return `mono signal-dash-val signal-dash-val--${tone}`;
 }
 
-function listRowSecondary(snapshot: EngineSnapshotJoinedApiRow): {
+function listRowSecondary(
+  snapshot: EngineSnapshotJoinedApiRow,
+  t: (key: string) => string,
+): {
   status: string;
   localTrend: string;
   positionStrength: string;
@@ -65,7 +77,7 @@ function listRowSecondary(snapshot: EngineSnapshotJoinedApiRow): {
         : "—";
   return {
     status: pickDashboardStr(v2?.status, p.durum),
-    localTrend: trendAxisDisplayAsLongShort(pickDashboardStr(v2?.local_trend, p.yerel_trend)),
+    localTrend: formatTrendAxisPanel(t, v2?.local_trend, p.yerel_trend),
     positionStrength: posStr,
   };
 }
@@ -100,8 +112,6 @@ function SignalDashboardDetailBody({ snapshot }: { snapshot: EngineSnapshotJoine
       </tr>
     );
   };
-
-  const yn = (b: boolean | undefined) => (b ? t("app.signalDashboard.ynYes") : t("app.signalDashboard.ynNo"));
 
   if (snapshot.error) {
     return (
@@ -149,6 +159,7 @@ function SignalDashboardDetailBody({ snapshot }: { snapshot: EngineSnapshotJoine
 
   const p = raw as SignalDashboardPayload;
   const v2 = parseSignalDashboardV2(ins.signal_dashboard_v2);
+  const rsi14 = pickRsi14Last(ins, v2, p);
   const posStr =
     v2?.position_strength_10 != null
       ? `${v2.position_strength_10} / 10`
@@ -172,6 +183,8 @@ function SignalDashboardDetailBody({ snapshot }: { snapshot: EngineSnapshotJoine
           ? "bear"
           : "default"
       : "default";
+  const exhaustionDisp = formatDetectionPanel(t, te);
+  const structureDisp = formatDetectionPanel(t, ss);
 
   const wireRow = (key: string, val: unknown) => {
     if (val === undefined || val === null) return null;
@@ -195,49 +208,40 @@ function SignalDashboardDetailBody({ snapshot }: { snapshot: EngineSnapshotJoine
     typeof ins.symbol === "string" && ins.symbol.trim() ? ins.symbol.trim().toUpperCase() : null;
   const displaySymbol = payloadSymbol ?? symbolUpper;
 
+  const sep = (
+    <tr key="_dashSep">
+      <td colSpan={2} className="signal-dash-detail__sep-cell">
+        <div className="signal-dash-detail__rule" role="presentation" />
+      </td>
+    </tr>
+  );
+
   return (
     <>
       <div className="signal-dash-detail__banner">
         <div className="signal-dash-detail__banner-left mono">{displaySymbol}</div>
         <div className="signal-dash-detail__banner-right mono">{t("app.signalDashboardDrawer.strengthShort", { value: posStr })}</div>
       </div>
-      <p className="muted" style={{ fontSize: "0.66rem", marginBottom: "0.35rem" }}>
-        {t("app.signalDashboard.priorityLine")}
-      </p>
-      <table style={{ width: "100%", fontSize: "0.74rem", borderCollapse: "collapse" }}>
+      <table className="signal-dash-detail__table">
         <tbody>
-          {rk("symbol", displaySymbol)}
-          {rk("venueInterval", venueLine)}
           {rk("status", pickDashboardStr(v2?.status, p.durum))}
-          {rk("statusModelRaw", pickDashboardStr(v2?.status_model_raw, p.durum_model_raw))}
-          {rk("directionPolicyDb", p.signal_direction_mode ?? "—")}
-          {rk("directionEffective", p.signal_direction_effective ?? "—")}
+          {rk("localTrend", formatTrendAxisPanel(t, v2?.local_trend, p.yerel_trend))}
+          {rk("globalTrend", formatTrendAxisPanel(t, v2?.global_trend, p.global_trend))}
           {rk(
-            "localTrend",
-            trendAxisDisplayAsLongShort(pickDashboardStr(v2?.local_trend, p.yerel_trend)),
+            "marketMode",
+            formatMarketModePanel(t, v2?.market_mode, p.piyasa_modu, rsi14),
           )}
-          {rk(
-            "globalTrend",
-            trendAxisDisplayAsLongShort(pickDashboardStr(v2?.global_trend, p.global_trend)),
-          )}
-          {rk("marketMode", pickDashboardStr(v2?.market_mode, p.piyasa_modu))}
-          {rk("entryMode", pickDashboardStr(v2?.entry_mode, p.giris_modu))}
-          {rk(
-            "volatilityPct",
-            v2?.volatility_pct != null && Number.isFinite(v2.volatility_pct)
-              ? v2.volatility_pct.toFixed(2)
-              : p.oynaklik_pct != null
-                ? p.oynaklik_pct.toFixed(2)
-                : "—",
-          )}
-          {rk("momentum1", pickDashboardStr(v2?.momentum_rsi, p.momentum_1))}
-          {rk("momentum2", pickDashboardStr(v2?.momentum_roc, p.momentum_2))}
+          {rk("entryMode", formatEntryModePanel(t, v2?.entry_mode, p.giris_modu))}
+          {rk("volatilityPct", formatVolatilityPercentPanel(v2?.volatility_pct, p.oynaklik_pct))}
+          {rk("momentum1", formatMomentumPanel(t, v2?.momentum_rsi, p.momentum_1))}
+          {rk("momentum2", formatMomentumPanel(t, v2?.momentum_roc, p.momentum_2))}
           {rk("entryActual", pickDashboardNum(v2?.entry_price ?? undefined, p.giris_gercek ?? undefined))}
           {rk("stopInitial", pickDashboardNum(v2?.stop_initial ?? undefined, p.stop_ilk ?? undefined))}
           {rk(
             "takeProfitInitial",
             pickDashboardNum(v2?.take_profit_initial ?? undefined, p.kar_al_ilk ?? undefined),
           )}
+          {sep}
           {rk(
             "stopTrailActive",
             pickDashboardNum(v2?.stop_trail ?? undefined, p.stop_trail_aktif ?? undefined),
@@ -246,27 +250,39 @@ function SignalDashboardDetailBody({ snapshot }: { snapshot: EngineSnapshotJoine
             "takeProfitDynamic",
             pickDashboardNum(v2?.take_profit_dynamic ?? undefined, p.kar_al_dinamik ?? undefined),
           )}
-          {rk("signalSource", pickDashboardStr(v2?.signal_source, p.sinyal_kaynagi))}
-          {rk("trendExhaustion", yn(te), te === true ? "warn" : "muted")}
-          {rk("structureShift", yn(ss), ss === true ? "warn" : "muted")}
+          {rk("signalSource", formatTrendSignalSourcePanel(t), "accent")}
+          {rk("trendExhaustion", exhaustionDisp.text, exhaustionDisp.toneKey)}
+          {rk("structureShift", structureDisp.text, structureDisp.toneKey)}
           {rk("positionStrength", posStr, psTone)}
           {rk("system", sysStr, sysTone)}
-          {rk("rangeHigh", formatDashboardNumber(p.range_high ?? undefined))}
-          {rk("rangeLow", formatDashboardNumber(p.range_low ?? undefined))}
-          {rk("rangeMid", formatDashboardNumber(p.range_mid ?? undefined))}
-          {rk("atr", formatDashboardNumber(p.atr ?? undefined))}
-          {rk("lastBar", p.last_bar_open_time ?? "—")}
         </tbody>
       </table>
+      <details className="signal-dash-detail__meta">
+        <summary>{t("app.signalDashboard.detailMetaSummary")}</summary>
+        <p className="muted signal-dash-detail__meta-note">{t("app.signalDashboard.priorityLine")}</p>
+        <table className="signal-dash-detail__table signal-dash-detail__table--compact">
+          <tbody>
+            {rk("symbol", displaySymbol)}
+            {rk("venueInterval", venueLine)}
+            {rk("statusModelRaw", pickDashboardStr(v2?.status_model_raw, p.durum_model_raw))}
+            {rk("directionPolicyDb", p.signal_direction_mode ?? "—")}
+            {rk("directionEffective", p.signal_direction_effective ?? "—")}
+            {rk("rangeWireSource", pickDashboardStr(v2?.signal_source, p.sinyal_kaynagi))}
+            {rk("rangeHigh", formatDashboardNumber(p.range_high ?? undefined))}
+            {rk("rangeLow", formatDashboardNumber(p.range_low ?? undefined))}
+            {rk("rangeMid", formatDashboardNumber(p.range_mid ?? undefined))}
+            {rk("atr", formatDashboardNumber(p.atr ?? undefined))}
+            {rk("lastBar", p.last_bar_open_time ?? "—")}
+            {rk("rsi14Last", rsi14 != null ? rsi14.toFixed(2) : "—")}
+          </tbody>
+        </table>
+      </details>
       {v2 ? (
-        <details style={{ marginTop: "0.45rem" }}>
-          <summary className="muted" style={{ fontSize: "0.7rem", cursor: "pointer" }}>
+        <details className="signal-dash-detail__meta">
+          <summary className="muted">
             {t("app.signalDashboard.wireSummary")} <code>signal_dashboard_v2</code>
           </summary>
-          <table
-            style={{ width: "100%", fontSize: "0.68rem", borderCollapse: "collapse", marginTop: "0.28rem" }}
-            className="mono muted"
-          >
+          <table className="signal-dash-detail__table signal-dash-detail__table--compact mono muted">
             <tbody>
               {wireRow("schema_version", v2.schema_version)}
               {wireRow("status", v2.status)}
@@ -288,6 +304,7 @@ function SignalDashboardDetailBody({ snapshot }: { snapshot: EngineSnapshotJoine
               {wireRow("structure_shift", v2.structure_shift)}
               {wireRow("position_strength_10", v2.position_strength_10)}
               {wireRow("system_active", v2.system_active)}
+              {wireRow("rsi_14_last", v2.rsi_14_last)}
             </tbody>
           </table>
         </details>
@@ -344,7 +361,7 @@ export function SignalDashboardDrawerPanel({ snapshots, chartMatchedEngineSymbol
       <div className="signal-dash-list" role="list">
         {snapshots.map((s) => {
           const accent = signalDashboardRowAccent(s);
-          const { status, localTrend, positionStrength } = listRowSecondary(s);
+          const { status, localTrend, positionStrength } = listRowSecondary(s, t);
           const sym = s.symbol?.trim() ? s.symbol.trim().toUpperCase() : "—";
           const venue = `${s.exchange?.trim() || "—"}/${s.segment?.trim() || "—"} · ${s.interval?.trim() || "—"}`;
           const isChart = chartMatchedEngineSymbolId != null && s.engine_symbol_id === chartMatchedEngineSymbolId;

@@ -468,12 +468,31 @@
     "signalDashboard": {
       "sectionTitle": "Signal dashboard",
       "priorityLine": "Fields below prefer `signal_dashboard_v2` when present; legacy Turkish keys are fallback.",
+      "detailMetaSummary": "Context & range engine (raw)",
       "payloadEmpty": "No payload on this snapshot row.",
       "insufficientBars": "Snapshot skipped: insufficient bars.",
       "ynYes": "Yes",
       "ynNo": "No",
       "systemActive": "Active",
       "wireSummary": "Raw",
+      "panel": {
+        "trendAxisUp": "UP",
+        "trendAxisDown": "DOWN",
+        "trendAxisFlat": "FLAT",
+        "trendAxisClosed": "OFF",
+        "momentumPositive": "POSITIVE",
+        "momentumNegative": "NEGATIVE",
+        "momentumNeutral": "NEUTRAL",
+        "entryReversal": "REVERSAL",
+        "entryFollowThrough": "FOLLOW-THROUGH",
+        "marketBreakout": "BREAKOUT",
+        "marketRange": "RANGE",
+        "marketTrend": "TREND",
+        "marketUncertain": "UNCERTAIN",
+        "detected": "DETECTED",
+        "notDetected": "Not detected",
+        "trendSignalSource": "AUTO (Trend)"
+      },
       "row": {
         "symbol": "Symbol",
         "venueInterval": "Exchange / segment · interval",
@@ -485,14 +504,14 @@
         "globalTrend": "Global trend",
         "marketMode": "Market mode",
         "entryMode": "Entry mode",
-        "volatilityPct": "Volatility %",
-        "momentum1": "Momentum (RSI)",
-        "momentum2": "Momentum (ROC)",
+        "volatilityPct": "Volatility",
+        "momentum1": "Momentum 1",
+        "momentum2": "Momentum 2",
         "entryActual": "Entry (actual)",
         "stopInitial": "Stop (initial)",
         "takeProfitInitial": "Take profit (initial)",
-        "stopTrailActive": "Stop (trail)",
-        "takeProfitDynamic": "Take profit (dynamic)",
+        "stopTrailActive": "Stop / trail (active)",
+        "takeProfitDynamic": "Take profit (dyn)",
         "signalSource": "Signal source",
         "trendExhaustion": "Trend exhaustion",
         "structureShift": "Structure shift",
@@ -501,6 +520,8 @@
         "rangeHigh": "Range high",
         "rangeLow": "Range low",
         "rangeMid": "Range mid",
+        "rangeWireSource": "Range engine (raw source)",
+        "rsi14Last": "RSI (14) last",
         "atr": "ATR",
         "lastBar": "Last bar"
       }
@@ -566,11 +587,5 @@
       "noTradesInPeriod": "No rows in this period.",
       "clickBarHint": "Click a bar to filter fills/orders for that period."
     }
-  },
-  "ai": {
-    "subtab_dashboard": "Dashboard",
-    "subtab_decisions": "Decisions",
-    "subtab_performance": "Performance",
-    "subtab_settings": "Settings"
   }
 }

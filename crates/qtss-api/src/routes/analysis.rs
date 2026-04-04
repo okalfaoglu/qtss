@@ -14,9 +14,12 @@ use uuid::Uuid;
 
 use qtss_chart_patterns::{
     analyze_channel_six_from_bars, channel_six_drawing_hints, channel_six_pattern_drawing_batch,
-    compute_formation_trade_levels, pattern_name_by_acp_id, ChannelSixDrawingHints,
-    ChannelSixReject, ChannelSixScanOutcome, ChannelSixWindowFilter, FormationTradeLevels,
-    OhlcBar, PatternDrawingBatch, SixPivotScanParams, SizeFilters,
+    check_breakout_volume, compute_apex_from_outcome, compute_formation_trade_levels,
+    detect_failure_swing, formation_to_drawing_batch, pattern_name_by_acp_id,
+    pivots_chronological, scan_formations, zigzag_from_ohlc_bars, ApexResult,
+    BreakoutVolumeResult, ChannelSixDrawingHints, ChannelSixReject, ChannelSixScanOutcome,
+    ChannelSixWindowFilter, FailureSwingResult, FormationMatch, FormationParams,
+    FormationTradeLevels, OhlcBar, PatternDrawingBatch, SixPivotScanParams, SizeFilters,
 };
 use qtss_common::{log_business, QtssLogLevel};
 use qtss_storage::{
@@ -1308,6 +1311,12 @@ struct PatternMatchPayload {
     pattern_drawing_batch: PatternDrawingBatch,
     #[serde(skip_serializing_if = "Option::is_none")]
     formation_trade_levels: Option<FormationTradeLevels>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    apex: Option<ApexResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_swing: Option<FailureSwingResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    breakout_volume: Option<BreakoutVolumeResult>,
 }
 
 #[derive(Serialize)]
@@ -1337,6 +1346,12 @@ struct ChannelSixResponse {
     /// First match only: same as `pattern_matches[0].formation_trade_levels` when present.
     #[serde(skip_serializing_if = "Option::is_none")]
     formation_trade_levels: Option<FormationTradeLevels>,
+    /// Faz 2 formasyonları (Double Top/Bottom, H&S, Triple, Flag).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    formations: Vec<FormationMatch>,
+    /// Faz 2 formasyonlarının çizim komutları (her formasyon için ayrı batch).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    formation_drawing_batches: Vec<PatternDrawingBatch>,
 }
 
 async fn channel_six_scan(
@@ -1468,12 +1483,15 @@ async fn channel_six_scan(
         .iter()
         .map(|o| {
             let id = o.scan.pattern_type_id;
-            let pattern_name = if (1..=13).contains(&id) {
+            let pattern_name = if (1..=21).contains(&id) {
                 pattern_name_by_acp_id(id as u8)
             } else {
                 None
             };
             let formation_trade_levels = compute_formation_trade_levels(o, ref_bar, ref_close);
+            let apex = compute_apex_from_outcome(o, ref_bar, 0.75);
+            let failure_swing = detect_failure_swing(o, &map, 0.85);
+            let breakout_volume = check_breakout_volume(&map, ref_bar, 20, 1.5);
             PatternMatchPayload {
                 outcome: o.clone(),
                 pattern_name,
@@ -1484,9 +1502,36 @@ async fn channel_six_scan(
                     body.zigzag_line_width,
                 ),
                 formation_trade_levels,
+                apex,
+                failure_swing,
+                breakout_volume,
             }
         })
         .collect();
+
+    // Faz 2: Klasik formasyonlar (zigzag pivotlarından)
+    let (formations, formation_drawing_batches) = {
+        let zz = zigzag_from_ohlc_bars(&map, 8, 50, 0);
+        let chrono = pivots_chronological(&zz);
+        let pivot_triples: Vec<(i64, f64, i32)> = chrono
+            .iter()
+            .map(|p| (p.point.index, p.point.price, p.dir))
+            .collect();
+        let bars_vec: Vec<OhlcBar> = map.values().copied().collect();
+        let fms = scan_formations(&pivot_triples, &bars_vec, &FormationParams::default());
+        let batches: Vec<PatternDrawingBatch> = fms
+            .iter()
+            .map(|fm| {
+                formation_to_drawing_batch(
+                    fm,
+                    body.theme_dark,
+                    body.pattern_line_width,
+                    body.zigzag_line_width,
+                )
+            })
+            .collect();
+        (fms, batches)
+    };
 
     let live_robot_match_index = all_outcomes
         .iter()
@@ -1497,7 +1542,7 @@ async fn channel_six_scan(
     let drawing = first.map(channel_six_drawing_hints);
     let pattern_name = first.and_then(|o| {
         let id = o.scan.pattern_type_id;
-        if (1..=13).contains(&id) {
+        if (1..=21).contains(&id) {
             pattern_name_by_acp_id(id as u8)
         } else {
             None
@@ -1511,7 +1556,7 @@ async fn channel_six_scan(
         .first()
         .and_then(|p| p.formation_trade_levels.clone());
 
-    let matched = !all_outcomes.is_empty();
+    let matched = !all_outcomes.is_empty() || !formations.is_empty();
     (
         StatusCode::OK,
         Json(ChannelSixResponse {
@@ -1528,6 +1573,8 @@ async fn channel_six_scan(
             repaint,
             live_robot_match_index,
             formation_trade_levels,
+            formations,
+            formation_drawing_batches,
         }),
     )
         .into_response()

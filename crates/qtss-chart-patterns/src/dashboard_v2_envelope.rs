@@ -72,6 +72,8 @@ pub struct SignalDashboardV2Envelope {
     pub structure_shift: bool,
     pub position_strength_10: u8,
     pub system_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rsi_14_last: Option<f64>,
 }
 
 #[must_use]
@@ -97,6 +99,7 @@ pub fn signal_dashboard_v2_envelope_from_v1(d: &SignalDashboardV1) -> SignalDash
         structure_shift: d.yapi_kaymasi,
         position_strength_10: d.pozisyon_gucu_10,
         system_active: d.sistem_aktif,
+        rsi_14_last: d.rsi_14_last,
     }
 }
 

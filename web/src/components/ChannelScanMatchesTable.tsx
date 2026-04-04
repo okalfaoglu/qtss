@@ -1,4 +1,4 @@
-import type { ChannelSixResponse, PatternMatchPayloadJson } from "../api/client";
+import type { ChannelSixResponse, PatternMatchPayloadJson, FormationMatchJson } from "../api/client";
 import { isLiveRobotSignal, outcomePivotBarRange } from "../lib/channelSixLiveSignal";
 import { formationLevelsForMatchRow } from "../lib/formationTradeLevelChart";
 
@@ -110,6 +110,64 @@ export function ChannelScanMatchesTable({ res }: { res: ChannelSixResponse }) {
           Tek eşleşme daha eski bir pencerede; en güncel pencere (skip=0) şu an geçerli formasyon üretmiyor olabilir.
         </p>
       ) : null}
+      <FormationsSubTable formations={res.formations} />
+    </div>
+  );
+}
+
+/** Faz 2 formasyonları alt tablosu (Double Top/Bottom, H&S, Triple, Flag). */
+function FormationsSubTable({ formations }: { formations?: FormationMatchJson[] }) {
+  if (!formations?.length) return null;
+  return (
+    <div style={{ marginTop: "0.75rem" }}>
+      <p className="muted" style={{ fontSize: "0.8rem", marginBottom: "0.35rem", fontWeight: 600 }}>
+        📐 Klasik Formasyonlar (Faz 2)
+      </p>
+      <div style={{ overflowX: "auto" }}>
+        <table className="mono" style={{ width: "100%", fontSize: "0.75rem", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ textAlign: "left", borderBottom: "1px solid var(--tv-border, #333)" }}>
+              <th style={{ padding: "0.2rem 0.4rem" }}>#</th>
+              <th style={{ padding: "0.2rem 0.4rem" }}>Formasyon</th>
+              <th style={{ padding: "0.2rem 0.4rem" }}>id</th>
+              <th style={{ padding: "0.2rem 0.4rem" }}>Neckline</th>
+              <th style={{ padding: "0.2rem 0.4rem" }}>Hedef</th>
+              <th style={{ padding: "0.2rem 0.4rem" }}>Yükseklik</th>
+              <th style={{ padding: "0.2rem 0.4rem" }}>Kalite</th>
+              <th style={{ padding: "0.2rem 0.4rem" }}>Hacim</th>
+            </tr>
+          </thead>
+          <tbody>
+            {formations.map((fm, i) => {
+              const volDiv = fm.volume_analysis;
+              const volLabel = volDiv?.volume_divergence
+                ? `⚠ ${volDiv.divergence_type}`
+                : volDiv?.has_volume_data
+                  ? "✓"
+                  : "—";
+              const qualityPct = (fm.quality * 100).toFixed(0);
+              return (
+                <tr key={i} style={{ borderBottom: "1px solid var(--tv-border, #222)" }}>
+                  <td style={{ padding: "0.25rem 0.4rem" }}>{i + 1}</td>
+                  <td style={{ padding: "0.25rem 0.4rem", fontWeight: 600 }}>{fm.pattern_name}</td>
+                  <td style={{ padding: "0.25rem 0.4rem" }}>{fm.pattern_type_id}</td>
+                  <td style={{ padding: "0.25rem 0.4rem" }}>
+                    {fm.neckline != null ? formatLevelPrice(fm.neckline) : "—"}
+                  </td>
+                  <td style={{ padding: "0.25rem 0.4rem" }}>
+                    {fm.target_price != null ? formatLevelPrice(fm.target_price) : "—"}
+                  </td>
+                  <td style={{ padding: "0.25rem 0.4rem" }}>{formatLevelPrice(fm.height)}</td>
+                  <td style={{ padding: "0.25rem 0.4rem", color: fm.quality > 0.7 ? "#4caf50" : fm.quality > 0.4 ? "#ffc107" : "#ef5350" }}>
+                    {qualityPct}%
+                  </td>
+                  <td style={{ padding: "0.25rem 0.4rem" }}>{volLabel}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

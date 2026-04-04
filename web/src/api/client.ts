@@ -657,11 +657,35 @@ export type FormationTradeLevelsJson = {
   method: string;
 };
 
+export type FormationVolumeAnalysisJson = {
+  has_volume_data: boolean;
+  volume_divergence: boolean;
+  divergence_type: string;
+  volume_change_ratio?: number;
+  breakout_volume?: { breakout_volume: number; avg_volume: number; volume_ratio: number; confirmed: boolean };
+  pivot_volumes?: { bar_index: number; price: number; dir: number; volume?: number }[];
+  avg_formation_volume?: number;
+};
+
+export type FormationMatchJson = {
+  pattern_type_id: number;
+  pattern_name: string;
+  pivots: [number, number, number][];
+  neckline?: number;
+  height: number;
+  target_price?: number;
+  quality: number;
+  volume_analysis?: FormationVolumeAnalysisJson;
+};
+
 export type PatternMatchPayloadJson = {
   outcome: ChannelSixOutcomeJson;
   pattern_name?: string;
   pattern_drawing_batch?: PatternDrawingBatchJson;
   formation_trade_levels?: FormationTradeLevelsJson;
+  apex?: { apex_bar: number; apex_price: number; bars_to_apex: number; proximity_ratio: number; is_stale: boolean };
+  failure_swing?: { reach_ratio: number; is_failure: boolean; failure_side: string; last_pivot_price: number; target_band_price: number; band_width: number };
+  breakout_volume?: { breakout_volume: number; avg_volume: number; volume_ratio: number; confirmed: boolean };
 };
 
 export type ChannelSixResponse = {
@@ -681,6 +705,10 @@ export type ChannelSixResponse = {
   used_zigzag?: { length: number; depth: number };
   /** İlk eşleşme ile aynı: `pattern_matches[0].formation_trade_levels`. */
   formation_trade_levels?: FormationTradeLevelsJson;
+  /** Faz 2 formasyonları (Double Top/Bottom, H&S, Triple, Flag). */
+  formations?: FormationMatchJson[];
+  /** Faz 2 formasyonlarının çizim komutları. */
+  formation_drawing_batches?: PatternDrawingBatchJson[];
 };
 
 export type PatternDrawingTimePrice = {

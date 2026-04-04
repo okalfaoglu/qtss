@@ -460,7 +460,7 @@
       "listHint": "Ayrıntı için satıra tıklayın. Satır rengi durumu yansıtır (LONG / SHORT / nötr); hata satırlarında kırmızı çerçeve vardır.",
       "backToList": "← Tüm sinyaller",
       "chartBadge": "Grafik",
-      "strengthShort": "PG {{value}}",
+      "strengthShort": "TSK {{value}}",
       "autoRefreshCheckbox": "Bu sekmedeyken verileri otomatik yenile",
       "autoRefreshActive": "Otomatik yenileme açık: motor anlık görüntüleri ~{{seconds}} sn’de bir çekilir.",
       "autoRefreshHint": "Anlık görüntüyü periyodik çekmek için yukarıdaki kutuyu işaretleyin."
@@ -468,12 +468,31 @@
     "signalDashboard": {
       "sectionTitle": "Sinyal panosu",
       "priorityLine": "Aşağıdaki alanlar varsa `signal_dashboard_v2` önceliklidir; yoksa eski Türkçe anahtarlar kullanılır.",
+      "detailMetaSummary": "Bağlam ve aralık motoru (ham)",
       "payloadEmpty": "Bu anlık görüntü satırında yük yok.",
       "insufficientBars": "Anlık görüntü atlandı: yetersiz mum.",
       "ynYes": "Evet",
       "ynNo": "Hayır",
       "systemActive": "Aktif",
       "wireSummary": "Ham",
+      "panel": {
+        "trendAxisUp": "YUKARI",
+        "trendAxisDown": "AŞAĞI",
+        "trendAxisFlat": "YATAY",
+        "trendAxisClosed": "KAPALI",
+        "momentumPositive": "POZİTİF",
+        "momentumNegative": "NEGATİF",
+        "momentumNeutral": "NÖTR",
+        "entryReversal": "DÖNÜŞ",
+        "entryFollowThrough": "TAKİP",
+        "marketBreakout": "KOPUŞ",
+        "marketRange": "ARALIK",
+        "marketTrend": "TREND",
+        "marketUncertain": "BELİRSİZ",
+        "detected": "TESPİT EDİLDİ",
+        "notDetected": "Tespit yok",
+        "trendSignalSource": "AUTO (Trend)"
+      },
       "row": {
         "symbol": "Sembol",
         "venueInterval": "Borsa / segment · aralık",
@@ -485,14 +504,14 @@
         "globalTrend": "Küresel trend",
         "marketMode": "Piyasa modu",
         "entryMode": "Giriş modu",
-        "volatilityPct": "Oynaklık %",
-        "momentum1": "Momentum (RSI)",
-        "momentum2": "Momentum (ROC)",
+        "volatilityPct": "Oynaklık",
+        "momentum1": "Momentum 1",
+        "momentum2": "Momentum 2",
         "entryActual": "Giriş (gerçek)",
         "stopInitial": "Stop (ilk)",
         "takeProfitInitial": "Kar al (ilk)",
-        "stopTrailActive": "Stop (iz süren)",
-        "takeProfitDynamic": "Kar al (dinamik)",
+        "stopTrailActive": "Stop/Trail (aktif)",
+        "takeProfitDynamic": "Kar al (dyn)",
         "signalSource": "Sinyal kaynağı",
         "trendExhaustion": "Trend tükenmesi",
         "structureShift": "Yapı kayması",
@@ -501,6 +520,8 @@
         "rangeHigh": "Aralık üst",
         "rangeLow": "Aralık alt",
         "rangeMid": "Aralık orta",
+        "rangeWireSource": "Aralık motoru (ham kaynak)",
+        "rsi14Last": "RSI (14) son",
         "atr": "ATR",
         "lastBar": "Son mum"
       }
@@ -566,11 +587,5 @@
       "noTradesInPeriod": "Bu dönemde satır yok.",
       "clickBarHint": "Döneme göre dolum/emir süzmek için bir çubuğa tıklayın."
     }
-  },
-  "ai": {
-    "subtab_dashboard": "Dashboard",
-    "subtab_decisions": "Kararlar",
-    "subtab_performance": "Performans",
-    "subtab_settings": "Ayarlar"
   }
 }

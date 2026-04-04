@@ -1657,6 +1657,65 @@ input[type="color"].tv-elliott-color-swatch:focus-visible {
   white-space: nowrap;
 }
 
+.signal-dash-detail__table {
+  width: 100%;
+  font-size: 0.74rem;
+  border-collapse: collapse;
+  margin-bottom: 0.35rem;
+}
+
+.signal-dash-detail__table--compact {
+  font-size: 0.68rem;
+  margin-top: 0.25rem;
+}
+
+.signal-dash-detail__sep-cell {
+  padding: 0.28rem 0 !important;
+  vertical-align: middle;
+}
+
+.signal-dash-detail__rule {
+  height: 0;
+  border: 0;
+  border-top: 1px dashed color-mix(in srgb, var(--muted) 55%, transparent);
+  margin: 0;
+}
+
+.signal-dash-detail__meta {
+  margin-top: 0.4rem;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  padding: 0.35rem 0.45rem;
+  background: color-mix(in srgb, var(--card) 92%, var(--bg));
+}
+
+.signal-dash-detail__meta > summary {
+  cursor: pointer;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+  list-style: none;
+}
+
+.signal-dash-detail__meta > summary::-webkit-details-marker {
+  display: none;
+}
+
+.signal-dash-detail__meta > summary::before {
+  content: "▸ ";
+  color: var(--muted);
+}
+
+.signal-dash-detail__meta[open] > summary::before {
+  content: "▾ ";
+}
+
+.signal-dash-detail__meta-note {
+  font-size: 0.65rem;
+  margin: 0.35rem 0 0.25rem 0;
+  line-height: 1.35;
+}
+
 :root[data-theme="light"] .signal-dash-detail__banner-left {
   background: #1e40af;
   color: #fff;

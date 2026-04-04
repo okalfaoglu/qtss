@@ -38,6 +38,8 @@ export type SignalDashboardPayload = {
   range_low?: number;
   range_mid?: number;
   atr?: number;
+  /** Wilder RSI(14) last bar; optional on older snapshots. */
+  rsi_14_last?: number | null;
 };
 
 export function formatDashboardNumber(n: number | null | undefined): string {
@@ -67,6 +69,7 @@ export type SignalDashboardV2Payload = {
   structure_shift?: boolean;
   position_strength_10?: number;
   system_active?: boolean;
+  rsi_14_last?: number | null;
 };
 
 export function parseSignalDashboardV2(raw: unknown): SignalDashboardV2Payload | null {
@@ -177,6 +180,8 @@ export function dashboardValueTone(rowKey: string, valueStr: string): DashboardV
     case "rangeMid":
     case "atr":
     case "lastBar":
+    case "rangeWireSource":
+    case "rsi14Last":
       return "default";
     case "entryActual":
       return "warn";
