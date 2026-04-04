@@ -99,7 +99,6 @@ import {
   mtfZigzagColorsFromConfig,
   normalizeElliottWaveConfig,
   patternMenuForTf,
-  scaleElliottHexColor,
   type ElliottWaveConfig,
 } from "./lib/elliottWaveAppConfig";
 import { ELLIOTT_PATTERN_MENU_ROWS } from "./lib/elliottPatternMenuCatalog";
