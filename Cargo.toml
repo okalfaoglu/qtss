@@ -18,6 +18,7 @@ members = [
     "crates/qtss-reconcile",
     "crates/qtss-ai",
     "crates/qtss-signal-card",
+    "crates/qtss-indicators",
 ]
 
 [workspace.package]
@@ -61,6 +62,7 @@ qtss-analysis = { path = "crates/qtss-analysis" }
 qtss-reconcile = { path = "crates/qtss-reconcile" }
 qtss-ai = { path = "crates/qtss-ai" }
 qtss-signal-card = { path = "crates/qtss-signal-card" }
+qtss-indicators = { path = "crates/qtss-indicators" }
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 hmac = "0.12"

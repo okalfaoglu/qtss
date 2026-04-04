@@ -8,7 +8,9 @@
       "Bash(wsl bash:*)",
       "Bash(xargs grep:*)",
       "Bash(ls /app/qtss/web/src/components/Ai*.tsx)",
-      "Bash(wsl wc:*)"
+      "Bash(wsl wc:*)",
+      "Bash(grep -r send_all wsl.localhostUbuntuappqtss --include=*.rs)",
+      "Bash(grep -r notify_on_sweep wsl.localhostUbuntuappqtss --include=*.rs)"
     ]
   }
 }
