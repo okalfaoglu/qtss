@@ -1815,8 +1815,10 @@ dependencies = [
  "qtss-ai",
  "qtss-chart-patterns",
  "qtss-common",
+ "qtss-indicators",
  "qtss-notify",
  "qtss-storage",
+ "qtss-tbm",
  "rust_decimal",
  "serde_json",
  "sqlx",
@@ -1959,6 +1961,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "qtss-indicators"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "qtss-nansen"
 version = "0.1.0"
 dependencies = [
@@ -2048,6 +2058,15 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "qtss-tbm"
+version = "0.1.0"
+dependencies = [
+ "qtss-indicators",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

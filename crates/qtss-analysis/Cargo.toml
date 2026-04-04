@@ -11,6 +11,8 @@ chrono.workspace = true
 qtss-ai.workspace = true
 qtss-common.workspace = true
 qtss-chart-patterns.workspace = true
+qtss-indicators.workspace = true
+qtss-tbm.workspace = true
 qtss-notify.workspace = true
 qtss-storage.workspace = true
 rust_decimal = { version = "1.36", features = ["serde"] }

@@ -304,6 +304,35 @@ pub async fn fetch_analysis_snapshot_payload(
     Ok(row)
 }
 
+/// Aynı sembol/exchange/segment'in farklı interval'lerindeki TBM snapshot payload'larını getirir.
+/// Dönen vektör (interval, payload) çiftleri içerir.
+pub async fn fetch_sibling_tbm_snapshots(
+    pool: &PgPool,
+    exchange: &str,
+    segment: &str,
+    symbol: &str,
+) -> Result<Vec<(String, JsonValue)>, StorageError> {
+    let rows = sqlx::query_as::<_, (String, JsonValue)>(
+        r#"
+        SELECT es.interval, a.payload
+        FROM analysis_snapshots a
+        JOIN engine_symbols es ON es.id = a.engine_symbol_id
+        WHERE es.exchange = $1
+          AND es.segment = $2
+          AND es.symbol = $3
+          AND es.enabled = true
+          AND a.engine_kind = 'tbm_scores'
+          AND a.error_reason IS NULL
+        "#,
+    )
+    .bind(exchange)
+    .bind(segment)
+    .bind(symbol)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn update_engine_symbol_enabled(
     pool: &PgPool,
     id: Uuid,

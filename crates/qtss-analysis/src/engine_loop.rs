@@ -22,12 +22,19 @@ use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
 use qtss_common::{log_business, QtssLogLevel};
 use qtss_storage::{
     clear_refresh_requested, default_range_engine_json, fetch_analysis_snapshot_payload,
-    fetch_latest_onchain_signal_score, fetch_range_engine_json, insert_range_signal_event,
-    list_enabled_engine_symbols, list_recent_bars, resolve_system_string,
-    resolve_worker_enabled_flag, resolve_worker_tick_secs, upsert_analysis_snapshot,
-    EngineSymbolRow, RangeSignalEventInsert,
+    fetch_latest_onchain_signal_score, fetch_range_engine_json, fetch_sibling_tbm_snapshots,
+    insert_range_signal_event, list_enabled_engine_symbols, list_recent_bars,
+    resolve_system_string, resolve_worker_enabled_flag, resolve_worker_tick_secs,
+    upsert_analysis_snapshot, EngineSymbolRow, RangeSignalEventInsert,
 };
 use rust_decimal::prelude::ToPrimitive;
+use qtss_indicators::indicator_bundle::compute_all as compute_indicators;
+use qtss_tbm::{
+    score_tbm,
+    setup::{detect_setups, SetupThresholds},
+    mtf::{mtf_confirm, TfScore, Timeframe},
+    scorer::TbmSignal,
+};
 use serde_json::json;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
@@ -603,6 +610,54 @@ async fn range_events_notify_bundle(
     Some((NotificationDispatcher::new(ncfg), chans))
 }
 
+async fn tbm_notify_bundle(
+    pool: &PgPool,
+) -> Option<(NotificationDispatcher, Vec<NotificationChannel>)> {
+    let enabled = resolve_worker_enabled_flag(
+        pool, "notify", "notify_on_tbm_setup", "QTSS_NOTIFY_ON_TBM_SETUP", false,
+    ).await;
+    if !enabled { return None; }
+    let raw = resolve_system_string(
+        pool, "notify", "notify_on_tbm_channels", "QTSS_NOTIFY_ON_TBM_CHANNELS", "telegram",
+    ).await;
+    let chans: Vec<NotificationChannel> = raw
+        .split(',')
+        .filter_map(|s| NotificationChannel::parse(s.trim()))
+        .collect();
+    if chans.is_empty() {
+        warn!("notify_on_tbm_setup enabled but channels empty");
+        return None;
+    }
+    let ncfg = load_notify_config_merged(pool).await;
+    Some((NotificationDispatcher::new(ncfg), chans))
+}
+
+async fn notify_tbm_setup(
+    d: &NotificationDispatcher,
+    channels: &[NotificationChannel],
+    t: &EngineSymbolRow,
+    setup: &qtss_tbm::setup::TbmSetup,
+) {
+    let dir_emoji = match setup.direction {
+        qtss_tbm::setup::SetupDirection::Bottom => "🟢",
+        qtss_tbm::setup::SetupDirection::Top => "🔴",
+    };
+    let title = format!("{dir_emoji} TBM {:?} — {} {}", setup.direction, t.symbol, t.interval);
+    let pillar_lines: String = setup.pillar_details.iter().take(8).map(|d| format!("• {d}")).collect::<Vec<_>>().join("\n");
+    let body = format!(
+        "Score: {:.1} | Signal: {:?}\n{}/{}\n\n{pillar_lines}",
+        setup.score, setup.signal, t.exchange, t.segment,
+    );
+    let n = Notification::new(title, body);
+    for r in d.send_all(channels, &n).await {
+        if r.ok {
+            info!(channel = ?r.channel, symbol = %t.symbol, "TBM setup bildirimi gönderildi");
+        } else {
+            warn!(channel = ?r.channel, detail = ?r.detail, "TBM setup bildirimi başarısız");
+        }
+    }
+}
+
 fn sweep_flags_from_payload(v: &serde_json::Value) -> (bool, bool) {
     if v.get("reason").and_then(|x| x.as_str()) == Some("insufficient_bars") {
         return (false, false);
@@ -956,6 +1011,7 @@ async fn run_engines_for_symbol(
     let gates = execution_gates_from_doc(range_doc);
     let sweep_bundle = sweep_notify_bundle(pool).await;
     let range_events_bundle = range_events_notify_bundle(pool).await;
+    let tbm_bundle = tbm_notify_bundle(pool).await;
     let targets = match list_enabled_engine_symbols(pool).await {
         Ok(t) => t,
         Err(e) => {
@@ -1191,6 +1247,266 @@ async fn run_engines_for_symbol(
                         count = formations.len(),
                         "formations snapshot"
                     );
+                }
+            }
+        }
+
+        // ── Faz C: TBM (Top/Bottom Mining) skorlama ──
+        {
+            let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
+            let highs: Vec<f64> = bars.iter().map(|b| b.high).collect();
+            let lows: Vec<f64> = bars.iter().map(|b| b.low).collect();
+            let opens: Vec<f64> = bars.iter().map(|b| b.open).collect();
+            let volumes: Vec<f64> = bars.iter().map(|b| b.volume.unwrap_or(0.0)).collect();
+
+            let bundle = compute_indicators(&opens, &highs, &lows, &closes, &volumes, &[]);
+
+            let last = closes.len().saturating_sub(1);
+            let prev = last.saturating_sub(1);
+
+            // Zigzag pivotlardan high/low pivot listesi oluştur
+            let bar_map: std::collections::BTreeMap<i64, OhlcBar> =
+                bars.iter().map(|b| (b.bar_index, *b)).collect();
+            let zz = zigzag_from_ohlc_bars(&bar_map, 8, 50, 0);
+            let chrono = pivots_chronological(&zz);
+            let (mut price_highs, mut price_lows): (Vec<(usize, f64)>, Vec<(usize, f64)>) = (vec![], vec![]);
+            let (mut macd_highs, mut macd_lows): (Vec<(usize, f64)>, Vec<(usize, f64)>) = (vec![], vec![]);
+            for p in &chrono {
+                let idx = p.point.index as usize;
+                if idx < bundle.macd.macd_line.len() && !bundle.macd.macd_line[idx].is_nan() {
+                    if p.dir > 0 {
+                        price_highs.push((idx, p.point.price));
+                        macd_highs.push((idx, bundle.macd.macd_line[idx]));
+                    } else {
+                        price_lows.push((idx, p.point.price));
+                        macd_lows.push((idx, bundle.macd.macd_line[idx]));
+                    }
+                }
+            }
+
+            // En güçlü formasyon
+            let pivot_triples: Vec<(i64, f64, i32)> = chrono
+                .iter()
+                .map(|p| (p.point.index, p.point.price, p.dir))
+                .collect();
+            let formations = scan_formations(&pivot_triples, &bars, &FormationParams::default());
+            let best_formation = formations.iter().max_by(|a, b| a.quality.partial_cmp(&b.quality).unwrap_or(std::cmp::Ordering::Equal));
+            let (form_quality, form_name) = best_formation.map(|f| (f.quality, f.pattern_name)).unwrap_or((0.0, ""));
+
+            let get_val = |v: &[f64], i: usize| -> f64 {
+                if i < v.len() && !v[i].is_nan() { v[i] } else { 0.0 }
+            };
+
+            // OBV ve CVD eğimi (son 10 bar)
+            let slope = |series: &[f64], lookback: usize| -> f64 {
+                if series.len() < lookback + 1 { return 0.0; }
+                let end = series.len() - 1;
+                let start = end - lookback;
+                series[end] - series[start]
+            };
+
+            // Fibonacci proximity
+            let fib_proximity = {
+                let swing_high = highs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let swing_low = lows.iter().cloned().fold(f64::INFINITY, f64::min);
+                let levels = qtss_indicators::fibonacci::fib_retracements(swing_high, swing_low);
+                let price = closes[last];
+                let range = (swing_high - swing_low).max(1e-10);
+                levels.iter().map(|l| 1.0 - ((price - l.price).abs() / range).min(1.0)).fold(0.0_f64, f64::max)
+            };
+
+            // Bottom score
+            let bottom_pillars = vec![
+                qtss_tbm::momentum::score_momentum(
+                    get_val(&bundle.stochastic.k, last),
+                    get_val(&bundle.stochastic.d, last),
+                    get_val(&bundle.macd.histogram, last),
+                    get_val(&bundle.macd.histogram, prev),
+                    get_val(&bundle.ema_9, last),
+                    get_val(&bundle.ema_21, last),
+                    &price_highs, &price_lows, &macd_highs, &macd_lows,
+                    true,
+                ),
+                qtss_tbm::volume::score_volume(
+                    get_val(&bundle.mfi_14, last),
+                    slope(&bundle.obv, 10),
+                    slope(&bundle.cvd, 10),
+                    volumes.get(last).copied().unwrap_or(0.0),
+                    get_val(&bundle.sma_20, last),
+                    true,
+                ),
+                qtss_tbm::structure::score_structure(
+                    fib_proximity, "nearest",
+                    get_val(&bundle.bollinger.percent_b, last),
+                    qtss_indicators::volatility::bb_squeeze(&bundle.bollinger.bandwidth, 0.03).get(last).copied().unwrap_or(false),
+                    qtss_indicators::volatility::compression_detector(&bundle.atr_14, 10).get(last).copied().unwrap_or(false),
+                    form_quality, form_name,
+                    true,
+                ),
+                qtss_tbm::onchain::score_onchain(&qtss_tbm::onchain::OnchainMetrics::default(), true),
+            ];
+            let bottom_score = score_tbm(bottom_pillars);
+
+            // Top score
+            let top_pillars = vec![
+                qtss_tbm::momentum::score_momentum(
+                    get_val(&bundle.stochastic.k, last),
+                    get_val(&bundle.stochastic.d, last),
+                    get_val(&bundle.macd.histogram, last),
+                    get_val(&bundle.macd.histogram, prev),
+                    get_val(&bundle.ema_9, last),
+                    get_val(&bundle.ema_21, last),
+                    &price_highs, &price_lows, &macd_highs, &macd_lows,
+                    false,
+                ),
+                qtss_tbm::volume::score_volume(
+                    get_val(&bundle.mfi_14, last),
+                    slope(&bundle.obv, 10),
+                    slope(&bundle.cvd, 10),
+                    volumes.get(last).copied().unwrap_or(0.0),
+                    get_val(&bundle.sma_20, last),
+                    false,
+                ),
+                qtss_tbm::structure::score_structure(
+                    fib_proximity, "nearest",
+                    get_val(&bundle.bollinger.percent_b, last),
+                    qtss_indicators::volatility::bb_squeeze(&bundle.bollinger.bandwidth, 0.03).get(last).copied().unwrap_or(false),
+                    qtss_indicators::volatility::compression_detector(&bundle.atr_14, 10).get(last).copied().unwrap_or(false),
+                    form_quality, form_name,
+                    false,
+                ),
+                qtss_tbm::onchain::score_onchain(&qtss_tbm::onchain::OnchainMetrics::default(), false),
+            ];
+            let top_score = score_tbm(top_pillars);
+
+            let setups = detect_setups(&bottom_score, &top_score, &SetupThresholds::default());
+
+            // Telegram bildirimi
+            if !setups.is_empty() {
+                if let Some((ref d, ref chans)) = tbm_bundle {
+                    for s in &setups {
+                        notify_tbm_setup(d, chans, &t, s).await;
+                    }
+                }
+            }
+
+            let tbm_payload = json!({
+                "bottom": {
+                    "total": bottom_score.total,
+                    "signal": format!("{:?}", bottom_score.signal),
+                    "pillars": bottom_score.pillars,
+                },
+                "top": {
+                    "total": top_score.total,
+                    "signal": format!("{:?}", top_score.signal),
+                    "pillars": top_score.pillars,
+                },
+                "setups": setups,
+                "bar_count": bars.len(),
+            });
+
+            if let Err(e) = upsert_analysis_snapshot(
+                pool, t.id, "tbm_scores", &tbm_payload, last_ot, Some(n as i32), None,
+            ).await {
+                warn!(%e, symbol = %t.symbol, "tbm_scores snapshot");
+            } else {
+                info!(
+                    symbol = %t.symbol,
+                    bottom = format!("{:.1}", bottom_score.total),
+                    top = format!("{:.1}", top_score.total),
+                    setups = setups.len(),
+                    "tbm_scores snapshot"
+                );
+            }
+
+            // ── MTF konfirmasyon ──
+            if let Ok(siblings) = fetch_sibling_tbm_snapshots(pool, &t.exchange, &t.segment, &t.symbol).await {
+                let tf_scores: Vec<TfScore> = siblings
+                    .iter()
+                    .filter_map(|(interval, payload)| {
+                        let tf = Timeframe::from_interval(interval)?;
+                        let bs = payload.pointer("/bottom/total")?.as_f64()?;
+                        let ts = payload.pointer("/top/total")?.as_f64()?;
+                        let bsig_str = payload.pointer("/bottom/signal")?.as_str().unwrap_or("None");
+                        let tsig_str = payload.pointer("/top/signal")?.as_str().unwrap_or("None");
+                        let parse_sig = |s: &str| match s {
+                            "VeryStrong" => TbmSignal::VeryStrong,
+                            "Strong" => TbmSignal::Strong,
+                            "Moderate" => TbmSignal::Moderate,
+                            "Weak" => TbmSignal::Weak,
+                            _ => TbmSignal::None,
+                        };
+                        Some(TfScore {
+                            timeframe: tf,
+                            bottom_score: bs,
+                            top_score: ts,
+                            bottom_signal: parse_sig(bsig_str),
+                            top_signal: parse_sig(tsig_str),
+                        })
+                    })
+                    .collect();
+
+                if tf_scores.len() >= 2 {
+                    let mtf = mtf_confirm(&tf_scores);
+                    let mtf_payload = json!({
+                        "bottom_score": mtf.bottom_score,
+                        "top_score": mtf.top_score,
+                        "bottom_signal": format!("{:?}", mtf.bottom_signal),
+                        "top_signal": format!("{:?}", mtf.top_signal),
+                        "bottom_alignment": mtf.bottom_alignment,
+                        "top_alignment": mtf.top_alignment,
+                        "tf_count": mtf.tf_count,
+                        "has_conflict": mtf.has_conflict,
+                        "details": mtf.details,
+                        "tf_scores": mtf.tf_scores,
+                    });
+                    if let Err(e) = upsert_analysis_snapshot(
+                        pool, t.id, "tbm_mtf", &mtf_payload, last_ot, Some(n as i32), None,
+                    ).await {
+                        warn!(%e, symbol = %t.symbol, "tbm_mtf snapshot");
+                    } else {
+                        info!(
+                            symbol = %t.symbol,
+                            tf_count = mtf.tf_count,
+                            bottom = format!("{:.1}", mtf.bottom_score),
+                            top = format!("{:.1}", mtf.top_score),
+                            alignment = format!("B{}/T{}", mtf.bottom_alignment, mtf.top_alignment),
+                            conflict = mtf.has_conflict,
+                            "tbm_mtf snapshot"
+                        );
+                    }
+
+                    // MTF setup sinyali Telegram'a gönder (Strong+ ve alignment ≥2)
+                    if let Some((ref d, ref chans)) = tbm_bundle {
+                        if (mtf.bottom_score >= 70.0 && mtf.bottom_alignment >= 2)
+                            || (mtf.top_score >= 70.0 && mtf.top_alignment >= 2)
+                        {
+                            let dir = if mtf.bottom_score >= mtf.top_score { "BOTTOM" } else { "TOP" };
+                            let best = mtf.bottom_score.max(mtf.top_score);
+                            let align = if dir == "BOTTOM" { mtf.bottom_alignment } else { mtf.top_alignment };
+                            let emoji = if dir == "BOTTOM" { "🟢" } else { "🔴" };
+                            let title = format!(
+                                "{emoji} MTF {dir} — {} {} ({}/{} TFs aligned)",
+                                t.symbol, t.interval, align, mtf.tf_count
+                            );
+                            let detail_lines = mtf.details.iter().take(6).map(|d| format!("• {d}")).collect::<Vec<_>>().join("\n");
+                            let tf_lines = mtf.tf_scores.iter().map(|s| {
+                                format!("  {:?}: B={:.0} T={:.0}", s.timeframe, s.bottom_score, s.top_score)
+                            }).collect::<Vec<_>>().join("\n");
+                            let body = format!(
+                                "MTF Score: {best:.1} | Signal: {:?}\n\n{tf_lines}\n\n{detail_lines}",
+                                if dir == "BOTTOM" { mtf.bottom_signal } else { mtf.top_signal },
+                            );
+                            let notif = Notification::new(title, body);
+                            for r in d.send_all(chans, &notif).await {
+                                if r.ok {
+                                    info!(channel = ?r.channel, symbol = %t.symbol, "MTF TBM bildirimi");
+                                } else {
+                                    warn!(channel = ?r.channel, detail = ?r.detail, "MTF TBM bildirimi başarısız");
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -73,6 +73,7 @@ import { buildFormationTradeLevelSpecs } from "./lib/formationTradeLevelChart";
 import { ChannelScanMatchesTable } from "./components/ChannelScanMatchesTable";
 import { AiDecisionsPanel } from "./components/AiDecisionsPanel";
 import { AiDashboardPanel } from "./components/AiDashboardPanel";
+import { TbmDashboardPanel } from "./components/TbmDashboardPanel";
 import { AiPerformancePanel } from "./components/AiPerformancePanel";
 import { AiSettingsPanel } from "./components/AiSettingsPanel";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
