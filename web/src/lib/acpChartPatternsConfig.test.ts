@@ -52,9 +52,9 @@ describe("normalizeAcpChartPatternsConfig", () => {
 });
 
 describe("patternIdsFromPatternGroups", () => {
-  it("returns all 13 ids when every group flag is true", () => {
+  it("returns ids 1–13 from groups plus phase-2 ids 14–21 when every group flag is true", () => {
     const s = patternIdsFromPatternGroups(DEFAULT_ACP_CONFIG.pattern_groups);
-    expect(s.size).toBe(13);
+    expect(s.size).toBe(ACP_PATTERN_ROWS.length);
     for (const { id } of ACP_PATTERN_ROWS) expect(s.has(id)).toBe(true);
   });
 
@@ -66,6 +66,7 @@ describe("patternIdsFromPatternGroups", () => {
     expect(s.has(2)).toBe(false);
     expect(s.has(3)).toBe(false);
     expect(s.has(4)).toBe(true);
+    expect(s.has(14)).toBe(true);
   });
 });
 
