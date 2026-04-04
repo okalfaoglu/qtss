@@ -507,7 +507,6 @@ export function buildElliottProjectionOverlayV2(
   const postGuide = postImpulseStructuralGuide(postAbc);
 
   const layers: PatternLayerOverlay[] = [];
-  const showAlt = opt.includeAltScenario !== false;
   /** When structural C/Y exists and last close confirms trend resumption, skip synthetic next-impulse paths. */
   let skipForwardFormationAfterConfirmedCorrection = false;
 
@@ -569,21 +568,8 @@ export function buildElliottProjectionOverlayV2(
       startPrice,
       tf,
       lineColor,
-      alt: false,
     });
     layers.push(...formed.layers);
-    if (showAlt) {
-      const formedAlt = buildFormationProjection({
-        imp,
-        postAbc,
-        startTime,
-        startPrice,
-        tf,
-        lineColor,
-        alt: true,
-      });
-      layers.push(...formedAlt.layers);
-    }
   }
 
   return { layers };
