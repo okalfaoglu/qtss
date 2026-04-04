@@ -1,0 +1,16 @@
+[package]
+name = "qtss-signal-card"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "PNG trading signal card for Telegram (plotters bitmap)."
+
+[dependencies]
+thiserror.workspace = true
+qtss-chart-patterns.workspace = true
+plotters = { version = "0.3.7", default-features = false, features = [
+    "bitmap_backend",
+    "bitmap_encoder",
+    "image",
+] }
+tempfile = "3"

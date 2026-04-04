@@ -460,7 +460,7 @@
       "listHint": "Ayrıntı için satıra tıklayın. Satır rengi durumu yansıtır (LONG / SHORT / nötr); hata satırlarında kırmızı çerçeve vardır.",
       "backToList": "← Tüm sinyaller",
       "chartBadge": "Grafik",
-      "strengthShort": "TSK {{value}}",
+      "strengthShort": "{{value}}",
       "autoRefreshCheckbox": "Bu sekmedeyken verileri otomatik yenile",
       "autoRefreshActive": "Otomatik yenileme açık: motor anlık görüntüleri ~{{seconds}} sn’de bir çekilir.",
       "autoRefreshHint": "Anlık görüntüyü periyodik çekmek için yukarıdaki kutuyu işaretleyin."

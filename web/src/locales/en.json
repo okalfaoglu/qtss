@@ -460,7 +460,7 @@
       "listHint": "Click a row for full detail. Row color reflects status (LONG / SHORT / neutral); red border also marks errors.",
       "backToList": "← All signals",
       "chartBadge": "Chart",
-      "strengthShort": "PS {{value}}",
+      "strengthShort": "{{value}}",
       "autoRefreshCheckbox": "Auto-refresh data while this tab is open",
       "autoRefreshActive": "Auto-refresh on: engine snapshots are fetched about every {{seconds}}s.",
       "autoRefreshHint": "Check the box above to poll the snapshot on an interval."
