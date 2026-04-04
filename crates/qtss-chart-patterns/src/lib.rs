@@ -283,6 +283,147 @@ pub fn channel_six_pattern_drawing_batch(
     }
 }
 
+/// Faz 2 `FormationMatch` → `PatternDrawingBatch` dönüşümü.
+///
+/// Formasyonun pivotlarından zigzag polyline, neckline (varsa) trend çizgisi,
+/// hedef fiyat çizgisi ve etiketler oluşturur.
+#[must_use]
+pub fn formation_to_drawing_batch(
+    fm: &FormationMatch,
+    theme_dark: bool,
+    pattern_line_width: u32,
+    zigzag_line_width: u32,
+) -> PatternDrawingBatch {
+    let id = fm.pattern_type_id;
+    let theme: &[(u8, u8, u8)] = if theme_dark {
+        THEME_DARK_RGB.as_slice()
+    } else {
+        THEME_LIGHT_RGB.as_slice()
+    };
+    let ci = if (1..=21).contains(&id) {
+        (id as usize - 1) % theme.len()
+    } else {
+        0
+    };
+    let (r, g, b) = theme[ci];
+    let color_hex = Some(rgb_to_hex(r, g, b));
+    let name = fm.pattern_name.to_string();
+
+    let mut commands = Vec::with_capacity(12);
+
+    // Zigzag polyline — tüm pivotları birleştir
+    let zz_points: Vec<TimePrice> = fm
+        .pivots
+        .iter()
+        .map(|(b, pr, _)| time_price_bar(*b, *pr))
+        .collect();
+    if zz_points.len() >= 2 {
+        commands.push(DrawingCommand::ZigzagPolyline {
+            points: zz_points,
+            line_width: zigzag_line_width,
+            color_hex: color_hex.clone(),
+        });
+    }
+
+    let first_bar = fm.pivots.first().map(|(b, _, _)| *b).unwrap_or(0);
+    let last_bar = fm.pivots.last().map(|(b, _, _)| *b).unwrap_or(0);
+
+    // Neckline — yatay çizgi (varsa)
+    if let Some(neck) = fm.neckline {
+        commands.push(DrawingCommand::TrendLine {
+            p1: time_price_bar(first_bar, neck),
+            p2: time_price_bar(last_bar, neck),
+            line_width: pattern_line_width,
+            color_hex: color_hex.clone(),
+            extend: TrendLineExtend::Right,
+            extend_bars: 10,
+        });
+    }
+
+    // Hedef fiyat çizgisi (varsa) — kesikli efekt için aynı renk
+    if let Some(target) = fm.target_price {
+        let target_color = if theme_dark {
+            Some("#ffab40".to_string()) // amber
+        } else {
+            Some("#e65100".to_string()) // dark orange
+        };
+        commands.push(DrawingCommand::TrendLine {
+            p1: time_price_bar(last_bar, target),
+            p2: time_price_bar(last_bar + 20, target),
+            line_width: 1,
+            color_hex: target_color,
+            extend: TrendLineExtend::None,
+            extend_bars: 0,
+        });
+    }
+
+    // Tepeler arası üst çizgi
+    let tops: Vec<(i64, f64)> = fm
+        .pivots
+        .iter()
+        .filter(|(_, _, d)| *d > 0)
+        .map(|(b, p, _)| (*b, *p))
+        .collect();
+    if tops.len() >= 2 {
+        commands.push(DrawingCommand::TrendLine {
+            p1: time_price_bar(tops[0].0, tops[0].1),
+            p2: time_price_bar(tops[tops.len() - 1].0, tops[tops.len() - 1].1),
+            line_width: pattern_line_width,
+            color_hex: color_hex.clone(),
+            extend: TrendLineExtend::None,
+            extend_bars: 0,
+        });
+    }
+
+    // Dipler arası alt çizgi
+    let bottoms: Vec<(i64, f64)> = fm
+        .pivots
+        .iter()
+        .filter(|(_, _, d)| *d < 0)
+        .map(|(b, p, _)| (*b, *p))
+        .collect();
+    if bottoms.len() >= 2 {
+        commands.push(DrawingCommand::TrendLine {
+            p1: time_price_bar(bottoms[0].0, bottoms[0].1),
+            p2: time_price_bar(bottoms[bottoms.len() - 1].0, bottoms[bottoms.len() - 1].1),
+            line_width: pattern_line_width,
+            color_hex: color_hex.clone(),
+            extend: TrendLineExtend::None,
+            extend_bars: 0,
+        });
+    }
+
+    // Formasyon etiketi
+    let label_pivot = fm.pivots.last().copied().unwrap_or((last_bar, 0.0, 1));
+    commands.push(DrawingCommand::PatternLabel {
+        at: time_price_bar(label_pivot.0, label_pivot.1),
+        text: name.clone(),
+        color_hex: color_hex.clone(),
+    });
+
+    // Pivot numaraları
+    for (i, (b, pr, dir)) in fm.pivots.iter().enumerate() {
+        let anchor = Some(if *dir > 0 {
+            PivotLabelAnchor::High
+        } else {
+            PivotLabelAnchor::Low
+        });
+        commands.push(DrawingCommand::PivotLabel {
+            at: time_price_bar(*b, *pr),
+            text: (i + 1).to_string(),
+            color_hex: color_hex.clone(),
+            anchor,
+        });
+    }
+
+    PatternDrawingBatch {
+        batch_id: Uuid::new_v4(),
+        pattern_type_id: (14..=21).contains(&id).then_some(id as u8),
+        pattern_name: Some(name),
+        commands,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
