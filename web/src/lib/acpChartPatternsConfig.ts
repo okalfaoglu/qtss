@@ -121,6 +121,14 @@ export const ACP_PATTERN_ROWS: { id: number; label: string }[] = [
   { id: 11, label: "Converging Triangle" },
   { id: 12, label: "Descending Triangle (Contracting)" },
   { id: 13, label: "Ascending Triangle (Contracting)" },
+  { id: 14, label: "Double Top" },
+  { id: 15, label: "Double Bottom" },
+  { id: 16, label: "Head and Shoulders" },
+  { id: 17, label: "Inverse Head and Shoulders" },
+  { id: 18, label: "Triple Top" },
+  { id: 19, label: "Triple Bottom" },
+  { id: 20, label: "Bullish Flag" },
+  { id: 21, label: "Bearish Flag" },
 ];
 
 /**
@@ -412,6 +420,9 @@ export function patternIdsFromPatternGroups(g: AcpPatternGroups): Set<number> {
   if (tr && nd && co) s.add(11);
   if (tr && fs && co) s.add(12);
   if (tr && rs && co) s.add(13);
+  // Faz 2 formasyonları — geometri/yön/dinamik matrisine ait değil; her zaman dahil
+  // (bireysel pattern checkbox'ı ile kontrol edilir)
+  for (let i = 14; i <= 21; i++) s.add(i);
   return s;
 }
 
@@ -422,7 +433,7 @@ export function acpEnabledPatternIds(cfg: AcpChartPatternsConfig): number[] | un
     if (!fromGroups.has(id)) return false;
     return true;
   });
-  if (ids.length === 13) return undefined;
+  if (ids.length === ACP_PATTERN_ROWS.length) return undefined;
   /** Boş API’de `allowed_pattern_ids: []` → “hepsi” sayılıyor; geçersiz id ile tümünü reddettiririz. */
   if (ids.length === 0) return [0];
   return ids;

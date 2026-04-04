@@ -403,7 +403,7 @@ export function AcpTrendoscopeSettingsCard({
           Pattern groups (Pine allowedPatterns)
         </summary>
         <p className="muted" style={{ margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
-          Geometri, yön ve dinamik bayraklarının hepsi açık değilse ilgili id’ler elenir; aşağıdaki 1–13 tablosundaki{" "}
+          Geometri, yön ve dinamik bayraklarının hepsi açık değilse ilgili id’ler elenir (1–13 için); 14–21 klasik formasyonlar yalnızca Aktif checkbox ile kontrol edilir. Aşağıdaki 1–21 tablosundaki{" "}
           <strong>Aktif</strong> ile kesişir (AND).
         </p>
         <div style={{ marginTop: "0.65rem", display: "flex", flexDirection: "column", gap: "0.65rem" }}>
@@ -505,7 +505,7 @@ export function AcpTrendoscopeSettingsCard({
 
       <details open className="tv-acp__details">
         <summary className="muted" style={{ cursor: "pointer", marginTop: "0.75rem" }}>
-          Formasyonlar (1–13) — TV &quot;Specific Pattern Filters&quot;
+          Formasyonlar (1–21) — TV &quot;Specific Pattern Filters&quot; + Klasik Formasyonlar
         </summary>
         <p className="muted" style={{ margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
           <strong>Son pivot</strong> sütunu yalnızca tarama bölümünde <strong>custom</strong> seçiliyken API’ye gider;{" "}
