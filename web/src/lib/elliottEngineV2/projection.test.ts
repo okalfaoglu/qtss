@@ -144,7 +144,7 @@ describe("buildElliottProjectionOverlayV2", () => {
     const out = buildElliottProjectionOverlayV2(
       engine15mWithPost(imp, post),
       anchorTwoBars,
-      { includeAltScenario: false },
+      {},
       undefined,
       undefined,
       "15m",

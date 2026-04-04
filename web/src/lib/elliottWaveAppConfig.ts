@@ -454,11 +454,6 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
   const show_nested_formations =
     typeof raw.show_nested_formations === "boolean" ? raw.show_nested_formations : base.show_nested_formations;
 
-  const show_projection_alt_scenario =
-    typeof raw.show_projection_alt_scenario === "boolean"
-      ? raw.show_projection_alt_scenario
-      : base.show_projection_alt_scenario;
-
   const projection_multi_corrective_scenarios =
     typeof (raw as Record<string, unknown>).projection_multi_corrective_scenarios === "boolean"
       ? (raw as { projection_multi_corrective_scenarios: boolean }).projection_multi_corrective_scenarios
@@ -624,7 +619,6 @@ export function normalizeElliottWaveConfig(raw: unknown): ElliottWaveConfig {
     show_projection_15m,
     show_historical_waves,
     show_nested_formations,
-    show_projection_alt_scenario,
     projection_multi_corrective_scenarios,
     use_acp_zigzag_swing,
     acp_zigzag_row_index,

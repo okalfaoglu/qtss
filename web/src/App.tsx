@@ -1090,10 +1090,7 @@ export default function App() {
         out.push(
           ...built.layers.map((layer) => ({
             ...layer,
-            zigzagLineColor:
-              layer.zigzagKind === "elliott_projection_alt"
-                ? scaleElliottHexColor(baseColor, 0.58)
-                : (layer.zigzagLineColor ?? baseColor),
+            zigzagLineColor: layer.zigzagLineColor ?? baseColor,
             zigzagLineStyle:
               layer.zigzagLineStyle ??
               (tf === "4h"

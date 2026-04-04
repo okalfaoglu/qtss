@@ -109,16 +109,15 @@ This document is the **normative** label/color/rule set. The running engine live
 
 ### 8.1 Forward projection (`projection.ts`) — normative behavior
 
-Yalnızca **formasyon tabanlı** ileri çizim: `buildFormationProjection` (ABC / sonraki 1–5 segmentleri, yatay hedef çizgileri). İsteğe bağlı ikinci yol `elliott_projection_alt` (`show_projection_alt_scenario`). `postImpulseAbc` teyitli kısım için `elliott_projection_done` / `elliott_projection_c_active`. Çoklu düzeltme renkleri: `projection_multi_corrective_scenarios`. `App.tsx` her TF için `buildElliottProjectionOverlayV2(..., sourceTf)` çağırır.
+Yalnızca **formasyon tabanlı** ileri çizim: `buildFormationProjection` (ABC / sonraki 1–5 segmentleri, yatay hedef çizgileri). `postImpulseAbc` teyitli kısım için `elliott_projection_done` / `elliott_projection_c_active`. Çoklu düzeltme renkleri: `projection_multi_corrective_scenarios`. `App.tsx` her TF için `buildElliottProjectionOverlayV2(..., sourceTf)` çağırır.
 
 | Kural | Uygulama |
 |--------|-----------|
 | **Zaman / fiyat çapası** | Başlangıç fiyatı ve zamanı **`out.ohlcByTf[sourceTf]` son mumunun `c` / `t`** (yoksa `anchorRows` son mumu). |
 | **Ana geometri** | `buildFormationProjection`: itkı ölçeği + örnek Fib oranlarıyla A–B–C ve tamamlandıktan sonra yeni itki segmentleri; süreler itkı bacak sürelerinden türetilen `durationA/B/C`. |
 | **C ilerlemesi** | `blendedProjectionPriceBase` yalnızca `postImpulseAbc` yolunda **C tamamlandı mı** ayrımı (`cCompleted`) için kullanılır. |
-| **İkinci senaryo** | `includeAltScenario`: ikinci `buildFormationProjection` çağrısı `alt: true` (farklı hedef segmentleri). |
 
-Ayarlar: `elliottWaveAppConfig` — `show_projection_*`, `show_projection_alt_scenario`, `projection_multi_corrective_scenarios`.
+Ayarlar: `elliottWaveAppConfig` — `show_projection_*`, `projection_multi_corrective_scenarios`.
 
 When behavior here changes, update this subsection in the same PR as code changes.
 
@@ -131,7 +130,7 @@ Normative **§8.1** describes current behavior. The following gaps are intention
 | **E1** | Geometry | Çıktı **segment polyline** + yatay hedef hatları; ayrı yay/kanal geometrisi yok. |
 | **E2** | Fib ratios | Formasyon projeksiyonu sabit örnek oranlar kullanır; tam Fib seviye grid’i değil. |
 | **E3** | Formation-aware path | Motor `postImpulseAbc` kalıbına göre çizim katmanı üretir; düzeltme dalgası türüne göre otomatik dallanma sınırlı. |
-| **E4** | Alternatives | Birincil + `elliott_projection_alt`; `projection_multi_corrective_scenarios` ile zigzag/yassı renk ayrımı (ABC adayları). |
+| **E4** | Alternatives | `projection_multi_corrective_scenarios` ile zigzag/yassı renk ayrımı (ABC adayları). |
 | **E5** | Time Fib | Süreler itkı bacak sürelerinden ölçeklenir; literatür “Fib zaman” projeksiyonu değil. |
 
 **Roadmap (remaining):**
@@ -139,7 +138,7 @@ Normative **§8.1** describes current behavior. The following gaps are intention
 1. **Formation-aware selector** — Use last confirmed structure (impulse leg / corrective type) to choose the next template: e.g. post–wave-5 → ABC vs flat vs triangle priors; mid-impulse → project waves 4–5 only; post–ABC → new impulse.
 2. **Fibonacci time** — İsteğe bağlı ince ayar / kapama anahtarı ileride.
 3. **Slope policy** — Segment eğimlerini ölçülen tarihsel itkı/düzeltme hızlarına daha sıkı bağlama.
-4. ~~**Multi-scenario (2 yol)**~~ — Birincil + alt senaryo **§8.1**; ek varyantlar (ör. kısa 5) isteğe bağlı.
+4. **Ek projeksiyon varyantları** — Örn. kısa 5 / alternatif kalibrasyon; kural tabanlı tanım gerektirir.
 5. **Horizontal Fib levels** — Optional marker or line layers at 0.382 / 0.618 / 1.0 / 1.618 / 2.618 of a chosen swing for targets, in addition to the projection polyline.
 
 **Corrective ratios (`tezWaveChecks.ts`):** Flat filter uses `TEZ_FLAT_B_VS_A_MIN = 0.382` … `MAX = 2.618` so **expanded** flats are not dropped; `TEZ_CLASSIC_REGULAR_FLAT_B_MIN = 0.618` is documented for scoring/detail only — consistent with a deliberate “wide net” detection policy.
