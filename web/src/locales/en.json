@@ -656,6 +656,7 @@
       "vendorAnthropic": "Anthropic (Claude)",
       "vendorGemini": "Google Gemini",
       "llmVendorHint": "Updates only app_config ai_engine_config: sets provider_tactical/operational/strategic and recommended models. API keys stay in system_config (unchanged).",
+      "geminiKeyReminder": "Gemini: the worker reads the Google API key from system_config `ai.gemini_api_key`, or if empty from `telegram_setup_analysis.gemini_api_key`. If both are empty, sweeps skip the LLM with no error row — check qtss-worker logs for «provider not built». Anthropic keys are not used.",
       "providersReference": "Providers: anthropic, openai_compatible (e.g. OpenAI ChatGPT at https://api.openai.com), ollama, gemini (aliases google / google_gemini). Gemini model example: gemini-2.5-flash. Gemini API key: system_config ai.gemini_api_key or telegram_setup_analysis.gemini_api_key. See docs/CONFIG_REGISTRY.md § ai."
     },
     "performance": {
@@ -672,7 +673,10 @@
       "last": "Last",
       "decisionDetail": "Decision detail",
       "rawOutput": "raw_output (errors and provider text)",
-      "clickToLoad": "Select a row to load detail."
+      "clickToLoad": "Select a row to load detail.",
+      "clearErrors": "Delete all error rows",
+      "clearErrorsConfirm": "Delete all {{count}} AI decision row(s) with status error from the database? This cannot be undone.",
+      "clearErrorsDone": "Removed {{count}} row(s)."
     },
     "col": {
       "time": "Time",

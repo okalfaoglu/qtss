@@ -5369,7 +5369,9 @@ export default function App() {
                   </div>
                   {aiSubtab === "ai_dashboard" && <AiDashboardPanel accessToken={token} />}
                   {aiSubtab === "ai_decisions" && <AiDecisionsPanel accessToken={token} canAdmin={rbacIsAdmin} />}
-                  {aiSubtab === "ai_performance" && <AiPerformancePanel accessToken={token} />}
+                  {aiSubtab === "ai_performance" && (
+                    <AiPerformancePanel accessToken={token} canAdmin={rbacIsAdmin} />
+                  )}
                   {aiSubtab === "ai_settings" && (
                     <AiSettingsPanel accessToken={token} canAdmin={rbacIsAdmin} />
                   )}

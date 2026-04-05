@@ -670,6 +670,21 @@ pub async fn list_ai_decisions(
     Ok(rows)
 }
 
+/// Deletes all rows with the given status. Only `error` is accepted from the public API (safe housekeeping).
+pub async fn delete_ai_decisions_with_status(pool: &PgPool, status: &str) -> AiResult<u64> {
+    let st = status.trim();
+    if st != "error" {
+        return Err(AiError::config(
+            "delete_ai_decisions_with_status: only status 'error' is supported",
+        ));
+    }
+    let res = sqlx::query(r#"DELETE FROM ai_decisions WHERE status = $1"#)
+        .bind(st)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
+}
+
 pub async fn fetch_ai_decision_detail(pool: &PgPool, id: Uuid) -> AiResult<Option<AiDecisionDetailRow>> {
     let row = sqlx::query_as::<_, AiDecisionDetailRow>(
         r#"SELECT id, created_at, layer, symbol, model_id, prompt_hash, input_snapshot,

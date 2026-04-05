@@ -656,6 +656,7 @@
       "vendorAnthropic": "Anthropic (Claude)",
       "vendorGemini": "Google Gemini",
       "llmVendorHint": "Yalnızca app_config `ai_engine_config` güncellenir: üç katmanın provider ve önerilen model alanları. API anahtarları system_config’te kalır (silinmez).",
+      "geminiKeyReminder": "Gemini: Google API anahtarı system_config `ai.gemini_api_key` içinde okunur; boşsa `telegram_setup_analysis.gemini_api_key` kullanılır. İkisi de boşsa sweep LLM çağırmaz ve veritabanına hata satırı yazılmaz — qtss-worker loglarında «provider not built» arayın. Anthropic anahtarı Gemini için kullanılmaz.",
       "providersReference": "Sağlayıcılar: anthropic, openai_compatible (ör. OpenAI ChatGPT, taban https://api.openai.com), ollama, gemini (takma ad: google / google_gemini). Gemini model örneği: gemini-2.5-flash. Anahtar: system_config `ai.gemini_api_key` veya `telegram_setup_analysis.gemini_api_key`. Ayrıntı: docs/CONFIG_REGISTRY.md `ai` bölümü."
     },
     "performance": {
@@ -672,7 +673,10 @@
       "last": "Son",
       "decisionDetail": "Karar detayı",
       "rawOutput": "raw_output (hata ve sağlayıcı metni)",
-      "clickToLoad": "Detay için bir satır seçin."
+      "clickToLoad": "Detay için bir satır seçin.",
+      "clearErrors": "Hata satırlarını sil",
+      "clearErrorsConfirm": "Veritabanından durumu «error» olan {{count}} AI karar satırı silinsin mi? Geri alınamaz.",
+      "clearErrorsDone": "{{count}} satır silindi."
     },
     "col": {
       "time": "Zaman",

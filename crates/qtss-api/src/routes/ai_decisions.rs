@@ -2,7 +2,7 @@
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Extension, Json, Router};
 use serde::Deserialize;
 use uuid::Uuid;
@@ -29,6 +29,12 @@ pub struct LinkApprovalBody {
     pub approval_request_id: Uuid,
 }
 
+#[derive(Deserialize)]
+pub struct DeleteAiDecisionsQuery {
+    /// Only `error` is allowed (bulk cleanup of failed LLM rows).
+    pub status: String,
+}
+
 fn map_ai(e: qtss_ai::AiError) -> ApiError {
     ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:?}"))
 }
@@ -43,6 +49,7 @@ pub fn ai_decisions_read_router() -> Router<SharedState> {
 
 pub fn ai_decisions_admin_router() -> Router<SharedState> {
     Router::new()
+        .route("/ai/decisions", delete(delete_ai_decisions_by_status))
         .route("/ai/decisions/{id}/approve", post(approve_ai_decision))
         .route("/ai/decisions/{id}/reject", post(reject_ai_decision))
         .route(
@@ -102,6 +109,21 @@ async fn active_portfolio_directive(
         .await
         .map_err(map_ai)?;
     Ok(Json(serde_json::to_value(row).unwrap_or(serde_json::json!(null))))
+}
+
+async fn delete_ai_decisions_by_status(
+    Extension(_claims): Extension<AccessClaims>,
+    State(st): State<SharedState>,
+    Query(q): Query<DeleteAiDecisionsQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let st_trim = q.status.trim();
+    if st_trim != "error" {
+        return Err(ApiError::bad_request("only status=error is supported for bulk delete"));
+    }
+    let n = qtss_ai::storage::delete_ai_decisions_with_status(&st.pool, st_trim)
+        .await
+        .map_err(map_ai)?;
+    Ok(Json(serde_json::json!({ "deleted": n })))
 }
 
 async fn approve_ai_decision(

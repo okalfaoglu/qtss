@@ -1883,6 +1883,17 @@ export async function fetchAiDecisionDetail(
   return JSON.parse(t) as AiDecisionDetailRowApi;
 }
 
+/** Admin — `DELETE /api/v1/ai/decisions?status=error` removes all failed LLM rows (CASCADE children). */
+export async function deleteAiDecisionsByStatus(accessToken: string, status: "error"): Promise<{ deleted: number }> {
+  const params = new URLSearchParams({ status });
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/decisions?${params}`, accessToken, {
+    method: "DELETE",
+  });
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("ai/decisions DELETE", r, t);
+  return JSON.parse(t) as { deleted: number };
+}
+
 export async function postAiDecisionApprove(
   accessToken: string,
   id: string,

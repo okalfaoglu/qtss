@@ -165,6 +165,9 @@ export function AiSettingsPanel({ accessToken, canAdmin }: Props) {
   ];
 
   const uniformVendor = detectUniformVendor(config);
+  const usesGemini = layers.some((l) =>
+    ["gemini", "google", "google_gemini"].includes(l.provider.trim().toLowerCase()),
+  );
 
   return (
     <div className="card" style={{ marginTop: "0.5rem" }}>
@@ -253,6 +256,23 @@ export function AiSettingsPanel({ accessToken, canAdmin }: Props) {
         <p className="muted" style={{ fontSize: "0.68rem", lineHeight: 1.45, marginTop: "0.35rem", maxWidth: "28rem" }}>
           {t("ai.settings.llmVendorHint")}
         </p>
+        {usesGemini ? (
+          <p
+            className="muted"
+            style={{
+              fontSize: "0.68rem",
+              lineHeight: 1.5,
+              marginTop: "0.5rem",
+              maxWidth: "32rem",
+              padding: "0.45rem 0.55rem",
+              borderRadius: 6,
+              border: "1px solid rgba(255, 193, 7, 0.35)",
+              background: "rgba(255, 193, 7, 0.06)",
+            }}
+          >
+            {t("ai.settings.geminiKeyReminder")}
+          </p>
+        ) : null}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.4rem", fontSize: "0.8rem", marginBottom: "1rem" }}>

@@ -329,6 +329,13 @@ pub async fn run_tactical_sweep(rt: &AiRuntime) -> AiResult<()> {
         return Ok(());
     }
     let Some(provider) = rt.tactical_provider() else {
+        if rt.config().tactical_layer_enabled {
+            tracing::warn!(
+                layer = "tactical",
+                provider_config = %rt.config().provider_tactical,
+                "tactical sweep skipped: provider not built (missing API key, wrong provider id, or layer misconfigured — no ai_decisions row is written)"
+            );
+        }
         return Ok(());
     };
     let symbols = list_enabled_engine_symbols(rt.pool()).await?;
@@ -514,6 +521,13 @@ pub async fn run_operational_sweep(rt: &AiRuntime) -> AiResult<()> {
         return Ok(());
     }
     let Some(provider) = rt.operational_provider() else {
+        if rt.config().operational_layer_enabled {
+            tracing::warn!(
+                layer = "operational",
+                provider_config = %rt.config().provider_operational,
+                "operational sweep skipped: provider not built (missing API key or misconfiguration)"
+            );
+        }
         return Ok(());
     };
     let repo = ExchangeOrderRepository::new(rt.pool().clone());
@@ -631,6 +645,13 @@ pub async fn run_strategic_sweep(rt: &AiRuntime) -> AiResult<()> {
         return Ok(());
     }
     let Some(provider) = rt.strategic_provider() else {
+        if rt.config().strategic_layer_enabled {
+            tracing::warn!(
+                layer = "strategic",
+                provider_config = %rt.config().provider_strategic,
+                "strategic sweep skipped: provider not built (missing API key or misconfiguration)"
+            );
+        }
         return Ok(());
     };
     let ctx = crate::context_builder::build_strategic_context(rt.pool()).await?;

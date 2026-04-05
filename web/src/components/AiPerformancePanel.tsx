@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  deleteAiDecisionsByStatus,
   fetchAiDecisions,
   fetchAiDecisionDetail,
   type AiDecisionListRowApi,
@@ -9,6 +10,7 @@ import {
 
 type Props = {
   accessToken: string | null;
+  canAdmin?: boolean;
 };
 
 type SymbolPerf = {
@@ -107,7 +109,8 @@ export function AiPerformancePanel({ accessToken }: Props) {
   const symbolPerfs = aggregateBySymbol(rows);
 
   const totalDecisions = rows.length;
-  const errorRate = totalDecisions > 0 ? (rows.filter((r) => r.status === "error").length / totalDecisions) * 100 : 0;
+  const errorRowCount = rows.filter((r) => r.status === "error").length;
+  const errorRate = totalDecisions > 0 ? (errorRowCount / totalDecisions) * 100 : 0;
   const approvalRate =
     totalDecisions > 0
       ? ((rows.filter((r) => r.status === "approved" || r.status === "applied").length / totalDecisions) * 100)
@@ -115,11 +118,50 @@ export function AiPerformancePanel({ accessToken }: Props) {
 
   return (
     <div className="card" style={{ marginTop: "0.5rem" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem" }}>
         <p className="tv-drawer__section-head">{t("ai.performance.title")}</p>
-        <button type="button" disabled={busy} onClick={() => void refresh()} style={{ fontSize: "0.75rem" }}>
-          {t("ai.refresh")}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+          {canAdmin && errorRowCount > 0 ? (
+            <button
+              type="button"
+              disabled={busy}
+              style={{
+                fontSize: "0.75rem",
+                borderColor: "#c62828",
+                color: "#ffcdd2",
+                background: "rgba(198,40,40,0.25)",
+              }}
+              onClick={() => {
+                if (
+                  !accessToken ||
+                  !window.confirm(t("ai.performance.clearErrorsConfirm", { count: errorRowCount }))
+                ) {
+                  return;
+                }
+                void (async () => {
+                  setErr("");
+                  try {
+                    setBusy(true);
+                    const { deleted } = await deleteAiDecisionsByStatus(accessToken, "error");
+                    setDetail(null);
+                    setSelectedId(null);
+                    window.alert(t("ai.performance.clearErrorsDone", { count: deleted }));
+                  } catch (e) {
+                    setErr(String(e));
+                  } finally {
+                    setBusy(false);
+                  }
+                  void refresh();
+                })();
+              }}
+            >
+              {t("ai.performance.clearErrors")}
+            </button>
+          ) : null}
+          <button type="button" disabled={busy} onClick={() => void refresh()} style={{ fontSize: "0.75rem" }}>
+            {t("ai.refresh")}
+          </button>
+        </div>
       </div>
       {err ? <p className="tv-drawer__error">{err}</p> : null}
 
