@@ -2333,3 +2333,21 @@ INSERT INTO system_config (module, config_key, value) VALUES
   ('worker', 'tbm_execute_min_signal', '"Strong"')
 ON CONFLICT (module, config_key) DO UPDATE SET value = EXCLUDED.value;
 
+-- TBM auto-execute + Telegram notify defaults (upsert after baseline seeds).
+UPDATE system_config
+SET value = '"true"'::jsonb
+WHERE module = 'worker'
+  AND config_key = 'tbm_auto_execute_enabled';
+
+UPDATE system_config
+SET value = '"Moderate"'::jsonb
+WHERE module = 'worker'
+  AND config_key = 'tbm_execute_min_signal';
+
+INSERT INTO system_config (module, config_key, value) VALUES
+  ('worker', 'tbm_auto_execute_enabled', '"true"'),
+  ('worker', 'tbm_execute_min_signal', '"Moderate"'),
+  ('notify', 'notify_on_tbm_setup', '"true"'),
+  ('notify', 'notify_on_tbm_channels', '"telegram"')
+ON CONFLICT (module, config_key) DO UPDATE SET value = EXCLUDED.value;
+
