@@ -1,6 +1,7 @@
 //! Minimal Telegram Bot HTTP helpers (file download + sendMessage).
 
 use serde_json::{json, Value};
+use tracing::debug;
 
 pub async fn get_file_path(client: &reqwest::Client, bot_token: &str, file_id: &str) -> Result<String, String> {
     let url = format!(
@@ -22,10 +23,17 @@ pub async fn get_file_path(client: &reqwest::Client, bot_token: &str, file_id: &
     if !v["ok"].as_bool().unwrap_or(false) {
         return Err("getFile ok=false".into());
     }
-    v["result"]["file_path"]
+    let path = v["result"]["file_path"]
         .as_str()
         .map(|s| s.to_string())
-        .ok_or_else(|| "getFile missing file_path".into())
+        .ok_or_else(|| String::from("getFile missing file_path"))?;
+    debug!(
+        target: "qtss_telegram_setup_analysis",
+        file_id_prefix = %file_id.chars().take(12).collect::<String>(),
+        path_len = path.len(),
+        "telegram getFile ok"
+    );
+    Ok(path)
 }
 
 pub async fn download_file(client: &reqwest::Client, bot_token: &str, file_path: &str) -> Result<Vec<u8>, String> {
@@ -72,5 +80,11 @@ pub async fn send_message_utf8(
     if !v["ok"].as_bool().unwrap_or(false) {
         return Err(format!("sendMessage ok=false: {}", txt.chars().take(200).collect::<String>()));
     }
+    debug!(
+        target: "qtss_telegram_setup_analysis",
+        chat_id,
+        text_chars = text.chars().count(),
+        "telegram sendMessage ok"
+    );
     Ok(())
 }

@@ -2,6 +2,7 @@
 
 use base64::Engine;
 use serde_json::{json, Value};
+use tracing::info;
 
 use crate::config::ResolvedSetupAnalysisConfig;
 use crate::BufferedTurn;
@@ -44,6 +45,19 @@ pub async fn analyze_setup_tr_report(
     if !cfg.gemini_configured() {
         return Err("Gemini API key missing".into());
     }
+
+    let total_text: usize = turns.iter().map(|t| t.text_parts.len()).sum();
+    let total_images: usize = turns.iter().map(|t| t.images.len()).sum();
+    let image_bytes: usize = turns.iter().flat_map(|t| &t.images).map(|i| i.bytes.len()).sum();
+    info!(
+        target: "qtss_telegram_setup_analysis",
+        model = %cfg.gemini_model,
+        turns = turns.len(),
+        total_text_parts = total_text,
+        total_images,
+        image_payload_bytes = image_bytes,
+        "setup_analysis: Gemini generateContent request starting"
+    );
 
     let mut parts: Vec<Value> = vec![json!({"text": PROMPT_SYSTEM_EN})];
 
@@ -137,6 +151,13 @@ pub async fn analyze_setup_tr_report(
     if text.trim().is_empty() {
         return Err("Gemini empty response".into());
     }
+
+    info!(
+        target: "qtss_telegram_setup_analysis",
+        model = %cfg.gemini_model,
+        out_chars = text.chars().count(),
+        "setup_analysis: Gemini generateContent finished"
+    );
 
     Ok(text)
 }
