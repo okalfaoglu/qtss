@@ -27,7 +27,11 @@ pub async fn apply_notify_telegram_system_config(
         .get("notify", "telegram_chat_id")
         .await?
         .and_then(|r| value_from_row_json(&r.value));
-    if let (Some(bot_token), Some(chat_id)) = (token, chat) {
+    // Bot token alone is enough for Bot API calls that pass `chat_id` per request (e.g. Telegram
+    // setup-analysis webhook replies). `telegram_chat_id` remains the default target for generic
+    // `NotificationDispatcher::send` to Telegram; use `""` until configured.
+    if let Some(bot_token) = token {
+        let chat_id = chat.unwrap_or_default();
         cfg.telegram = Some(TelegramConfig {
             bot_token,
             chat_id,
