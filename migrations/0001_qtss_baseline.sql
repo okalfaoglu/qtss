@@ -2291,7 +2291,8 @@ VALUES
 ON CONFLICT (module, config_key) DO NOTHING;
 
 -- >>> merged from former 0005_enable_tbm_notifications.sql, 0006_nansen_tick_optimization.sql,
---     0007_telegram_setup_analysis_gemini_model_2_5.sql (single-file migrations for sqlx embed).
+--     0007_telegram_setup_analysis_gemini_model_2_5.sql, 0007_tbm_auto_execute_config.sql
+--     (single-file migrations for sqlx embed).
 
 -- Enable TBM setup notifications via Telegram
 INSERT INTO system_config (module, config_key, value) VALUES
@@ -2323,4 +2324,12 @@ WHERE
     module = 'telegram_setup_analysis'
     AND config_key = 'gemini_model'
     AND trim(coalesce(value ->> 'value', '')) IN ('gemini-2.0-flash', 'gemini-2.0-flash-lite');
+
+-- >>> merged from former 0007_tbm_auto_execute_config.sql
+-- TBM auto-execute: Setup tespit edildiginde paper/live execution pipeline'a otomatik sinyal gonderimi
+-- Default: kapali (guvenlik icin). Aktif edildiginde Strong+ sinyaller islem acar.
+INSERT INTO system_config (module, config_key, value) VALUES
+  ('worker', 'tbm_auto_execute_enabled', '"false"'),
+  ('worker', 'tbm_execute_min_signal', '"Strong"')
+ON CONFLICT (module, config_key) DO UPDATE SET value = EXCLUDED.value;
 

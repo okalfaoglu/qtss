@@ -684,7 +684,7 @@ function MtfSection({ mtf }: { mtf: MtfPayload }) {
 
 /* ══════════════════════════ Symbol TBM Card ══════════════════════════ */
 
-function SymbolTbmCard({ item, delta }: { item: SymbolTbm; delta?: ScoreDelta }) {
+function SymbolTbmCard({ item, delta, history }: { item: SymbolTbm; delta?: ScoreDelta; history?: HistoryPoint[] }) {
   const [expanded, setExpanded] = useState(false);
   const tbm = item.tbm;
   const mtf = item.mtf;
@@ -707,6 +707,25 @@ function SymbolTbmCard({ item, delta }: { item: SymbolTbm; delta?: ScoreDelta })
         </span>
         <span style={{ fontSize: 11, color: "#475569", transform: expanded ? "rotate(180deg)" : "rotate(0)", transition: "transform 0.2s" }}>&#9660;</span>
       </div>
+
+      {/* Sparklines */}
+      {history && history.length >= 3 && (() => {
+        const key = `${item.symbol}|${item.interval}`;
+        const bottomVals = history.map(h => h.scores[key]?.bottom).filter((v): v is number => v != null);
+        const topVals = history.map(h => h.scores[key]?.top).filter((v): v is number => v != null);
+        return bottomVals.length >= 3 ? (
+          <div style={{ display: "flex", gap: 12, marginTop: 6, alignItems: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "#64748b" }}>
+              <span>B</span>
+              <Sparkline values={bottomVals} color="#4ade80" width={70} height={16} />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "#64748b" }}>
+              <span>T</span>
+              <Sparkline values={topVals} color="#f87171" width={70} height={16} />
+            </div>
+          </div>
+        ) : null;
+      })()}
 
       <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
         <div style={{ flex: 1 }}>
@@ -1235,6 +1254,9 @@ export function TbmDashboardPanel({ accessToken }: Props) {
       {/* Alert Rules Panel */}
       {showAlertRules && <AlertRulesPanel rules={alertRules} setRules={setAlertRules} />}
 
+      {/* Webhook Panel */}
+      {showWebhook && <WebhookPanel config={webhookConfig} setConfig={setWebhookConfig} />}
+
       {/* Triggered Alerts Banner */}
       {triggeredAlerts.length > 0 && (
         <div style={{ background: "#422006", border: "1px solid #facc1555", borderRadius: 8, padding: "8px 12px", marginBottom: 12, fontSize: 11 }}>
@@ -1301,6 +1323,7 @@ export function TbmDashboardPanel({ accessToken }: Props) {
             key={`${item.symbol}-${item.interval}-${i}`}
             item={item}
             delta={deltaMap.get(`${item.symbol}|${item.interval}`)}
+            history={scoreHistory}
           />
         ))
       )}
