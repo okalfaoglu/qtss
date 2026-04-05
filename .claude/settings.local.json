@@ -14,7 +14,8 @@
       "Read(///wsl.localhost/Ubuntu/app/qtss/**)",
       "Bash(npx tsc:*)",
       "Bash(xargs wc:*)",
-      "Bash(grep -r \"alert\\\\|notify\\\\|export\\\\|filter\\\\|sort\\\\|watchlist\" ./web/src --include=*.tsx --include=*.ts)"
+      "Bash(grep -r \"alert\\\\|notify\\\\|export\\\\|filter\\\\|sort\\\\|watchlist\" ./web/src --include=*.tsx --include=*.ts)",
+      "WebSearch"
     ]
   }
 }
