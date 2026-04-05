@@ -665,6 +665,7 @@
       "errors": "Errors",
       "last": "Last",
       "decisionDetail": "Decision detail",
+      "rawOutput": "raw_output (errors and provider text)",
       "clickToLoad": "Select a row to load detail."
     },
     "col": {

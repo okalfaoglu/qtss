@@ -665,6 +665,7 @@
       "errors": "Hatalar",
       "last": "Son",
       "decisionDetail": "Karar detayı",
+      "rawOutput": "raw_output (hata ve sağlayıcı metni)",
       "clickToLoad": "Detay için bir satır seçin."
     },
     "col": {

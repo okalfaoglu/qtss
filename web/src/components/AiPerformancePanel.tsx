@@ -246,6 +246,25 @@ export function AiPerformancePanel({ accessToken }: Props) {
               <span className="mono">{detail.applied_at?.slice(0, 19) ?? "—"}</span>
             </div>
           </div>
+          {detail.raw_output ? (
+            <>
+              <p className="muted" style={{ fontSize: "0.65rem", marginTop: "0.3rem" }}>
+                {t("ai.performance.rawOutput")}
+              </p>
+              <pre
+                className="mono"
+                style={{
+                  fontSize: "0.65rem",
+                  maxHeight: 200,
+                  overflow: "auto",
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                }}
+              >
+                {detail.raw_output}
+              </pre>
+            </>
+          ) : null}
           <p className="muted" style={{ fontSize: "0.65rem", marginTop: "0.3rem" }}>parsed_decision</p>
           <pre className="mono" style={{ fontSize: "0.65rem", maxHeight: 120, overflow: "auto" }}>
             {JSON.stringify(detail.parsed_decision, null, 2)}
