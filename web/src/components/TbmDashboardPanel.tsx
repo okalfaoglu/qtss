@@ -47,9 +47,25 @@ interface SymbolTbm {
   computedAt: string;
 }
 
-type SortField = "score" | "symbol" | "interval" | "time";
+interface AlertRule {
+  id: string;
+  symbol: string; // "*" = all
+  direction: "bottom" | "top" | "both";
+  minScore: number;
+  minSignal: string;
+  enabled: boolean;
+}
+
+interface ScoreDelta {
+  prevBottom: number;
+  prevTop: number;
+  deltaBottom: number;
+  deltaTop: number;
+}
+
+type SortField = "score" | "symbol" | "interval" | "time" | "delta";
 type SortDir = "asc" | "desc";
-type ViewMode = "cards" | "heatmap";
+type ViewMode = "cards" | "heatmap" | "compare";
 type DirectionFilter = "all" | "bottom" | "top";
 type SignalFilter = "all" | "VeryStrong" | "Strong" | "Moderate" | "Weak" | "None";
 
@@ -109,6 +125,315 @@ function timeAgo(iso: string): string {
   if (diff < 3600) return `${Math.floor(diff / 60)}m`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
   return `${Math.floor(diff / 86400)}d`;
+}
+
+/* ══════════════════════════ Radar Chart (SVG) ══════════════════════════ */
+
+const PILLAR_LABELS = ["Momentum", "Volume", "Structure", "Onchain"];
+const PILLAR_COLORS: Record<string, string> = { Momentum: "#818cf8", Volume: "#38bdf8", Structure: "#f472b6", Onchain: "#34d399" };
+
+function RadarChart({ pillars, size = 120, label }: { pillars: PillarScore[]; size?: number; label?: string }) {
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = size / 2 - 16;
+  const levels = [25, 50, 75, 100];
+
+  // Map pillar scores to radar positions (4 axes)
+  const pillarMap: Record<string, number> = {};
+  for (const p of pillars) pillarMap[p.kind] = p.score;
+
+  const angles = PILLAR_LABELS.map((_, i) => (Math.PI * 2 * i) / 4 - Math.PI / 2);
+  const points = PILLAR_LABELS.map((kind, i) => {
+    const score = pillarMap[kind] ?? 0;
+    const pct = score / 100;
+    return { x: cx + r * pct * Math.cos(angles[i]), y: cy + r * pct * Math.sin(angles[i]) };
+  });
+  const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ") + " Z";
+
+  return (
+    <div style={{ textAlign: "center" }}>
+      {label && <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 2 }}>{label}</div>}
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        {/* Grid rings */}
+        {levels.map(lv => (
+          <polygon
+            key={lv}
+            points={angles.map(a => `${cx + r * (lv / 100) * Math.cos(a)},${cy + r * (lv / 100) * Math.sin(a)}`).join(" ")}
+            fill="none" stroke="#334155" strokeWidth={0.5}
+          />
+        ))}
+        {/* Axis lines */}
+        {angles.map((a, i) => (
+          <line key={i} x1={cx} y1={cy} x2={cx + r * Math.cos(a)} y2={cy + r * Math.sin(a)} stroke="#334155" strokeWidth={0.5} />
+        ))}
+        {/* Score polygon */}
+        <polygon points={points.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ")} fill="#818cf833" stroke="#818cf8" strokeWidth={1.5} />
+        {/* Score dots */}
+        {points.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r={2.5} fill={PILLAR_COLORS[PILLAR_LABELS[i]]} />
+        ))}
+        {/* Labels */}
+        {PILLAR_LABELS.map((kind, i) => {
+          const lx = cx + (r + 12) * Math.cos(angles[i]);
+          const ly = cy + (r + 12) * Math.sin(angles[i]);
+          return (
+            <text key={kind} x={lx} y={ly} textAnchor="middle" dominantBaseline="middle" fontSize={8} fill={PILLAR_COLORS[kind]}>
+              {kind.slice(0, 3).toUpperCase()}
+            </text>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+/* ══════════════════════════ Delta Badge ══════════════════════════ */
+
+function DeltaBadge({ delta }: { delta: number }) {
+  if (Math.abs(delta) < 0.5) return null;
+  const up = delta > 0;
+  return (
+    <span style={{ fontSize: 10, fontWeight: 600, color: up ? "#4ade80" : "#ef4444", marginLeft: 4 }}>
+      {up ? "▲" : "▼"}{Math.abs(delta).toFixed(1)}
+    </span>
+  );
+}
+
+/* ══════════════════════════ CSV Export ══════════════════════════ */
+
+function exportCsv(items: SymbolTbm[], deltaMap: Map<string, ScoreDelta>) {
+  const header = "Symbol,Exchange,Segment,Interval,Bottom Score,Bottom Signal,Top Score,Top Signal,Delta Bottom,Delta Top,Setups,Computed At";
+  const rows = items.map(i => {
+    const tbm = i.tbm!;
+    const key = `${i.symbol}|${i.interval}`;
+    const d = deltaMap.get(key);
+    return [
+      i.symbol, i.exchange, i.segment, i.interval,
+      tbm.bottom.total.toFixed(1), tbm.bottom.signal,
+      tbm.top.total.toFixed(1), tbm.top.signal,
+      d ? d.deltaBottom.toFixed(1) : "0",
+      d ? d.deltaTop.toFixed(1) : "0",
+      tbm.setups.length,
+      i.computedAt,
+    ].join(",");
+  });
+  const csv = [header, ...rows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `tbm_export_${new Date().toISOString().slice(0, 19).replace(/:/g, "")}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ══════════════════════════ Alert Rules (localStorage) ══════════════════════════ */
+
+const ALERT_STORAGE_KEY = "qtss_tbm_alert_rules";
+
+function loadAlertRules(): AlertRule[] {
+  try {
+    const raw = localStorage.getItem(ALERT_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function saveAlertRules(rules: AlertRule[]) {
+  localStorage.setItem(ALERT_STORAGE_KEY, JSON.stringify(rules));
+}
+
+function checkAlerts(items: SymbolTbm[], rules: AlertRule[]): { rule: AlertRule; item: SymbolTbm; score: number; dir: string }[] {
+  const triggered: { rule: AlertRule; item: SymbolTbm; score: number; dir: string }[] = [];
+  for (const rule of rules) {
+    if (!rule.enabled) continue;
+    for (const item of items) {
+      if (rule.symbol !== "*" && !item.symbol.includes(rule.symbol)) continue;
+      const tbm = item.tbm;
+      if (!tbm) continue;
+      const checkBottom = rule.direction === "bottom" || rule.direction === "both";
+      const checkTop = rule.direction === "top" || rule.direction === "both";
+      const minSig = SIGNAL_ORDER[rule.minSignal] ?? 0;
+      if (checkBottom && tbm.bottom.total >= rule.minScore && (SIGNAL_ORDER[tbm.bottom.signal] ?? 0) >= minSig) {
+        triggered.push({ rule, item, score: tbm.bottom.total, dir: "Bottom" });
+      }
+      if (checkTop && tbm.top.total >= rule.minScore && (SIGNAL_ORDER[tbm.top.signal] ?? 0) >= minSig) {
+        triggered.push({ rule, item, score: tbm.top.total, dir: "Top" });
+      }
+    }
+  }
+  return triggered;
+}
+
+function AlertRulesPanel({ rules, setRules }: { rules: AlertRule[]; setRules: (r: AlertRule[]) => void }) {
+  const [newSymbol, setNewSymbol] = useState("*");
+  const [newDir, setNewDir] = useState<"bottom" | "top" | "both">("both");
+  const [newScore, setNewScore] = useState(60);
+  const [newSignal, setNewSignal] = useState("Moderate");
+
+  const addRule = () => {
+    const r: AlertRule = { id: Date.now().toString(), symbol: newSymbol, direction: newDir, minScore: newScore, minSignal: newSignal, enabled: true };
+    const updated = [...rules, r];
+    setRules(updated);
+    saveAlertRules(updated);
+  };
+
+  const removeRule = (id: string) => {
+    const updated = rules.filter(r => r.id !== id);
+    setRules(updated);
+    saveAlertRules(updated);
+  };
+
+  const toggleRule = (id: string) => {
+    const updated = rules.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r);
+    setRules(updated);
+    saveAlertRules(updated);
+  };
+
+  const inputStyle: React.CSSProperties = { background: "#1e293b", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 4, padding: "3px 6px", fontSize: 11 };
+
+  return (
+    <div style={{ background: "#0f172a", borderRadius: 8, border: "1px solid #334155", padding: 12, marginBottom: 12 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Alert Kurallari</div>
+
+      {/* Existing rules */}
+      {rules.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          {rules.map(r => (
+            <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid #1e293b", fontSize: 11, opacity: r.enabled ? 1 : 0.4 }}>
+              <button type="button" onClick={() => toggleRule(r.id)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: r.enabled ? "#4ade80" : "#64748b" }}>
+                {r.enabled ? "●" : "○"}
+              </button>
+              <span style={{ fontWeight: 600 }}>{r.symbol}</span>
+              <span style={{ color: "#64748b" }}>{r.direction}</span>
+              <span>≥{r.minScore}</span>
+              {signalBadge(r.minSignal)}
+              <button type="button" onClick={() => removeRule(r.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", fontSize: 12, marginLeft: "auto" }}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add new rule */}
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <input value={newSymbol} onChange={e => setNewSymbol(e.target.value.toUpperCase())} placeholder="* veya BTCUSDT" style={{ ...inputStyle, width: 90 }} />
+        <select value={newDir} onChange={e => setNewDir(e.target.value as "bottom" | "top" | "both")} style={inputStyle}>
+          <option value="both">Her Iki</option>
+          <option value="bottom">Dip</option>
+          <option value="top">Tepe</option>
+        </select>
+        <input type="number" value={newScore} onChange={e => setNewScore(Number(e.target.value))} min={0} max={100} step={5} style={{ ...inputStyle, width: 48 }} />
+        <select value={newSignal} onChange={e => setNewSignal(e.target.value)} style={inputStyle}>
+          <option value="None">None</option>
+          <option value="Weak">Weak</option>
+          <option value="Moderate">Moderate</option>
+          <option value="Strong">Strong</option>
+          <option value="VeryStrong">VeryStrong</option>
+        </select>
+        <button type="button" onClick={addRule} style={{ background: "#334155", color: "#e2e8f0", border: "1px solid #475569", borderRadius: 4, padding: "3px 10px", fontSize: 11, cursor: "pointer" }}>+ Ekle</button>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════ Compare View ══════════════════════════ */
+
+function CompareView({ items, selectedKeys, setSelectedKeys }: {
+  items: SymbolTbm[];
+  selectedKeys: Set<string>;
+  setSelectedKeys: (s: Set<string>) => void;
+}) {
+  const selected = items.filter(i => selectedKeys.has(`${i.symbol}|${i.interval}`));
+
+  const toggleSelect = (item: SymbolTbm) => {
+    const key = `${item.symbol}|${item.interval}`;
+    const next = new Set(selectedKeys);
+    if (next.has(key)) next.delete(key);
+    else if (next.size < 4) next.add(key); // max 4
+    setSelectedKeys(next);
+  };
+
+  return (
+    <div>
+      {/* Selection chips */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 10 }}>
+        {items.map(i => {
+          const key = `${i.symbol}|${i.interval}`;
+          const isSelected = selectedKeys.has(key);
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => toggleSelect(i)}
+              style={{
+                background: isSelected ? "#334155" : "#0f172a",
+                color: isSelected ? "#e2e8f0" : "#64748b",
+                border: `1px solid ${isSelected ? "#818cf8" : "#334155"}`,
+                borderRadius: 4, padding: "3px 8px", fontSize: 10, cursor: "pointer", fontWeight: isSelected ? 600 : 400,
+              }}
+            >
+              {i.symbol} {i.interval}
+            </button>
+          );
+        })}
+      </div>
+
+      {selected.length === 0 && (
+        <div style={{ color: "#64748b", fontSize: 12, textAlign: "center", padding: 30 }}>Karsilastirmak icin en fazla 4 sembol secin</div>
+      )}
+
+      {/* Comparison grid */}
+      {selected.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(selected.length, 4)}, 1fr)`, gap: 10 }}>
+          {selected.map(item => {
+            const tbm = item.tbm!;
+            return (
+              <div key={`${item.symbol}|${item.interval}`} style={{ background: "#0f172a", borderRadius: 8, padding: 12, border: "1px solid #334155" }}>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>{item.symbol} <span style={{ fontSize: 10, color: "#64748b" }}>{item.interval}</span></div>
+
+                {/* Radar */}
+                <div style={{ display: "flex", justifyContent: "center", gap: 8 }}>
+                  <RadarChart pillars={tbm.bottom.pillars} size={100} label="Bottom" />
+                  <RadarChart pillars={tbm.top.pillars} size={100} label="Top" />
+                </div>
+
+                {/* Scores */}
+                <div style={{ marginTop: 8 }}>
+                  {scoreBar(tbm.bottom.total, `Bottom ${tbm.bottom.signal}`, "#4ade80")}
+                  {scoreBar(tbm.top.total, `Top ${tbm.top.signal}`, "#f87171")}
+                </div>
+
+                {/* Pillar table */}
+                <table style={{ width: "100%", fontSize: 10, borderCollapse: "collapse", marginTop: 6 }}>
+                  <tbody>
+                    {PILLAR_LABELS.map(kind => {
+                      const bp = tbm.bottom.pillars.find(p => p.kind === kind);
+                      const tp = tbm.top.pillars.find(p => p.kind === kind);
+                      return (
+                        <tr key={kind} style={{ borderBottom: "1px solid #1e293b" }}>
+                          <td style={{ padding: "2px 4px", color: PILLAR_COLORS[kind], fontWeight: 600 }}>{kind.slice(0, 3)}</td>
+                          <td style={{ padding: "2px 4px", textAlign: "right", color: "#4ade80" }}>{bp?.score.toFixed(0) ?? "—"}</td>
+                          <td style={{ padding: "2px 4px", textAlign: "right", color: "#f87171" }}>{tp?.score.toFixed(0) ?? "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+
+                {/* Setups */}
+                {tbm.setups.length > 0 && (
+                  <div style={{ marginTop: 6, fontSize: 10, background: "#052e1633", borderRadius: 4, padding: "4px 6px", border: "1px solid #22c55e33" }}>
+                    {tbm.setups.map((s, i) => (
+                      <div key={i}><strong>{s.direction}</strong> {s.signal} ({s.score.toFixed(1)})</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /* ══════════════════════════ Stat Cards ══════════════════════════ */
@@ -212,7 +537,7 @@ function MtfSection({ mtf }: { mtf: MtfPayload }) {
 
 /* ══════════════════════════ Symbol TBM Card ══════════════════════════ */
 
-function SymbolTbmCard({ item }: { item: SymbolTbm }) {
+function SymbolTbmCard({ item, delta }: { item: SymbolTbm; delta?: ScoreDelta }) {
   const [expanded, setExpanded] = useState(false);
   const tbm = item.tbm;
   const mtf = item.mtf;
@@ -231,13 +556,20 @@ function SymbolTbmCard({ item }: { item: SymbolTbm }) {
         <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
           {signalBadge(bestSignal)}
           <span style={{ fontSize: 16, fontWeight: 800 }}>{bestScore.toFixed(1)}</span>
+          {delta && <DeltaBadge delta={bestDir === "Bottom" ? delta.deltaBottom : delta.deltaTop} />}
         </span>
         <span style={{ fontSize: 11, color: "#475569", transform: expanded ? "rotate(180deg)" : "rotate(0)", transition: "transform 0.2s" }}>&#9660;</span>
       </div>
 
       <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
-        <div style={{ flex: 1 }}>{scoreBar(tbm.bottom.total, "Bottom", "#4ade80")}</div>
-        <div style={{ flex: 1 }}>{scoreBar(tbm.top.total, "Top", "#f87171")}</div>
+        <div style={{ flex: 1 }}>
+          {scoreBar(tbm.bottom.total, "Bottom", "#4ade80")}
+          {delta && <DeltaBadge delta={delta.deltaBottom} />}
+        </div>
+        <div style={{ flex: 1 }}>
+          {scoreBar(tbm.top.total, "Top", "#f87171")}
+          {delta && <DeltaBadge delta={delta.deltaTop} />}
+        </div>
       </div>
 
       {tbm.setups.length > 0 && (
@@ -252,6 +584,11 @@ function SymbolTbmCard({ item }: { item: SymbolTbm }) {
 
       {expanded && (
         <div style={{ marginTop: 10 }}>
+          {/* Radar Charts */}
+          <div style={{ display: "flex", justifyContent: "center", gap: 16, marginBottom: 10 }}>
+            <RadarChart pillars={tbm.bottom.pillars} size={120} label="Bottom" />
+            <RadarChart pillars={tbm.top.pillars} size={120} label="Top" />
+          </div>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             <DirectionSection label="Bottom (Dip)" emoji="&#x1F7E2;" data={tbm.bottom} />
             <DirectionSection label="Top (Tepe)" emoji="&#x1F534;" data={tbm.top} />
@@ -409,6 +746,7 @@ function FilterBar({
       <div style={{ display: "flex", gap: 2 }}>
         <button type="button" style={btnStyle(viewMode === "cards")} onClick={() => setViewMode("cards")}>Kartlar</button>
         <button type="button" style={btnStyle(viewMode === "heatmap")} onClick={() => setViewMode("heatmap")}>Heatmap</button>
+        <button type="button" style={btnStyle(viewMode === "compare")} onClick={() => setViewMode("compare")}>Karsilastir</button>
       </div>
 
       <div style={{ width: 1, height: 20, background: "#334155" }} />
@@ -461,6 +799,7 @@ function FilterBar({
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
           <select value={sortField} onChange={e => setSortField(e.target.value as SortField)} style={selectStyle}>
             <option value="score">Skor</option>
+            <option value="delta">Delta</option>
             <option value="symbol">Sembol</option>
             <option value="interval">TF</option>
             <option value="time">Zaman</option>
@@ -488,6 +827,18 @@ export function TbmDashboardPanel({ accessToken }: Props) {
   const [countdown, setCountdown] = useState(AUTO_REFRESH_SECS);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [showSetupLog, setShowSetupLog] = useState(false);
+  const [showAlertRules, setShowAlertRules] = useState(false);
+
+  // Delta tracking (in-memory between refreshes)
+  const [deltaMap, setDeltaMap] = useState<Map<string, ScoreDelta>>(new Map());
+  const prevItemsRef = useRef<SymbolTbm[]>([]);
+
+  // Alert rules (localStorage)
+  const [alertRules, setAlertRules] = useState<AlertRule[]>(loadAlertRules);
+  const [triggeredAlerts, setTriggeredAlerts] = useState<{ rule: AlertRule; item: SymbolTbm; score: number; dir: string }[]>([]);
+
+  // Compare mode
+  const [compareKeys, setCompareKeys] = useState<Set<string>>(new Set());
 
   // Filters
   const [viewMode, setViewMode] = useState<ViewMode>("cards");
@@ -522,6 +873,28 @@ export function TbmDashboardPanel({ accessToken }: Props) {
         if (!v.tbm) continue;
         result.push({ symbol: v.row.symbol, exchange: v.row.exchange, segment: v.row.segment, interval: v.row.interval, tbm: v.tbm, mtf: v.mtf, computedAt: v.row.computed_at ?? "" });
       }
+
+      // Compute deltas from previous items
+      const newDeltaMap = new Map<string, ScoreDelta>();
+      const prev = prevItemsRef.current;
+      for (const item of result) {
+        const key = `${item.symbol}|${item.interval}`;
+        const prevItem = prev.find(p => p.symbol === item.symbol && p.interval === item.interval);
+        if (prevItem?.tbm && item.tbm) {
+          newDeltaMap.set(key, {
+            prevBottom: prevItem.tbm.bottom.total,
+            prevTop: prevItem.tbm.top.total,
+            deltaBottom: item.tbm.bottom.total - prevItem.tbm.bottom.total,
+            deltaTop: item.tbm.top.total - prevItem.tbm.top.total,
+          });
+        }
+      }
+      if (prev.length > 0) setDeltaMap(newDeltaMap);
+      prevItemsRef.current = result;
+
+      // Check alert rules
+      setTriggeredAlerts(checkAlerts(result, alertRules));
+
       setItems(result);
     } catch (e) {
       setErr(String(e));
@@ -529,7 +902,7 @@ export function TbmDashboardPanel({ accessToken }: Props) {
       setBusy(false);
       setCountdown(AUTO_REFRESH_SECS);
     }
-  }, [accessToken]);
+  }, [accessToken, alertRules]);
 
   refreshRef.current = refresh;
 
@@ -585,6 +958,16 @@ export function TbmDashboardPanel({ accessToken }: Props) {
           cmp = sa - sb;
           break;
         }
+        case "delta": {
+          const keyA = `${a.symbol}|${a.interval}`;
+          const keyB = `${b.symbol}|${b.interval}`;
+          const dA = deltaMap.get(keyA);
+          const dB = deltaMap.get(keyB);
+          const absA = Math.max(Math.abs(dA?.deltaBottom ?? 0), Math.abs(dA?.deltaTop ?? 0));
+          const absB = Math.max(Math.abs(dB?.deltaBottom ?? 0), Math.abs(dB?.deltaTop ?? 0));
+          cmp = absA - absB;
+          break;
+        }
         case "symbol": cmp = a.symbol.localeCompare(b.symbol); break;
         case "interval": cmp = TF_ORDER.indexOf(a.interval) - TF_ORDER.indexOf(b.interval); break;
         case "time": cmp = new Date(a.computedAt).getTime() - new Date(b.computedAt).getTime(); break;
@@ -593,7 +976,7 @@ export function TbmDashboardPanel({ accessToken }: Props) {
     });
 
     return list;
-  }, [items, symbolSearch, signalFilter, direction, minScore, sortField, sortDir]);
+  }, [items, symbolSearch, signalFilter, direction, minScore, sortField, sortDir, deltaMap]);
 
   // Stats
   const stats = useMemo(() => {

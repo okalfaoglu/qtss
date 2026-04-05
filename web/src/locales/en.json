@@ -133,6 +133,7 @@
     "configTitle": "Configuration (admin)",
     "hintModule": "system_config module: telegram_setup_analysis — keys: webhook_secret (secret), gemini_api_key (secret), trigger_phrase, gemini_model, max_buffer_turns, buffer_ttl_secs, allowed_chat_ids (comma-separated chat ids, optional).",
     "hintWebhook": "Set Telegram webhook to POST https://<your-api-host>/telegram/setup-analysis/<webhook_secret> for the same bot as notify.telegram_bot_token.",
+    "hintNoPublicIp": "No public IP: Telegram requires a publicly reachable HTTPS URL (allowed ports include 80, 88, 443, 8443). Use a tunnel that terminates TLS and forwards to qtss-api (e.g. http://127.0.0.1:8080), such as Tailscale Funnel or Cloudflare Tunnel. Tailscale MagicDNS hostnames alone are not resolved by Telegram’s servers.",
     "hintGemini": "Secrets and trigger phrase: edit `telegram_setup_analysis` rows in Admin → system_config (not .env).",
     "hintNotify": "Requires notify.telegram_bot_token to download files and reply. For channels, add the bot as an admin with permission to post messages.",
     "hintFlow": "Flow: send photo/text → queued → send trigger → Turkish report. Channel posts (channel_post) are supported; private chats and groups work too.",

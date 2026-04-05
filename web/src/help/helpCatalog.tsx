@@ -266,6 +266,10 @@ export const HELP_TOPICS: HelpTopic[] = [
       "grafik",
       "system_config",
       "telegram_setup_analysis",
+      "public ip",
+      "tailscale",
+      "funnel",
+      "tunnel",
       "yardım",
       "help",
     ]),
@@ -292,7 +296,9 @@ export const HELP_TOPICS: HelpTopic[] = [
           </li>
           <li>
             <strong>Telegram</strong>: Bot webhook URL{" "}
-            <code className="mono">{`https://<api-host>/telegram/setup-analysis/<webhook_secret>`}</code>.
+            <code className="mono">{`https://<api-host>/telegram/setup-analysis/<webhook_secret>`}</code>. Kamuya açık IP yoksa{" "}
+            <strong>HTTPS tüneli</strong> gerekir (ör. Tailscale Funnel, Cloudflare Tunnel); yalnızca MagicDNS ile tailnet içi isimler Telegram
+            tarafından çözülmez.
           </li>
           <li>
             <strong>Kullanım</strong>: Önce görüntü/metin gönderin (kuyruğa eklenir), ardından tetik ifadesini gönderin (varsayılan{" "}

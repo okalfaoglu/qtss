@@ -133,6 +133,7 @@
     "configTitle": "Yapılandırma (yönetici)",
     "hintModule": "system_config modülü: telegram_setup_analysis — anahtarlar: webhook_secret (gizli), gemini_api_key (gizli), trigger_phrase, gemini_model, max_buffer_turns, buffer_ttl_secs, allowed_chat_ids (virgülle sohbet id’leri, isteğe bağlı).",
     "hintWebhook": "Telegram webhook: POST https://<api-host>/telegram/setup-analysis/<webhook_secret> — notify.telegram_bot_token ile aynı bot.",
+    "hintNoPublicIp": "Kamuya açık IP yoksa: Telegram yine de internetten erişilen bir HTTPS URL ister (izinli portlar: 80, 88, 443, 8443). TLS’i uçta sonlandıran ve qtss-api’ye yönlendiren bir tünel kullanın (ör. http://127.0.0.1:8080): Tailscale Funnel, Cloudflare Tunnel, ngrok vb. Yalnızca Tailscale MagicDNS adları Telegram sunucuları tarafından çözülmez.",
     "hintGemini": "Gizli anahtarlar ve tetik ifadesi: Yönetici → system_config içinde `telegram_setup_analysis` satırları (.env değil).",
     "hintNotify": "Dosya indirip sohbete yanıt için notify.telegram_bot_token gerekir. Kanal kullanıyorsanız botu kanala yönetici ekleyin ve “Mesaj gönder” yetkisi verin.",
     "hintFlow": "Akış: bir veya daha fazla foto/metin gönder → kuyruğa eklenir → tetik ifadesini gönder → Türkçe rapor. Kanal yayınları (channel_post) desteklenir; özel sohbet / grup da çalışır.",

@@ -86,6 +86,7 @@ export function TelegramSetupAnalysisPanel({ accessToken }: Props) {
         <ul className="tv-registry__hint-list">
           <li>{t("telegramSetupAnalysis.hintModule")}</li>
           <li>{t("telegramSetupAnalysis.hintWebhook")}</li>
+          <li>{t("telegramSetupAnalysis.hintNoPublicIp")}</li>
           <li>{t("telegramSetupAnalysis.hintGemini")}</li>
           <li>{t("telegramSetupAnalysis.hintNotify")}</li>
           <li>{t("telegramSetupAnalysis.hintFlow")}</li>
