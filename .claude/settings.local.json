@@ -12,7 +12,9 @@
       "Bash(grep -r send_all wsl.localhostUbuntuappqtss --include=*.rs)",
       "Bash(grep -r notify_on_sweep wsl.localhostUbuntuappqtss --include=*.rs)",
       "Read(///wsl.localhost/Ubuntu/app/qtss/**)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(xargs wc:*)",
+      "Bash(grep -r \"alert\\\\|notify\\\\|export\\\\|filter\\\\|sort\\\\|watchlist\" ./web/src --include=*.tsx --include=*.ts)"
     ]
   }
 }

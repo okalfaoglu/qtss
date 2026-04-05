@@ -1273,14 +1273,38 @@ async fn run_engines_for_symbol(
                         .and_then(|c| c.as_u64())
                         .map(|c| c as u32);
 
-                    // funding_score: [-1, 1] arası normalize skor → gerçek funding rate tahmini
-                    // exchange_netflow_score: [-1, 1] → direkt akış yönü
-                    // nansen_netflow_score: [-1, 1] → smart money akış yönü
+                    // Bireysel skorlardan veya aggregate+direction'dan metric oluştur
+                    let smart_money = r.nansen_netflow_score
+                        .or(r.nansen_sm_score)
+                        .map(|s| -s * 1000.0);
+
+                    let exchange_nf = r.exchange_netflow_score
+                        .or_else(|| {
+                            // Coinglass/HL verisi yoksa aggregate_score + direction'dan türet
+                            if r.aggregate_score.abs() > 0.001 {
+                                Some(-r.aggregate_score)
+                            } else {
+                                None
+                            }
+                        })
+                        .map(|s| s * 1000.0);
+
+                    let funding = r.funding_score
+                        .or(r.oi_score) // OI skoru funding proxy olabilir
+                        .map(|s| s * 0.05);
+
+                    // HL whale + nansen perp skorlarından whale aktivite tahmini
+                    let whale_est = whale_count.or_else(|| {
+                        let wh = r.hl_whale_score.unwrap_or(0.0).abs()
+                            + r.nansen_perp_score.unwrap_or(0.0).abs();
+                        if wh > 0.01 { Some((wh * 100.0) as u32) } else { None }
+                    });
+
                     qtss_tbm::onchain::OnchainMetrics {
-                        smart_money_net_flow: r.nansen_netflow_score.map(|s| -s * 1000.0),
-                        exchange_netflow: r.exchange_netflow_score.map(|s| -s * 1000.0),
-                        whale_tx_count: whale_count,
-                        funding_rate: r.funding_score.map(|s| s * 0.05),
+                        smart_money_net_flow: smart_money,
+                        exchange_netflow: exchange_nf,
+                        whale_tx_count: whale_est,
+                        funding_rate: funding,
                     }
                 } else {
                     qtss_tbm::onchain::OnchainMetrics::default()
