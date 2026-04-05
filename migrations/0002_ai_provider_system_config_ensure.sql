@@ -15,7 +15,10 @@ VALUES
     ('ai', 'openai_compat_headers_json', '{"value":""}', 'Extra JSON headers', false),
     ('ai', 'onprem_timeout_secs', '{"secs":180}', NULL, false),
     ('ai', 'onprem_max_in_flight', '{"value":"4"}', NULL, false),
-    ('ai', 'onprem_api_key', '{"value":""}', 'Optional Bearer for gateway', true)
+    ('ai', 'onprem_api_key', '{"value":""}', 'Optional Bearer for gateway', true),
+    ('ai', 'gemini_api_key', '{"value":""}', 'Optional; if empty qtss-ai uses telegram_setup_analysis.gemini_api_key', true),
+    ('ai', 'gemini_api_root', '{"value":""}', 'Empty = https://generativelanguage.googleapis.com/v1beta', false),
+    ('ai', 'gemini_timeout_secs', '{"secs":120}', 'generateContent HTTP timeout floor', false)
 ON CONFLICT (module, config_key) DO NOTHING;
 
 -- Align `app_config.ai_engine_config` with qtss-ai::AiEngineConfig when older JSON omits output_locale.

@@ -13,10 +13,14 @@ fn json_secret_value(v: &serde_json::Value) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-async fn get_secret_trimmed(pool: &PgPool, config_key: &str) -> Option<String> {
+async fn get_secret_trimmed_module(pool: &PgPool, module: &str, config_key: &str) -> Option<String> {
     let repo = SystemConfigRepository::new(pool.clone());
-    let row = repo.get("ai", config_key).await.ok()??;
+    let row = repo.get(module, config_key).await.ok()??;
     json_secret_value(&row.value)
+}
+
+async fn get_secret_trimmed(pool: &PgPool, config_key: &str) -> Option<String> {
+    get_secret_trimmed_module(pool, "ai", config_key).await
 }
 
 /// Inference uçları ve anahtarlar — `provider_for_layer` girdisi.
@@ -25,6 +29,10 @@ pub struct AiProviderSecrets {
     pub anthropic_api_key: Option<String>,
     pub anthropic_base_url: String,
     pub anthropic_timeout_secs: u64,
+    /// Optional dedicated key; if empty, `telegram_setup_analysis.gemini_api_key` is used (same Google AI Studio key).
+    pub gemini_api_key: Option<String>,
+    pub gemini_api_root: String,
+    pub gemini_timeout_secs: u64,
     pub ollama_base_url: String,
     pub openai_compat_base_url: String,
     pub openai_compat_headers_json: Option<String>,
@@ -49,6 +57,23 @@ impl AiProviderSecrets {
                 "ai",
                 "anthropic_timeout_secs",
                 "QTSS_AI_ANTHROPIC_TIMEOUT_SECS",
+                120,
+                30,
+            )
+            .await,
+            gemini_api_root: resolve_system_string(
+                pool,
+                "ai",
+                "gemini_api_root",
+                "QTSS_AI_GEMINI_API_ROOT",
+                "",
+            )
+            .await,
+            gemini_timeout_secs: resolve_worker_tick_secs(
+                pool,
+                "ai",
+                "gemini_timeout_secs",
+                "QTSS_AI_GEMINI_TIMEOUT_SECS",
                 120,
                 30,
             )
@@ -109,6 +134,18 @@ impl AiProviderSecrets {
 
         s.anthropic_api_key = get_secret_trimmed(pool, "anthropic_api_key").await;
         s.onprem_api_key = get_secret_trimmed(pool, "onprem_api_key").await;
+        let ai_g = get_secret_trimmed_module(pool, "ai", "gemini_api_key").await;
+        let tg_g = get_secret_trimmed_module(pool, "telegram_setup_analysis", "gemini_api_key").await;
+        s.gemini_api_key = match (
+            ai_g.filter(|x| !x.is_empty()),
+            tg_g.filter(|x| !x.is_empty()),
+        ) {
+            (Some(k), _) | (None, Some(k)) => Some(k),
+            _ => None,
+        };
+        if s.gemini_api_root.trim().is_empty() {
+            s.gemini_api_root = "https://generativelanguage.googleapis.com/v1beta".to_string();
+        }
 
         if qtss_common::env_overrides_enabled() {
             if let Ok(k) = std::env::var("ANTHROPIC_API_KEY").or_else(|_| std::env::var("QTSS_AI_ANTHROPIC_API_KEY")) {
@@ -145,6 +182,18 @@ impl AiProviderSecrets {
                 let t = k.trim().to_string();
                 if !t.is_empty() {
                     s.onprem_api_key = Some(t);
+                }
+            }
+            if let Ok(k) = std::env::var("QTSS_AI_GEMINI_API_KEY").or_else(|_| std::env::var("GEMINI_API_KEY")) {
+                let t = k.trim().to_string();
+                if !t.is_empty() {
+                    s.gemini_api_key = Some(t);
+                }
+            }
+            if let Ok(u) = std::env::var("QTSS_AI_GEMINI_API_ROOT") {
+                let t = u.trim();
+                if !t.is_empty() {
+                    s.gemini_api_root = t.to_string();
                 }
             }
         }

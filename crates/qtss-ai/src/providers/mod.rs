@@ -1,10 +1,12 @@
 //! Multi-vendor completion providers (cloud + on-prem).
 
 mod anthropic;
+mod gemini;
 mod ollama;
 mod openai_compatible;
 
 pub use anthropic::AnthropicProvider;
+pub use gemini::GeminiProvider;
 pub use ollama::OllamaProvider;
 pub use openai_compatible::OpenAiCompatibleProvider;
 
@@ -112,6 +114,19 @@ pub fn provider_for_layer(
             secrets.ollama_base_url.clone(),
             secrets.onprem_timeout_secs,
         )?)),
+        "gemini" | "google" | "google_gemini" => {
+            let Some(ref api_key) = secrets.gemini_api_key else {
+                return Err(AiError::ProviderNotConfigured(
+                    "Gemini API key missing (system_config ai.gemini_api_key or telegram_setup_analysis.gemini_api_key)"
+                        .into(),
+                ));
+            };
+            Ok(Arc::new(GeminiProvider::from_settings(
+                api_key.clone(),
+                secrets.gemini_api_root.clone(),
+                secrets.gemini_timeout_secs,
+            )?))
+        }
         _ => Err(AiError::UnknownProvider(id.to_string())),
     }
 }

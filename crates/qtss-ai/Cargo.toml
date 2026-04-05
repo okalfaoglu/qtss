@@ -19,6 +19,7 @@ thiserror.workspace = true
 async-trait.workspace = true
 sqlx.workspace = true
 reqwest.workspace = true
+urlencoding.workspace = true
 sha2.workspace = true
 hex.workspace = true
 rust_decimal = { version = "1.36", features = ["serde"] }
