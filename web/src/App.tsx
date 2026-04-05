@@ -177,6 +177,7 @@ import {
   setElliottAnalysisTimeframeColumnEnabled,
 } from "./app/elliottAppHelpers";
 import { formatConfluenceExtras } from "./app/confluenceFormat";
+import { TbmDashboardPanel } from "./components/TbmDashboardPanel";
 import { channelSixRejectMessage } from "./app/channelRejectMessage";
 import {
   ACCESS_TOKEN_STORAGE_KEY,
@@ -2554,6 +2555,16 @@ export default function App() {
                   style={drawerTab === "ai" ? { borderColor: "#a855f7" } : undefined}
                 >
                   🤖 AI
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={drawerTab === "tbm"}
+                  className={`tv-settings__tab ${drawerTab === "tbm" ? "is-active" : ""}`}
+                  onClick={() => setDrawerTab("tbm")}
+                  style={drawerTab === "tbm" ? { borderColor: "#22c55e" } : undefined}
+                >
+                  TBM
                 </button>
                 <button
                   type="button"
