@@ -25,7 +25,8 @@ type AiConfig = {
   max_tokens_strategic: number;
   require_min_confidence: number;
   decision_ttl_secs: number;
-  auto_approve_above: number | null;
+  auto_approve_threshold: number;
+  auto_approve_enabled: boolean;
   output_locale: string | null;
 };
 
@@ -161,6 +162,23 @@ export function AiSettingsPanel({ accessToken, canAdmin }: Props) {
         <strong>{config.enabled ? t("ai.settings.engineOn") : t("ai.settings.engineOff")}</strong>
       </div>
 
+      {!config.enabled ? (
+        <p
+          className="muted"
+          style={{
+            fontSize: "0.78rem",
+            lineHeight: 1.55,
+            marginBottom: "0.85rem",
+            padding: "0.55rem 0.65rem",
+            borderRadius: 6,
+            border: "1px solid var(--border-subtle, #444)",
+            background: "var(--panel-elevated, rgba(255,255,255,0.04))",
+          }}
+        >
+          {t("ai.settings.engineOffExplainer")}
+        </p>
+      ) : null}
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.4rem", fontSize: "0.8rem", marginBottom: "1rem" }}>
         <div>
           <span className="muted">{t("ai.settings.minConfidence")}: </span>
@@ -172,7 +190,9 @@ export function AiSettingsPanel({ accessToken, canAdmin }: Props) {
         </div>
         <div>
           <span className="muted">{t("ai.settings.autoApprove")}: </span>
-          <strong>{config.auto_approve_above != null ? `>${config.auto_approve_above}` : t("ai.settings.disabled")}</strong>
+          <strong>
+            {config.auto_approve_enabled ? `≥${config.auto_approve_threshold}` : t("ai.settings.disabled")}
+          </strong>
         </div>
         <div>
           <span className="muted">{t("ai.settings.locale")}: </span>

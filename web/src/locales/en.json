@@ -25,7 +25,8 @@
     "reject": "Reject",
     "portfolio": "Portfolio directive",
     "tacticalSection": "Tactical directive",
-    "load": "Load"
+    "load": "Load",
+    "noDirective": "No record (load tactical preview or enable the engine)."
   },
   "drawer": {
     "help": "Help",
@@ -633,7 +634,8 @@
       "maxPositions": "Max positions",
       "regime": "Preferred regime",
       "validUntil": "Valid until",
-      "recentDecisions": "Recent decisions"
+      "recentDecisions": "Recent decisions",
+      "emptyHint": "No decisions yet. If the engine is off in AI → Settings, sweeps do not call the LLM until an admin sets app_config ai_engine_config.enabled to true; qtss-worker must run and provider keys (e.g. ANTHROPIC_API_KEY) must be set."
     },
     "settings": {
       "title": "AI engine settings",
@@ -642,6 +644,7 @@
       "notConfigured": "Could not load engine config (missing row or insufficient permissions).",
       "engineOn": "Engine enabled",
       "engineOff": "Engine disabled",
+      "engineOffExplainer": "Default seed keeps ai_engine_config.enabled false: worker loops still run, but tactical/operational/strategic sweeps skip LLM work until an admin turns the engine on (Application config key ai_engine_config, or POST /api/v1/config). Set provider API keys (e.g. ANTHROPIC_API_KEY). With QTSS_CONFIG_ENV_OVERRIDES=1, QTSS_AI_ENABLED=1 also enables the engine. QTSS_AI_ENGINE_WORKER=0 disables AI background tasks in qtss-worker.",
       "minConfidence": "Min confidence",
       "decisionTTL": "Decision TTL",
       "autoApprove": "Auto-approve above",

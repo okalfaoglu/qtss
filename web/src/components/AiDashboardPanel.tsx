@@ -105,6 +105,12 @@ export function AiDashboardPanel({ accessToken }: Props) {
         <LayerCard label={t("ai.dashboard.strategic")} stats={strategic} color="#ce93d8" />
       </div>
 
+      {!busy && !err && rows.length === 0 ? (
+        <p className="muted" style={{ fontSize: "0.78rem", lineHeight: 1.5, marginBottom: "0.85rem" }}>
+          {t("ai.dashboard.emptyHint")}
+        </p>
+      ) : null}
+
       {portfolio ? (
         <div style={{ marginTop: "0.5rem" }}>
           <p className="tv-drawer__section-head">{t("ai.dashboard.activePortfolio")}</p>

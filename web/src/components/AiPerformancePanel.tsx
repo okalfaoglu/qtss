@@ -160,6 +160,12 @@ export function AiPerformancePanel({ accessToken }: Props) {
         </div>
       </div>
 
+      {!busy && !err && rows.length === 0 ? (
+        <p className="muted" style={{ fontSize: "0.78rem", lineHeight: 1.5, marginBottom: "0.85rem" }}>
+          {t("ai.dashboard.emptyHint")}
+        </p>
+      ) : null}
+
       <p className="tv-drawer__section-head">{t("ai.performance.bySymbol")}</p>
       <div style={{ overflowX: "auto", maxHeight: 300 }}>
         <table className="tv-data-table" style={{ fontSize: "0.75rem" }}>

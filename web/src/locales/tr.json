@@ -25,7 +25,8 @@
     "reject": "Reddet",
     "portfolio": "Portföy direktifi",
     "tacticalSection": "Taktik direktif",
-    "load": "Yükle"
+    "load": "Yükle",
+    "noDirective": "Kayıt yok (taktik önizlemesini yükleyin veya motoru açın)."
   },
   "drawer": {
     "help": "Yardım",
@@ -633,7 +634,8 @@
       "maxPositions": "Maks. pozisyon",
       "regime": "Tercih edilen rejim",
       "validUntil": "Geçerlilik",
-      "recentDecisions": "Son kararlar"
+      "recentDecisions": "Son kararlar",
+      "emptyHint": "Henüz karar yok. AI → Ayarlar’da motor kapalıysa, yönetici `app_config` içindeki `ai_engine_config` için `enabled: true` yapana kadar sweep’ler LLM çağırmaz; `qtss-worker` çalışmalı ve sağlayıcı anahtarları (örn. ANTHROPIC_API_KEY) tanımlı olmalıdır."
     },
     "settings": {
       "title": "AI motor ayarları",
@@ -642,6 +644,7 @@
       "notConfigured": "Motor yapılandırması yüklenemedi (satır yok veya yetki yetersiz).",
       "engineOn": "Motor açık",
       "engineOff": "Motor kapalı",
+      "engineOffExplainer": "Varsayılan seed’de `ai_engine_config.enabled` false gelir: worker döngüleri çalışır ama taktik/operasyonel/stratejik sweep’ler motor açılana kadar LLM çağırmaz. Açmak için yönetici Uygulama yapılandırması anahtarı `ai_engine_config` veya `POST /api/v1/config` ile `enabled: true` yapın. Sağlayıcı anahtarlarını ayarlayın (örn. ANTHROPIC_API_KEY). `QTSS_CONFIG_ENV_OVERRIDES=1` iken `QTSS_AI_ENABLED=1` motoru da açar. `QTSS_AI_ENGINE_WORKER=0` ise qtss-worker içindeki AI arka plan görevlerini kapatır.",
       "minConfidence": "Min. güven",
       "decisionTTL": "Karar ömrü (TTL)",
       "autoApprove": "Üzerinde otomatik onay",

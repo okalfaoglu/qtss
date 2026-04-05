@@ -153,7 +153,7 @@ export function AiDecisionsPanel({ accessToken, canAdmin }: Props) {
         {t("aiDecisions.portfolio")}
       </p>
       <pre className="mono" style={{ fontSize: "0.8rem", maxHeight: 200, overflow: "auto" }}>
-        {JSON.stringify(portfolio, null, 2)}
+        {portfolio == null ? t("aiDecisions.noDirective") : JSON.stringify(portfolio, null, 2)}
       </pre>
       <p className="tv-drawer__section-head" style={{ marginTop: "1rem" }}>
         {t("aiDecisions.tacticalSection")}
@@ -165,7 +165,7 @@ export function AiDecisionsPanel({ accessToken, canAdmin }: Props) {
         </button>
       </div>
       <pre className="mono" style={{ fontSize: "0.8rem", maxHeight: 200, overflow: "auto" }}>
-        {JSON.stringify(tacticalPreview, null, 2)}
+        {tacticalPreview == null ? t("aiDecisions.noDirective") : JSON.stringify(tacticalPreview, null, 2)}
       </pre>
     </div>
   );
