@@ -1013,6 +1013,27 @@ async fn run_engines_for_symbol(
     let sweep_bundle = sweep_notify_bundle(pool).await;
     let range_events_bundle = range_events_notify_bundle(pool).await;
     let tbm_bundle = tbm_notify_bundle(pool).await;
+
+    // TBM → Execution Bridge config
+    let tbm_auto_execute = resolve_worker_enabled_flag(
+        pool, "worker", "tbm_auto_execute_enabled", "QTSS_TBM_AUTO_EXECUTE_ENABLED", false,
+    ).await;
+    let tbm_execute_min_signal: u8 = {
+        let s = resolve_system_string(
+            pool, "worker", "tbm_execute_min_signal", "QTSS_TBM_EXECUTE_MIN_SIGNAL", "Strong",
+        ).await;
+        match s.as_str() {
+            "VeryStrong" => 5,
+            "Strong" => 4,
+            "Moderate" => 3,
+            "Weak" => 2,
+            _ => 4, // default Strong
+        }
+    };
+    if tbm_auto_execute {
+        info!(min_signal = tbm_execute_min_signal, "TBM auto-execute aktif");
+    }
+
     let targets = match list_enabled_engine_symbols(pool).await {
         Ok(t) => t,
         Err(e) => {
@@ -1455,6 +1476,52 @@ async fn run_engines_for_symbol(
                 if let Some((ref d, ref chans)) = tbm_bundle {
                     for s in &setups {
                         notify_tbm_setup(d, chans, &t, s).await;
+                    }
+                }
+            }
+
+            // ── TBM → Execution Bridge ──
+            // Strong+ setup → range_signal_event insert → paper/live execution pipeline
+            if tbm_auto_execute {
+                for s in &setups {
+                    let sig_order = match s.signal {
+                        TbmSignal::VeryStrong => 5,
+                        TbmSignal::Strong => 4,
+                        TbmSignal::Moderate => 3,
+                        _ => 0,
+                    };
+                    if sig_order < tbm_execute_min_signal {
+                        continue;
+                    }
+                    let (event_kind, dir_label) = match s.direction {
+                        qtss_tbm::setup::SetupDirection::Bottom => ("long_entry", "tbm_bottom"),
+                        qtss_tbm::setup::SetupDirection::Top => ("short_entry", "tbm_top"),
+                    };
+                    let row = RangeSignalEventInsert {
+                        engine_symbol_id: t.id,
+                        event_kind: event_kind.to_string(),
+                        bar_open_time: last_bar_ot,
+                        reference_price: Some(last_close),
+                        source: "tbm_setup".into(),
+                        payload: json!({
+                            "direction": dir_label,
+                            "score": s.score,
+                            "signal": format!("{:?}", s.signal),
+                            "pillar_details": s.pillar_details,
+                            "summary": s.summary,
+                        }),
+                    };
+                    match insert_range_signal_event(pool, &row).await {
+                        Ok(Some(_)) => {
+                            info!(
+                                symbol = %t.symbol,
+                                kind = event_kind,
+                                score = format!("{:.1}", s.score),
+                                "tbm_execution_event inserted"
+                            );
+                        }
+                        Ok(None) => {} // duplicate, skip
+                        Err(e) => warn!(%e, symbol = %t.symbol, "tbm execution event insert"),
                     }
                 }
             }

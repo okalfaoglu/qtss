@@ -74,6 +74,8 @@ type SignalFilter = "all" | "VeryStrong" | "Strong" | "Moderate" | "Weak" | "Non
 const SIGNAL_ORDER: Record<string, number> = { VeryStrong: 5, Strong: 4, Moderate: 3, Weak: 2, None: 1 };
 const TF_ORDER = ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"];
 const AUTO_REFRESH_SECS = 60;
+const HISTORY_STORAGE_KEY = "qtss_tbm_score_history";
+const MAX_HISTORY_POINTS = 30;
 
 /* ══════════════════════════ Helpers ══════════════════════════ */
 
@@ -432,6 +434,151 @@ function CompareView({ items, selectedKeys, setSelectedKeys }: {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+/* ══════════════════════════ Score History (localStorage) ══════════════════════════ */
+
+interface HistoryPoint {
+  ts: number; // epoch ms
+  scores: Record<string, { bottom: number; top: number }>; // key = symbol|interval
+}
+
+function loadHistory(): HistoryPoint[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function saveHistory(h: HistoryPoint[]) {
+  localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(h.slice(-MAX_HISTORY_POINTS)));
+}
+
+function appendHistory(items: SymbolTbm[]): HistoryPoint[] {
+  const history = loadHistory();
+  const now = Date.now();
+  // Throttle: skip if last point <30s ago
+  if (history.length > 0 && now - history[history.length - 1].ts < 30000) return history;
+  const scores: Record<string, { bottom: number; top: number }> = {};
+  for (const i of items) {
+    if (i.tbm) scores[`${i.symbol}|${i.interval}`] = { bottom: i.tbm.bottom.total, top: i.tbm.top.total };
+  }
+  const updated = [...history, { ts: now, scores }].slice(-MAX_HISTORY_POINTS);
+  saveHistory(updated);
+  return updated;
+}
+
+/* ══════════════════════════ Sparkline (SVG) ══════════════════════════ */
+
+function Sparkline({ values, width = 80, height = 20, color = "#818cf8" }: { values: number[]; width?: number; height?: number; color?: string }) {
+  if (values.length < 2) return null;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const step = width / (values.length - 1);
+  const points = values.map((v, i) => `${(i * step).toFixed(1)},${(height - ((v - min) / range) * (height - 2) - 1).toFixed(1)}`).join(" ");
+  const lastY = height - ((values[values.length - 1] - min) / range) * (height - 2) - 1;
+  return (
+    <svg width={width} height={height} style={{ display: "inline-block", verticalAlign: "middle" }}>
+      <polyline points={points} fill="none" stroke={color} strokeWidth={1.2} />
+      <circle cx={width} cy={lastY} r={2} fill={color} />
+    </svg>
+  );
+}
+
+/* ══════════════════════════ Webhook Panel ══════════════════════════ */
+
+const WEBHOOK_STORAGE_KEY = "qtss_tbm_webhook";
+
+interface WebhookConfig {
+  enabled: boolean;
+  url: string;
+  minSignal: string;
+}
+
+function loadWebhookConfig(): WebhookConfig {
+  try {
+    const raw = localStorage.getItem(WEBHOOK_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : { enabled: false, url: "", minSignal: "Strong" };
+  } catch { return { enabled: false, url: "", minSignal: "Strong" }; }
+}
+
+function saveWebhookConfig(cfg: WebhookConfig) {
+  localStorage.setItem(WEBHOOK_STORAGE_KEY, JSON.stringify(cfg));
+}
+
+async function fireWebhook(cfg: WebhookConfig, item: SymbolTbm, setup: SymbolTbm["tbm"] extends infer T ? T extends { setups: infer S } ? S extends (infer U)[] ? U : never : never : never) {
+  if (!cfg.enabled || !cfg.url) return;
+  const minSig = SIGNAL_ORDER[cfg.minSignal] ?? 0;
+  if ((SIGNAL_ORDER[setup.signal] ?? 0) < minSig) return;
+  try {
+    await fetch(cfg.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        event: "tbm_setup",
+        symbol: item.symbol,
+        exchange: item.exchange,
+        segment: item.segment,
+        interval: item.interval,
+        direction: setup.direction,
+        score: setup.score,
+        signal: setup.signal,
+        summary: setup.summary,
+        timestamp: new Date().toISOString(),
+      }),
+    });
+  } catch (e) {
+    console.warn("TBM webhook failed:", e);
+  }
+}
+
+function WebhookPanel({ config, setConfig }: { config: WebhookConfig; setConfig: (c: WebhookConfig) => void }) {
+  const inputStyle: React.CSSProperties = { background: "#1e293b", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 4, padding: "4px 8px", fontSize: 11, outline: "none" };
+  return (
+    <div style={{ background: "#0f172a", borderRadius: 8, border: "1px solid #334155", padding: 12, marginBottom: 12 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Webhook Entegrasyonu</div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={config.enabled}
+            onChange={e => { const c = { ...config, enabled: e.target.checked }; setConfig(c); saveWebhookConfig(c); }}
+          />
+          Aktif
+        </label>
+        <input
+          type="text"
+          placeholder="https://your-endpoint.com/webhook"
+          value={config.url}
+          onChange={e => { const c = { ...config, url: e.target.value }; setConfig(c); saveWebhookConfig(c); }}
+          style={{ ...inputStyle, flex: 1, minWidth: 200 }}
+        />
+        <select
+          value={config.minSignal}
+          onChange={e => { const c = { ...config, minSignal: e.target.value }; setConfig(c); saveWebhookConfig(c); }}
+          style={inputStyle}
+        >
+          <option value="Weak">Weak+</option>
+          <option value="Moderate">Moderate+</option>
+          <option value="Strong">Strong+</option>
+          <option value="VeryStrong">VeryStrong</option>
+        </select>
+        <button
+          type="button"
+          onClick={async () => {
+            try {
+              const r = await fetch(config.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: "test", timestamp: new Date().toISOString() }) });
+              alert(r.ok ? "Webhook OK" : `Webhook hata: ${r.status}`);
+            } catch (e) { alert(`Webhook hata: ${e}`); }
+          }}
+          style={{ ...inputStyle, cursor: "pointer", background: "#334155" }}
+        >
+          Test
+        </button>
+      </div>
     </div>
   );
 }
@@ -840,6 +987,13 @@ export function TbmDashboardPanel({ accessToken }: Props) {
   // Compare mode
   const [compareKeys, setCompareKeys] = useState<Set<string>>(new Set());
 
+  // Score history
+  const [scoreHistory, setScoreHistory] = useState<HistoryPoint[]>(loadHistory);
+
+  // Webhook
+  const [webhookConfig, setWebhookConfig] = useState<WebhookConfig>(loadWebhookConfig);
+  const [showWebhook, setShowWebhook] = useState(false);
+
   // Filters
   const [viewMode, setViewMode] = useState<ViewMode>("cards");
   const [direction, setDirection] = useState<DirectionFilter>("all");
@@ -894,6 +1048,18 @@ export function TbmDashboardPanel({ accessToken }: Props) {
 
       // Check alert rules
       setTriggeredAlerts(checkAlerts(result, alertRules));
+
+      // Append score history
+      setScoreHistory(appendHistory(result));
+
+      // Fire webhooks for new setups
+      for (const item of result) {
+        if (item.tbm?.setups) {
+          for (const s of item.tbm.setups) {
+            fireWebhook(webhookConfig, item, s);
+          }
+        }
+      }
 
       setItems(result);
     } catch (e) {
@@ -1032,6 +1198,15 @@ export function TbmDashboardPanel({ accessToken }: Props) {
             style={{ background: showSetupLog ? "#334155" : "transparent", color: "#e2e8f0", border: "1px solid #475569", borderRadius: 4, padding: "4px 10px", fontSize: 11, cursor: "pointer" }}
           >
             Setup Log
+          </button>
+
+          {/* Webhook toggle */}
+          <button
+            type="button"
+            onClick={() => setShowWebhook(!showWebhook)}
+            style={{ background: showWebhook ? "#334155" : "transparent", color: webhookConfig.enabled ? "#4ade80" : "#e2e8f0", border: "1px solid #475569", borderRadius: 4, padding: "4px 10px", fontSize: 11, cursor: "pointer" }}
+          >
+            Webhook
           </button>
 
           {/* CSV Export */}

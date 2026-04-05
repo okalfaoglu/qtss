@@ -2220,7 +2220,7 @@ VALUES
     (
         'telegram_setup_analysis',
         'gemini_model',
-        '{"value":"gemini-2.0-flash"}'::jsonb,
+        '{"value":"gemini-2.5-flash"}'::jsonb,
         1,
         'Gemini model id for generateContent (Google AI).',
         false
@@ -2289,4 +2289,38 @@ VALUES
         true
     )
 ON CONFLICT (module, config_key) DO NOTHING;
+
+-- >>> merged from former 0005_enable_tbm_notifications.sql, 0006_nansen_tick_optimization.sql,
+--     0007_telegram_setup_analysis_gemini_model_2_5.sql (single-file migrations for sqlx embed).
+
+-- Enable TBM setup notifications via Telegram
+INSERT INTO system_config (module, config_key, value) VALUES
+  ('notify', 'notify_on_tbm_setup', '"true"'),
+  ('notify', 'notify_on_tbm_channels', '"telegram"')
+ON CONFLICT (module, config_key) DO UPDATE SET value = EXCLUDED.value;
+
+-- Nansen API kredi optimizasyonu: tick sürelerini artırarak günlük sorgu sayısını ~81% azalt
+-- Varsayılan: 300-600s → Optimize: 1800-3600s (kritik olmayan endpointler devre dışı)
+
+INSERT INTO system_config (module, config_key, value) VALUES
+  -- Core endpointler: 1 saatte bir (önceki: 5-10dk)
+  ('worker', 'nansen_token_screener_tick_secs', '3600'),
+  ('worker', 'nansen_netflows_tick_secs', '3600'),
+  ('worker', 'nansen_perp_trades_tick_secs', '1800'),
+  ('worker', 'nansen_perp_leaderboard_tick_secs', '3600'),
+  ('worker', 'nansen_whale_perp_positions_tick_secs', '1800'),
+  -- Düşük öncelikli endpointler: daha seyrek
+  ('worker', 'nansen_holdings_tick_secs', '7200'),
+  ('worker', 'nansen_flow_intel_tick_secs', '7200')
+ON CONFLICT (module, config_key) DO UPDATE SET value = EXCLUDED.value;
+
+-- Gemini: gemini-2.0-flash is not available to new API users (404). Bump default to gemini-2.5-flash.
+UPDATE system_config
+SET
+    value = jsonb_set(value, '{value}', '"gemini-2.5-flash"'::jsonb, true),
+    updated_at = now()
+WHERE
+    module = 'telegram_setup_analysis'
+    AND config_key = 'gemini_model'
+    AND trim(coalesce(value ->> 'value', '')) IN ('gemini-2.0-flash', 'gemini-2.0-flash-lite');
 

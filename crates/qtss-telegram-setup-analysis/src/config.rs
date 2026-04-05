@@ -41,7 +41,7 @@ impl ResolvedSetupAnalysisConfig {
         let repo = SystemConfigRepository::new(pool.clone());
 
         let trigger_phrase = read_nonempty_string(&repo, "trigger_phrase", "QTSS_ANALIZ").await;
-        let gemini_model = read_nonempty_string(&repo, "gemini_model", "gemini-2.0-flash").await;
+        let gemini_model = read_nonempty_string(&repo, "gemini_model", "gemini-2.5-flash").await;
         let webhook_secret = read_string_allow_empty(&repo, "webhook_secret").await;
         let gemini_api_key = read_string_allow_empty(&repo, "gemini_api_key").await;
 
