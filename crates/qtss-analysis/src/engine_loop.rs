@@ -1261,6 +1261,32 @@ async fn run_engines_for_symbol(
 
             let bundle = compute_indicators(&opens, &highs, &lows, &closes, &volumes, &[]);
 
+            // Faz E: Onchain veri çekme
+            let onchain_metrics = {
+                let row = fetch_latest_onchain_signal_score(pool, &t.symbol).await.unwrap_or(None);
+                if let Some(r) = row {
+                    // meta_json'dan whale tx count çıkar
+                    let whale_count = r.meta_json.as_ref()
+                        .and_then(|m| m.get("source_breakdown"))
+                        .and_then(|sb| sb.get("nansen_whale_perp_aggregate"))
+                        .and_then(|w| w.get("trade_count"))
+                        .and_then(|c| c.as_u64())
+                        .map(|c| c as u32);
+
+                    // funding_score: [-1, 1] arası normalize skor → gerçek funding rate tahmini
+                    // exchange_netflow_score: [-1, 1] → direkt akış yönü
+                    // nansen_netflow_score: [-1, 1] → smart money akış yönü
+                    qtss_tbm::onchain::OnchainMetrics {
+                        smart_money_net_flow: r.nansen_netflow_score.map(|s| -s * 1000.0),
+                        exchange_netflow: r.exchange_netflow_score.map(|s| -s * 1000.0),
+                        whale_tx_count: whale_count,
+                        funding_rate: r.funding_score.map(|s| s * 0.05),
+                    }
+                } else {
+                    qtss_tbm::onchain::OnchainMetrics::default()
+                }
+            };
+
             let last = closes.len().saturating_sub(1);
             let prev = last.saturating_sub(1);
 
@@ -1343,7 +1369,7 @@ async fn run_engines_for_symbol(
                     form_quality, form_name,
                     true,
                 ),
-                qtss_tbm::onchain::score_onchain(&qtss_tbm::onchain::OnchainMetrics::default(), true),
+                qtss_tbm::onchain::score_onchain(&onchain_metrics, true),
             ];
             let bottom_score = score_tbm(bottom_pillars);
 
@@ -1375,7 +1401,7 @@ async fn run_engines_for_symbol(
                     form_quality, form_name,
                     false,
                 ),
-                qtss_tbm::onchain::score_onchain(&qtss_tbm::onchain::OnchainMetrics::default(), false),
+                qtss_tbm::onchain::score_onchain(&onchain_metrics, false),
             ];
             let top_score = score_tbm(top_pillars);
 
