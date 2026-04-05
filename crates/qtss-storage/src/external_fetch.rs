@@ -91,6 +91,59 @@ pub async fn upsert_external_source(
     Ok(row)
 }
 
+/// Aktif engine_symbols'daki futures sembolleri için eksik Binance veri kaynaklarını otomatik oluşturur.
+/// Dönüş: oluşturulan kaynak sayısı.
+pub async fn ensure_binance_sources_for_active_symbols(pool: &PgPool) -> Result<usize, StorageError> {
+    let symbols = crate::engine_analysis::list_enabled_engine_symbols(pool).await?;
+    let existing = list_external_sources(pool).await?;
+    let existing_keys: std::collections::HashSet<String> = existing.iter().map(|r| r.key.clone()).collect();
+
+    let empty_headers = serde_json::json!({});
+    let mut created = 0usize;
+
+    for sym in &symbols {
+        if sym.segment != "futures" { continue; }
+        let pair = sym.symbol.to_uppercase(); // e.g. "ETHUSDT"
+
+        let sources = [
+            (
+                format!("binance_taker_{}", pair.to_lowercase()),
+                format!("https://fapi.binance.com/futures/data/takerlongshortRatio?symbol={pair}&period=5m&limit=10"),
+                60i32,
+                "Binance taker buy/sell ratio",
+            ),
+            (
+                format!("binance_premium_{}", pair.to_lowercase()),
+                format!("https://fapi.binance.com/fapi/v1/premiumIndex?symbol={pair}"),
+                120,
+                "Binance premium index / funding rate",
+            ),
+            (
+                format!("binance_open_interest_{}", pair.to_lowercase()),
+                format!("https://fapi.binance.com/fapi/v1/openInterest?symbol={pair}"),
+                120,
+                "Binance open interest",
+            ),
+            (
+                format!("binance_ls_ratio_{}", pair.to_lowercase()),
+                format!("https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={pair}&period=5m&limit=10"),
+                300,
+                "Binance global long/short account ratio",
+            ),
+        ];
+
+        for (key, url, tick, desc) in &sources {
+            if !existing_keys.contains(key) {
+                upsert_external_source(
+                    pool, key, true, "GET", url, &empty_headers, None, *tick, Some(desc),
+                ).await?;
+                created += 1;
+            }
+        }
+    }
+    Ok(created)
+}
+
 pub async fn delete_external_source(pool: &PgPool, key: &str) -> Result<u64, StorageError> {
     sqlx::query(r#"DELETE FROM data_snapshots WHERE source_key = $1"#)
         .bind(key)

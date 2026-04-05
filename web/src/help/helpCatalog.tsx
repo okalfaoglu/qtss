@@ -278,10 +278,11 @@ export const HELP_TOPICS: HelpTopic[] = [
         </p>
         <ul className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.55, marginTop: "0.35rem" }}>
           <li>
-            <strong>SQL / migration</strong>: Repo kökündeki <code className="mono">migrations/0003_telegram_setup_analysis_system_config.sql</code>{" "}
-            dosyası, <code className="mono">qtss-api</code> veya <code className="mono">qtss-worker</code> süreci başlarken{" "}
-            <code className="mono">run_migrations</code> ile otomatik uygulanır (<code className="mono">DATABASE_URL</code> gerekli). Elle{" "}
-            <code className="mono">psql</code> ile çalıştırmayın; <code className="mono">_sqlx_migrations</code> kaydı bozulabilir.
+            <strong>SQL / migration</strong>: Tohumlar <code className="mono">migrations/0001_qtss_baseline.sql</code> içinde{" "}
+            (<code className="mono">telegram_setup_analysis</code>). <code className="mono">qtss-api</code> /{" "}
+            <code className="mono">qtss-worker</code> başlarken <code className="mono">run_migrations</code> uygular;{" "}
+            <code className="mono">DATABASE_URL</code> gerekli. Elle <code className="mono">psql</code> ile parça çalıştırmayın;{" "}
+            <code className="mono">_sqlx_migrations</code> kaydı bozulabilir.
           </li>
           <li>
             <strong>Yapılandırma</strong>: Admin → <code className="mono">system_config</code>, modül{" "}

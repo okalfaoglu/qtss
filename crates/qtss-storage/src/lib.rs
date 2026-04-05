@@ -65,8 +65,9 @@ pub use exchange_accounts::{ExchangeAccountRepository, ExchangeCredentials};
 pub use exchange_fills::{ExchangeFillRepository, ExchangeFillRow};
 pub use exchange_orders::{ExchangeOrderRepository, ExchangeOrderRow};
 pub use external_fetch::{
-    delete_external_source, external_snapshot_age_secs, list_enabled_external_sources,
-    list_external_sources, upsert_external_source, ExternalDataSourceRow,
+    delete_external_source, ensure_binance_sources_for_active_symbols,
+    external_snapshot_age_secs, list_enabled_external_sources, list_external_sources,
+    upsert_external_source, ExternalDataSourceRow,
 };
 pub use fill_long_estimate::{symbols_with_open_positions_from_fills, symbols_with_positive_long_from_fills, FillPositionKey};
 pub use ingestion_state::{

@@ -6,7 +6,7 @@ Applied at API/worker startup via `qtss_storage::run_migrations` (SQLx).
 
 Tek dosya:
 
-- **`0001_qtss_baseline.sql`** — tüm şema + tohumlar + sonradan eklenen parçalar (`-- >>> merged from: NNNN_*.sql` bölüm başlıklarıyla). Eski zincir `0001`…`0063` ve ayrı `0002`…`0005` parçaları burada birleşiktir.
+- **`0001_qtss_baseline.sql`** — tüm şema + tohumlar + sonradan eklenen parçalar (`-- >>> merged from:` / `-- >>> squashed from:` bölüm başlıklarıyla). Eski zincir `0001`…`0063` ve son delta parçaları burada birleşiktir; dizinde yalnız bu dosya kalmalıdır.
 
 Yeni şema değişikliği: geçici olarak `0002_yeni.sql` ekleyip `python3 scripts/squash_migrations_into_one.py` ile tekrar tek dosyaya indir (veya üretimde zaten uygulanmış baseline’ı elleme — yeni numaralı dosya + squash / dokümantasyondaki reset kuralları).
 

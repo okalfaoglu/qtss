@@ -11,6 +11,7 @@ mod confluence_hook;
 mod copy_trade_follower;
 mod copy_trade_queue;
 mod data_sources;
+mod defillama;
 mod engines;
 mod kill_switch;
 mod live_position_notify;
@@ -190,6 +191,14 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(nansen_engine::nansen_whale_perp_aggregate_loop(nansen_wh));
         let setup_pool = pool.clone();
         tokio::spawn(setup_scan_engine::nansen_setup_scan_loop(setup_pool));
+        // Auto-sync: aktif engine_symbols için eksik Binance veri kaynaklarını oluştur
+        match qtss_storage::ensure_binance_sources_for_active_symbols(&pool).await {
+            Ok(n) if n > 0 => tracing::info!(created = n, "Binance veri kaynakları otomatik oluşturuldu"),
+            Err(e) => tracing::warn!(%e, "Binance auto-sync hatası"),
+            _ => {}
+        }
+        let defi_pool = pool.clone();
+        tokio::spawn(defillama::defillama_loop(defi_pool));
         let b_pool = pool.clone();
         tokio::spawn(engines::external_binance_loop(b_pool));
         let cg_pool = pool.clone();

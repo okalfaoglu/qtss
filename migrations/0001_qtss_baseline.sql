@@ -2188,3 +2188,105 @@ VALUES
   )
 ON CONFLICT (module, config_key) DO NOTHING;
 
+-- >>> squashed from: 0002_engine_symbol_ingestion_state.sql
+-- Worker REST backfill health (`qtss-storage` ingestion_state, `GET …/analysis/engine/ingestion-state`).
+
+CREATE TABLE IF NOT EXISTS engine_symbol_ingestion_state (
+    engine_symbol_id UUID NOT NULL PRIMARY KEY REFERENCES engine_symbols (id) ON DELETE CASCADE,
+    bar_row_count INTEGER NOT NULL DEFAULT 0,
+    min_open_time TIMESTAMPTZ,
+    max_open_time TIMESTAMPTZ,
+    gap_count INTEGER NOT NULL DEFAULT 0,
+    max_gap_seconds INTEGER,
+    last_backfill_at TIMESTAMPTZ,
+    last_health_check_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_error TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- >>> squashed from: 0003_telegram_setup_analysis_system_config.sql
+-- Telegram setup-analysis webhook + Gemini: `system_config` module `telegram_setup_analysis`.
+
+INSERT INTO system_config (module, config_key, value, schema_version, description, is_secret)
+VALUES
+    (
+        'telegram_setup_analysis',
+        'trigger_phrase',
+        '{"value":"QTSS_ANALIZ"}'::jsonb,
+        1,
+        'User sends this phrase (alone or with a trailing note) to flush the queue and run analysis.',
+        false
+    ),
+    (
+        'telegram_setup_analysis',
+        'gemini_model',
+        '{"value":"gemini-2.0-flash"}'::jsonb,
+        1,
+        'Gemini model id for generateContent (Google AI).',
+        false
+    ),
+    (
+        'telegram_setup_analysis',
+        'webhook_secret',
+        '{"value":""}'::jsonb,
+        1,
+        'Path secret for POST /telegram/setup-analysis/{secret}. Non-empty enables the webhook.',
+        true
+    ),
+    (
+        'telegram_setup_analysis',
+        'gemini_api_key',
+        '{"value":""}'::jsonb,
+        1,
+        'Google AI Studio / Gemini API key.',
+        true
+    ),
+    (
+        'telegram_setup_analysis',
+        'max_buffer_turns',
+        '{"value":"12"}'::jsonb,
+        1,
+        'Max queued items per chat (1–50).',
+        false
+    ),
+    (
+        'telegram_setup_analysis',
+        'buffer_ttl_secs',
+        '{"value":"7200"}'::jsonb,
+        1,
+        'Drop stale queue entries older than this many seconds (300–86400).',
+        false
+    ),
+    (
+        'telegram_setup_analysis',
+        'allowed_chat_ids',
+        '{"value":""}'::jsonb,
+        1,
+        'Optional comma-separated Telegram chat ids; empty = allow all chats.',
+        false
+    )
+ON CONFLICT (module, config_key) DO NOTHING;
+
+-- >>> squashed from: 0005_notify_telegram_system_config_seed.sql
+-- `notify.telegram_*` for `load_notify_config_merged` (optional; fill via Admin / seed env).
+
+INSERT INTO system_config (module, config_key, value, schema_version, description, is_secret)
+VALUES
+    (
+        'notify',
+        'telegram_bot_token',
+        '{"value":""}'::jsonb,
+        1,
+        'Telegram Bot API token (BotFather). Required for setup-analysis getFile/sendMessage.',
+        true
+    ),
+    (
+        'notify',
+        'telegram_chat_id',
+        '{"value":""}'::jsonb,
+        1,
+        'Default chat id for generic Telegram notifications (user / group / channel). Optional for webhook-only bot flows.',
+        true
+    )
+ON CONFLICT (module, config_key) DO NOTHING;
+
