@@ -4,8 +4,11 @@
 //! See `docs/QTSS_CURSOR_DEV_GUIDE.md` §9.1 item 5.
 
 mod engine_loop;
+mod error;
 
 use async_trait::async_trait;
+
+pub use error::AnalysisError;
 use chrono::{DateTime, Utc};
 use qtss_storage::EngineSymbolRow;
 use serde_json::Value;
@@ -22,5 +25,5 @@ pub trait ConfluencePersist: Send + Sync {
         dash_payload: &Value,
         last_bar_open_time: DateTime<Utc>,
         bar_count: i32,
-    ) -> Result<(), String>;
+    ) -> Result<(), AnalysisError>;
 }

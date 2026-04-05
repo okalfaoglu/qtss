@@ -321,7 +321,7 @@ pub async fn compute_and_persist(
     dash_payload: &Value,
     last_bar_open_time: DateTime<Utc>,
     bar_count: i32,
-) -> Result<(), String> {
+) -> Result<(), qtss_analysis::AnalysisError> {
     if !confluence_engine_enabled() {
         return Ok(());
     }
@@ -477,8 +477,7 @@ pub async fn compute_and_persist(
         Some(bar_count),
         None,
     )
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     let scores_json = build_category_scores_json(
         smart_money,

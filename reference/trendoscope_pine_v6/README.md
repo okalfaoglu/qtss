@@ -1,6 +1,6 @@
 # Trendoscope Pine v6 — referans kaynaklar (QTSS hizası)
 
-Bu klasör, **Auto Chart Patterns [Trendoscope®]** göstergesi ve bağımlı kütüphanelerin, projede **Rust/Web** tarafıyla (`crates/qtss-chart-patterns`, `docs/CHART_PATTERNS_TRENDOSCOPE_PORT.md`) karşılaştırma ve golden test için saklanan **Pine Script** kopyalarıdır.
+Bu klasör, **Auto Chart Patterns [Trendoscope®]** göstergesi ve bağımlı kütüphanelerin, projede **Rust/Web** tarafıyla (`crates/qtss-chart-patterns`, `docs/ACP_PINE_PARITY_FIX.md`) karşılaştırma ve golden test için saklanan **Pine Script** kopyalarıdır.
 
 ## Lisans
 

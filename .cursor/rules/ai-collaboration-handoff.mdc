@@ -1,0 +1,31 @@
+---
+description: Multi-agent (Cursor, Claude, others) coordination — avoid overwriting work and keep docs aligned with code
+alwaysApply: true
+---
+
+# AI collaboration and handoff (QTSS)
+
+Different assistants may touch the same tree. Follow this so changes stay visible and one session does not silently undo another.
+
+## Before you change or delete
+
+1. **Search the repo** for symbols, route paths, and env names you plan to remove or rename: `rg` / IDE search across `crates/`, `web/`, `docs/`, `migrations/`, `.env.example`.
+2. **Prefer extending** an existing module (`qtss-api` route file, `qtss-worker` loop, `web/src/api/client.ts`) over adding a **parallel** crate or duplicate HTTP surface unless the user explicitly wants a split.
+3. **Do not delete** another agent’s wiring (imports, `tokio::spawn`, `Router::merge`) without grep evidence it is unused; if it looks dead, note it in the PR/summary instead of deleting in the same pass as unrelated work.
+
+## After you add or change behavior
+
+1. **Public HTTP:** New or changed `GET|POST|PATCH|DELETE` under `/api/v1` → update `docs/PROJECT.md` §8 (or the narrowest accurate subsection) and ensure `web/src/api/client.ts` (or callers) matches path and method.
+2. **New workspace crate** or **worker background task** → update `docs/PROJECT.md` §2–§3 and, if spawn order matters, `docs/QTSS_MASTER_DEV_GUIDE.md` §10; align with `Cargo.toml` `[workspace].members`.
+3. **Schema:** New tables or `app_config` keys → mention in `docs/PROJECT.md` §7 or `docs/CONFIG_REGISTRY.md` when the key is operator-facing.
+4. **Commit message:** One explicit line for doc touch, e.g. `Docs: PROJECT §8 (new /foo route).`
+
+## Drift checks (when touching related code)
+
+- **Web ↔ API:** Grep `web/` for the path string; grep `crates/qtss-api` for the Axum `route(...)`.
+- **Worker ↔ storage:** Callers of new SQL should live in `qtss-storage` or be justified as raw `sqlx` with a migration in `migrations/`.
+- **Help/UI copy** that names endpoints must match real routes (worker often calls **external** APIs, not `qtss-api`).
+
+## Single source of truth
+
+Code wins over prose. If docs disagree with `routes/mod.rs`, `main.rs`, or `client.ts`, **fix the docs** in the same change set when you already edit that area.

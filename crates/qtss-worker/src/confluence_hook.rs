@@ -18,7 +18,7 @@ impl ConfluencePersist for WorkerConfluenceHook {
         dash_payload: &Value,
         last_bar_open_time: DateTime<Utc>,
         bar_count: i32,
-    ) -> Result<(), String> {
+    ) -> Result<(), qtss_analysis::AnalysisError> {
         crate::confluence::compute_and_persist(pool, t, dash_payload, last_bar_open_time, bar_count)
             .await
     }

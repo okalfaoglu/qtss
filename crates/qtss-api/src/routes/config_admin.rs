@@ -1,7 +1,7 @@
 //! Admin config CRUD — Bearer access_token + RBAC (ileride).
 
 use axum::extract::{Extension, Path, State};
-use axum::routing::{delete, get};
+use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
 
@@ -25,7 +25,7 @@ pub struct UpsertBody {
 pub fn config_router() -> Router<SharedState> {
     Router::new()
         .route("/config", get(list_config).post(upsert_config))
-        .route("/config/{key}", delete(delete_config))
+        .route("/config/{key}", get(get_config).delete(delete_config))
 }
 
 async fn list_config(
@@ -36,6 +36,25 @@ async fn list_config(
     let rows = st.config.list(500).await?;
     log_business(QtssLogLevel::Debug, "qtss_api::config", "list_config");
     Ok(Json(rows))
+}
+
+async fn get_config(
+    Extension(claims): Extension<AccessClaims>,
+    State(st): State<SharedState>,
+    Path(key): Path<String>,
+) -> Result<Json<AppConfigEntry>, ApiError> {
+    let _ = claims;
+    let row = st
+        .config
+        .get_by_key(key.trim())
+        .await?
+        .ok_or_else(|| ApiError::not_found("config key not found"))?;
+    log_business(
+        QtssLogLevel::Debug,
+        "qtss_api::config",
+        format!("get_config {}", row.key),
+    );
+    Ok(Json(row))
 }
 
 async fn upsert_config(

@@ -2,7 +2,7 @@
 
 Çok borsalı alım-satım ve analiz platformu. Çekirdek **Rust**; web ve mobil tüketim **HTTP API** üzerinden. Bu belge mimari kararları, klasör yapısını ve yol haritasını özetler.
 
-**Hizalama (kesin kural):** Kod ve şablonlar tek doğrulukla güncellenir — tam madde listesi: [QTSS_MASTER_DEV_GUIDE.md](./QTSS_MASTER_DEV_GUIDE.md) — worker `tokio::spawn` + `init_logging` + `run_migrations` ([Bölüm 10 — spawn sırası](./QTSS_MASTER_DEV_GUIDE.md#10-spawn-s%C4%B1ras%C4%B1)); API aynı `init_logging` + migrasyon bağlamı; `data_sources/registry.rs`; `qtss-storage` / `pool.rs`; kök `.env.example`; `migrations/README.md` + [Bölüm 5 — migration kuralları](./QTSS_MASTER_DEV_GUIDE.md#5-migration-kurallar%C4%B1); log seviyeleri [§8.1](./QTSS_MASTER_DEV_GUIDE.md#81-loglama--trace--debug--info--warn--error--critical); [SECURITY.md](./SECURITY.md) worker canlı emir notu; bu belge [§7](#7-veritabanı-özet). **Checkout farkı:** Bu depoda migrasyonlar yalnızca `0001`–`0012` olabilir; tam ürün hattı için bkz. MASTER **§0.3** ve `migrations/README.md`.
+**Hizalama (kesin kural):** Kod ve şablonlar tek doğrulukla güncellenir — tam madde listesi: [QTSS_MASTER_DEV_GUIDE.md](./QTSS_MASTER_DEV_GUIDE.md) — worker `tokio::spawn` + `init_logging` + `run_migrations` ([Bölüm 10 — spawn sırası](./QTSS_MASTER_DEV_GUIDE.md#10-spawn-s%C4%B1ras%C4%B1)); API aynı `init_logging` + migrasyon bağlamı; `data_sources/registry.rs`; `qtss-storage` / `pool.rs`; kök `.env.example`; `migrations/README.md` + [Bölüm 5 — migration kuralları](./QTSS_MASTER_DEV_GUIDE.md#5-migration-kurallar%C4%B1); log seviyeleri [§8.1](./QTSS_MASTER_DEV_GUIDE.md#81-loglama--trace--debug--info--warn--error--critical); [SECURITY.md](./SECURITY.md) worker canlı emir notu; bu belge [§7](#7-veritabanı-özet). **Migrasyon gerçeği (bu depo):** `migrations/0001_qtss_baseline.sql` tek dosya; eski çok adımlı zincir içeride `-- >>> merged from:` ile birleşiktir — ayrıntı [QTSS_MASTER_DEV_GUIDE.md §0.3](./QTSS_MASTER_DEV_GUIDE.md) ve `migrations/README.md`.
 
 ---
 
@@ -44,10 +44,9 @@ qtss/
 ├── docs/
 │   └── PROJECT.md             # Bu dosya
 ├── deploy/                    # systemd birim şablonları, worker/API notları
-├── migrations/                # SQLx migrasyonları (PostgreSQL). **Bu checkout:** 12× `.sql` (`0001`–`0012`); tam envanter: `migrations/README.md`
-│   ├── README.md              # sıralı dosya listesi + sürüm = önek, çift önek yasağı; MASTER §5 / PROJECT §7
-│   ├── 0001_init.sql … 0012_acp_pattern_groups.sql  # bu depoda: çekirdek + ACP
-│   └── Tam ürün hattında: `0013`+ … `0047`+ (worker, Nansen, AI, `system_config`, …) — `migrations/README.md`. Aynı önek iki dosya yasak — [QTSS_MASTER_DEV_GUIDE.md §5](./QTSS_MASTER_DEV_GUIDE.md#5-migration-kurallar%C4%B1)
+├── migrations/                # SQLx migrasyonları (PostgreSQL). **Bu depo:** yalnızca `0001_qtss_baseline.sql` (+ geçici `0002_*.sql` squash öncesi)
+│   ├── README.md              # squash akışı, çift önek yasağı; MASTER §5
+│   └── 0001_qtss_baseline.sql # çekirdek + ACP + Nansen + AI + `system_config` + … (`-- >>> merged from:` bölümleri)
 ├── web/                     # Vite + React + TS; LWC grafik, Elliott V2, ACP kanal taraması (proxy → API)
 └── crates/
     ├── qtss-common/           # Uygulama modu (live/dry), merkezi loglama
@@ -63,7 +62,13 @@ qtss/
     ├── qtss-notify/           # Telegram, webhook, … (`POST /notify/test` + worker uyarıları)
     ├── qtss-strategy/         # Dry strateji döngüleri (signal_filter, whale_momentum, risk, …)
     ├── qtss-analysis/         # `engine_symbols` → trading_range + signal_dashboard snapshot döngüsü (worker spawn)
-    └── qtss-chart-patterns/   # ACP çizim JSON, kanal/inspect/resolve; Pine `find` tam portu değil — bkz. `docs/CHART_PATTERNS_TRENDOSCOPE_PORT.md`
+    ├── qtss-reconcile/        # Binance açık emir yamaları (`qtss-api` + worker reconcile döngüleri)
+    ├── qtss-ai/               # LLM sağlayıcıları, AI kararları, worker `ai_engine` entegrasyonu
+    ├── qtss-signal-card/      # Sinyal kartı yardımcıları
+    ├── qtss-indicators/       # Gösterge hesapları
+    ├── qtss-tbm/              # TBM (dashboard) destek crate’i
+    ├── qtss-telegram-setup-analysis/  # Telegram setup analizi (API webhook + worker ile ilişkili)
+    └── qtss-chart-patterns/   # ACP çizim JSON, kanal tarama; Pine tam parity değil — bkz. [ACP_PINE_PARITY_FIX.md](./ACP_PINE_PARITY_FIX.md)
 ```
 
 **Migrasyonları çalıştırma:** `qtss-api` veya `qtss-worker` başlarken bekleyen `migrations/*.sql` dosyaları otomatik uygulanır: `cargo run -p qtss-api`. İlk kurulumda örnek org + admin + OAuth istemcisi için: `cargo run -p qtss-api --bin qtss-seed` (binary adı `seed` değil, `qtss-seed`).
@@ -74,16 +79,16 @@ qtss/
 
 **Tekil sürüm numarası:** Aynı `NNNN_` öneki iki dosyada kullanılamaz (`_sqlx_migrations` satır başına tek checksum). Dağıtımda genelde yalnız **`migrations/0001_qtss_baseline.sql`** vardır (içinde `-- >>> merged from: …` bölümleri). Yeni delta: geçici **`0002_*.sql`** + `python3 scripts/squash_migrations_into_one.py` ile tekrar tek dosya — `migrations/README.md`. `qtss-sync-sqlx-checksums` çift öneği reddeder.
 
-**Nansen setup scan** (tam ürün migrasyon hattında, örn. `0020_nansen_setup_scans.sql`): `nansen_setup_runs` / `nansen_setup_rows`; worker `setup_scan_engine` (`QTSS_SETUP_SCAN_SECS`, `QTSS_SETUP_MAX_SNAPSHOT_AGE_SECS`); varsayılan `QTSS_SETUP_SNAPSHOT_ONLY=1` ile setup Nansen’e ikinci HTTP göndermez (kredi yalnız `nansen_engine`); TP1 için 1h OHLC + 6h vol; `meta_json.spec_version` (ör. `nansen_setup_v3`); 5 LONG + 5 SHORT; API `GET /api/v1/analysis/nansen/setups/latest`.
+**Nansen setup scan:** Tablolar `nansen_setup_runs` / `nansen_setup_rows` (baseline içinde); worker `setup_scan_engine` (`QTSS_SETUP_SCAN_SECS`, `QTSS_SETUP_MAX_SNAPSHOT_AGE_SECS`); varsayılan `QTSS_SETUP_SNAPSHOT_ONLY=1` ile setup Nansen’e ikinci HTTP göndermez (kredi yalnız `nansen_engine`); TP1 için 1h OHLC + 6h vol; `meta_json.spec_version` (ör. `nansen_setup_v3`); 5 LONG + 5 SHORT; API `GET /api/v1/analysis/nansen/setups/latest`.
 
 **Nansen extended HTTP:** `nansen_extended.rs` + `nansen_engine` re-export; `data_snapshots` anahtarları ve TGM **perp PnL leaderboard** → `app_config.nansen_whale_watchlist` → whale aggregate (`profiler/perp-positions`). Varsayılan leaderboard yolu: `api/v1/tgm/perp-pnl-leaderboard` (`NANSEN_PERP_LEADERBOARD_PATH`). Tam env listesi: kök `.env.example`, özet: [QTSS_MASTER_DEV_GUIDE.md §6](./QTSS_MASTER_DEV_GUIDE.md#6-ortam-de%C4%9Fi%C5%9Fkenleri).
 
-**Planlanan genişlemeler** (henüz ayrı crate olarak yok):
+**Planlanan genişlemeler** (henüz ayrı crate olarak yok veya kısmi):
 
-- `crates/qtss-connectors/` — ek borsa adapter’ları (`qtss-binance` yanında)
-- `crates/qtss-marketdata/` — WebSocket bar/tick akışı, normalizasyon
+- `crates/qtss-connectors/` — tek çatı altında çok borsa adapter’ı (API’de şimdilik `orders_bybit` / `orders_okx` yazma uçları var; ayrı crate yok)
+- `crates/qtss-marketdata/` — venue-bağımsız WebSocket bar/tick normalizasyonu (Binance kline WS şu an `qtss-worker` + `qtss-binance` içinde)
 
-Mevcut: `crates/qtss-analysis/` — `engine_symbols` snapshot döngüsü (worker); API `/analysis/*` iskeleti ayrı.
+- Mevcut analiz: `crates/qtss-analysis/` — snapshot döngüsü (worker); API `/analysis/*` geniş yüzey (`routes/analysis.rs` vb.).
 - `web/` — **Vite + React** (`npm run dev` / `npm run build`). Grafik: Lightweight Charts; Elliott Wave V2 (`web/src/lib/elliottEngineV2/`). Tez §2.5.3–2.5.5 metin kataloğu tek dosyada: `web/src/lib/elliottRulesCatalog.ts` (panel + `public/elliott_dalga_prensipleri.txt` özeti).
 
 Mevcut ayrı crate’ler: `qtss-nansen`, `qtss-notify`, `qtss-strategy`, `qtss-analysis` — bkz. §3 tablo ve [QTSS_MASTER_DEV_GUIDE.md](./QTSS_MASTER_DEV_GUIDE.md) (durum özeti §0, FAZ tabloları §4).
@@ -98,6 +103,7 @@ Mevcut ayrı crate’ler: `qtss-nansen`, `qtss-notify`, `qtss-strategy`, `qtss-a
 | **qtss-domain** | `ExchangeId`, `MarketSegment`, `InstrumentId`, `TimestampBar`, `OrderType` (tam set), copy-trade modelleri, komisyon trait’i, tenancy tipleri |
 | **qtss-storage** | Bağlantı havuzu, migrasyon, `app_config`, `engine_symbols`, `data_snapshots`, `onchain_signal_scores`, `market_bars`, paper, Nansen setup, … |
 | **qtss-execution** | `ExecutionGateway`, `BinanceLiveGateway`, `DryRunGateway`; `set_reference_price` (paper) |
+| **qtss-reconcile** | Binance spot/futures açık emir listesi ↔ `exchange_orders` yama mantığı |
 | **qtss-nansen** | Nansen HTTP istemcisi (token screener, smart-money, TGM — `perp-pnl-leaderboard` göreli yol — profiler perp-positions) |
 | **qtss-notify** | Telegram / webhook / … bildirim gönderimi |
 | **qtss-strategy** | `signal_filter`, `whale_momentum`, `arb_funding`, `copy_trade`, `risk` — worker `strategy_runner` ile dry |
@@ -105,8 +111,14 @@ Mevcut ayrı crate’ler: `qtss-nansen`, `qtss-notify`, `qtss-strategy`, `qtss-a
 | **qtss-reporting** | PDF üretimi (printpdf) |
 | **qtss-binance** | Spot / FAPI REST, katalog, `KlineBar`, kapanan mum WS ayrıştırma, komisyon ipucu (`exchangeInfo`) |
 | **qtss-api** | Axum + `x-request-id`, `GET /metrics`, IP tabanlı rate limit (`tower-governor`) |
-| **qtss-worker** | PnL rollup, `qtss_analysis` spawn + `confluence_hook`, Nansen (screener + extended HTTP), harici çekim motorları, on-chain skor, setup scan, kill switch, position manager, copy follower, `notify_outbox` (`QTSS_NOTIFY_OUTBOX_*`), isteğe bağlı strateji dry döngüleri; `QTSS_KLINE_SYMBOL` / `QTSS_KLINE_SYMBOLS` + `DATABASE_URL` |
-| **qtss-chart-patterns** | Trend çizgisi bar enterpolasyonu, ACP `patternType` id → isim, `PatternDrawingBatch` (serde), Zigzag iskelesi, kanal altılı tarama API; Pine ile tam özdeş değil — bkz. `docs/CHART_PATTERNS_TRENDOSCOPE_PORT.md` |
+| **qtss-analysis** | `engine_analysis_loop`, trading range / confluence / snapshot üretimi (worker) |
+| **qtss-worker** | Yukarıdaki spawn zinciri ([MASTER §10](./QTSS_MASTER_DEV_GUIDE.md#10-spawn-s%C4%B1ras%C4%B1)): katalog senkronu, reconcile döngüleri, Nansen (çoklu loop), setup scan, harici motorlar, on-chain skor, notify, kill switch, position manager, copy trade, strateji, AI, user stream; kline WS önceliği: etkin `engine_symbols` (Binance) satırları → yoksa `QTSS_KLINE_SYMBOL(S)` / env |
+| **qtss-ai** | Çoklu LLM sağlayıcı, `ai_decisions` / direktifler, worker `ai_engine` |
+| **qtss-signal-card** | Sinyal kartı veri/yardımcı |
+| **qtss-indicators** | Teknik gösterge hesapları |
+| **qtss-tbm** | TBM paneli desteği |
+| **qtss-telegram-setup-analysis** | Telegram setup analizi (API status ucu + webhook path’leri) |
+| **qtss-chart-patterns** | ACP çizim JSON, kanal altılı tarama; Pine tam parity değil — [ACP_PINE_PARITY_FIX.md](./ACP_PINE_PARITY_FIX.md) |
 
 ---
 
@@ -144,19 +156,21 @@ Bu ayrım, iş kurallarının tek kaynağının kod kalmasını sağlar; veritab
 
 ## 7. Veritabanı (özet)
 
-- **`0001_init.sql`** — `organizations`, `users`, `roles`, `user_roles`, `app_config`, `exchange_accounts`, `copy_subscriptions`, `pnl_rollups`, `backtest_runs`
-- **`0002_oauth.sql`** — `oauth_clients`, `refresh_tokens`
-- **`0003_market_catalog.sql`** — `exchanges`, `markets`, `instruments` (katalog senkronu)
-- **`0004_exchange_orders.sql`** — `exchange_orders` (gönderilen emirler, denetim / idempotency zemini)
-- **`0005_audit_log.sql`** — `audit_log` (HTTP mutasyon denetimi)
-- **`0006_market_bars.sql`** — `market_bars` (venue OHLCV; worker veya ileride diğer beslemeler)
-- **`0007_acp_chart_patterns.sql`** — Pine ACP v6 fabrika: `acp_chart_patterns` (4 zigzag, yalnız ilki açık; `pivot_tail_skip_max: 0`)
-- **`0008_acp_zigzag_seven_fib.sql`** — mevcut `acp_chart_patterns` satırını TV fabrikasına hizalar (dosya adı tarihsel)
-- **`0009_acp_pine_indicator_defaults.sql`** — eski 7 Fib veya bozuk ayarlar için aynı hizalamayı tekrar uygular
-- **`0010_acp_abstract_size_filters.sql`** — `ignore_if_entry_crossed` + `size_filters` (abstractchartpatterns) eksikse ekler
-- **`0011_acp_last_pivot_direction.sql`**, **`0012_acp_pattern_groups.sql`** — ACP pivot yönü, pattern grupları
+**Tek migrasyon dosyası:** `migrations/0001_qtss_baseline.sql`. Tarihsel çok dosyalı zincir (`0001_init` … `0012_acp_*`, sonrası Nansen/AI/`system_config` vb.) bu dosyada **`-- >>> merged from: …`** bölümleriyle birleşiktir; şema özeti (kanıt: aynı dosyada `CREATE TABLE`):
 
-**Bu checkout:** Yukarıdaki `0001`–`0012` dosyaları mevcuttur; **`0013` ve sonrası bu ağaçta yoktur** — worker analiz döngüleri, Nansen tabloları, `system_config`, AI şeması vb. tam ürün migrasyon zinciri gerektirir. **Tam hatta** (`0013`–`0036` ve ötesi): `bar_intervals`, `engine_symbols`, paper, Nansen, `data_snapshots`, external fetch, confluence, `onchain_signal_scores`, `0042`+ AI, `0044`+ `system_config` — dosya adları ve sıra: `migrations/README.md`. Numara kuralları: [QTSS_MASTER_DEV_GUIDE.md §5](./QTSS_MASTER_DEV_GUIDE.md#5-migration-kurallar%C4%B1).
+- **Kimlik / org:** `organizations`, `users`, `roles`, `user_roles`, `user_permissions`, `oauth_clients`, `refresh_tokens`
+- **Config:** `app_config`, `system_config`
+- **Katalog / bar meta:** `exchanges`, `markets`, `instruments`, `bar_intervals`, `market_bars`
+- **Emir / defter:** `exchange_accounts`, `exchange_orders`, `exchange_fills`, `copy_subscriptions`, `copy_trade_execution_jobs`, paper: `paper_balances`, `paper_fills`, `range_signal_paper_executions`
+- **PnL / backtest:** `pnl_rollups`, `backtest_runs`
+- **Denetim:** `audit_log`
+- **Analiz / motor:** `engine_symbols`, `engine_symbol_ingestion_state`, `analysis_snapshots`, `range_signal_events`, `data_snapshots`, `market_confluence_snapshots`, `external_data_sources`
+- **Nansen:** `nansen_snapshots`, `nansen_setup_runs`, `nansen_setup_rows`
+- **On-chain:** `onchain_signal_scores`
+- **ACP:** `app_config` anahtarı `acp_chart_patterns` (fabrika JSON; baseline içi `0007`–`0012` birleşimi)
+- **Bildirim / AI:** `notify_outbox`, `ai_approval_requests`, `ai_decisions`, `ai_tactical_decisions`, `ai_position_directives`, `ai_portfolio_directives`, `ai_decision_outcomes`
+
+Yeni DDL: geçici `0002_*.sql` → squash — [migrations/README.md](../migrations/README.md), [QTSS_MASTER_DEV_GUIDE.md §5](./QTSS_MASTER_DEV_GUIDE.md#5-migration-kurallar%C4%B1).
 
 Ayrıntılı güvenlik hedefleri: [SECURITY.md](SECURITY.md).
 
@@ -176,7 +190,7 @@ Tüm yanıtlarda **`x-request-id`** (UUID) üretilir veya istemci gönderdiyse y
 
 | Uç | Gerekli roller |
 |----|----------------|
-| `GET/POST /api/v1/config`, `DELETE /api/v1/config/{key}` | `admin` |
+| `GET/POST /api/v1/config`, `GET /api/v1/config/{key}`, `DELETE /api/v1/config/{key}` | `admin` |
 | `GET/PUT /api/v1/users/{user_id}/permissions` | `admin` (hedef kullanıcı aynı `org_id`) |
 | `GET /api/v1/audit/recent` | `qtss:admin` veya `qtss:audit:read` (JWT / `user_permissions`) |
 | `POST /api/v1/reconcile/binance`, `POST /api/v1/reconcile/binance/futures` | `admin` |
@@ -185,47 +199,21 @@ Tüm yanıtlarda **`x-request-id`** (UUID) üretilir veya istemci gönderdiyse y
 | `GET /api/v1/orders/binance` | `admin`, `trader`, `analyst`, `viewer` |
 | `POST /api/v1/orders/binance/place`, `POST /api/v1/orders/binance/cancel` | `admin`, `trader` |
 | `POST /api/v1/copy-trade/subscriptions`, `PATCH .../{id}/active`, `DELETE .../{id}` | `admin`, `trader` |
-| `GET /api/v1/dashboard/pnl`, `GET /api/v1/market/binance/*`, `GET /api/v1/market/bars/recent`, `GET /api/v1/copy-trade/subscriptions`, `GET /api/v1/ai/approval-requests`, `GET /api/v1/notify/outbox`, analysis / notify iskeletleri | `admin`, `trader`, `analyst`, `viewer` |
+| `GET /api/v1/dashboard/pnl`, `GET /api/v1/dashboard/pnl/equity`, `GET /api/v1/market/binance/*`, `GET /api/v1/market/bars/recent`, `GET /api/v1/copy-trade/subscriptions`, `GET /api/v1/fills`, `GET /api/v1/ai/*` (okuma), `GET /api/v1/notify/outbox`, `GET /api/v1/analysis/*` (okuma), `GET /api/v1/catalog/*` (salt okunur katalog) | `admin`, `trader`, `analyst`, `viewer` |
+| `POST /api/v1/dashboard/pnl/rebuild`, `GET|POST /api/v1/admin/system-config`, `POST /api/v1/admin/kill-switch/reset`, `POST /api/v1/ai/decisions/{id}/approve` … | `admin` |
 | `POST /api/v1/notify/outbox` | `admin`, `trader` |
 | `POST /api/v1/ai/approval-requests` | `admin`, `trader` |
 | `PATCH /api/v1/ai/approval-requests/{id}` | `admin` |
 
-Yetersiz rol → HTTP **403** (`insufficient_scope`).
+Yetersiz rol → HTTP **403** (`insufficient_scope`). Tam ağaç: `crates/qtss-api/src/routes/mod.rs` (`api_router`). **Not:** `GET /ai/decisions`, `GET /ai/directives/*` rotaları bu dosyada `require_dashboard_roles` ile sarılmamıştır (yalnızca geçerli JWT); diğer çoğu `/api/v1/*` ucu dashboard rolleriyle kısıtlıdır.
 
-### Yollar
+### Yollar (kodla eşleşen özet)
 
-- `GET /health` — servis durumu (JWT gerekmez)
-- `GET /api/v1/me` — JWT özeti: `sub`, `org_id`, `roles`, `permissions` (JWT + `user_permissions` birleşik), `azp`
-- `GET /api/v1/users/{user_id}/permissions` — yalnızca DB’deki ek izinler (`qtss:*` listesi)
-- `PUT /api/v1/users/{user_id}/permissions` — gövde `{ "permissions": ["qtss:read", ...] }`; tabloyu değiştirir (aynı kurum); `QTSS_AUDIT_HTTP=1` iken `audit_log.details` içinde önce/sonra izin listesi
-- `GET /api/v1/audit/recent?limit=` — son `audit_log` satırları (`details` dahil); `qtss:admin` veya `qtss:audit:read`; `limit` varsayılan 100, üst sınır 500
-- `GET /metrics` — Prometheus uyumlu sayaç (JWT gerekmez; üretimde ağ politikası ile koruyun)
-- `GET /api/v1/config` — config listesi
-- `POST /api/v1/config` — upsert (`key`, `value`, isteğe bağlı `description`, `actor_user_id`)
-- `DELETE /api/v1/config/{key}`
-- `GET /api/v1/dashboard/pnl?ledger=&bucket=`
-- `POST /api/v1/catalog/sync/binance` — Binance spot + USDT-M enstrüman kataloğunu DB’ye yazar
-- `GET /api/v1/market/binance/klines?symbol=&interval=&segment=` — `segment` = `spot` (varsayılan) veya `futures`
-- `GET /api/v1/market/binance/commission-defaults?segment=&symbol=` — `symbol` verilirse ilgili `exchangeInfo` çekilir; sembol satırında ücret alanları varsa `source=exchange_info`, yoksa tier0 `fallback_tier0`
-- `GET /api/v1/market/binance/stream-urls?symbol=&interval=` — spot ve USDT-M kline WebSocket URL’leri (istemci doğrudan bağlanır)
-- `GET /api/v1/market/bars/recent?exchange=&segment=&symbol=&interval=&limit=` — `market_bars` (varsayılan `limit=500`, üst sınır 5000)
-- `POST /api/v1/market/binance/bars/backfill` — gövde: `{ "symbol", "interval", "segment?": "spot"|"futures", "limit?": 1..1000 }`; Binance REST klines → `market_bars` upsert (worker olmadan geçmiş dolum)
-- `POST /api/v1/reconcile/binance` — Binance **spot** `openOrders` ile yerel `exchange_orders` (`venue_order_id`); spot API anahtarı gerekir; uygun satırlar `reconciled_not_open` güncellenir (`status_updates_applied` alanında sayı)
-- `POST /api/v1/reconcile/binance/futures` — USDT-M **futures** `fapi/v1/openOrders` ile yerel `exchange_orders`; futures API anahtarı gerekir; aynı durum güncellemesi
-- `GET /api/v1/market/binance/commission-account` — hesaba özel maker/taker (`symbol`, `segment`)
-- `GET /api/v1/orders/binance` — son emirler (kullanıcıya göre, `exchange_orders`)
-- `POST /api/v1/orders/binance/place` — gövde: `{ "intent": OrderIntent }`; `exchange_accounts` + `exchange_orders` (`venue_order_id` / `venue_response` Binance yanıtından)
-- `POST /api/v1/orders/binance/cancel` — gövde: `client_order_id`, `symbol`, `segment`; yerel kayıt `canceled` olarak işaretlenir
-- `GET /api/v1/copy-trade/subscriptions` — `leader` veya `follower` olduğun abonelikler
-- `POST /api/v1/copy-trade/subscriptions` — `leader_user_id`, `rule` (JSON, [`CopyRule`](crates/qtss-domain/src/copy_trade.rs) şeması)
-- `PATCH /api/v1/copy-trade/subscriptions/{id}/active` — `{ "active": bool }`
-- `DELETE /api/v1/copy-trade/subscriptions/{id}`
-- `GET /api/v1/analysis/health` — iskelet
-- `POST /api/v1/notify/test` — `qtss-notify` ile test bildirimi (kanal env’leri kök `.env.example`)
-- `GET /api/v1/notify/outbox?limit=` — org için `notify_outbox` geçmişi
-- `POST /api/v1/notify/outbox` — kuyruğa ekle (`title`, `body`, `channels?`; boşsa `webhook`)
+**JWT gerekmez:** `GET /health`, `GET /live`, `GET /ready`, `GET /metrics`, `POST /oauth/token`, `GET /api/v1/locales`, `GET /api/v1/bootstrap/web-oauth-client`, Telegram webhook path’leri (`/telegram/webhook/{secret}`, `/telegram/setup-analysis/{secret}` — `main.rs`).
 
-`qtss-worker`: `QTSS_KLINE_SYMBOL` veya `QTSS_KLINE_SYMBOLS` (combined stream), `QTSS_KLINE_INTERVAL`, `QTSS_KLINE_SEGMENT` (`spot` / `futures`). **`DATABASE_URL` doluysa** migrasyon + `market_bars` + analiz / Nansen / on-chain loop’ları; yoksa kline yalnız log. Ortam anahtarları: kök `.env.example`, ayrıntı: [QTSS_MASTER_DEV_GUIDE.md §6](./QTSS_MASTER_DEV_GUIDE.md#6-ortam-de%C4%9Fi%C5%9Fkenleri). Kalıcı çalıştırma: [deploy/README.md](../deploy/README.md).
+**`/api/v1` (Bearer):** Oturum: `GET /me`, `PATCH /me/locale`. İzinler: `GET|PUT /users/{user_id}/permissions`. Denetim: `GET /audit/recent`. Config: `GET|POST /config`, `GET /config/{key}`, `DELETE /config/{key}`; admin: `GET|POST /admin/system-config`, `GET|DELETE /admin/system-config/{module}/{key}`, `POST /admin/kill-switch/reset`. Dashboard: `GET /dashboard/pnl`, `GET /dashboard/pnl/equity`, `POST /dashboard/pnl/rebuild`. Katalog: `GET /catalog/exchanges|markets|instruments|bar-intervals`, yazma: `POST /catalog/...`; `POST /catalog/sync/binance`. Piyasa: `GET /market/binance/klines|commission-defaults|stream-urls|commission-account`, `GET /market/bars/recent`, `POST /market/binance/bars/backfill`. Mutabakat: `POST /reconcile/binance`, `POST /reconcile/binance/futures`. Emirler: Binance `GET /orders/binance`, `GET /orders/binance/fills`, `POST …/place|cancel`; Bybit/OKX `POST /orders/bybit|okx/place|cancel`; paper `GET /orders/dry/fills|balance`, `POST /orders/dry/place`. Birleşik fill listesi: `GET /fills`. Copy trade: `GET|POST /copy-trade/subscriptions`, `PATCH|DELETE …/{id}…`. Backtest: `POST /backtest/run`. Bildirim: `POST /notify/test`, `GET|POST /notify/outbox`. AI onay: `GET|POST /ai/approval-requests`, `PATCH /ai/approval-requests/{id}`. AI kararlar: `GET /ai/decisions`, `GET /ai/decisions/{id}`, `GET /ai/directives/tactical|portfolio`; admin `POST /ai/decisions/{id}/approve|reject`, `POST …/link-approval-request`. Analiz: `GET /analysis/health`, `GET /analysis/chart-patterns-config`, `GET /analysis/elliott-wave-config`, `POST /analysis/patterns/channel-six`, `GET /analysis/engine/symbols|snapshots|ingestion-state`, `GET /analysis/engine/confluence/latest`, `GET /analysis/confluence/latest`, `GET /analysis/data-snapshots`, `GET /analysis/market-context/latest|summary`, `GET /analysis/market-confluence/history`, `GET /analysis/engine/range-signals`, `GET /analysis/range-engine/config`, `GET /analysis/nansen/snapshot`, `GET /analysis/nansen/setups/latest`, `GET /analysis/onchain-signals/latest|history|breakdown`, `GET /analysis/external-fetch/sources|snapshots|snapshots/{key}`; yazma: `POST /analysis/engine/symbols-bulk`, `POST /analysis/engine/symbols`, `PATCH /analysis/engine/symbols/{id}`, `PATCH /analysis/range-engine/config`, `POST|DELETE /analysis/external-fetch/sources…`. Telegram setup analizi: `GET /telegram-setup-analysis/status`.
+
+`qtss-worker`: **`DATABASE_URL` doluysa** migrasyon, arka plan döngüleri ve (Binance için) önce etkin `engine_symbols` satırlarından kline WebSocket; yoksa `QTSS_KLINE_SYMBOL` / `QTSS_KLINE_SYMBOLS` / `worker.kline_symbols_csv` ile birleşik veya tek sembol akışı (`crates/qtss-worker/src/main.rs`). `QTSS_MARKET_DATA_EXCHANGE` (varsayılan `binance`). Ortam: kök `.env.example`, [QTSS_MASTER_DEV_GUIDE.md §6](./QTSS_MASTER_DEV_GUIDE.md#6-ortam-de%C4%9Fi%C5%9Fkenleri). Kalıcı çalıştırma: [deploy/README.md](../deploy/README.md).
 
 ---
 

@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { fetchWithBearerRetry } from "../api/client";
+
 type Props = {
   accessToken: string | null;
-  canAdmin: boolean;
+  /** `app_config` uçları `require_admin`; false iken istek atılmaz. */
+  canAdmin?: boolean;
 };
 
 type AiConfig = {
@@ -28,12 +31,15 @@ type AiConfig = {
 
 const API_BASE = (import.meta as Record<string, Record<string, string>>).env?.VITE_API_BASE ?? "";
 
+const AI_ENGINE_CONFIG_KEY = "ai_engine_config";
+
 async function fetchAiConfig(token: string): Promise<AiConfig | null> {
-  const r = await fetch(`${API_BASE}/api/v1/config/ai_engine_config`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const r = await fetchWithBearerRetry(
+    `${API_BASE}/api/v1/config/${encodeURIComponent(AI_ENGINE_CONFIG_KEY)}`,
+    token,
+  );
   if (!r.ok) return null;
-  const j = await r.json();
+  const j = (await r.json()) as { value?: AiConfig };
   return (j?.value ?? j) as AiConfig;
 }
 
@@ -45,6 +51,11 @@ export function AiSettingsPanel({ accessToken, canAdmin }: Props) {
 
   const refresh = useCallback(async () => {
     if (!accessToken) return;
+    if (canAdmin === false) {
+      setConfig(null);
+      setErr("");
+      return;
+    }
     setBusy(true);
     setErr("");
     try {
@@ -55,7 +66,7 @@ export function AiSettingsPanel({ accessToken, canAdmin }: Props) {
     } finally {
       setBusy(false);
     }
-  }, [accessToken]);
+  }, [accessToken, canAdmin]);
 
   useEffect(() => {
     void refresh();
@@ -63,6 +74,17 @@ export function AiSettingsPanel({ accessToken, canAdmin }: Props) {
 
   if (!accessToken) {
     return <p className="muted">{t("ai.loginPrompt")}</p>;
+  }
+
+  if (canAdmin === false) {
+    return (
+      <div className="card" style={{ marginTop: "0.5rem" }}>
+        <p className="tv-drawer__section-head">{t("ai.settings.title")}</p>
+        <p className="muted" style={{ fontSize: "0.85rem", marginTop: "0.5rem" }}>
+          {t("ai.settings.adminOnly")}
+        </p>
+      </div>
+    );
   }
 
   if (!config) {

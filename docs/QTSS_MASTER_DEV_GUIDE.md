@@ -2,7 +2,7 @@
 
 > **Tarih:** 2026-03-29  
 > **Amaç:** Projenin tam durum analizi, tespit edilen hatalar/sorunlar, iyileştirme önerileri ve **bulut + on-prem (kurum içi)** çoklu AI sağlayıcı destekli AI katmanı entegrasyon planını **tek çatı** altında birleştirir. Bu doküman Cursor'ın ana referansıdır.  
-> **Önceki dokümanlar:** Eski ayrı rehberler (`QTSS_CURSOR_DEV_GUIDE.md`, `SPEC_ONCHAIN_SIGNALS.md`, `PLAN_CONFLUENCE_AND_MARKET_DATA.md`, `DATA_SOURCES_AND_SOURCE_KEYS.md`, `NANSEN_TOKEN_SCREENER.md`) ve proje dışı `QTSS_AI_ENGINE_GUIDE` içeriği bu dosyada birleştirildi; o dosyalar repo’dan kaldırıldı. Güncel `docs/` envanteri için **Bölüm 11**’e bakın.
+> **Önceki dokümanlar:** Eski ayrı rehberler (`SPEC_ONCHAIN_SIGNALS.md`, `PLAN_CONFLUENCE_AND_MARKET_DATA.md`, `DATA_SOURCES_AND_SOURCE_KEYS.md`, `NANSEN_TOKEN_SCREENER.md`) ve proje dışı `QTSS_AI_ENGINE_GUIDE` içeriği bu dosyada birleştirildi; o dosyalar repo’dan kaldırıldı. **`QTSS_CURSOR_DEV_GUIDE.md`** yeniden ince bir eşlik dosyası olarak tutulur (kaynak kod ve hata mesajlarındaki **§6** SQLx / checksum derin linkleri için). Güncel `docs/` envanteri için **Bölüm 11**’e bakın.
 
 ---
 
@@ -49,16 +49,17 @@
 
 | # | Yönlendirme | Durum | Kanıt |
 |---|-------------|-------|--------|
-| 17 | **AI katmanı (`qtss-ai` + çoklu sağlayıcı, on-prem dahil)** | ✅ DONE | `crates/qtss-ai/` (`AiRuntime`, `providers/*`, `context_builder`, katman süpürüleri, `feedback`), migration `0042`–`0043`, API `routes/ai_decisions.rs`, `web/…/AiDecisionsPanel.tsx`, worker `ai_engine.rs` + `position_manager` AI SL/TP + `record_decision_outcome` |
+| 17 | **AI katmanı (`qtss-ai` + çoklu sağlayıcı, on-prem dahil)** | ✅ DONE | `crates/qtss-ai/` (`AiRuntime`, `providers/*`, `context_builder`, katman süpürüleri, `feedback`); AI tabloları `migrations/0001_qtss_baseline.sql` içinde; API `routes/ai_decisions.rs`, `web/…/AiDecisionsPanel.tsx`, worker `ai_engine.rs` + `position_manager` AI SL/TP + `record_decision_outcome` |
 
-### 0.3 Repo checkout türleri (minimal vs tam ürün hattı)
+### 0.3 Migrasyon düzeni (bu depo — kod doğruluk kaynağı)
 
-| Tür | Migrasyon kapsamı | Not |
-|-----|-------------------|-----|
-| **Minimal checkout** | Yalnızca `0001_init.sql` … `0012_acp_pattern_groups.sql` (12 dosya) | `system_config`, `ai_decisions`, Nansen genişletilmiş tablolar vb. **yoktur**. MASTER’daki FAZ 11.7 / spawn listesi / kanıt tabloları **tam zincir** ile doğrulanır. Kontrol: `migrations/*.sql` dosya sayısı ve `migrations/README.md`. |
-| **Tam ürün hattı** | `0013`+ … `0047`+ (ve sıradaki `0048`+ tohumlar) | AI (`0042`–`0043`), `system_config` (`0044`), locale ve worker tick tohumları (`0045`–`0047`). **0048+** idempotent seed’ler `0044` DDL’inden sonra eklenir. |
+| Gerçek durum | Açıklama |
+|--------------|----------|
+| **Tek dosya baseline** | `migrations/0001_qtss_baseline.sql` — SQLx tek sürüm kaydı; içinde eski çok dosyalı zincir `-- >>> merged from: NNNN_….sql` başlıklarıyla birleşiktir (`0007`–`0012` ACP satırları, Nansen, `engine_symbols`, `system_config`, AI tabloları, `exchange_fills`, …). |
+| **Yeni şema değişikliği** | Geçici `0002_*.sql` → `python3 scripts/squash_migrations_into_one.py` ile tekrar tek baseline (tam akış: `migrations/README.md`). |
+| **Tarihsel not** | Eski dallarda ayrı `0001_init.sql` … `0012_*.sql` + sonrası `0013`+ dosyaları vardı; **mevcut ağaçta** bunlar ayrı dosya olarak yoktur — kanıt: `ls migrations/*.sql` ve baseline içi `merged from` yorumları. |
 
-`docs/PROJECT.md` ve `migrations/README.md` bu ayrımı yansıtmalıdır; tek belgede “36 migrasyon” ile “12 dosya” çelişkisi olmamalıdır.
+`docs/PROJECT.md` §7 ve bu bölüm aynı hikâyeyi anlatmalıdır; belge ile `migrations/*.sql` çelişmemelidir.
 
 ### 0.4 Elliott ileri projeksiyon (web, `elliottEngineV2`)
 
@@ -425,7 +426,8 @@ Aşağıdaki **FAZ 0–11** maddeleri **❌** / **✅ DONE** ile izlenir. **FAZ 
 
 - SQLx sürümü = dosya adındaki sayı öneki (ör. `0042_xxx.sql` → version 42).
 - **Aynı önek iki kez kullanılamaz** — SQLx çöker.
-- **Tam ürün hattında** son migration örneği: **0047** (`worker.kill_switch_*_tick_secs` tohumları); sıradaki boş önek: **0048**. Bu checkout’ta daha kısa bir önek zinciri olabilir — kaynak: `migrations/README.md`.
+- **Squashed checkout:** `migrations/README.md` — yalnız `0001_qtss_baseline.sql`; yeni delta geçici `0002_*.sql` + squash. Üretimde checksum / eski çoklu zincir: **`docs/QTSS_CURSOR_DEV_GUIDE.md` §6**.
+- **Tam ürün hattında** (çok dosyalı eski düzen) son migration örneği: **0047** (`worker.kill_switch_*_tick_secs` tohumları); sıradaki boş önek: **0048**. Bu checkout’ta daha kısa bir önek zinciri olabilir — kaynak: `migrations/README.md`.
 - Uygulanmış migration dosyasını **asla değiştirme** — checksum uyuşmazlığı. Yeni numara ile yeni dosya ekle.
 - Checksum sorunu olursa: `cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums`.
 - Her yeni migration sonrası `migrations/README.md` envanterini güncelle.
@@ -615,16 +617,29 @@ Operatör ve OAuth / canlı emir sınırları için ayrıca **`docs/SECURITY.md`
 
 ## 10. Spawn Sırası
 
-Worker `main.rs` DATABASE_URL bloğu sonundaki spawn sırası (mevcut + yeni AI):
+Worker `main.rs` içinde `DATABASE_URL` dolu iken, havuz oluşturulup `run_migrations` sonrası **mevcut** spawn sırası (satır numaraları değişebilir; kanıt: `crates/qtss-worker/src/main.rs`):
 
 ```
+apply_initial_halt_from_db
+tokio::spawn(kill_switch_db_sync_loop)
 tokio::spawn(pnl_rollup_loop)
+tokio::spawn(binance_catalog_sync_loop)
 tokio::spawn(binance_spot_reconcile_loop)
 tokio::spawn(binance_futures_reconcile_loop)
-tokio::spawn(engine_analysis_loop + confluence_hook)
+tokio::spawn(engine_analysis_loop + WorkerConfluenceHook)
+tokio::spawn(engine_symbol_ingest_loop)
+tokio::spawn(range_signal_execute_loop)
 tokio::spawn(nansen_token_screener_loop)
-tokio::spawn(nansen_netflows_loop) ... (7 Nansen loop)
-tokio::spawn(setup_scan_engine)
+tokio::spawn(nansen_netflows_loop)
+tokio::spawn(nansen_holdings_loop)
+tokio::spawn(nansen_perp_trades_loop)
+tokio::spawn(nansen_who_bought_loop)
+tokio::spawn(nansen_flow_intel_loop)
+tokio::spawn(nansen_perp_leaderboard_loop)
+tokio::spawn(nansen_whale_perp_aggregate_loop)
+tokio::spawn(nansen_setup_scan_loop)
+// ensure_binance_sources_for_active_symbols (await, spawn değil)
+tokio::spawn(defillama_loop)
 tokio::spawn(external_binance_loop)
 tokio::spawn(external_coinglass_loop)
 tokio::spawn(external_hyperliquid_loop)
@@ -637,35 +652,39 @@ tokio::spawn(kill_switch_loop)
 tokio::spawn(position_manager_loop)
 tokio::spawn(copy_trade_follower_loop)
 tokio::spawn(copy_trade_queue_loop)
-strategy_runner::spawn_if_enabled
-// --- YENİ: AI katmanı (çoklu sağlayıcı; katman başına yapılandırma) ---
-tokio::spawn(tactical_layer.run())          // tactical provider + anahtar yüklüyse
-tokio::spawn(operational::run(..))          // operational provider + anahtar yüklüyse
-tokio::spawn(strategic::run(..))            // strategic provider + QTSS_AI_STRATEGIC_ENABLED=1
-tokio::spawn(expire_stale_decisions_loop)   // 5dk tick, süresi dolmuş kararları temizle
+strategy_runner::spawn_if_enabled(&pool).await
+ai_engine::spawn_ai_background_tasks(&pool).await   // içinde katman + expire_stale vb.
+tokio::spawn(ai_tactical_executor_loop)
+binance_user_stream::spawn_binance_user_stream_tasks(&pool).await
 ```
 
-*Not:* Bu blok özet şemadır; gerçek `tokio::spawn` sırası ve koşulları her zaman `crates/qtss-worker/src/main.rs` ile doğrulanmalıdır.
+**Sonra** (aynı `main`, DB’den veya env’den): `engine_symbols` veya `QTSS_KLINE_SYMBOL(S)` ile Binance kline WebSocket görevleri; en sonda isteğe bağlı `QTSS_WORKER_HTTP_BIND` probe HTTP sunucusu.
+
+*Not:* AI ayrıntısı `ai_engine.rs` içinde; yukarıdaki liste özet şemadır — her PR’da `main.rs` ile doğrulayın.
 
 ---
 
-## 11. Doküman dizini (7 dosya + README)
+## 11. Doküman dizini (`docs/` — 11 Markdown dosyası)
 
-`docs/` altında tutulan çekirdek dokümanlar aşağıdadır. Cursor ve geliştirme için **birincil kaynak** `QTSS_MASTER_DEV_GUIDE.md` dosyasıdır (`README.md` kısa indeks sağlar). **Not:** `.cursor/rules/` (ör. `english-identifiers.mdc`) bu listede sayılmaz; IDE/agent kuralları ayrıdır.
+`docs/` altında şu an **11** `.md` dosyası vardır (indeks dahil). Cursor ve geliştirme için **birincil kaynak** `QTSS_MASTER_DEV_GUIDE.md` dosyasıdır. **Not:** `.cursor/rules/` (ör. `english-identifiers.mdc`) bu listede sayılmaz; IDE/agent kuralları ayrıdır.
 
 | Dosya | Rol |
 |-------|-----|
 | `README.md` | Dizin indeksi |
 | `PROJECT.md` | Mimari, crate’ler, API, yol haritası özeti |
 | `QTSS_MASTER_DEV_GUIDE.md` | Durum, riskler, iyileştirmeler, AI planı, **FAZ 0–11** (çok dil + Telegram + DB merkezi config) |
+| `QTSS_CURSOR_DEV_GUIDE.md` | SQLx / checksum / squash ↔ DB (**§6**); Cursor odaklı |
 | `CONFIG_REGISTRY.md` | `system_config` / `app_config` konvansiyonları, admin API özeti (**FAZ 11.3**) |
 | `SECURITY.md` | Güvenlik notları |
 | `ELLIOTT_V2_STANDARDS.md` | Elliott V2 web referansı |
+| `ELLIOTT_WAVE_RULES_REFERENCE.md` | Elliott kuralları referans metni |
 | `SPEC_EXECUTION_RANGE_SIGNALS_UI.md` | Execution / range / UI şartnamesi |
+| `SIGNAL_MACHINE_GROUP_POLICY.md` | Sinyal makinesi / grup politikası |
+| `ACP_PINE_PARITY_FIX.md` | ACP / Pine parity notları |
 
-**Repodan kaldırılan (içerik bu dosyada veya `PROJECT.md` / `.env.example` / kaynak kodda):** `DATA_SOURCES_AND_SOURCE_KEYS.md`, `NANSEN_TOKEN_SCREENER.md`, `SPEC_ONCHAIN_SIGNALS.md`, `PLAN_CONFLUENCE_AND_MARKET_DATA.md`, `QTSS_CURSOR_DEV_GUIDE.md`.
+**Repodan kaldırılan (içerik bu dosyada veya `PROJECT.md` / `.env.example` / kaynak kodda):** `DATA_SOURCES_AND_SOURCE_KEYS.md`, `NANSEN_TOKEN_SCREENER.md`, `SPEC_ONCHAIN_SIGNALS.md`, `PLAN_CONFLUENCE_AND_MARKET_DATA.md`.
 
-**Not:** `PROJECT.md` içindeki yol haritası ve dış linkler, bu rehberle uyumlu olacak şekilde güncellenmelidir; özellikle silinen `QTSS_CURSOR_DEV_GUIDE.md` adına kalan referanslar **`QTSS_MASTER_DEV_GUIDE.md`** ile değiştirilmelidir.
+**Not:** `PROJECT.md` içindeki yol haritası ve dış linkler bu rehberle uyumlu olmalıdır. Tam anlatım Master’da; SQLx başlatma / checksum / squash konuları için **`QTSS_CURSOR_DEV_GUIDE.md` §6** kullanılır.
 
 ---
 
