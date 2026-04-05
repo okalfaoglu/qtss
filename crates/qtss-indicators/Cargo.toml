@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Pure technical indicators for TBM (Top/Bottom Mining): EMA, MACD, Bollinger, Stochastic, MFI, OBV, CVD, VWAP, Fibonacci, volatility."
 
+[lib]
+path = "src/lib.rs"
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

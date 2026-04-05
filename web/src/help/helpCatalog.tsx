@@ -253,6 +253,54 @@ export const HELP_TOPICS: HelpTopic[] = [
       </>
     ),
   },
+  {
+    id: "telegram-setup-analysis",
+    title: "Telegram kurulum analizi (AI / Gemini)",
+    searchBlob: sb([
+      "telegram",
+      "kurulum",
+      "analiz",
+      "gemini",
+      "webhook",
+      "qtss_analiz",
+      "grafik",
+      "system_config",
+      "telegram_setup_analysis",
+      "yardım",
+      "help",
+    ]),
+    body: (
+      <>
+        <p className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.5 }}>
+          Çekmece sekmesi <strong>{`TG kurulum analizi`}</strong>: kuyruk + tetik ifadesi ile grafik/metin analizi; bot yanıtları Türkçe. Sunucu
+          tarafında <code className="mono">notify.telegram_bot_token</code> (aynı bot) ve{" "}
+          <code className="mono">telegram_setup_analysis</code> modülü gerekir.
+        </p>
+        <ul className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.55, marginTop: "0.35rem" }}>
+          <li>
+            <strong>SQL / migration</strong>: Repo kökündeki <code className="mono">migrations/0003_telegram_setup_analysis_system_config.sql</code>{" "}
+            dosyası, <code className="mono">qtss-api</code> veya <code className="mono">qtss-worker</code> süreci başlarken{" "}
+            <code className="mono">run_migrations</code> ile otomatik uygulanır (<code className="mono">DATABASE_URL</code> gerekli). Elle{" "}
+            <code className="mono">psql</code> ile çalıştırmayın; <code className="mono">_sqlx_migrations</code> kaydı bozulabilir.
+          </li>
+          <li>
+            <strong>Yapılandırma</strong>: Admin → <code className="mono">system_config</code>, modül{" "}
+            <code className="mono">telegram_setup_analysis</code>: en az <code className="mono">webhook_secret</code> ve{" "}
+            <code className="mono">gemini_api_key</code> (gizli). İsteğe bağlı: <code className="mono">trigger_phrase</code>,{" "}
+            <code className="mono">allowed_chat_ids</code>, <code className="mono">gemini_model</code>.
+          </li>
+          <li>
+            <strong>Telegram</strong>: Bot webhook URL{" "}
+            <code className="mono">{`https://<api-host>/telegram/setup-analysis/<webhook_secret>`}</code>.
+          </li>
+          <li>
+            <strong>Kullanım</strong>: Sohbette önce görüntü/metin gönderin (kuyruğa eklenir), ardından tetik ifadesini gönderin (varsayılan{" "}
+            <code className="mono">QTSS_ANALIZ</code>).
+          </li>
+        </ul>
+      </>
+    ),
+  },
 ];
 
 export function filterHelpTopics(query: string): HelpTopic[] {
