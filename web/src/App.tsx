@@ -73,7 +73,6 @@ import { buildFormationTradeLevelSpecs } from "./lib/formationTradeLevelChart";
 import { ChannelScanMatchesTable } from "./components/ChannelScanMatchesTable";
 import { AiDecisionsPanel } from "./components/AiDecisionsPanel";
 import { AiDashboardPanel } from "./components/AiDashboardPanel";
-import { TbmDashboardPanel } from "./components/TbmDashboardPanel";
 import { AiPerformancePanel } from "./components/AiPerformancePanel";
 import { AiSettingsPanel } from "./components/AiSettingsPanel";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
@@ -158,6 +157,7 @@ import { TradingRangeTradeSummary } from "./components/TradingRangeTradeSummary"
 import { TradingRangeFuturesQuickTrade } from "./components/TradingRangeFuturesQuickTrade";
 import { TradingRangeDataEntryPanel } from "./components/TradingRangeDataEntryPanel";
 import { NotificationDrawerPanel } from "./components/NotificationDrawerPanel";
+import { TelegramSetupAnalysisPanel } from "./components/TelegramSetupAnalysisPanel";
 import { ServerRegistryPanel } from "./components/ServerRegistryPanel";
 import { HelpCrossLink } from "./help/HelpCrossLink";
 import { HelpPanel } from "./help/HelpPanel";
@@ -2558,21 +2558,20 @@ export default function App() {
                 <button
                   type="button"
                   role="tab"
-                  aria-selected={drawerTab === "tbm"}
-                  className={`tv-settings__tab ${drawerTab === "tbm" ? "is-active" : ""}`}
-                  onClick={() => setDrawerTab("tbm")}
-                  style={drawerTab === "tbm" ? { borderColor: "#22c55e" } : undefined}
-                >
-                  ⛏️ TBM
-                </button>
-                <button
-                  type="button"
-                  role="tab"
                   aria-selected={drawerTab === "notify"}
                   className={`tv-settings__tab ${drawerTab === "notify" ? "is-active" : ""}`}
                   onClick={() => setDrawerTab("notify")}
                 >
                   Bildirimler
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={drawerTab === "telegram_setup_analysis"}
+                  className={`tv-settings__tab ${drawerTab === "telegram_setup_analysis" ? "is-active" : ""}`}
+                  onClick={() => setDrawerTab("telegram_setup_analysis")}
+                >
+                  {t("telegramSetupAnalysis.tab")}
                 </button>
                 <button
                   type="button"
@@ -5364,10 +5363,6 @@ export default function App() {
                 </>
               ) : null}
 
-              {drawerTab === "tbm" ? (
-                <TbmDashboardPanel accessToken={token} />
-              ) : null}
-
               {drawerTab === "notify" ? (
                 <>
                   {matchesSetting(
@@ -5386,6 +5381,29 @@ export default function App() {
                   ) ? (
                     token ? (
                       <NotificationDrawerPanel accessToken={token} />
+                    ) : (
+                      <p className="muted card">{t("notifyTest.signInPrompt")}</p>
+                    )
+                  ) : null}
+                </>
+              ) : null}
+
+              {drawerTab === "telegram_setup_analysis" ? (
+                <>
+                  {matchesSetting(
+                    "telegram",
+                    "kurulum",
+                    "setup",
+                    "analiz",
+                    "analysis",
+                    "gemini",
+                    "webhook",
+                    "qtss_analiz",
+                    "grafik",
+                    "chart",
+                  ) ? (
+                    token ? (
+                      <TelegramSetupAnalysisPanel accessToken={token} />
                     ) : (
                       <p className="muted card">{t("notifyTest.signInPrompt")}</p>
                     )

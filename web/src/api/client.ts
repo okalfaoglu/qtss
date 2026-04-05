@@ -1926,3 +1926,28 @@ export async function fetchAiPortfolioDirective(accessToken: string): Promise<un
   if (!r.ok) throwQtssApiError("ai/directives/portfolio", r, t);
   return JSON.parse(t) as unknown;
 }
+
+export type TelegramSetupAnalysisStatusApi = {
+  webhook_configured: boolean;
+  gemini_configured: boolean;
+  trigger_phrase: string;
+  gemini_model: string;
+  max_buffer_turns: number;
+  buffer_ttl_secs: number;
+  allowlist_restricts: boolean;
+  allowlist_size: number;
+  webhook_path: string;
+};
+
+export async function fetchTelegramSetupAnalysisStatus(
+  accessToken: string,
+): Promise<TelegramSetupAnalysisStatusApi> {
+  const r = await fetchWithBearerRetry(
+    `${API_BASE}/api/v1/telegram-setup-analysis/status`,
+    accessToken,
+    {},
+  );
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("telegram-setup-analysis/status", r, t);
+  return JSON.parse(t) as TelegramSetupAnalysisStatusApi;
+}

@@ -11,6 +11,8 @@ use crate::oauth::jwt::JwtIssuer;
 
 pub struct AppState {
     pub pool: PgPool,
+    pub http_client: reqwest::Client,
+    pub setup_analysis_buffers: qtss_telegram_setup_analysis::SharedSetupBuffers,
     pub config: AppConfigRepository,
     pub pnl: PnlRollupRepository,
     pub exchange_accounts: ExchangeAccountRepository,
@@ -117,8 +119,15 @@ impl AppState {
         let notify_outbox = NotifyOutboxRepository::new(pool.clone());
         let user_permissions = UserPermissionRepository::new(pool.clone());
         let users = UserRepository::new(pool.clone());
+        let http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .user_agent(concat!("qtss-api/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|e| anyhow::anyhow!("reqwest client: {e}"))?;
         Ok(Self {
             pool,
+            http_client,
+            setup_analysis_buffers: qtss_telegram_setup_analysis::SharedSetupBuffers::new(),
             config,
             pnl,
             exchange_accounts,

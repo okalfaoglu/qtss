@@ -29,6 +29,7 @@ mod rate_limit;
 mod routes;
 mod state;
 mod telegram_webhook;
+mod telegram_setup_analysis_webhook;
 
 use rate_limit::ForwardedIpKeyExtractor;
 use routes::health_router;
@@ -102,6 +103,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .merge(health_router())
         .merge(telegram_webhook::telegram_webhook_router())
+        .merge(telegram_setup_analysis_webhook::telegram_setup_analysis_router())
         .route("/metrics", get(metrics::prometheus_metrics_gate))
         .route("/oauth/token", post(oauth::oauth_token))
         .nest(

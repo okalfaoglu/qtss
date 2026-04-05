@@ -18,6 +18,7 @@ export type SettingsTab =
   | "queues"
   | "ai"
   | "notify"
+  | "telegram_setup_analysis"
   | "tbm"
   | "help"
   | "setting";

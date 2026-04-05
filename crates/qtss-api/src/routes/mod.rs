@@ -24,6 +24,7 @@ mod orders_okx;
 mod reconcile;
 mod session;
 mod system_config_admin;
+mod telegram_setup_analysis;
 mod user_permissions_admin;
 
 use axum::middleware::from_fn;
@@ -94,6 +95,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
                 .merge(notify::notify_router())
                 .merge(external_fetch::external_fetch_read_router())
                 .merge(onchain_signals::onchain_signals_router())
+                .merge(telegram_setup_analysis::telegram_setup_analysis_status_router())
                 .layer(from_fn(require_dashboard_roles)),
         )
         .merge(
