@@ -5374,6 +5374,10 @@ export default function App() {
                 </>
               ) : null}
 
+              {drawerTab === "tbm" ? (
+                <TbmDashboardPanel accessToken={token} />
+              ) : null}
+
               {drawerTab === "notify" ? (
                 <>
                   {matchesSetting(
