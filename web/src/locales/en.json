@@ -650,7 +650,13 @@
       "autoApprove": "Auto-approve above",
       "disabled": "Off",
       "locale": "Output locale",
-      "layerConfig": "Layers"
+      "layerConfig": "Layers",
+      "llmVendor": "LLM vendor (all layers)",
+      "vendorMixedPlaceholder": "Mixed / other — pick Anthropic or Gemini to align",
+      "vendorAnthropic": "Anthropic (Claude)",
+      "vendorGemini": "Google Gemini",
+      "llmVendorHint": "Updates only app_config ai_engine_config: sets provider_tactical/operational/strategic and recommended models. API keys stay in system_config (unchanged).",
+      "providersReference": "Providers: anthropic, openai_compatible (e.g. OpenAI ChatGPT at https://api.openai.com), ollama, gemini (aliases google / google_gemini). Gemini model example: gemini-2.5-flash. Gemini API key: system_config ai.gemini_api_key or telegram_setup_analysis.gemini_api_key. See docs/CONFIG_REGISTRY.md § ai."
     },
     "performance": {
       "title": "AI performance",

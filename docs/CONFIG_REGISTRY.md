@@ -18,6 +18,17 @@ Bu dosya FAZ **11.3** ile uyumludur. Bu repoda `system_config` DDL + tohumlar ta
 
 **Çözümleme:** `qtss_storage::resolve_worker_tick_secs` + `QTSS_CONFIG_ENV_OVERRIDES` + ilgili `QTSS_*` yedekleri. Tam anahtar listesi ve worker modülleri için ana referans: **`docs/QTSS_MASTER_DEV_GUIDE.md` FAZ 11.7** ve üretim repodaki `crates/qtss-storage/src/config_tick.rs`.
 
+### `ai` — qtss-ai LLM sırları ve uçları
+
+| `config_key` | `value` örneği | `is_secret` | Açıklama |
+|--------------|----------------|-------------|-----------|
+| `anthropic_api_key` | `{"value":""}` | `true` | Anthropic Messages API (`provider_*` = `anthropic`). |
+| `gemini_api_key` | `{"value":""}` | `true` | İsteğe bağlı; **boşsa** `telegram_setup_analysis.gemini_api_key` kullanılır (aynı Google AI Studio anahtarı). |
+| `gemini_api_root` | `{"value":""}` | `false` | Boş = `https://generativelanguage.googleapis.com/v1beta`. |
+| `gemini_timeout_secs` | `{"secs":120}` | `false` | `generateContent` için taban HTTP süresi; istek `suggested_timeout` ile uzar. |
+
+**Sağlayıcı kimlikleri** (`app_config` `ai_engine_config` içindeki `provider_tactical` / `operational` / `strategic`): `anthropic`, `openai_compatible` (OpenAI ChatGPT ve uyumlu uçlar), `ollama`, `gemini` (takma adlar: `google`, `google_gemini`). Kod: `crates/qtss-ai/src/providers/mod.rs` + `provider_secrets.rs`. Eksik satırlar için migrasyon `0002_ai_provider_system_config_ensure.sql`.
+
 ### `notify` — Telegram (AI onayı)
 
 | `config_key` | `value` örneği | `is_secret` | Açıklama |

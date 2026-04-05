@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { fetchWithBearerRetry } from "../api/client";
+import { fetchWithBearerRetry, upsertAppConfig } from "../api/client";
 
 type Props = {
   accessToken: string | null;
@@ -33,6 +33,39 @@ type AiConfig = {
 const API_BASE = (import.meta as Record<string, Record<string, string>>).env?.VITE_API_BASE ?? "";
 
 const AI_ENGINE_CONFIG_KEY = "ai_engine_config";
+
+const GEMINI_PROVIDER_IDS = new Set(["gemini", "google", "google_gemini"]);
+
+function detectUniformVendor(c: AiConfig): "anthropic" | "gemini" | "custom" {
+  const p = [c.provider_tactical, c.provider_operational, c.provider_strategic].map((x) => x.trim().toLowerCase());
+  if (p.every((x) => x === "anthropic")) return "anthropic";
+  if (p.every((x) => GEMINI_PROVIDER_IDS.has(x))) return "gemini";
+  return "custom";
+}
+
+/** Applies recommended models per vendor; keeps all other `ai_engine_config` fields (keys, max_tokens, etc.). */
+function applyVendorPreset(base: AiConfig, vendor: "anthropic" | "gemini"): AiConfig {
+  if (vendor === "anthropic") {
+    return {
+      ...base,
+      provider_tactical: "anthropic",
+      provider_operational: "anthropic",
+      provider_strategic: "anthropic",
+      model_tactical: "claude-haiku-4-5-20251001",
+      model_operational: "claude-haiku-4-5-20251001",
+      model_strategic: "claude-sonnet-4-20250514",
+    };
+  }
+  return {
+    ...base,
+    provider_tactical: "gemini",
+    provider_operational: "gemini",
+    provider_strategic: "gemini",
+    model_tactical: "gemini-2.5-flash",
+    model_operational: "gemini-2.5-flash",
+    model_strategic: "gemini-2.5-flash",
+  };
+}
 
 async function fetchAiConfig(token: string): Promise<AiConfig | null> {
   const r = await fetchWithBearerRetry(
@@ -131,6 +164,8 @@ export function AiSettingsPanel({ accessToken, canAdmin }: Props) {
     },
   ];
 
+  const uniformVendor = detectUniformVendor(config);
+
   return (
     <div className="card" style={{ marginTop: "0.5rem" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -178,6 +213,47 @@ export function AiSettingsPanel({ accessToken, canAdmin }: Props) {
           {t("ai.settings.engineOffExplainer")}
         </p>
       ) : null}
+
+      <div className="tv-settings__fields" style={{ marginBottom: "0.85rem" }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem", maxWidth: "22rem" }}>
+          <span className="muted" style={{ fontSize: "0.8rem" }}>
+            {t("ai.settings.llmVendor")}
+          </span>
+          <select
+            className="mono"
+            value={uniformVendor === "custom" ? "" : uniformVendor}
+            disabled={busy}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v !== "anthropic" && v !== "gemini") return;
+              void (async () => {
+                if (!accessToken) return;
+                setBusy(true);
+                setErr("");
+                try {
+                  const next = applyVendorPreset(config, v);
+                  await upsertAppConfig(accessToken, {
+                    key: AI_ENGINE_CONFIG_KEY,
+                    value: next,
+                  });
+                  setConfig(next);
+                } catch (e) {
+                  setErr(String(e));
+                } finally {
+                  setBusy(false);
+                }
+              })();
+            }}
+          >
+            <option value="">{t("ai.settings.vendorMixedPlaceholder")}</option>
+            <option value="anthropic">{t("ai.settings.vendorAnthropic")}</option>
+            <option value="gemini">{t("ai.settings.vendorGemini")}</option>
+          </select>
+        </label>
+        <p className="muted" style={{ fontSize: "0.68rem", lineHeight: 1.45, marginTop: "0.35rem", maxWidth: "28rem" }}>
+          {t("ai.settings.llmVendorHint")}
+        </p>
+      </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.4rem", fontSize: "0.8rem", marginBottom: "1rem" }}>
         <div>
@@ -242,6 +318,10 @@ export function AiSettingsPanel({ accessToken, canAdmin }: Props) {
           </div>
         ))}
       </div>
+
+      <p className="muted" style={{ fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.65rem" }}>
+        {t("ai.settings.providersReference")}
+      </p>
 
       {!canAdmin ? (
         <p className="muted" style={{ fontSize: "0.7rem", marginTop: "0.75rem" }}>
