@@ -614,5 +614,62 @@
       "noTradesInPeriod": "Bu dönemde satır yok.",
       "clickBarHint": "Döneme göre dolum/emir süzmek için bir çubuğa tıklayın."
     }
+  },
+  "ai": {
+    "loginPrompt": "AI çekmecesini kullanmak için giriş yapın.",
+    "refresh": "Yenile",
+    "subtab_dashboard": "Özet",
+    "subtab_decisions": "Kararlar",
+    "subtab_performance": "Performans",
+    "subtab_settings": "Ayarlar",
+    "dashboard": {
+      "title": "AI özeti",
+      "pendingAlert": "{{count}} karar onay bekliyor",
+      "tactical": "Taktik",
+      "operational": "Operasyonel",
+      "strategic": "Stratejik",
+      "activePortfolio": "Aktif portföy direktifi",
+      "riskBudget": "Risk bütçesi",
+      "maxPositions": "Maks. pozisyon",
+      "regime": "Tercih edilen rejim",
+      "validUntil": "Geçerlilik",
+      "recentDecisions": "Son kararlar"
+    },
+    "settings": {
+      "title": "AI motor ayarları",
+      "adminOnly": "Motor yapılandırmasını görmek veya değiştirmek için yönetici rolü gerekir.",
+      "loading": "Yükleniyor…",
+      "notConfigured": "Motor yapılandırması yüklenemedi (satır yok veya yetki yetersiz).",
+      "engineOn": "Motor açık",
+      "engineOff": "Motor kapalı",
+      "minConfidence": "Min. güven",
+      "decisionTTL": "Karar ömrü (TTL)",
+      "autoApprove": "Üzerinde otomatik onay",
+      "disabled": "Kapalı",
+      "locale": "Çıktı dili",
+      "layerConfig": "Katmanlar"
+    },
+    "performance": {
+      "title": "AI performansı",
+      "allLayers": "Tüm katmanlar",
+      "totalDecisions": "Toplam karar",
+      "approvalRate": "Onay oranı",
+      "errorRate": "Hata oranı",
+      "bySymbol": "Sembole göre",
+      "total": "Toplam",
+      "approved": "Onaylı",
+      "applied": "Uygulanan",
+      "errors": "Hatalar",
+      "last": "Son",
+      "decisionDetail": "Karar detayı",
+      "clickToLoad": "Detay için bir satır seçin."
+    },
+    "col": {
+      "time": "Zaman",
+      "layer": "Katman",
+      "symbol": "Sembol",
+      "status": "Durum",
+      "confidence": "Güven"
+    }
   }
 }

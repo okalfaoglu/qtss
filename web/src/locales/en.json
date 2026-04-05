@@ -616,9 +616,60 @@
     }
   },
   "ai": {
+    "loginPrompt": "Sign in to use the AI drawer.",
+    "refresh": "Refresh",
     "subtab_dashboard": "Dashboard",
     "subtab_decisions": "Decisions",
     "subtab_performance": "Performance",
-    "subtab_settings": "Settings"
+    "subtab_settings": "Settings",
+    "dashboard": {
+      "title": "AI overview",
+      "pendingAlert": "{{count}} decision(s) awaiting approval",
+      "tactical": "Tactical",
+      "operational": "Operational",
+      "strategic": "Strategic",
+      "activePortfolio": "Active portfolio directive",
+      "riskBudget": "Risk budget",
+      "maxPositions": "Max positions",
+      "regime": "Preferred regime",
+      "validUntil": "Valid until",
+      "recentDecisions": "Recent decisions"
+    },
+    "settings": {
+      "title": "AI engine settings",
+      "adminOnly": "Admin role required to view or change engine configuration.",
+      "loading": "Loading…",
+      "notConfigured": "Could not load engine config (missing row or insufficient permissions).",
+      "engineOn": "Engine enabled",
+      "engineOff": "Engine disabled",
+      "minConfidence": "Min confidence",
+      "decisionTTL": "Decision TTL",
+      "autoApprove": "Auto-approve above",
+      "disabled": "Off",
+      "locale": "Output locale",
+      "layerConfig": "Layers"
+    },
+    "performance": {
+      "title": "AI performance",
+      "allLayers": "All layers",
+      "totalDecisions": "Total decisions",
+      "approvalRate": "Approval rate",
+      "errorRate": "Error rate",
+      "bySymbol": "By symbol",
+      "total": "Total",
+      "approved": "Approved",
+      "applied": "Applied",
+      "errors": "Errors",
+      "last": "Last",
+      "decisionDetail": "Decision detail",
+      "clickToLoad": "Select a row to load detail."
+    },
+    "col": {
+      "time": "Time",
+      "layer": "Layer",
+      "symbol": "Symbol",
+      "status": "Status",
+      "confidence": "Confidence"
+    }
   }
 }
