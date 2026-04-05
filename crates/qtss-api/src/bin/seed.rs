@@ -6,6 +6,10 @@
 //!
 //! **Öncelik (OAuth client_secret):** `QTSS_SEED_OAUTH_CLIENT_SECRET` (doluysa) → `system_config.seed.oauth_client_secret` → yoksa üret.
 //! Her koşuda plaintext `oauth_client_secret` `system_config`’te tutulur; `oauth_clients` hash’i yenilenir.
+//!
+//! **İsteğe bağlı Telegram (`notify`):** ortam doluysa `system_config` güncellenir (yoksa dokunulmaz):
+//! - `QTSS_SEED_NOTIFY_TELEGRAM_BOT_TOKEN` → `notify.telegram_bot_token`
+//! - `QTSS_SEED_NOTIFY_TELEGRAM_CHAT_ID` → `notify.telegram_chat_id`
 
 use anyhow::Context;
 use qtss_common::{load_dotenv, require_postgres_database_url};
@@ -75,6 +79,37 @@ fn env_trimmed(key: &str) -> Option<String> {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+/// Writes `notify.telegram_*` when matching env vars are set (does not clear existing DB values).
+async fn seed_notify_telegram_from_env(sys: &SystemConfigRepository) -> anyhow::Result<()> {
+    if let Some(token) = env_trimmed("QTSS_SEED_NOTIFY_TELEGRAM_BOT_TOKEN") {
+        sys.upsert(
+            "notify",
+            "telegram_bot_token",
+            serde_json::json!({ "value": token }),
+            Some(1),
+            Some("Telegram Bot API token (from QTSS_SEED_NOTIFY_TELEGRAM_BOT_TOKEN on seed)."),
+            Some(true),
+            None,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("system_config notify.telegram_bot_token: {e}"))?;
+    }
+    if let Some(chat_id) = env_trimmed("QTSS_SEED_NOTIFY_TELEGRAM_CHAT_ID") {
+        sys.upsert(
+            "notify",
+            "telegram_chat_id",
+            serde_json::json!({ "value": chat_id }),
+            Some(1),
+            Some("Default Telegram chat id for notify (from QTSS_SEED_NOTIFY_TELEGRAM_CHAT_ID on seed)."),
+            Some(true),
+            None,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("system_config notify.telegram_chat_id: {e}"))?;
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -250,6 +285,8 @@ async fn main() -> anyhow::Result<()> {
         "binance_futures_api_secret",
     )
     .await?;
+
+    seed_notify_telegram_from_env(&sys).await?;
 
     println!("OK — org_id={org_id} user_id={uid}");
     println!("OAuth client_id={client_id}");
