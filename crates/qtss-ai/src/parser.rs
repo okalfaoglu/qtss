@@ -24,28 +24,92 @@ const OPERATIONAL_ACTIONS: &[&str] = &[
     "add_to_position",
 ];
 
-/// Pulls a JSON object from markdown fences or the first `{`…`}` span.
-pub fn extract_json_block(raw: &str) -> AiResult<String> {
-    let t = raw.trim();
-    if let Some(start) = t.find("```json") {
-        let after = &t[start + "```json".len()..];
-        if let Some(end) = after.find("```") {
-            return Ok(after[..end].trim().to_string());
+/// Case-insensitive ASCII substring search (for ```json / ```JSON).
+fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    let nb = needle.as_bytes();
+    let hb = haystack.as_bytes();
+    'outer: for i in 0..=hb.len().saturating_sub(nb.len()) {
+        for j in 0..nb.len() {
+            if hb[i + j].to_ascii_lowercase() != nb[j].to_ascii_lowercase() {
+                continue 'outer;
+            }
+        }
+        return Some(i);
+    }
+    None
+}
+
+/// Extract first `{`…`}` that parses as a JSON object: brace matching, then scan `}` if truncated.
+fn try_extract_json_object(s: &str) -> AiResult<String> {
+    let s = s.trim();
+    let start = s.find('{').ok_or_else(|| AiError::parse("no JSON object start"))?;
+    let slice = &s[start..];
+    if let Some(end) = find_matching_brace(slice) {
+        let cand = slice[..=end].to_string();
+        if serde_json::from_str::<Value>(&cand).is_ok() {
+            return Ok(cand);
         }
     }
-    if let Some(start) = t.find("```") {
-        let after = &t[start + 3..];
-        if let Some(line_end) = after.find('\n') {
-            let rest = &after[line_end + 1..];
-            if let Some(end) = rest.find("```") {
-                return Ok(rest[..end].trim().to_string());
+    // Gemini / long outputs: missing closing ``` fence or `max_tokens` cut mid-object — try each `}`.
+    for (i, ch) in slice.char_indices() {
+        if ch != '}' {
+            continue;
+        }
+        let end = i + ch.len_utf8();
+        let cand = &slice[..end];
+        if let Ok(v) = serde_json::from_str::<Value>(cand) {
+            if v.is_object() {
+                return Ok(cand.to_string());
             }
         }
     }
-    let start = t.find('{').ok_or_else(|| AiError::parse("no JSON object start"))?;
-    let slice = &t[start..];
-    let end = find_matching_brace(slice).ok_or_else(|| AiError::parse("unbalanced JSON braces"))?;
-    Ok(slice[..=end].to_string())
+    Err(AiError::parse("unbalanced JSON braces"))
+}
+
+/// Pulls a JSON object from markdown fences or the first `{`…`}` span.
+pub fn extract_json_block(raw: &str) -> AiResult<String> {
+    let t = raw.trim();
+
+    // ```json … ``` (closing fence optional — models often omit it when truncated).
+    if let Some(idx) = find_case_insensitive(t, "```json") {
+        let rest = t[idx + "```json".len()..].trim_start();
+        let content = if let Some(close) = rest.find("```") {
+            rest[..close].trim()
+        } else {
+            rest.trim()
+        };
+        if let Ok(s) = try_extract_json_object(content) {
+            return Ok(s);
+        }
+    }
+
+    // Generic ``` fence (optional language line).
+    if let Some(idx) = t.find("```") {
+        let mut rest = t[idx + 3..].trim_start();
+        if !rest.starts_with('{') {
+            if let Some(nl) = rest.find('\n') {
+                let lang = rest[..nl].trim().to_lowercase();
+                if lang.is_empty() || lang == "json" {
+                    rest = rest[nl + 1..].trim_start();
+                }
+            }
+        }
+        let content = if let Some(close) = rest.find("```") {
+            rest[..close].trim()
+        } else {
+            rest.trim()
+        };
+        if !content.is_empty() && content.contains('{') {
+            if let Ok(s) = try_extract_json_object(content) {
+                return Ok(s);
+            }
+        }
+    }
+
+    try_extract_json_object(t)
 }
 
 fn find_matching_brace(s: &str) -> Option<usize> {
@@ -273,5 +337,28 @@ mod tests {
 ```"#;
         let v = parse_operational_decision(raw).unwrap();
         assert_eq!(v["action"], "activate_trailing");
+    }
+
+    #[test]
+    fn tactical_gemini_fenced_unclosed_fence() {
+        let raw = r#"```json
+{
+  "direction": "buy",
+  "confidence": 0.65,
+  "stop_loss_pct": 2.5,
+  "reasoning": "ok"
+}"#;
+        let v = parse_tactical_decision(raw).unwrap();
+        assert_eq!(v["direction"], "buy");
+        assert_eq!(v["confidence"], 0.65);
+    }
+
+    #[test]
+    fn tactical_case_insensitive_json_fence() {
+        let raw = r#"```JSON
+{"direction": "neutral", "confidence": 0.5}
+```"#;
+        let v = parse_tactical_decision(raw).unwrap();
+        assert_eq!(v["direction"], "neutral");
     }
 }
