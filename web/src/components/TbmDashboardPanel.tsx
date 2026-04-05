@@ -1016,6 +1016,15 @@ export function TbmDashboardPanel({ accessToken }: Props) {
             {autoRefresh ? `${countdown}s` : "OFF"}
           </button>
 
+          {/* Alert rules toggle */}
+          <button
+            type="button"
+            onClick={() => setShowAlertRules(!showAlertRules)}
+            style={{ background: showAlertRules ? "#334155" : "transparent", color: triggeredAlerts.length > 0 ? "#facc15" : "#e2e8f0", border: `1px solid ${triggeredAlerts.length > 0 ? "#facc15" : "#475569"}`, borderRadius: 4, padding: "4px 10px", fontSize: 11, cursor: "pointer" }}
+          >
+            Alerts{triggeredAlerts.length > 0 ? ` (${triggeredAlerts.length})` : ""}
+          </button>
+
           {/* Setup log toggle */}
           <button
             type="button"
@@ -1023,6 +1032,16 @@ export function TbmDashboardPanel({ accessToken }: Props) {
             style={{ background: showSetupLog ? "#334155" : "transparent", color: "#e2e8f0", border: "1px solid #475569", borderRadius: 4, padding: "4px 10px", fontSize: 11, cursor: "pointer" }}
           >
             Setup Log
+          </button>
+
+          {/* CSV Export */}
+          <button
+            type="button"
+            onClick={() => exportCsv(filtered, deltaMap)}
+            style={{ background: "transparent", color: "#e2e8f0", border: "1px solid #475569", borderRadius: 4, padding: "4px 10px", fontSize: 11, cursor: "pointer" }}
+            title="CSV olarak indir"
+          >
+            CSV
           </button>
 
           <button
@@ -1037,6 +1056,21 @@ export function TbmDashboardPanel({ accessToken }: Props) {
       </div>
 
       {err && <div style={{ color: "#ef4444", fontSize: 12, marginBottom: 8 }}>{err}</div>}
+
+      {/* Alert Rules Panel */}
+      {showAlertRules && <AlertRulesPanel rules={alertRules} setRules={setAlertRules} />}
+
+      {/* Triggered Alerts Banner */}
+      {triggeredAlerts.length > 0 && (
+        <div style={{ background: "#422006", border: "1px solid #facc1555", borderRadius: 8, padding: "8px 12px", marginBottom: 12, fontSize: 11 }}>
+          <strong style={{ color: "#facc15" }}>Alert ({triggeredAlerts.length}):</strong>{" "}
+          {triggeredAlerts.map((a, i) => (
+            <span key={i} style={{ marginRight: 8 }}>
+              {a.item.symbol} {a.item.interval} {a.dir} {a.score.toFixed(0)}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Stat Cards */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
@@ -1084,8 +1118,16 @@ export function TbmDashboardPanel({ accessToken }: Props) {
 
       {viewMode === "heatmap" ? (
         <HeatmapView items={filtered} direction={direction} />
+      ) : viewMode === "compare" ? (
+        <CompareView items={filtered} selectedKeys={compareKeys} setSelectedKeys={setCompareKeys} />
       ) : (
-        filtered.map((item, i) => <SymbolTbmCard key={`${item.symbol}-${item.interval}-${i}`} item={item} />)
+        filtered.map((item, i) => (
+          <SymbolTbmCard
+            key={`${item.symbol}-${item.interval}-${i}`}
+            item={item}
+            delta={deltaMap.get(`${item.symbol}|${item.interval}`)}
+          />
+        ))
       )}
     </div>
   );
