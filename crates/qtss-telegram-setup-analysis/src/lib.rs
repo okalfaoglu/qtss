@@ -61,6 +61,9 @@ impl SharedSetupBuffers {
 }
 
 /// Handle a Telegram `Update` JSON. Sends replies to the same chat via Bot API when needed.
+///
+/// Private / group chats use `message`. **Channels** broadcast posts as `channel_post` (same shape);
+/// without handling it, channel uploads are ignored and the queue never fills.
 pub async fn process_telegram_update(
     http: &reqwest::Client,
     buffers: &SharedSetupBuffers,
@@ -68,7 +71,11 @@ pub async fn process_telegram_update(
     cfg: &ResolvedSetupAnalysisConfig,
     bot_token: &str,
 ) {
-    let Some(msg) = update.get("message").filter(|m| !m.is_null()) else {
+    let msg = update
+        .get("message")
+        .filter(|m| !m.is_null())
+        .or_else(|| update.get("channel_post").filter(|m| !m.is_null()));
+    let Some(msg) = msg else {
         return;
     };
 

@@ -294,8 +294,9 @@ export const HELP_TOPICS: HelpTopic[] = [
             <code className="mono">{`https://<api-host>/telegram/setup-analysis/<webhook_secret>`}</code>.
           </li>
           <li>
-            <strong>Kullanım</strong>: Sohbette önce görüntü/metin gönderin (kuyruğa eklenir), ardından tetik ifadesini gönderin (varsayılan{" "}
-            <code className="mono">QTSS_ANALIZ</code>).
+            <strong>Kullanım</strong>: Önce görüntü/metin gönderin (kuyruğa eklenir), ardından tetik ifadesini gönderin (varsayılan{" "}
+            <code className="mono">QTSS_ANALIZ</code>). <strong>Kanallarda</strong> güncelleme türü <code className="mono">channel_post</code> olduğu
+            için bot kanalda yönetici ve mesaj gönderebilir olmalıdır.
           </li>
         </ul>
       </>

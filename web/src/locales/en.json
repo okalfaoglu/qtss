@@ -134,8 +134,8 @@
     "hintModule": "system_config module: telegram_setup_analysis — keys: webhook_secret (secret), gemini_api_key (secret), trigger_phrase, gemini_model, max_buffer_turns, buffer_ttl_secs, allowed_chat_ids (comma-separated chat ids, optional).",
     "hintWebhook": "Set Telegram webhook to POST https://<your-api-host>/telegram/setup-analysis/<webhook_secret> for the same bot as notify.telegram_bot_token.",
     "hintGemini": "Secrets and trigger phrase: edit `telegram_setup_analysis` rows in Admin → system_config (not .env).",
-    "hintNotify": "Requires notify.telegram_bot_token so the server can download files and reply to the user chat.",
-    "hintFlow": "Flow: send one or more photos/messages → they are queued → send the trigger alone or with a short note → receive the Turkish report (entry, SL, TP, risk bar).",
+    "hintNotify": "Requires notify.telegram_bot_token to download files and reply. For channels, add the bot as an admin with permission to post messages.",
+    "hintFlow": "Flow: send photo/text → queued → send trigger → Turkish report. Channel posts (channel_post) are supported; private chats and groups work too.",
     "statusYes": "Yes",
     "statusNo": "No"
   },
