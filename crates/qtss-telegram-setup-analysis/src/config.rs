@@ -132,17 +132,17 @@ impl ResolvedSetupAnalysisConfig {
 }
 
 fn json_value_string(value: &JsonValue) -> Option<String> {
-    let raw = value.get("value").or_else(|| value.as_str().map(|_| value));
-    if let Some(s) = raw.and_then(|x| x.as_str()) {
+    let v = value.get("value").unwrap_or(value);
+    if let Some(s) = v.as_str() {
         return Some(s.trim().to_string());
     }
-    if let Some(n) = raw.and_then(|x| x.as_i64()) {
+    if let Some(n) = v.as_i64() {
         return Some(n.to_string());
     }
-    if let Some(n) = raw.and_then(|x| x.as_u64()) {
+    if let Some(n) = v.as_u64() {
         return Some(n.to_string());
     }
-    if let Some(f) = raw.and_then(|x| x.as_f64()) {
+    if let Some(f) = v.as_f64() {
         return Some(f.to_string());
     }
     None
