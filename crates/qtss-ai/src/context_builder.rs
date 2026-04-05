@@ -26,7 +26,7 @@ fn trim_context_if_needed(ctx: &mut Value) {
         return;
     }
     // Priority order for removal: ai_feedback → confluence → open_position → onchain_signals
-    let low_priority_keys = ["ai_feedback", "decision_history", "chart_formations", "confluence", "open_position"];
+    let low_priority_keys = ["ai_feedback", "decision_history", "chart_formations", "tbm_mtf", "tbm_scores", "confluence", "open_position"];
     if let Some(obj) = ctx.as_object_mut() {
         for key in &low_priority_keys {
             obj.remove(*key);
@@ -128,6 +128,22 @@ pub async fn build_tactical_context(pool: &PgPool, symbol: &str) -> AiResult<Val
         Value::Null
     };
 
+    // Faz H: TBM skorları (Top/Bottom Mining) — dip/tepe sinyalleri + MTF konfirmasyon
+    let tbm_scores = if let Some(e) = engine_row {
+        fetch_analysis_snapshot_payload(pool, e.id, "tbm_scores")
+            .await?
+            .unwrap_or(Value::Null)
+    } else {
+        Value::Null
+    };
+    let tbm_mtf = if let Some(e) = engine_row {
+        fetch_analysis_snapshot_payload(pool, e.id, "tbm_mtf")
+            .await?
+            .unwrap_or(Value::Null)
+    } else {
+        Value::Null
+    };
+
     let price_context = if let Some(e) = engine_row {
         summarize_recent_bars(
             pool,
@@ -198,6 +214,8 @@ pub async fn build_tactical_context(pool: &PgPool, symbol: &str) -> AiResult<Val
         "onchain_signals": onchain,
         "confluence": confluence,
         "chart_formations": chart_formations,
+        "tbm_scores": tbm_scores,
+        "tbm_mtf": tbm_mtf,
         "price_context": price_context,
         "open_position": open_position,
         "last_ai_decision": last_ai_decision,

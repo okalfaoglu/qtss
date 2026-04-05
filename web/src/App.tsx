@@ -2558,6 +2558,16 @@ export default function App() {
                 <button
                   type="button"
                   role="tab"
+                  aria-selected={drawerTab === "tbm"}
+                  className={`tv-settings__tab ${drawerTab === "tbm" ? "is-active" : ""}`}
+                  onClick={() => setDrawerTab("tbm")}
+                  style={drawerTab === "tbm" ? { borderColor: "#22c55e" } : undefined}
+                >
+                  ⛏️ TBM
+                </button>
+                <button
+                  type="button"
+                  role="tab"
                   aria-selected={drawerTab === "notify"}
                   className={`tv-settings__tab ${drawerTab === "notify" ? "is-active" : ""}`}
                   onClick={() => setDrawerTab("notify")}
@@ -5352,6 +5362,10 @@ export default function App() {
                   {aiSubtab === "ai_performance" && <AiPerformancePanel accessToken={token} />}
                   {aiSubtab === "ai_settings" && <AiSettingsPanel accessToken={token} />}
                 </>
+              ) : null}
+
+              {drawerTab === "tbm" ? (
+                <TbmDashboardPanel accessToken={token} />
               ) : null}
 
               {drawerTab === "notify" ? (
