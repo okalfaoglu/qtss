@@ -63,11 +63,11 @@ async fn fetch_stablecoin_flow(client: &Client) -> Result<JsonValue, String> {
     let url = format!("{DEFILLAMA_STABLECOINS}/stablecoins?includePrices=false");
     let data = fetch_json(client, &url).await?;
 
-    let peggedAssets = data.get("peggedAssets").and_then(|v| v.as_array());
-    if peggedAssets.is_none() {
+    let pegged_assets = data.get("peggedAssets").and_then(|v| v.as_array());
+    if pegged_assets.is_none() {
         return Err("no peggedAssets".into());
     }
-    let assets = peggedAssets.unwrap();
+    let assets = pegged_assets.unwrap();
 
     // Top 5 stablecoin (USDT, USDC, DAI, BUSD, TUSD)
     let mut total_mcap = 0.0_f64;

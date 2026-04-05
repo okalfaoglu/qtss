@@ -11,7 +11,7 @@ mod confluence_hook;
 mod copy_trade_follower;
 mod copy_trade_queue;
 mod data_sources;
-#[allow(dead_code, unused_variables)]
+#[allow(dead_code, unused_variables, unused_imports, non_snake_case)]
 mod defillama;
 mod engines;
 mod kill_switch;
