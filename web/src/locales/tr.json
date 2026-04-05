@@ -644,7 +644,7 @@
       "notConfigured": "Motor yapılandırması yüklenemedi (satır yok veya yetki yetersiz).",
       "engineOn": "Motor açık",
       "engineOff": "Motor kapalı",
-      "engineOffExplainer": "Varsayılan seed’de `ai_engine_config.enabled` false gelir: worker döngüleri çalışır ama taktik/operasyonel/stratejik sweep’ler motor açılana kadar LLM çağırmaz. Açmak için yönetici Uygulama yapılandırması anahtarı `ai_engine_config` veya `POST /api/v1/config` ile `enabled: true` yapın. Sağlayıcı anahtarlarını ayarlayın (örn. ANTHROPIC_API_KEY). `QTSS_CONFIG_ENV_OVERRIDES=1` iken `QTSS_AI_ENABLED=1` motoru da açar. `QTSS_AI_ENGINE_WORKER=0` ise qtss-worker içindeki AI arka plan görevlerini kapatır.",
+      "engineOffExplainer": "Varsayılan seed’de `app_config.ai_engine_config` içinde `enabled` false: worker döngüleri çalışır ama sweep’ler LLM çağırmaz. Motoru açmak için yönetici `ai_engine_config` üzerinde `enabled: true` (Uygulama yapılandırması veya `POST /api/v1/config`). Anthropic anahtarı `system_config` içinde `module` = `ai`, `config_key` = `anthropic_api_key` — JSON gövdesinde `value` alanına yazılır (tohumda boş); Admin veya SQL `UPDATE` ile doldurun. Bu `ai.*` satırları veya `output_locale` eksikse migrasyon `0002_ai_provider_system_config_ensure.sql` veya `docs/sql/ai_provider_system_config_ensure.sql` idempotent ekler. Ortamda `ANTHROPIC_API_KEY` da kullanılabilir; `QTSS_CONFIG_ENV_OVERRIDES=1` iken `QTSS_AI_ENABLED=1` motoru da açar. `QTSS_AI_ENGINE_WORKER=0` AI arka plan görevlerini kapatır.",
       "minConfidence": "Min. güven",
       "decisionTTL": "Karar ömrü (TTL)",
       "autoApprove": "Üzerinde otomatik onay",

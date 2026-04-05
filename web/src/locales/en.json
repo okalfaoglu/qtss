@@ -644,7 +644,7 @@
       "notConfigured": "Could not load engine config (missing row or insufficient permissions).",
       "engineOn": "Engine enabled",
       "engineOff": "Engine disabled",
-      "engineOffExplainer": "Default seed keeps ai_engine_config.enabled false: worker loops still run, but tactical/operational/strategic sweeps skip LLM work until an admin turns the engine on (Application config key ai_engine_config, or POST /api/v1/config). Set provider API keys (e.g. ANTHROPIC_API_KEY). With QTSS_CONFIG_ENV_OVERRIDES=1, QTSS_AI_ENABLED=1 also enables the engine. QTSS_AI_ENGINE_WORKER=0 disables AI background tasks in qtss-worker.",
+      "engineOffExplainer": "Default seed keeps app_config ai_engine_config.enabled false: worker loops still run, but sweeps skip the LLM until an admin sets enabled: true (Application config key ai_engine_config, or POST /api/v1/config). Store the Anthropic key in system_config (module ai, config_key anthropic_api_key) as JSON with a value field — seed is empty; fill via Admin or SQL UPDATE. If those ai.* rows or output_locale on ai_engine_config are missing, migration 0002_ai_provider_system_config_ensure.sql or docs/sql/ai_provider_system_config_ensure.sql adds them idempotently. You can also use env ANTHROPIC_API_KEY; with QTSS_CONFIG_ENV_OVERRIDES=1, QTSS_AI_ENABLED=1 enables the engine. QTSS_AI_ENGINE_WORKER=0 disables AI background tasks in qtss-worker.",
       "minConfidence": "Min confidence",
       "decisionTTL": "Decision TTL",
       "autoApprove": "Auto-approve above",

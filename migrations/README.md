@@ -4,11 +4,10 @@ Applied at API/worker startup via `qtss_storage::run_migrations` (SQLx).
 
 ## Current layout (squashed baseline)
 
-Tek dosya:
+- **`0001_qtss_baseline.sql`** — tüm şema + tohumlar + sonradan eklenen parçalar (`-- >>> merged from:` / `-- >>> squashed from:` bölüm başlıklarıyla). Eski zincir `0001`…`0063` ve son delta parçaları burada birleşiktir.
+- **`0002_ai_provider_system_config_ensure.sql`** — `system_config` `ai.*` sağlayıcı satırlarını idempotent ekler; `app_config.ai_engine_config` içinde eksik `output_locale` anahtarını tamamlar. Bir sonraki squash öncesi geçici delta; operatör kopyası: `docs/sql/ai_provider_system_config_ensure.sql`.
 
-- **`0001_qtss_baseline.sql`** — tüm şema + tohumlar + sonradan eklenen parçalar (`-- >>> merged from:` / `-- >>> squashed from:` bölüm başlıklarıyla). Eski zincir `0001`…`0063` ve son delta parçaları burada birleşiktir; dizinde yalnız bu dosya kalmalıdır.
-
-Yeni şema değişikliği: geçici olarak `0002_yeni.sql` ekleyip `python3 scripts/squash_migrations_into_one.py` ile tekrar tek dosyaya indir (veya üretimde zaten uygulanmış baseline’ı elleme — yeni numaralı dosya + squash / dokümantasyondaki reset kuralları).
+Normalde squash sonrası yalnız `0001` kalır. Yeni şema değişikliği veya `0002` sonrası birleştirme: geçici olarak `0002_*.sql` ekleyip `python3 scripts/squash_migrations_into_one.py` ile tekrar tek dosyaya indir (üretimde uygulanmış baseline’ı elleme — yeni numaralı dosya + squash / dokümantasyondaki reset kuralları).
 
 **Regenerate** (split dosyalar varken veya git’ten eski `migrations/*.sql` seti geri alındıktan sonra):
 
