@@ -173,7 +173,7 @@ pub async fn defillama_loop(pool: PgPool) {
         // 1) Chain TVL
         match fetch_chain_tvl(&client).await {
             Ok(payload) => {
-                if let Err(e) = upsert_data_snapshot(&pool, "defillama_chain_tvl", &json!({}), &payload, None).await {
+                if let Err(e) = upsert_data_snapshot(&pool, "defillama_chain_tvl", &json!({}), Some(&payload), None, None).await {
                     warn!(%e, "defillama_chain_tvl snapshot");
                 } else {
                     info!("defillama_chain_tvl güncellendi");
@@ -185,7 +185,7 @@ pub async fn defillama_loop(pool: PgPool) {
         // 2) Stablecoin flow
         match fetch_stablecoin_flow(&client).await {
             Ok(payload) => {
-                if let Err(e) = upsert_data_snapshot(&pool, "defillama_stablecoin_flow", &json!({}), &payload, None).await {
+                if let Err(e) = upsert_data_snapshot(&pool, "defillama_stablecoin_flow", &json!({}), Some(&payload), None, None).await {
                     warn!(%e, "defillama_stablecoin_flow snapshot");
                 } else {
                     info!("defillama_stablecoin_flow güncellendi");
@@ -197,7 +197,7 @@ pub async fn defillama_loop(pool: PgPool) {
         // 3) DEX volume
         match fetch_dex_volume(&client).await {
             Ok(payload) => {
-                if let Err(e) = upsert_data_snapshot(&pool, "defillama_dex_volume", &json!({}), &payload, None).await {
+                if let Err(e) = upsert_data_snapshot(&pool, "defillama_dex_volume", &json!({}), Some(&payload), None, None).await {
                     warn!(%e, "defillama_dex_volume snapshot");
                 } else {
                     info!("defillama_dex_volume güncellendi");
