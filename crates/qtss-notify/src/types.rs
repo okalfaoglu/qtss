@@ -63,6 +63,12 @@ pub struct Notification {
     /// Telegram Bot API `reply_markup` (ör. `inline_keyboard`); yalnızca Telegram kanalında kullanılır.
     #[serde(default)]
     pub telegram_reply_markup: Option<serde_json::Value>,
+    /// When set, Telegram `sendMessage` uses this as the full `text` instead of `title` + newline + `body`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telegram_text: Option<String>,
+    /// Telegram `parse_mode` (e.g. `HTML`). Only applied when sending to Telegram.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telegram_parse_mode: Option<String>,
 }
 
 impl Notification {
@@ -72,7 +78,16 @@ impl Notification {
             body: body.into(),
             body_html: None,
             telegram_reply_markup: None,
+            telegram_text: None,
+            telegram_parse_mode: None,
         }
+    }
+
+    /// Telegram-only rich text; other channels still use [`Self::title`] and [`Self::body`].
+    pub fn with_telegram_html_message(mut self, html: impl Into<String>) -> Self {
+        self.telegram_text = Some(html.into());
+        self.telegram_parse_mode = Some("HTML".into());
+        self
     }
 
     pub fn with_html(mut self, html: impl Into<String>) -> Self {

@@ -23,16 +23,17 @@ use qtss_chart_patterns::{
 };
 use qtss_common::{log_business, QtssLogLevel};
 use qtss_storage::{
-    fetch_analysis_snapshot_payload, fetch_data_snapshot, fetch_latest_nansen_setup_with_rows,
-    fetch_nansen_snapshot, fetch_range_engine_json, insert_engine_symbol,
-    list_analysis_snapshots_with_symbols, list_data_snapshots, list_engine_symbols_all,
-    list_engine_symbols_with_ingestion,
-    list_engine_symbols_matching, list_market_confluence_snapshots_for_symbol,
-    list_market_context_summaries, list_range_signal_events_joined, merge_json_deep,
-    update_engine_symbol_patch, upsert_range_engine_json, AnalysisSnapshotJoinedRow,
-    DataSnapshotRow, EngineSymbolInsert, EngineSymbolRow, MarketConfluenceSnapshotRow,
-    MarketContextSummaryRow, NansenSetupRowDetail, NansenSetupRunRow, NansenSnapshotRow,
-    EngineSymbolIngestionJoinedRow, RangeSignalEventJoinedRow,
+    fetch_analysis_snapshot_payload, fetch_data_snapshot, fetch_latest_intake_playbook_run,
+    fetch_latest_nansen_setup_with_rows, fetch_nansen_snapshot, fetch_range_engine_json,
+    insert_engine_symbol, list_analysis_snapshots_with_symbols, list_data_snapshots,
+    list_engine_symbols_all, list_engine_symbols_with_ingestion, list_engine_symbols_matching,
+    list_intake_playbook_candidates_for_run, list_market_confluence_snapshots_for_symbol,
+    list_market_context_summaries, list_range_signal_events_joined,
+    list_recent_intake_playbook_runs, merge_json_deep, update_engine_symbol_patch,
+    upsert_range_engine_json, AnalysisSnapshotJoinedRow, DataSnapshotRow, EngineSymbolInsert,
+    EngineSymbolRow, IntakePlaybookCandidateRow, IntakePlaybookRunRow,
+    MarketConfluenceSnapshotRow, MarketContextSummaryRow, NansenSetupRowDetail, NansenSetupRunRow,
+    NansenSnapshotRow, EngineSymbolIngestionJoinedRow, RangeSignalEventJoinedRow,
 };
 
 use crate::error::ApiError;
@@ -104,6 +105,14 @@ pub fn analysis_read_router() -> Router<SharedState> {
         .route(
             "/analysis/nansen/setups/latest",
             get(get_nansen_setups_latest_api),
+        )
+        .route(
+            "/analysis/intake-playbook/latest",
+            get(get_intake_playbook_latest_api),
+        )
+        .route(
+            "/analysis/intake-playbook/recent",
+            get(list_intake_playbook_recent_api),
         )
 }
 
@@ -862,6 +871,81 @@ async fn get_nansen_setups_latest_api(
         },
     };
     Ok(Json(resp))
+}
+
+#[derive(Serialize)]
+struct IntakePlaybookLatestResponse {
+    pub run: Option<IntakePlaybookRunRow>,
+    pub candidates: Vec<IntakePlaybookCandidateRow>,
+}
+
+#[derive(Deserialize)]
+struct IntakePlaybookLatestQuery {
+    pub playbook_id: String,
+}
+
+/// Latest intake playbook run + ranked candidates (`qtss-worker` `intake_playbook_engine`).
+async fn get_intake_playbook_latest_api(
+    State(st): State<SharedState>,
+    Extension(loc): Extension<NegotiatedLocale>,
+    Query(q): Query<IntakePlaybookLatestQuery>,
+) -> Result<Json<IntakePlaybookLatestResponse>, ApiError> {
+    let pid = q.playbook_id.trim();
+    if pid.is_empty() {
+        return Err(ApiError::bad_request("query playbook_id is required"));
+    }
+    let run = fetch_latest_intake_playbook_run(&st.pool, pid)
+        .await
+        .map_err(|e| {
+            map_analysis_storage_err(
+                e,
+                &loc,
+                "analysis.intake_playbook_load_failed",
+                "Failed to load intake playbook run.",
+            )
+        })?;
+    let candidates = match &run {
+        Some(r) => list_intake_playbook_candidates_for_run(&st.pool, r.id)
+            .await
+            .map_err(|e| {
+                map_analysis_storage_err(
+                    e,
+                    &loc,
+                    "analysis.intake_playbook_candidates_failed",
+                    "Failed to load intake playbook candidates.",
+                )
+            })?,
+        None => vec![],
+    };
+    Ok(Json(IntakePlaybookLatestResponse { run, candidates }))
+}
+
+#[derive(Deserialize)]
+struct IntakePlaybookRecentQuery {
+    #[serde(default = "default_intake_playbook_recent_limit")]
+    limit: i64,
+}
+
+fn default_intake_playbook_recent_limit() -> i64 {
+    50
+}
+
+async fn list_intake_playbook_recent_api(
+    State(st): State<SharedState>,
+    Extension(loc): Extension<NegotiatedLocale>,
+    Query(q): Query<IntakePlaybookRecentQuery>,
+) -> Result<Json<Vec<IntakePlaybookRunRow>>, ApiError> {
+    let rows = list_recent_intake_playbook_runs(&st.pool, q.limit)
+        .await
+        .map_err(|e| {
+            map_analysis_storage_err(
+                e,
+                &loc,
+                "analysis.intake_playbook_recent_failed",
+                "Failed to list recent intake playbook runs.",
+            )
+        })?;
+    Ok(Json(rows))
 }
 
 #[derive(Deserialize)]

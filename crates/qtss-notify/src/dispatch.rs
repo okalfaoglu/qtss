@@ -109,11 +109,17 @@ impl NotificationDispatcher {
             .as_ref()
             .ok_or_else(|| NotifyError::ChannelNotConfigured("telegram".into()))?;
         let url = format!("https://api.telegram.org/bot{}/sendMessage", c.bot_token);
-        let text = format!("{}\n{}", n.title, n.body);
+        let text = n
+            .telegram_text
+            .clone()
+            .unwrap_or_else(|| format!("{}\n{}", n.title, n.body));
         let mut body = json!({
             "chat_id": c.chat_id,
             "text": text
         });
+        if let Some(pm) = n.telegram_parse_mode.as_deref().filter(|s| !s.is_empty()) {
+            body["parse_mode"] = json!(pm);
+        }
         if let Some(m) = &n.telegram_reply_markup {
             body["reply_markup"] = m.clone();
         }

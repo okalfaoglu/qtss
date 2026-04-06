@@ -23,7 +23,7 @@ use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
 use qtss_common::{log_business, QtssLogLevel};
 use qtss_storage::{
     clear_refresh_requested, default_range_engine_json, fetch_analysis_snapshot_payload,
-    fetch_data_snapshot, fetch_latest_onchain_signal_score, fetch_range_engine_json,
+    fetch_latest_onchain_signal_score, fetch_range_engine_json,
     fetch_sibling_tbm_snapshots,
     insert_range_signal_event, list_enabled_engine_symbols, list_recent_bars,
     resolve_system_string, resolve_worker_enabled_flag, resolve_worker_tick_secs,
@@ -1519,25 +1519,7 @@ async fn run_engines_for_symbol(
                         funding_rate: funding,
                     }
                 } else {
-                    // Onchain skor satırı yok — DefiLlama stablecoin flow'dan proxy oluştur
-                    let stable_flow = fetch_data_snapshot(pool, "defillama_stablecoin_flow")
-                        .await
-                        .ok()
-                        .flatten()
-                        .and_then(|s| s.response_json)
-                        .and_then(|j| j.get("stablecoin_flow_pct").and_then(|v| v.as_f64()));
-
-                    if let Some(flow_pct) = stable_flow {
-                        // Stablecoin artışı → risk appetite yüksek → exchange'e giriş olabilir
-                        qtss_tbm::onchain::OnchainMetrics {
-                            smart_money_net_flow: None,
-                            exchange_netflow: Some(-flow_pct * 100.0), // pozitif flow = bullish
-                            whale_tx_count: None,
-                            funding_rate: None,
-                        }
-                    } else {
-                        qtss_tbm::onchain::OnchainMetrics::default()
-                    }
+                    qtss_tbm::onchain::OnchainMetrics::default()
                 }
             };
 

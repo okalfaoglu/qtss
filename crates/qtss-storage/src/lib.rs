@@ -14,6 +14,7 @@ pub mod exchange_orders;
 pub mod external_fetch;
 pub mod fill_long_estimate;
 pub mod ingestion_state;
+pub mod intake_playbook;
 pub mod market_bars;
 pub mod market_confluence_snapshots;
 pub mod nansen;
@@ -74,6 +75,12 @@ pub use ingestion_state::{
     count_market_bars_series, list_engine_symbols_with_ingestion,
     list_recent_bar_open_times_desc, upsert_engine_symbol_ingestion_state,
     EngineSymbolIngestionJoinedRow,
+};
+pub use intake_playbook::{
+    fetch_latest_intake_playbook_run, insert_intake_playbook_candidates, insert_intake_playbook_run,
+    list_intake_playbook_candidates_for_run, list_recent_intake_playbook_runs,
+    update_intake_candidate_merged_engine_symbol, IntakePlaybookCandidateInsert, IntakePlaybookCandidateRow,
+    IntakePlaybookRunInsert, IntakePlaybookRunRow,
 };
 pub use market_bars::{
     fetch_recent_bars_stats, list_bars_in_range, list_recent_bars, upsert_market_bar, MarketBarRow,

@@ -11,8 +11,6 @@ mod confluence_hook;
 mod copy_trade_follower;
 mod copy_trade_queue;
 mod data_sources;
-#[allow(dead_code, unused_variables, unused_imports, non_snake_case)]
-mod defillama;
 mod engines;
 mod kill_switch;
 mod live_position_notify;
@@ -30,6 +28,7 @@ mod strategy_runner;
 mod ai_tactical_executor;
 mod worker_probe_http;
 mod engine_ingest;
+mod intake_playbook_engine;
 
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -170,6 +169,8 @@ async fn main() -> anyhow::Result<()> {
         ));
         let ingest_pool = pool.clone();
         tokio::spawn(engine_ingest::engine_symbol_ingest_loop(ingest_pool));
+        let intake_pool = pool.clone();
+        tokio::spawn(intake_playbook_engine::intake_playbook_loop(intake_pool));
         let range_exec_pool = pool.clone();
         tokio::spawn(range_signal_execute_loop::range_signal_execute_loop(
             range_exec_pool,
@@ -216,8 +217,6 @@ async fn main() -> anyhow::Result<()> {
             Err(e) => tracing::warn!(%e, "Binance auto-sync hatası"),
             _ => {}
         }
-        let defi_pool = pool.clone();
-        tokio::spawn(defillama::defillama_loop(defi_pool));
         let b_pool = pool.clone();
         tokio::spawn(engines::external_binance_loop(b_pool));
         let cg_pool = pool.clone();
