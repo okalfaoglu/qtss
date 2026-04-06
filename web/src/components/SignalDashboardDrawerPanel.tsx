@@ -236,6 +236,11 @@ function SignalDashboardDetailBody({ snapshot }: { snapshot: EngineSnapshotJoine
           {rk("momentum1", formatMomentumPanel(t, v2?.momentum_rsi, p.momentum_1))}
           {rk("momentum2", formatMomentumPanel(t, v2?.momentum_roc, p.momentum_2))}
           {rk("entryActual", pickDashboardNum(v2?.entry_price ?? undefined, p.giris_gercek ?? undefined))}
+          <tr key="entryRefNote">
+            <td colSpan={2} className="muted" style={{ fontSize: "0.68rem", lineHeight: 1.35, padding: "0 0 0.35rem 0" }}>
+              {t("app.signalDashboard.entryRefNote")}
+            </td>
+          </tr>
           {rk("stopInitial", pickDashboardNum(v2?.stop_initial ?? undefined, p.stop_ilk ?? undefined))}
           {rk(
             "takeProfitInitial",

@@ -168,28 +168,35 @@ export function TradingRangeEngineEvalDialog({
           ) : dashSetupLevels.insufficient ? (
             <p className="muted tv-engine-eval-dialog__empty">{t("app.tradingRangeEngineEval.insufficientBars")}</p>
           ) : (
-            <dl className="tv-engine-eval-dialog__dl">
-              <dt className="muted">{t("app.signalDashboard.row.entryActual")}</dt>
-              <dd className="mono">{dashSetupLevels.entry}</dd>
-              <dt className="muted">{t("app.signalDashboard.row.stopInitial")}</dt>
-              <dd className="mono">{dashSetupLevels.stop}</dd>
-              <dt className="muted">{t("app.signalDashboard.row.takeProfitInitial")}</dt>
-              <dd className="mono">{dashSetupLevels.tp}</dd>
-              <dt className="muted">{t("app.signalDashboard.row.stopTrailActive")}</dt>
-              <dd className="mono">{dashSetupLevels.stopTrail}</dd>
-              <dt className="muted">{t("app.signalDashboard.row.takeProfitDynamic")}</dt>
-              <dd className="mono">{dashSetupLevels.tpDyn}</dd>
-              <dt className="muted">{t("app.signalDashboard.row.positionStrength")}</dt>
-              <dd className="mono">{dashSetupLevels.pos}</dd>
-              <dt className="muted">{t("app.signalDashboard.row.volatilityPct")}</dt>
-              <dd className="mono">{dashSetupLevels.vol}</dd>
-              <dt className="muted">{t("app.signalDashboard.row.momentum1")}</dt>
-              <dd className="mono">{dashSetupLevels.m1}</dd>
-              <dt className="muted">{t("app.signalDashboard.row.momentum2")}</dt>
-              <dd className="mono">{dashSetupLevels.m2}</dd>
-              <dt className="muted">{t("app.signalDashboard.row.atr")}</dt>
-              <dd className="mono">{dashSetupLevels.atr}</dd>
-            </dl>
+            <>
+              <dl className="tv-engine-eval-dialog__dl">
+                <dt className="muted">{t("app.signalDashboard.row.entryActual")}</dt>
+                <dd className="mono">{dashSetupLevels.entry}</dd>
+              </dl>
+              <p className="muted" style={{ fontSize: "0.72rem", margin: "0 0 0.5rem" }}>
+                {t("app.signalDashboard.entryRefNote")}
+              </p>
+              <dl className="tv-engine-eval-dialog__dl">
+                <dt className="muted">{t("app.signalDashboard.row.stopInitial")}</dt>
+                <dd className="mono">{dashSetupLevels.stop}</dd>
+                <dt className="muted">{t("app.signalDashboard.row.takeProfitInitial")}</dt>
+                <dd className="mono">{dashSetupLevels.tp}</dd>
+                <dt className="muted">{t("app.signalDashboard.row.stopTrailActive")}</dt>
+                <dd className="mono">{dashSetupLevels.stopTrail}</dd>
+                <dt className="muted">{t("app.signalDashboard.row.takeProfitDynamic")}</dt>
+                <dd className="mono">{dashSetupLevels.tpDyn}</dd>
+                <dt className="muted">{t("app.signalDashboard.row.positionStrength")}</dt>
+                <dd className="mono">{dashSetupLevels.pos}</dd>
+                <dt className="muted">{t("app.signalDashboard.row.volatilityPct")}</dt>
+                <dd className="mono">{dashSetupLevels.vol}</dd>
+                <dt className="muted">{t("app.signalDashboard.row.momentum1")}</dt>
+                <dd className="mono">{dashSetupLevels.m1}</dd>
+                <dt className="muted">{t("app.signalDashboard.row.momentum2")}</dt>
+                <dd className="mono">{dashSetupLevels.m2}</dd>
+                <dt className="muted">{t("app.signalDashboard.row.atr")}</dt>
+                <dd className="mono">{dashSetupLevels.atr}</dd>
+              </dl>
+            </>
           )}
         </section>
 
