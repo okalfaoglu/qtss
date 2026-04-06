@@ -280,6 +280,7 @@ Locale: {locale}. {reasoning_lang}
 Required keys first: "direction" (strong_buy|buy|neutral|sell|strong_sell|no_trade), "confidence" (0.0-1.0).
 Then if applicable: positive "stop_loss_pct" for directional trades (not neutral/no_trade), then optional "position_size_multiplier" (0.0-2.0), "take_profit_pct", "entry_price_hint".
 Optional last: "reasoning" (omit entirely if unsure — prefer no reasoning over a long one).
+Omit "position_size_multiplier", "take_profit_pct", and "entry_price_hint" unless they differ from defaults; never emit partial keys — saves tokens and avoids truncated JSON.
 Context may include `portfolio_directive` from the strategic layer: honor `symbol_weight_0_1`, `preferred_regime`, and `risk_budget_pct` when deciding direction and size.
 Context may include `decision_history` — your recent decisions for this symbol with outcomes. Avoid flip-flopping; if your last decision was recent and the context hasn't materially changed, prefer consistency. Learn from outcomes (profit/loss).
 Context may include `ai_feedback` with past decision outcomes (win_rate, avg_pnl_pct): factor these into confidence calibration.
@@ -402,12 +403,19 @@ async fn run_tactical_single(
         return Ok(());
     }
     let user = serde_json::to_string_pretty(&ctx).unwrap_or_else(|_| "{}".to_string());
+    let is_gemini = provider.provider_id() == "gemini";
+    let max_tokens = if is_gemini {
+        config.max_tokens_tactical.max(4096)
+    } else {
+        config.max_tokens_tactical
+    };
     let req = AiRequest {
         system: Some(system_prompt.to_string()),
         user,
-        max_tokens: config.max_tokens_tactical,
+        max_tokens,
         temperature: 0.3,
         model: config.model_tactical.clone(),
+        force_json_mime: is_gemini,
     };
     let resp = match complete_with_retry(provider, &req, breaker).await {
         Ok(r) => r,
@@ -558,6 +566,7 @@ pub async fn run_operational_sweep(rt: &AiRuntime) -> AiResult<()> {
             max_tokens: rt.config().max_tokens_operational,
             temperature: 0.2,
             model: rt.config().model_operational.clone(),
+            force_json_mime: false,
         };
         let resp = match complete_with_retry(provider.as_ref(), &req, rt.operational_breaker()).await {
             Ok(r) => r,
@@ -670,6 +679,7 @@ pub async fn run_strategic_sweep(rt: &AiRuntime) -> AiResult<()> {
         max_tokens: rt.config().max_tokens_strategic,
         temperature: 0.35,
         model: rt.config().model_strategic.clone(),
+        force_json_mime: false,
     };
     let resp = complete_with_retry(provider.as_ref(), &req, rt.strategic_breaker()).await?;
     let parsed = match parse_portfolio_decision(&resp.text) {

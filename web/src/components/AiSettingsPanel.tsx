@@ -64,8 +64,8 @@ function applyVendorPreset(base: AiConfig, vendor: "anthropic" | "gemini"): AiCo
     model_tactical: "gemini-2.5-flash",
     model_operational: "gemini-2.5-flash",
     model_strategic: "gemini-2.5-flash",
-    // Verbose `reasoning` often hits default 1024 and truncates mid-JSON (parse_error: unbalanced braces).
-    max_tokens_tactical: Math.max(base.max_tokens_tactical, 3072),
+    // Gemini tactical: large prompt + optional fields can exhaust output; floor avoids mid-key truncation.
+    max_tokens_tactical: Math.max(base.max_tokens_tactical, 4096),
   };
 }
 

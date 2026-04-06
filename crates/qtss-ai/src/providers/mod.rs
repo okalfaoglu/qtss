@@ -43,6 +43,9 @@ pub struct AiRequest {
     pub max_tokens: u32,
     pub temperature: f32,
     pub model: String,
+    /// Gemini: set `generationConfig.responseMimeType` to `application/json` for valid JSON objects.
+    #[serde(default)]
+    pub force_json_mime: bool,
 }
 
 impl AiRequest {

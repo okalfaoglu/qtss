@@ -17,7 +17,10 @@
       "Bash(grep -r \"alert\\\\|notify\\\\|export\\\\|filter\\\\|sort\\\\|watchlist\" ./web/src --include=*.tsx --include=*.ts)",
       "WebSearch",
       "mcp__Claude_Preview__preview_start",
-      "Read(///wsl.localhost/Ubuntu//**)"
+      "Read(///wsl.localhost/Ubuntu//**)",
+      "WebFetch(domain:docs.nansen.ai)",
+      "WebFetch(domain:app.nansen.ai)",
+      "Bash(git -C / rev-parse --show-toplevel)"
     ]
   }
 }

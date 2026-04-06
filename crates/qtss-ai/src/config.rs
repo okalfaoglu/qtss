@@ -48,7 +48,7 @@ impl AiEngineConfig {
             model_tactical: "claude-haiku-4-5-20251001".into(),
             model_operational: "claude-haiku-4-5-20251001".into(),
             model_strategic: "claude-sonnet-4-20250514".into(),
-            // Gemini with response_mime_type=application/json still needs headroom for reasoning.
+            // Gemini + large tactical user JSON: keep headroom so output is not cut mid-key.
             max_tokens_tactical: 4096,
             max_tokens_operational: 512,
             max_tokens_strategic: 4096,

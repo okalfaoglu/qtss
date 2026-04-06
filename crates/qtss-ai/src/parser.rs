@@ -66,16 +66,6 @@ fn try_extract_json_object(s: &str) -> AiResult<String> {
             }
         }
     }
-
-    // Last resort: truncated string recovery — close open strings, trim trailing comma, add missing braces.
-    if let Some(repaired) = try_repair_truncated_json(slice) {
-        if let Ok(v) = serde_json::from_str::<Value>(&repaired) {
-            if v.is_object() {
-                return Ok(repaired);
-            }
-        }
-    }
-
     Err(AiError::parse("unbalanced JSON braces"))
 }
 
@@ -122,69 +112,6 @@ pub fn extract_json_block(raw: &str) -> AiResult<String> {
     try_extract_json_object(t)
 }
 
-/// Attempt to repair truncated JSON by closing open strings and adding missing braces.
-/// Handles: `{"direction":"buy","confidence":0.7,"reasoning":"some long text that got trun`
-fn try_repair_truncated_json(s: &str) -> Option<String> {
-    let mut buf = s.to_string();
-    // Trim trailing whitespace
-    let trimmed = buf.trim_end();
-    buf = trimmed.to_string();
-
-    // Track string state to detect unclosed quotes
-    let mut in_str = false;
-    let mut esc = false;
-    for b in buf.bytes() {
-        if in_str {
-            if esc { esc = false; }
-            else if b == b'\\' { esc = true; }
-            else if b == b'"' { in_str = false; }
-        } else {
-            match b {
-                b'"' => in_str = true,
-                _ => {}
-            }
-        }
-    }
-
-    // If we're inside a string, close it
-    if in_str {
-        buf.push('"');
-    }
-
-    // Remove trailing comma if any (after optional whitespace)
-    let t = buf.trim_end();
-    if t.ends_with(',') {
-        buf = t[..t.len() - 1].to_string();
-    }
-
-    // Recount brace depth after string repair
-    in_str = false;
-    esc = false;
-    let mut brace_stack: Vec<u8> = Vec::new();
-    for b in buf.bytes() {
-        if in_str {
-            if esc { esc = false; }
-            else if b == b'\\' { esc = true; }
-            else if b == b'"' { in_str = false; }
-        } else {
-            match b {
-                b'"' => in_str = true,
-                b'{' => brace_stack.push(b'}'),
-                b'[' => brace_stack.push(b']'),
-                b'}' | b']' => { brace_stack.pop(); }
-                _ => {}
-            }
-        }
-    }
-
-    // Close remaining open braces/brackets
-    while let Some(closer) = brace_stack.pop() {
-        buf.push(closer as char);
-    }
-
-    Some(buf)
-}
-
 fn find_matching_brace(s: &str) -> Option<usize> {
     let mut depth = 0_i32;
     let mut in_str = false;
@@ -214,6 +141,96 @@ fn find_matching_brace(s: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// Pull a JSON string value for `key` (first occurrence). Handles `\"` escapes; returns `None` if the string is unclosed (truncated).
+fn parse_json_string_field<'a>(raw: &'a str, key: &str) -> Option<&'a str> {
+    let needle = format!("\"{key}\"");
+    let idx = raw.find(&needle)?;
+    let mut s = &raw[idx + needle.len()..];
+    s = s.trim_start();
+    if !s.starts_with(':') {
+        return None;
+    }
+    s = s[1..].trim_start();
+    if !s.starts_with('"') {
+        return None;
+    }
+    s = &s[1..];
+    let bytes = s.as_bytes();
+    let mut i = 0_usize;
+    let mut esc = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if esc {
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if b == b'\\' {
+            esc = true;
+            i += 1;
+            continue;
+        }
+        if b == b'"' {
+            return Some(&s[..i]);
+        }
+        let ch = s[i..].chars().next()?;
+        i += ch.len_utf8();
+    }
+    None
+}
+
+/// Pull a JSON number for `key` (first occurrence).
+fn parse_json_number_field(raw: &str, key: &str) -> Option<f64> {
+    let needle = format!("\"{key}\"");
+    let idx = raw.find(&needle)?;
+    let mut s = raw[idx + needle.len()..].trim_start();
+    if !s.starts_with(':') {
+        return None;
+    }
+    s = s[1..].trim_start();
+    let end = s
+        .find(|c: char| c.is_ascii_whitespace() || c == ',' || c == '}')
+        .unwrap_or(s.len());
+    if end == 0 {
+        return None;
+    }
+    s[..end].parse().ok()
+}
+
+/// Recover a minimal tactical object when the model truncates mid-JSON (e.g. max_output_tokens while typing `position_size_multiplier`).
+fn salvage_truncated_tactical_json(raw: &str) -> Option<String> {
+    let direction_raw = parse_json_string_field(raw, "direction")?;
+    let direction = direction_raw.trim().to_lowercase().replace(' ', "_");
+    if !TACTICAL_DIRECTIONS.contains(&direction.as_str()) {
+        return None;
+    }
+    let confidence = parse_json_number_field(raw, "confidence")?;
+    if !(0.0..=1.0).contains(&confidence) {
+        return None;
+    }
+    let mut map = serde_json::Map::new();
+    map.insert("direction".into(), Value::String(direction));
+    map.insert("confidence".into(), json!(confidence));
+    if let Some(x) = parse_json_number_field(raw, "stop_loss_pct") {
+        map.insert("stop_loss_pct".into(), json!(x));
+    }
+    if let Some(x) = parse_json_number_field(raw, "take_profit_pct") {
+        map.insert("take_profit_pct".into(), json!(x));
+    }
+    if let Some(x) = parse_json_number_field(raw, "position_size_multiplier") {
+        map.insert("position_size_multiplier".into(), json!(x));
+    }
+    if let Some(x) = parse_json_number_field(raw, "entry_price_hint") {
+        map.insert("entry_price_hint".into(), json!(x));
+    }
+    if let Some(s) = parse_json_string_field(raw, "reasoning") {
+        if !s.is_empty() {
+            map.insert("reasoning".into(), Value::String(s.to_string()));
+        }
+    }
+    Some(Value::Object(map).to_string())
 }
 
 fn require_direction(v: &Value) -> AiResult<String> {
@@ -248,7 +265,10 @@ fn clamp_multiplier(v: &Value) -> AiResult<()> {
 
 /// Normalized tactical JSON (`direction`, `confidence`, optional multiplier / SL / TP / reasoning).
 pub fn parse_tactical_decision(raw: &str) -> AiResult<Value> {
-    let s = extract_json_block(raw)?;
+    let s = match extract_json_block(raw) {
+        Ok(s) => s,
+        Err(e) => salvage_truncated_tactical_json(raw).ok_or(e)?,
+    };
     let v: Value = serde_json::from_str(&s).map_err(|e| AiError::parse(e.to_string()))?;
     let dir = require_direction(&v)?;
     let conf = require_confidence(&v)?;
@@ -427,29 +447,28 @@ mod tests {
     }
 
     #[test]
-    fn tactical_truncated_reasoning_repaired() {
-        // Gemini cuts mid-string in reasoning field
-        let raw = r#"{"direction": "neutral", "confidence": 0.51, "reasoning": "Conflicting signals: bullish chart patterns (Double/Triple Bottom) with unconfirmed breakout volume and bearish"#;
-        let v = parse_tactical_decision(raw).unwrap();
-        assert_eq!(v["direction"], "neutral");
-        assert_eq!(v["confidence"], 0.51);
-        // reasoning should be recovered (truncated but valid)
-        assert!(v["reasoning"].as_str().unwrap().starts_with("Conflicting"));
-    }
-
-    #[test]
-    fn tactical_truncated_after_comma() {
-        let raw = r#"{"direction": "buy", "confidence": 0.7, "reasoning": "test","#;
-        let v = parse_tactical_decision(raw).unwrap();
-        assert_eq!(v["direction"], "buy");
-    }
-
-    #[test]
     fn tactical_case_insensitive_json_fence() {
         let raw = r#"```JSON
 {"direction": "neutral", "confidence": 0.5}
 ```"#;
         let v = parse_tactical_decision(raw).unwrap();
         assert_eq!(v["direction"], "neutral");
+    }
+
+    #[test]
+    fn tactical_salvage_truncated_mid_optional_key() {
+        let raw = r#"{"direction": "buy", "confidence": 0.55, "stop_loss_pct": 1.5, "position_"#;
+        let v = parse_tactical_decision(raw).unwrap();
+        assert_eq!(v["direction"], "buy");
+        assert_eq!(v["confidence"], 0.55);
+        assert_eq!(v["stop_loss_pct"], 1.5);
+    }
+
+    #[test]
+    fn tactical_salvage_truncated_mid_position_size_key() {
+        let raw = r#"{"direction": "buy", "confidence": 0.65, "stop_loss_pct": 1.5, "position"#;
+        let v = parse_tactical_decision(raw).unwrap();
+        assert_eq!(v["direction"], "buy");
+        assert_eq!(v["stop_loss_pct"], 1.5);
     }
 }
