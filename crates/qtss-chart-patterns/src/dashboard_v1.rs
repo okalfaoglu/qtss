@@ -154,6 +154,27 @@ fn roc_label(pct: f64) -> &'static str {
 }
 
 /// Son `close`, bir önceki `exclude_last` mum içindeki high/low kırılımı.
+fn normalized_setup_side(raw: &str) -> &'static str {
+    let s = raw.trim().to_uppercase().replace('İ', "I");
+    match s.as_str() {
+        "LONG" => "LONG",
+        "SHORT" => "SHORT",
+        _ => "NOTR",
+    }
+}
+
+/// LONG: `sl < entry < tp`; SHORT: `tp < entry < sl`. Aksi halde seviyeler yanıltıcıdır (süpürme + kapanış uyumsuzluğu).
+fn trade_levels_consistent(side: &str, entry: f64, sl: f64, tp: f64) -> bool {
+    if !entry.is_finite() || !sl.is_finite() || !tp.is_finite() {
+        return false;
+    }
+    match side {
+        "LONG" => sl < entry && entry < tp,
+        "SHORT" => tp < entry && entry < sl,
+        _ => false,
+    }
+}
+
 fn structure_shift(bars: &[OhlcBar], exclude_last: usize) -> bool {
     let n = bars.len();
     if n < exclude_last + 3 {
@@ -270,29 +291,47 @@ pub fn compute_signal_dashboard_v1_with_policy(
         .map(|(h, l)| (h - l).abs() * 0.008)
         .unwrap_or(0.0);
 
-    let (mut giris_gercek, mut stop_ilk, mut kar_al_ilk) = if tr.long_sweep_signal {
-        let entry = last_c.is_finite().then_some(last_c);
+    let entry_opt = last_c.is_finite().then_some(last_c);
+    let long_levels = if tr.long_sweep_signal {
         let sl = rl.map(|x| x - buffer);
         let tp = rh;
-        (entry, sl, tp)
-    } else if tr.short_sweep_signal {
-        let entry = last_c.is_finite().then_some(last_c);
+        (entry_opt, sl, tp)
+    } else {
+        (None, None, None)
+    };
+    let short_levels = if tr.short_sweep_signal {
         let sl = rh.map(|x| x + buffer);
         let tp = rl;
-        (entry, sl, tp)
+        (entry_opt, sl, tp)
     } else {
         (None, None, None)
     };
 
-    let mid = rh.zip(rl).map(|(h, l)| (h + l) * 0.5);
-    let mut kar_al_dinamik = mid.or(kar_al_ilk);
-    let mut stop_trail_aktif = stop_ilk;
-
     // Skor tabanlı setup motoru: TradingRangeResult içindeki karar (hard+soft+eşik).
     // Trend fallback kaldırıldı: setup yoksa NOTR.
     let durum_model_raw = tr.setup_side.clone();
+    let side_norm = normalized_setup_side(&durum_model_raw);
 
-    let durum = match direction_policy {
+    let (mut giris_gercek, mut stop_ilk, mut kar_al_ilk) = match side_norm {
+        "LONG" => long_levels,
+        "SHORT" => short_levels,
+        _ => (None, None, None),
+    };
+
+    if let (Some(e), Some(sl), Some(tp)) = (giris_gercek, stop_ilk, kar_al_ilk) {
+        if !trade_levels_consistent(side_norm, e, sl, tp) {
+            giris_gercek = None;
+            stop_ilk = None;
+            kar_al_ilk = None;
+        }
+    }
+
+    let mid = rh.zip(rl).map(|(h, l)| (h + l) * 0.5);
+    // İlk TP sabit (`kar_al_ilk`); dinamik hedef ayrı alan — başlangıçta aynı, orta bant `mid` ile karıştırılmaz.
+    let mut kar_al_dinamik = kar_al_ilk.or(mid);
+    let mut stop_trail_aktif = stop_ilk;
+
+    let mut durum = match direction_policy {
         SignalDirectionPolicy::Both => durum_model_raw.clone(),
         SignalDirectionPolicy::LongOnly if durum_model_raw == "SHORT" => "NOTR".to_string(),
         SignalDirectionPolicy::ShortOnly if durum_model_raw == "LONG" => "NOTR".to_string(),
@@ -318,6 +357,13 @@ pub fn compute_signal_dashboard_v1_with_policy(
         kar_al_ilk = None;
         stop_trail_aktif = None;
         kar_al_dinamik = mid;
+    }
+
+    // İlk etap: yürütülebilir üçlü (entry + SL + TP) yoksa etkin sinyal LONG/SHORT olamaz;
+    // skor ham olarak LONG/SHORT dese bile NOTR. Sonraki fazda TP revizyonu / iz süren SL ayrı güncellenir.
+    let levels_ready = giris_gercek.is_some() && stop_ilk.is_some() && kar_al_ilk.is_some();
+    if !levels_ready && (durum == "LONG" || durum == "SHORT") {
+        durum = "NOTR".to_string();
     }
 
     let trend_tukenmesi = rsi_last.is_finite() && (rsi_last > 72.0 || rsi_last < 28.0);
@@ -386,7 +432,7 @@ pub fn compute_signal_dashboard_v1_with_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trading_range::{analyze_trading_range, TradingRangeParams};
+    use crate::trading_range::{analyze_trading_range, TradingRangeParams, TradingRangeResult};
 
     fn bar(i: i64, c: f64) -> OhlcBar {
         OhlcBar {
@@ -443,5 +489,89 @@ mod tests {
                 assert!(long_only.giris_gercek.is_none());
             }
         }
+    }
+
+    fn synthetic_tr_both_sweeps_short_wins() -> TradingRangeResult {
+        TradingRangeResult {
+            valid: true,
+            reason: None,
+            bar_count: 120,
+            range_high: Some(2200.0),
+            range_low: Some(2000.0),
+            mid: Some(2100.0),
+            is_range_regime: true,
+            atr: Some(10.0),
+            atr_sma: Some(10.0),
+            window_bar_first: Some(0),
+            window_bar_last: Some(119),
+            last_bar_index: Some(119),
+            long_sweep_signal: true,
+            short_sweep_signal: true,
+            long_sweep_latent: true,
+            short_sweep_latent: true,
+            support_touches: 2,
+            resistance_touches: 2,
+            close_breakout: false,
+            range_width: Some(200.0),
+            range_width_atr: Some(20.0),
+            range_too_narrow: false,
+            range_too_wide: false,
+            wick_rejection_long: false,
+            wick_rejection_short: false,
+            fake_breakout_long: false,
+            fake_breakout_short: false,
+            setup_score_long: 50,
+            setup_score_short: 60,
+            setup_score_best: 60,
+            guardrails_pass: true,
+            setup_side: "SHORT".to_string(),
+            score_touch_long: 0,
+            score_touch_short: 0,
+            score_rejection_long: 0,
+            score_rejection_short: 0,
+            score_oscillator_long: 0,
+            score_oscillator_short: 0,
+            score_volume_long: 0,
+            score_volume_short: 0,
+            score_breakout_long: 0,
+            score_breakout_short: 0,
+            volume_unavailable: true,
+            range_zone: "mid".to_string(),
+        }
+    }
+
+    /// Skor LONG dese de long süpürme yoksa üçlü üretilemez; etkin `durum` NOTR kalmalı (`durum_model_raw` LONG kalır).
+    #[test]
+    fn effective_durum_notr_when_long_model_without_executable_levels() {
+        let mut tr = synthetic_tr_both_sweeps_short_wins();
+        tr.setup_side = "LONG".to_string();
+        tr.long_sweep_signal = false;
+        tr.long_sweep_latent = false;
+        let bars: Vec<OhlcBar> = (0..120_i64).map(|i| bar(i, 2100.0)).collect();
+        let d = compute_signal_dashboard_v1_with_policy(&bars, &tr, SignalDirectionPolicy::Both);
+        assert_eq!(d.durum_model_raw, "LONG");
+        assert!(d.giris_gercek.is_none());
+        assert_eq!(d.durum, "NOTR");
+    }
+
+    /// İki süpürme aynı anda ateşlendiğinde eski kod long dalını seçerdi; seviyeler `setup_side` ile hizalanmalı.
+    #[test]
+    fn setup_levels_follow_short_when_both_sweeps_and_short_wins() {
+        let tr = synthetic_tr_both_sweeps_short_wins();
+        let bars: Vec<OhlcBar> = (0..120_i64).map(|i| bar(i, 2100.0)).collect();
+        let d = compute_signal_dashboard_v1_with_policy(&bars, &tr, SignalDirectionPolicy::Both);
+        assert_eq!(d.durum, "SHORT");
+        let e = d.giris_gercek.expect("entry");
+        let sl = d.stop_ilk.expect("stop");
+        let tp = d.kar_al_ilk.expect("tp");
+        assert!(
+            tp < e && e < sl,
+            "SHORT geometry: tp={tp} entry={e} sl={sl}"
+        );
+        assert_eq!(
+            d.kar_al_dinamik,
+            d.kar_al_ilk,
+            "dynamic TP should start from initial TP, not range mid"
+        );
     }
 }
