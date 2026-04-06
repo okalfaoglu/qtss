@@ -161,7 +161,8 @@ fn screener_rows(response: &Value) -> Vec<ScreenerRow> {
             .or_else(|| parse_json_f64_opt(row.get("liquidity_usd")))
             .unwrap_or(0.0)
             .max(0.0);
-        let mcap_usd = parse_json_f64_opt(row.get("market_cap"))
+        let mcap_usd = parse_json_f64_opt(row.get("market_cap_usd"))
+            .or_else(|| parse_json_f64_opt(row.get("market_cap")))
             .or_else(|| parse_json_f64_opt(row.get("marketCap")))
             .or_else(|| parse_json_f64_opt(row.get("mcap")))
             .unwrap_or(0.0)
@@ -181,11 +182,13 @@ fn screener_rows(response: &Value) -> Vec<ScreenerRow> {
             .or_else(|| parse_json_f64_opt(row.get("freshWallets")))
             .or_else(|| parse_json_f64_opt(row.get("fresh_wallet_count")))
             .unwrap_or(0.0);
-        let nof_buy_wallets = parse_json_f64_opt(row.get("nof_buy_wallets"))
+        let nof_buy_wallets = parse_json_f64_opt(row.get("nof_buyers"))
+            .or_else(|| parse_json_f64_opt(row.get("nof_buy_wallets")))
             .or_else(|| parse_json_f64_opt(row.get("nofBuyWallets")))
             .or_else(|| parse_json_f64_opt(row.get("unique_buyers")))
             .unwrap_or(0.0);
-        let nof_sell_wallets = parse_json_f64_opt(row.get("nof_sell_wallets"))
+        let nof_sell_wallets = parse_json_f64_opt(row.get("nof_sellers"))
+            .or_else(|| parse_json_f64_opt(row.get("nof_sell_wallets")))
             .or_else(|| parse_json_f64_opt(row.get("nofSellWallets")))
             .or_else(|| parse_json_f64_opt(row.get("unique_sellers")))
             .unwrap_or(0.0);
