@@ -61,7 +61,7 @@ function aggregateBySymbol(rows: AiDecisionListRowApi[]): SymbolPerf[] {
     .sort((a, b) => b.total - a.total);
 }
 
-export function AiPerformancePanel({ accessToken }: Props) {
+export function AiPerformancePanel({ accessToken, canAdmin = false }: Props) {
   const { t } = useTranslation();
   const [rows, setRows] = useState<AiDecisionListRowApi[]>([]);
   const [detail, setDetail] = useState<AiDecisionDetailRowApi | null>(null);
