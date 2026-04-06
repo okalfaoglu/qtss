@@ -130,10 +130,9 @@ fn try_repair_truncated_json(s: &str) -> Option<String> {
     let trimmed = buf.trim_end();
     buf = trimmed.to_string();
 
-    // Count open quotes (track string state)
+    // Track string state to detect unclosed quotes
     let mut in_str = false;
     let mut esc = false;
-    let mut depth = 0i32;
     for b in buf.bytes() {
         if in_str {
             if esc { esc = false; }
@@ -142,8 +141,6 @@ fn try_repair_truncated_json(s: &str) -> Option<String> {
         } else {
             match b {
                 b'"' => in_str = true,
-                b'{' | b'[' => depth += 1,
-                b'}' | b']' => depth -= 1,
                 _ => {}
             }
         }
@@ -160,8 +157,7 @@ fn try_repair_truncated_json(s: &str) -> Option<String> {
         buf = t[..t.len() - 1].to_string();
     }
 
-    // Recount depth after repairs
-    depth = 0;
+    // Recount brace depth after string repair
     in_str = false;
     esc = false;
     let mut brace_stack: Vec<u8> = Vec::new();
@@ -173,9 +169,9 @@ fn try_repair_truncated_json(s: &str) -> Option<String> {
         } else {
             match b {
                 b'"' => in_str = true,
-                b'{' => { depth += 1; brace_stack.push(b'}'); }
-                b'[' => { depth += 1; brace_stack.push(b']'); }
-                b'}' | b']' => { depth -= 1; brace_stack.pop(); }
+                b'{' => brace_stack.push(b'}'),
+                b'[' => brace_stack.push(b']'),
+                b'}' | b']' => { brace_stack.pop(); }
                 _ => {}
             }
         }
