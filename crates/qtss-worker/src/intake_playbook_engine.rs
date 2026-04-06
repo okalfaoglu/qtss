@@ -490,8 +490,8 @@ fn institutional_accum_like(rows: &[ScreenerRow]) -> Vec<&ScreenerRow> {
 
 fn candidates_from_rows<'a>(
     rows: &[&'a ScreenerRow],
-    direction: &str,
-    tier: &str,
+    direction: &'static str,
+    tier: &'static str,
     conf_base: i32,
 ) -> Vec<IntakePlaybookCandidateInsert<'a>> {
     rows.iter()

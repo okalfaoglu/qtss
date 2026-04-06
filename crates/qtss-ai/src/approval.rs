@@ -8,7 +8,10 @@ use serde_json::{json, Value};
 use crate::config::AiEngineConfig;
 use crate::error::AiResult;
 use qtss_notify::{escape_telegram_html, Notification, NotificationChannel, NotificationDispatcher};
-use qtss_signal_card::{format_compact_price, try_render_ai_approval_card_png, AiApprovalCardInput};
+use qtss_signal_card::{
+    format_compact_price, try_render_ai_approval_card_png, try_render_operational_approval_card_png,
+    AiApprovalCardInput, OperationalApprovalCardInput,
+};
 
 /// Price / timeframe context for Telegram + optional PNG card (built from LLM JSON + bar context).
 #[derive(Clone, Debug, Default)]
@@ -24,13 +27,34 @@ pub struct AiDecisionNotifySnapshot {
     pub operational_action: Option<String>,
     pub operational_new_sl_pct: Option<f64>,
     pub operational_new_tp_pct: Option<f64>,
+    pub operational_trailing_callback_pct: Option<f64>,
+    pub operational_partial_close_pct: Option<f64>,
+    pub strategic_risk_budget_pct: Option<f64>,
+    pub strategic_max_open_positions: Option<i32>,
+    pub strategic_preferred_regime: Option<String>,
+    /// JSON string of `symbol_scores` (truncated in Telegram HTML).
+    pub strategic_symbol_scores_json: Option<String>,
 }
 
 impl AiDecisionNotifySnapshot {
     #[must_use]
-    pub fn strategic_portfolio() -> Self {
+    pub fn from_strategic_parsed(parsed: &Value) -> Self {
+        let scores_raw = parsed
+            .get("symbol_scores")
+            .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".into()))
+            .filter(|s| !s.is_empty());
         Self {
             layer: "strategic".into(),
+            strategic_risk_budget_pct: parsed.get("risk_budget_pct").and_then(|v| v.as_f64()),
+            strategic_max_open_positions: parsed
+                .get("max_open_positions")
+                .and_then(|v| v.as_i64())
+                .map(|x| x as i32),
+            strategic_preferred_regime: parsed
+                .get("preferred_regime")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            strategic_symbol_scores_json: scores_raw,
             ..Default::default()
         }
     }
@@ -79,6 +103,9 @@ impl AiDecisionNotifySnapshot {
             .map(str::to_string);
         s.operational_new_sl_pct = parsed.get("new_stop_loss_pct").and_then(|v| v.as_f64());
         s.operational_new_tp_pct = parsed.get("new_take_profit_pct").and_then(|v| v.as_f64());
+        s.operational_trailing_callback_pct =
+            parsed.get("trailing_callback_pct").and_then(|v| v.as_f64());
+        s.operational_partial_close_pct = parsed.get("partial_close_pct").and_then(|v| v.as_f64());
         s
     }
 }
@@ -171,6 +198,42 @@ fn tactical_price_levels(
     Some((ref_px, sl_px, tp_px))
 }
 
+fn try_operational_approval_png(
+    symbol: &str,
+    confidence: f64,
+    snapshot: &AiDecisionNotifySnapshot,
+) -> Option<Vec<u8>> {
+    if snapshot.layer != "operational" {
+        return None;
+    }
+    let action = snapshot.operational_action.as_deref()?.trim();
+    if action.is_empty() {
+        return None;
+    }
+    let input = OperationalApprovalCardInput {
+        symbol: symbol.trim().to_uppercase(),
+        timeframe: snapshot
+            .timeframe
+            .clone()
+            .unwrap_or_else(|| "—".into()),
+        last_close: snapshot.last_price,
+        approx_change_pct: snapshot.approx_price_change_pct,
+        action: action.to_string(),
+        confidence_0_1: confidence.clamp(0.0, 1.0),
+        new_sl_pct: snapshot.operational_new_sl_pct,
+        new_tp_pct: snapshot.operational_new_tp_pct,
+        trailing_callback_pct: snapshot.operational_trailing_callback_pct,
+        partial_close_pct: snapshot.operational_partial_close_pct,
+    };
+    match try_render_operational_approval_card_png(&input) {
+        Ok(bytes) => Some(bytes),
+        Err(e) => {
+            tracing::warn!(error = %e, "operational AI approval card PNG render failed");
+            None
+        }
+    }
+}
+
 fn try_tactical_approval_png(
     symbol: &str,
     direction: Option<&str>,
@@ -213,8 +276,13 @@ fn photo_caption_plain(symbol: Option<&str>, snapshot: &AiDecisionNotifySnapshot
         .timeframe
         .as_deref()
         .unwrap_or("—");
+    let kind = match snapshot.layer.as_str() {
+        "operational" => "operasyonel özet",
+        "tactical" => "taktik özet",
+        _ => "özet",
+    };
     let line = format!(
-        "{sym} ({tf}) — AI özet kartı. Sonraki mesajda gerekçe ve Onay/Red düğmeleri."
+        "{sym} ({tf}) — AI {kind} kartı. Sonraki mesajda gerekçe ve Onay/Red düğmeleri."
     );
     truncate_chars(&line, TELEGRAM_PHOTO_CAPTION_MAX)
 }
@@ -263,7 +331,9 @@ fn build_plain_operator_body(
              last_price: {}\n\
              operational_action: {}\n\
              new_stop_loss_pct: {:?}\n\
-             new_take_profit_pct: {:?}\n",
+             new_take_profit_pct: {:?}\n\
+             trailing_callback_pct: {:?}\n\
+             partial_close_pct: {:?}\n",
             snapshot
                 .last_price
                 .map(format_compact_price)
@@ -274,7 +344,27 @@ fn build_plain_operator_body(
                 .unwrap_or("(n/a)"),
             snapshot.operational_new_sl_pct,
             snapshot.operational_new_tp_pct,
+            snapshot.operational_trailing_callback_pct,
+            snapshot.operational_partial_close_pct,
         ));
+    } else if snapshot.layer == "strategic" {
+        extra.push_str(&format!(
+            "\n\
+             risk_budget_pct: {:?}\n\
+             max_open_positions: {:?}\n\
+             preferred_regime: {:?}\n",
+            snapshot.strategic_risk_budget_pct,
+            snapshot.strategic_max_open_positions,
+            snapshot.strategic_preferred_regime,
+        ));
+        if let Some(ref s) = snapshot.strategic_symbol_scores_json {
+            let head: String = s.chars().take(800).collect();
+            extra.push_str("symbol_scores (head):\n");
+            extra.push_str(&head);
+            if s.len() > 800 {
+                extra.push_str("…\n");
+            }
+        }
     }
     format!(
         "decision_id: {decision_id}\n\
