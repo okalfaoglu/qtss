@@ -83,9 +83,10 @@ pub use ingestion_state::{
 pub use intake_playbook::{
     fetch_intake_playbook_candidate_by_id, fetch_intake_playbook_run_by_id,
     fetch_latest_intake_playbook_run, insert_intake_playbook_candidates, insert_intake_playbook_run,
-    list_intake_playbook_candidates_for_run, list_recent_intake_playbook_runs,
-    update_intake_candidate_merged_engine_symbol, IntakePlaybookCandidateInsert, IntakePlaybookCandidateRow,
-    IntakePlaybookRunInsert, IntakePlaybookRunRow,
+    list_intake_playbook_candidates_for_run, list_promotable_intake_candidates,
+    list_recent_intake_playbook_runs, update_intake_candidate_merged_engine_symbol,
+    IntakePlaybookCandidateInsert, IntakePlaybookCandidateRow, IntakePlaybookRunInsert,
+    IntakePlaybookRunRow,
 };
 pub use market_bars::{
     fetch_recent_bars_stats, list_bars_in_range, list_recent_bars, upsert_market_bar, MarketBarRow,
