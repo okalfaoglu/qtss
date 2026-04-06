@@ -15,26 +15,27 @@ COMMENT ON COLUMN engine_symbols.lifecycle_state IS
 CREATE INDEX IF NOT EXISTS idx_engine_symbols_lifecycle
   ON engine_symbols (lifecycle_state) WHERE lifecycle_state NOT IN ('retired', 'manual');
 
-INSERT INTO system_config (module, key, value_json)
+INSERT INTO system_config (module, config_key, value, description, is_secret)
 VALUES
-  ('worker', 'intake_auto_promote_enabled',
-   '{"enabled": false}'::jsonb),
-  ('worker', 'intake_auto_promote_tick_secs',
-   '{"secs": 120}'::jsonb),
-  ('worker', 'intake_auto_promote_min_confidence',
-   '{"value": 60}'::jsonb),
+  ('worker', 'intake_auto_promote_enabled', '{"enabled": false}'::jsonb,
+   'Enable intake_auto_promote_loop (auto-promote candidates to engine_symbols).', false),
+  ('worker', 'intake_auto_promote_tick_secs', '{"secs": 120}'::jsonb,
+   'Tick interval seconds for intake_auto_promote_loop.', false),
+  ('worker', 'intake_auto_promote_min_confidence', '{"value": 60}'::jsonb,
+   'Minimum candidate confidence_0_100 for auto-promote.', false),
   ('worker', 'intake_auto_promote_playbooks',
-   '{"value": "elite_long,elite_short,ten_x_alert,institutional_accumulation,institutional_exit"}'::jsonb),
-  ('worker', 'intake_auto_promote_max_active',
-   '{"value": 20}'::jsonb),
-  ('worker', 'intake_auto_promote_default_interval',
-   '{"value": "15m"}'::jsonb),
-  ('worker', 'lifecycle_manager_enabled',
-   '{"enabled": false}'::jsonb),
-  ('worker', 'lifecycle_manager_tick_secs',
-   '{"secs": 300}'::jsonb),
-  ('worker', 'lifecycle_cooldown_hours',
-   '{"value": 24}'::jsonb),
-  ('worker', 'lifecycle_retire_stale_hours',
-   '{"value": 48}'::jsonb)
-ON CONFLICT (module, key) DO NOTHING;
+   '{"value": "elite_long,elite_short,ten_x_alert,institutional_accumulation,institutional_exit"}'::jsonb,
+   'Comma-separated playbook_id list allowed for auto-promote.', false),
+  ('worker', 'intake_auto_promote_max_active', '{"value": 20}'::jsonb,
+   'Max engine_symbols in promoted|analyzing|ready|trading|closing for auto-promote cap.', false),
+  ('worker', 'intake_auto_promote_default_interval', '{"value": "15m"}'::jsonb,
+   'Default bar interval for promoted engine_symbols.', false),
+  ('worker', 'lifecycle_manager_enabled', '{"enabled": false}'::jsonb,
+   'Enable lifecycle_manager_loop (state transitions for intake-managed symbols).', false),
+  ('worker', 'lifecycle_manager_tick_secs', '{"secs": 300}'::jsonb,
+   'Tick interval seconds for lifecycle_manager_loop.', false),
+  ('worker', 'lifecycle_cooldown_hours', '{"value": 24}'::jsonb,
+   'Hours in cooldown before transition to retired.', false),
+  ('worker', 'lifecycle_retire_stale_hours', '{"value": 48}'::jsonb,
+   'Stale hours before force-retire non-manual lifecycle rows with no position.', false)
+ON CONFLICT (module, config_key) DO NOTHING;
