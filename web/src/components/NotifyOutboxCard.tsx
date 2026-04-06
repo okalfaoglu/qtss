@@ -3,6 +3,8 @@ import { fetchNotifyOutbox, type NotifyOutboxRowApi } from "../api/client";
 
 type Props = {
   accessToken: string;
+  /** Increment (e.g. after enqueue from Template tab) to re-fetch the table. */
+  refreshSignal?: number;
 };
 
 function asIso(s: string | null | undefined): string {
@@ -12,7 +14,7 @@ function asIso(s: string | null | undefined): string {
   return d.toISOString().replace("T", " ").replace("Z", "Z");
 }
 
-export function NotifyOutboxCard({ accessToken }: Props) {
+export function NotifyOutboxCard({ accessToken, refreshSignal = 0 }: Props) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [limit, setLimit] = useState(50);
@@ -47,7 +49,7 @@ export function NotifyOutboxCard({ accessToken }: Props) {
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [refresh, refreshSignal]);
 
   const filtered = useMemo(() => {
     const term = q.trim().toLowerCase();

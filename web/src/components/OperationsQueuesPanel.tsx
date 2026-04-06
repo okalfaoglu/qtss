@@ -2,12 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   fetchAiApprovalRequests,
-  fetchNotifyOutbox,
   patchAiApprovalRequest,
   postAiApprovalRequest,
-  postNotifyOutbox,
   type AiApprovalRequestRowApi,
-  type NotifyOutboxRowApi,
 } from "../api/client";
 
 type Props = {
@@ -24,14 +21,9 @@ function truncate(s: string, max: number): string {
 
 export function OperationsQueuesPanel({ accessToken, canOps, canAdmin }: Props) {
   const { t } = useTranslation();
-  const [outbox, setOutbox] = useState<NotifyOutboxRowApi[]>([]);
   const [approvals, setApprovals] = useState<AiApprovalRequestRowApi[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-
-  const [notifyTitle, setNotifyTitle] = useState("");
-  const [notifyBody, setNotifyBody] = useState("");
-  const [notifyChannels, setNotifyChannels] = useState("webhook");
 
   const [aiKind, setAiKind] = useState("generic");
   const [aiPayloadText, setAiPayloadText] = useState('{"note":"dashboard test"}');
@@ -43,14 +35,10 @@ export function OperationsQueuesPanel({ accessToken, canOps, canAdmin }: Props) 
     setErr("");
     setBusy(true);
     try {
-      const [o, a] = await Promise.all([
-        fetchNotifyOutbox(accessToken, 50),
-        fetchAiApprovalRequests(accessToken, {
-          status: approvalFilter || undefined,
-          limit: 50,
-        }),
-      ]);
-      setOutbox(o);
+      const a = await fetchAiApprovalRequests(accessToken, {
+        status: approvalFilter || undefined,
+        limit: 50,
+      });
       setApprovals(a);
     } catch (e) {
       setErr(String(e));
@@ -62,30 +50,6 @@ export function OperationsQueuesPanel({ accessToken, canOps, canAdmin }: Props) 
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  const enqueueNotify = async () => {
-    if (!accessToken || !canOps) return;
-    setErr("");
-    setBusy(true);
-    try {
-      const ch = notifyChannels
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-      await postNotifyOutbox(accessToken, {
-        title: notifyTitle.trim(),
-        body: notifyBody.trim(),
-        channels: ch.length ? ch : undefined,
-      });
-      setNotifyTitle("");
-      setNotifyBody("");
-      await refresh();
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const submitAiStub = async () => {
     if (!accessToken || !canOps) return;
@@ -126,15 +90,15 @@ export function OperationsQueuesPanel({ accessToken, canOps, canAdmin }: Props) 
   };
 
   if (!accessToken) {
-    return <p className="muted">Kuyrukları görmek için giriş yapın.</p>;
+    return <p className="muted">{t("ai.approvalQueueLoginPrompt")}</p>;
   }
 
   return (
     <>
       <div className="card">
-        <p className="tv-drawer__section-head">{t("ai.queuesPanelHead")}</p>
+        <p className="tv-drawer__section-head">{t("ai.approvalQueueHead")}</p>
         <p className="muted" style={{ fontSize: "0.75rem", marginBottom: "0.5rem" }}>
-          {t("ai.queuesPanelIntro")}
+          {t("ai.approvalQueueIntro")}
         </p>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.65rem" }}>
           <button type="button" className="theme-toggle" disabled={busy} onClick={() => void refresh()}>
@@ -156,81 +120,6 @@ export function OperationsQueuesPanel({ accessToken, canOps, canAdmin }: Props) 
           </label>
         </div>
         {err ? <p className="err" style={{ marginBottom: "0.5rem" }}>{err}</p> : null}
-      </div>
-
-      <div className="card">
-        <p className="tv-drawer__section-head">Bildirim outbox</p>
-        <div style={{ overflowX: "auto", maxHeight: "14rem" }}>
-          <table style={{ width: "100%", fontSize: "0.68rem", borderCollapse: "collapse" }}>
-            <thead>
-              <tr className="muted">
-                <th style={{ textAlign: "left", padding: "0.2rem" }}>created</th>
-                <th style={{ textAlign: "left", padding: "0.2rem" }}>status</th>
-                <th style={{ textAlign: "left", padding: "0.2rem" }}>title</th>
-                <th style={{ textAlign: "left", padding: "0.2rem" }}>channels</th>
-              </tr>
-            </thead>
-            <tbody>
-              {outbox.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="muted" style={{ padding: "0.35rem" }}>
-                    Kayıt yok veya migration/worker henüz yok.
-                  </td>
-                </tr>
-              ) : (
-                outbox.map((row) => (
-                  <tr key={row.id}>
-                    <td className="mono" style={{ padding: "0.2rem", whiteSpace: "nowrap" }}>
-                      {truncate(row.created_at, 19)}
-                    </td>
-                    <td style={{ padding: "0.2rem" }}>{row.status}</td>
-                    <td style={{ padding: "0.2rem" }} title={row.title}>
-                      {truncate(row.title, 36)}
-                    </td>
-                    <td className="mono" style={{ padding: "0.2rem" }}>
-                      {row.channels?.join(", ") ?? "—"}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-        {canOps ? (
-          <div style={{ marginTop: "0.65rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-            <label>
-              <span className="muted" style={{ fontSize: "0.72rem" }}>
-                title
-              </span>
-              <input className="mono" value={notifyTitle} onChange={(e) => setNotifyTitle(e.target.value)} />
-            </label>
-            <label>
-              <span className="muted" style={{ fontSize: "0.72rem" }}>
-                body
-              </span>
-              <textarea
-                className="mono"
-                rows={2}
-                value={notifyBody}
-                onChange={(e) => setNotifyBody(e.target.value)}
-                style={{ width: "100%" }}
-              />
-            </label>
-            <label>
-              <span className="muted" style={{ fontSize: "0.72rem" }}>
-                channels (virgül)
-              </span>
-              <input className="mono" value={notifyChannels} onChange={(e) => setNotifyChannels(e.target.value)} />
-            </label>
-            <button type="button" className="theme-toggle" disabled={busy} onClick={() => void enqueueNotify()}>
-              Outbox’a ekle
-            </button>
-          </div>
-        ) : (
-          <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.72rem" }}>
-            Outbox’a yazma: trader veya admin rolü gerekir.
-          </p>
-        )}
       </div>
 
       <div className="card">

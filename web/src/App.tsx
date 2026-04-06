@@ -5378,7 +5378,7 @@ export default function App() {
                     "kuyruk",
                   ) ? (
                     token ? (
-                      <NotificationDrawerPanel accessToken={token} />
+                      <NotificationDrawerPanel accessToken={token} canOps={rbacIsOps} />
                     ) : (
                       <p className="muted card">{t("notifyTest.signInPrompt")}</p>
                     )
