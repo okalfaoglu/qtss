@@ -401,15 +401,6 @@ async fn avg_btc_eth_funding_async(pool: &PgPool) -> Option<f64> {
     Some(rates.iter().sum::<f64>() / rates.len() as f64)
 }
 
-// -- Per-symbol funding lookup ----------------------------------------------
-
-async fn symbol_funding_rate(pool: &PgPool, symbol: &str) -> Option<f64> {
-    let key = format!("binance_premium_{}usdt", symbol.trim().to_lowercase());
-    let row = fetch_data_snapshot(pool, &key).await.ok()??;
-    let j = row.response_json.as_ref()?;
-    binance_funding_rate(j)
-}
-
 // -- Market mode (enhanced with 9 signals) ----------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -576,83 +567,6 @@ fn buy_to_sell_ratio(row: &ScreenerRow) -> f64 {
     row.buy_vol / row.sell_vol
 }
 
-// -- Enriched detail_json for candidates ------------------------------------
-
-fn trade_plan_detail(row: &ScreenerRow, direction: &str, tp_pcts: &[f64], sl_pct: f64, horizon: &str) -> Value {
-    let price = parse_json_f64_opt(row.raw.get("price"))
-        .or_else(|| parse_json_f64_opt(row.raw.get("current_price")))
-        .or_else(|| parse_json_f64_opt(row.raw.get("last_price")));
-    let entry = price.unwrap_or(0.0);
-    let tps: Vec<Value> = tp_pcts
-        .iter()
-        .map(|pct| {
-            json!({
-                "pct": pct,
-                "price": if entry > 0.0 { entry * (1.0 + pct / 100.0) } else { 0.0 },
-            })
-        })
-        .collect();
-    let sl_price = if entry > 0.0 {
-        entry * (1.0 + sl_pct / 100.0)
-    } else {
-        0.0
-    };
-
-    let mut detail = row.raw.clone();
-    if let Some(obj) = detail.as_object_mut() {
-        obj.insert("direction".into(), json!(direction));
-        obj.insert("entry_price".into(), json!(entry));
-        obj.insert(
-            "targets".into(),
-            json!(tps),
-        );
-        obj.insert("stop_loss_pct".into(), json!(sl_pct));
-        obj.insert("stop_loss_price".into(), json!(sl_price));
-        obj.insert("horizon".into(), json!(horizon));
-        obj.insert("net_flow_usd".into(), json!(row.net_flow));
-        obj.insert("buy_ratio".into(), json!(buy_ratio(row)));
-        obj.insert("volume_change_pct".into(), json!(row.volume_change_pct));
-        obj.insert("fresh_wallets".into(), json!(row.fresh_wallets));
-        obj.insert("nof_buy_wallets".into(), json!(row.nof_buy_wallets));
-        obj.insert("nof_sell_wallets".into(), json!(row.nof_sell_wallets));
-        obj.insert("mcap_usd".into(), json!(row.mcap_usd));
-        obj.insert("liquidity_usd".into(), json!(row.liquidity_usd));
-    }
-    detail
-}
-
-// -- Candidate builder (enriched with trade plan) ---------------------------
-
-fn candidates_from_rows_enriched(
-    rows: &[&ScreenerRow],
-    direction: &'static str,
-    tier: &'static str,
-    conf_base: i32,
-    tp_pcts: &[f64],
-    sl_pct: f64,
-    horizon: &str,
-) -> (Vec<Value>, Vec<IntakePlaybookCandidateInsert<'static>>) {
-    let mut details = Vec::new();
-    let mut inserts: Vec<IntakePlaybookCandidateInsert<'static>> = Vec::new();
-    for (i, r) in rows.iter().enumerate() {
-        let detail = trade_plan_detail(r, direction, tp_pcts, sl_pct, horizon);
-        details.push(detail);
-        inserts.push(IntakePlaybookCandidateInsert {
-            rank: (i + 1) as i32,
-            symbol: Box::leak(r.symbol.clone().into_boxed_str()),
-            chain: r
-                .chain
-                .as_deref()
-                .map(|c| &*Box::leak(c.to_string().into_boxed_str()) as &'static str),
-            direction,
-            intake_tier: tier,
-            confidence_0_100: (conf_base + (30 - (i as i32 * 5))).clamp(20, 92),
-            detail_json: Box::leak(Box::new(Value::Null)),
-        });
-    }
-    (details, inserts)
-}
-
 fn candidates_from_rows<'a>(
     rows: &[&'a ScreenerRow],
     direction: &'static str,
@@ -715,7 +629,7 @@ fn pick_short_candidates(rows: &[ScreenerRow], limit: usize) -> Vec<&ScreenerRow
 }
 
 /// Elite long: SM inflow >$500K, buy/sell ≥2.0, multiple wallets, early stage (<10% move), MCap ≤$120M.
-fn pick_elite_long(rows: &[ScreenerRow], aux: &AuxData) -> Vec<&ScreenerRow> {
+fn pick_elite_long<'a>(rows: &'a [ScreenerRow], aux: &AuxData) -> Vec<&'a ScreenerRow> {
     let mut v: Vec<&ScreenerRow> = rows
         .iter()
         .filter(|r| {
@@ -746,7 +660,7 @@ fn pick_elite_long(rows: &[ScreenerRow], aux: &AuxData) -> Vec<&ScreenerRow> {
 
 /// Elite short: SM outflow >$500K, retail still buying (buy_ratio>0.55), price pumped (≥3%),
 /// MM distributing is a bonus signal.
-fn pick_elite_short(rows: &[ScreenerRow], funding_avg: Option<f64>, aux: &AuxData) -> Vec<&ScreenerRow> {
+fn pick_elite_short<'a>(rows: &'a [ScreenerRow], funding_avg: Option<f64>, aux: &AuxData) -> Vec<&'a ScreenerRow> {
     let funding_positive = funding_avg.map_or(false, |f| f >= 0.0003);
     let mut v: Vec<&ScreenerRow> = rows
         .iter()
@@ -804,7 +718,7 @@ fn pick_ten_x(rows: &[ScreenerRow]) -> Vec<&ScreenerRow> {
 }
 
 /// Explosive setups with direction detection.
-fn pick_explosive(rows: &[ScreenerRow], aux: &AuxData) -> Vec<(&ScreenerRow, &'static str)> {
+fn pick_explosive<'a>(rows: &'a [ScreenerRow], aux: &AuxData) -> Vec<(&'a ScreenerRow, &'static str)> {
     let mut v: Vec<(&ScreenerRow, &'static str)> = rows
         .iter()
         .filter(|r| {
@@ -858,7 +772,7 @@ fn pick_early_accumulation(rows: &[ScreenerRow]) -> Vec<&ScreenerRow> {
 }
 
 /// Institutional exit: large outflow while price flat/up. Enriched with entity detection.
-fn institutional_exit_like(rows: &[ScreenerRow], aux: &AuxData) -> Vec<&ScreenerRow> {
+fn institutional_exit_like<'a>(rows: &'a [ScreenerRow], aux: &AuxData) -> Vec<&'a ScreenerRow> {
     let mut v: Vec<&ScreenerRow> = rows
         .iter()
         .filter(|r| {
@@ -882,7 +796,7 @@ fn institutional_exit_like(rows: &[ScreenerRow], aux: &AuxData) -> Vec<&Screener
 }
 
 /// Institutional accumulation: large inflow + volume rising. Enriched with entity detection.
-fn institutional_accum_like(rows: &[ScreenerRow], aux: &AuxData) -> Vec<&ScreenerRow> {
+fn institutional_accum_like<'a>(rows: &'a [ScreenerRow], aux: &AuxData) -> Vec<&'a ScreenerRow> {
     let mut v: Vec<&ScreenerRow> = rows
         .iter()
         .filter(|r| {
@@ -1382,7 +1296,6 @@ async fn run_sweep(pool: &PgPool) -> Result<(), qtss_storage::StorageError> {
     // === Playbook 7: Explosive with direction detection ===
     let exp = pick_explosive(&rows, &aux);
     let exp_directions: Vec<&str> = exp.iter().map(|(_, d)| *d).collect();
-    let exp_rows: Vec<&ScreenerRow> = exp.iter().map(|(r, _)| *r).collect();
     let exp_summary = json!({
         "min_volume_change_pct": 200,
         "min_volume_usd": 1_000_000,
