@@ -671,7 +671,7 @@ fn pick_elite_short<'a>(rows: &'a [ScreenerRow], funding_avg: Option<f64>, aux: 
         .iter()
         .filter(|r| {
             r.net_flow < -ELITE_FLOW_USD
-                && r.price_change_pct >= 3.0
+                && r.price_change_pct >= -5.0
                 && r.liquidity_usd >= 10_000.0
         })
         .collect();
