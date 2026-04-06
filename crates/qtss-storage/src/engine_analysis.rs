@@ -25,6 +25,8 @@ pub struct EngineSymbolRow {
     pub market_id: Option<Uuid>,
     pub instrument_id: Option<Uuid>,
     pub bar_interval_id: Option<Uuid>,
+    /// `manual` | `promoted` | `analyzing` | `ready` | `trading` | `closing` | `cooldown` | `retired`
+    pub lifecycle_state: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -59,7 +61,7 @@ pub async fn list_enabled_engine_symbols(
 ) -> Result<Vec<EngineSymbolRow>, StorageError> {
     let rows = sqlx::query_as::<_, EngineSymbolRow>(
         r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode,
-                  exchange_id, market_id, instrument_id, bar_interval_id, created_at, updated_at
+                  exchange_id, market_id, instrument_id, bar_interval_id, lifecycle_state, created_at, updated_at
            FROM engine_symbols
            WHERE enabled = true
            ORDER BY sort_order ASC, symbol ASC, interval ASC"#,
@@ -72,7 +74,7 @@ pub async fn list_enabled_engine_symbols(
 pub async fn list_engine_symbols_all(pool: &PgPool) -> Result<Vec<EngineSymbolRow>, StorageError> {
     let rows = sqlx::query_as::<_, EngineSymbolRow>(
         r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode,
-                  exchange_id, market_id, instrument_id, bar_interval_id, created_at, updated_at
+                  exchange_id, market_id, instrument_id, bar_interval_id, lifecycle_state, created_at, updated_at
            FROM engine_symbols
            ORDER BY sort_order ASC, symbol ASC, interval ASC"#,
     )
@@ -98,7 +100,7 @@ pub async fn list_engine_symbols_matching(
     let seg = segment.map(str::trim).filter(|s| !s.is_empty());
     let rows = sqlx::query_as::<_, EngineSymbolRow>(
         r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode,
-                  exchange_id, market_id, instrument_id, bar_interval_id, created_at, updated_at
+                  exchange_id, market_id, instrument_id, bar_interval_id, lifecycle_state, created_at, updated_at
            FROM engine_symbols
            WHERE symbol = $1
              AND ($2::text IS NULL OR BTRIM(interval) = BTRIM($2))
@@ -219,7 +221,7 @@ pub async fn fetch_engine_symbol_by_id(
 ) -> Result<Option<EngineSymbolRow>, StorageError> {
     let row = sqlx::query_as::<_, EngineSymbolRow>(
         r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode,
-                  exchange_id, market_id, instrument_id, bar_interval_id, created_at, updated_at
+                  exchange_id, market_id, instrument_id, bar_interval_id, lifecycle_state, created_at, updated_at
            FROM engine_symbols WHERE id = $1"#,
     )
     .bind(id)
@@ -238,7 +240,7 @@ pub async fn fetch_engine_symbol_by_series(
 ) -> Result<Option<EngineSymbolRow>, StorageError> {
     let row = sqlx::query_as::<_, EngineSymbolRow>(
         r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode,
-                  exchange_id, market_id, instrument_id, bar_interval_id, created_at, updated_at
+                  exchange_id, market_id, instrument_id, bar_interval_id, lifecycle_state, created_at, updated_at
            FROM engine_symbols
            WHERE LOWER(TRIM(exchange)) = LOWER(TRIM($1))
              AND LOWER(TRIM(segment)) = LOWER(TRIM($2))
@@ -267,7 +269,7 @@ pub async fn insert_engine_symbol(
              label = COALESCE(EXCLUDED.label, engine_symbols.label),
              signal_direction_mode = COALESCE(EXCLUDED.signal_direction_mode, engine_symbols.signal_direction_mode)
            RETURNING id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode,
-                     exchange_id, market_id, instrument_id, bar_interval_id, created_at, updated_at"#,
+                     exchange_id, market_id, instrument_id, bar_interval_id, lifecycle_state, created_at, updated_at"#,
     )
     .bind(&row.exchange)
     .bind(&row.segment)
@@ -414,6 +416,162 @@ pub async fn list_analysis_snapshots_with_symbols(
            FROM analysis_snapshots s
            INNER JOIN engine_symbols e ON e.id = s.engine_symbol_id
            ORDER BY e.sort_order, e.symbol, e.interval, s.engine_kind"#,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+// --- lifecycle state helpers ---
+
+pub async fn update_engine_symbol_lifecycle_state(
+    pool: &PgPool,
+    id: Uuid,
+    new_state: &str,
+) -> Result<(), StorageError> {
+    sqlx::query(
+        r#"UPDATE engine_symbols SET lifecycle_state = $2, updated_at = now() WHERE id = $1"#,
+    )
+    .bind(id)
+    .bind(new_state)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn update_engine_symbol_lifecycle_and_enabled(
+    pool: &PgPool,
+    id: Uuid,
+    new_state: &str,
+    enabled: bool,
+) -> Result<(), StorageError> {
+    sqlx::query(
+        r#"UPDATE engine_symbols SET lifecycle_state = $2, enabled = $3, updated_at = now() WHERE id = $1"#,
+    )
+    .bind(id)
+    .bind(new_state)
+    .bind(enabled)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn list_engine_symbols_by_lifecycle(
+    pool: &PgPool,
+    states: &[&str],
+) -> Result<Vec<EngineSymbolRow>, StorageError> {
+    let rows = sqlx::query_as::<_, EngineSymbolRow>(
+        r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode,
+                  exchange_id, market_id, instrument_id, bar_interval_id, lifecycle_state, created_at, updated_at
+           FROM engine_symbols
+           WHERE lifecycle_state = ANY($1)
+           ORDER BY updated_at DESC"#,
+    )
+    .bind(states)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn count_engine_symbols_by_lifecycle(
+    pool: &PgPool,
+    states: &[&str],
+) -> Result<i64, StorageError> {
+    let count: (i64,) = sqlx::query_as(
+        r#"SELECT COUNT(*) FROM engine_symbols WHERE lifecycle_state = ANY($1)"#,
+    )
+    .bind(states)
+    .fetch_one(pool)
+    .await?;
+    Ok(count.0)
+}
+
+/// Rows not in 'retired' or 'manual' whose `updated_at` is older than `hours` ago.
+pub async fn list_stale_lifecycle_engine_symbols(
+    pool: &PgPool,
+    stale_hours: i64,
+) -> Result<Vec<EngineSymbolRow>, StorageError> {
+    let rows = sqlx::query_as::<_, EngineSymbolRow>(
+        r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode,
+                  exchange_id, market_id, instrument_id, bar_interval_id, lifecycle_state, created_at, updated_at
+           FROM engine_symbols
+           WHERE lifecycle_state NOT IN ('retired', 'manual')
+             AND updated_at < now() - make_interval(hours => $1)
+           ORDER BY updated_at ASC"#,
+    )
+    .bind(stale_hours as f64)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Check if any `analysis_snapshots` of the given kinds exist for this engine symbol.
+pub async fn has_analysis_snapshots(
+    pool: &PgPool,
+    engine_symbol_id: Uuid,
+    kinds: &[&str],
+) -> Result<bool, StorageError> {
+    let row: (bool,) = sqlx::query_as(
+        r#"SELECT EXISTS(
+             SELECT 1 FROM analysis_snapshots
+             WHERE engine_symbol_id = $1
+               AND engine_kind = ANY($2)
+               AND error IS NULL
+           )"#,
+    )
+    .bind(engine_symbol_id)
+    .bind(kinds)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
+/// Check if an applied AI tactical decision exists for a given symbol string (recent).
+pub async fn has_applied_tactical_for_symbol(
+    pool: &PgPool,
+    symbol: &str,
+) -> Result<bool, StorageError> {
+    let row: (bool,) = sqlx::query_as(
+        r#"SELECT EXISTS(
+             SELECT 1 FROM ai_decisions d
+             JOIN ai_tactical_decisions t ON t.decision_id = d.id
+             WHERE UPPER(TRIM(d.symbol)) = UPPER(TRIM($1))
+               AND t.status = 'applied'
+               AND d.created_at > now() - interval '24 hours'
+           )"#,
+    )
+    .bind(symbol)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
+/// Net filled order quantity for a symbol (positive = long exposure).
+pub async fn net_filled_position_for_symbol(
+    pool: &PgPool,
+    symbol: &str,
+) -> Result<f64, StorageError> {
+    let row: Option<(f64,)> = sqlx::query_as(
+        r#"SELECT COALESCE(SUM(
+             CASE WHEN side = 'BUY' THEN filled_qty ELSE -filled_qty END
+           ), 0.0)
+           FROM exchange_orders
+           WHERE UPPER(TRIM(symbol)) = UPPER(TRIM($1))
+             AND status IN ('FILLED', 'PARTIALLY_FILLED')
+             AND created_at > now() - interval '30 days'"#,
+    )
+    .bind(symbol)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| r.0).unwrap_or(0.0))
+}
+
+/// Lifecycle summary: count per state.
+pub async fn lifecycle_state_summary(
+    pool: &PgPool,
+) -> Result<Vec<(String, i64)>, StorageError> {
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        r#"SELECT lifecycle_state, COUNT(*) FROM engine_symbols GROUP BY lifecycle_state ORDER BY lifecycle_state"#,
     )
     .fetch_all(pool)
     .await?;

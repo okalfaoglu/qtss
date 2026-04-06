@@ -199,6 +199,36 @@ pub async fn list_recent_intake_playbook_runs(
     Ok(rows)
 }
 
+/// Un-promoted candidates from recent runs: `merged_engine_symbol_id IS NULL`,
+/// filtered by playbook IDs and minimum confidence, ordered by confidence DESC.
+pub async fn list_promotable_intake_candidates(
+    pool: &PgPool,
+    playbook_ids: &[String],
+    min_confidence: i32,
+    limit: i64,
+) -> Result<Vec<IntakePlaybookCandidateRow>, StorageError> {
+    let lim = limit.clamp(1, 200);
+    let rows = sqlx::query_as::<_, IntakePlaybookCandidateRow>(
+        r#"SELECT c.id, c.run_id, c.rank, c.symbol, c.chain, c.direction, c.intake_tier,
+                  c.confidence_0_100, c.detail_json, c.merged_engine_symbol_id, c.merged_at
+           FROM intake_playbook_candidates c
+           JOIN intake_playbook_runs r ON r.id = c.run_id
+           WHERE c.merged_engine_symbol_id IS NULL
+             AND c.confidence_0_100 >= $1
+             AND r.playbook_id = ANY($2)
+             AND r.computed_at > now() - interval '6 hours'
+             AND (r.expires_at IS NULL OR r.expires_at > now())
+           ORDER BY c.confidence_0_100 DESC, c.rank ASC
+           LIMIT $3"#,
+    )
+    .bind(min_confidence)
+    .bind(playbook_ids)
+    .bind(lim)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn update_intake_candidate_merged_engine_symbol(
     pool: &PgPool,
     candidate_id: Uuid,
