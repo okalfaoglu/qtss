@@ -93,8 +93,7 @@ pub async fn nansen_token_screener_loop(pool: PgPool) {
         if api_key.is_none() {
             if !LOGGED_MISSING_NANSEN_KEY.swap(true, Ordering::SeqCst) {
                 warn!(
-                    "NANSEN_API_KEY tanımsız veya boş — token screener çalışmıyor; \
-                     systemd EnvironmentFile / .env ile anahtarı verin ve servisi yeniden başlatın"
+                    "Nansen API key missing — token screener idle; set system_config worker/nansen_api_key (secret) or NANSEN_API_KEY env, then restart worker"
                 );
             }
             tokio::time::sleep(Duration::from_secs(next_sleep)).await;

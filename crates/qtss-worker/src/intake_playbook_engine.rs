@@ -3,19 +3,22 @@
 //! Data: `data_snapshots` (`nansen_token_screener`, `nansen_netflows`, `nansen_flow_intelligence`,
 //! `nansen_perp_trades`, `binance_premium_*`). Heuristics are best-effort; Nansen JSON shape may vary.
 //!
-//! Enable: `QTSS_INTAKE_PLAYBOOK_ENABLED=1` or `system_config` `worker` / `intake_playbook_loop_enabled` `{ "enabled": true }`.
+//! Enable: `system_config` `worker` / `intake_playbook_loop_enabled` → `{ "enabled": true }` (preferred); env `QTSS_INTAKE_PLAYBOOK_ENABLED` is fallback.
 //!
-//! Optional alerts (async via `notify_outbox`): `QTSS_INTAKE_PLAYBOOK_NOTIFY_ENABLED=1`,
-//! `QTSS_INTAKE_PLAYBOOK_NOTIFY_CHANNELS=telegram` (comma-separated). Requires `notify_outbox` worker loop enabled.
+//! Optional alerts (async via `notify_outbox`): `system_config` `worker` / `intake_playbook_notify_enabled` and
+//! `intake_playbook_notify_channels` (comma-separated, e.g. `telegram`); env keys remain fallback per `resolve_*`.
+//! Requires `notify_outbox` worker loop enabled.
+//! `intake_ten_x_alert` is deduped per symbol via `notify_outbox` rows (`org_id` NULL, `event_key`, `symbol`) inside
+//! `intake_playbook_notify_ten_x_dedupe_secs` / `QTSS_INTAKE_PLAYBOOK_NOTIFY_TEN_X_DEDUPE_SECS` (0 = no dedupe).
 
 use chrono::{Duration, Utc};
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use qtss_storage::{
     fetch_data_snapshot, fetch_latest_intake_playbook_run, insert_intake_playbook_candidates,
-    insert_intake_playbook_run, resolve_worker_enabled_flag, resolve_worker_tick_secs,
+    insert_intake_playbook_run, resolve_system_csv, resolve_worker_enabled_flag, resolve_worker_tick_secs,
     NotifyOutboxRepository, IntakePlaybookCandidateInsert, IntakePlaybookRunInsert,
 };
 
@@ -522,13 +525,19 @@ async fn intake_notify_enabled(pool: &PgPool) -> bool {
     .await
 }
 
-fn intake_notify_channel_list() -> Vec<String> {
-    std::env::var("QTSS_INTAKE_PLAYBOOK_NOTIFY_CHANNELS")
-        .unwrap_or_else(|_| "telegram".into())
-        .split(',')
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty())
-        .collect()
+async fn intake_notify_channels(pool: &PgPool) -> Vec<String> {
+    resolve_system_csv(
+        pool,
+        "worker",
+        "intake_playbook_notify_channels",
+        "QTSS_INTAKE_PLAYBOOK_NOTIFY_CHANNELS",
+        "telegram",
+    )
+    .await
+    .into_iter()
+    .map(|s| s.trim().to_lowercase())
+    .filter(|s| !s.is_empty())
+    .collect()
 }
 
 async fn try_enqueue_intake_notification(
@@ -537,18 +546,30 @@ async fn try_enqueue_intake_notification(
     event_key: &'static str,
     title: &str,
     body: &str,
+    symbol: Option<&str>,
 ) {
     if !notify_on {
         return;
     }
-    let channels = intake_notify_channel_list();
+    let channels = intake_notify_channels(pool).await;
     if channels.is_empty() {
-        warn!("intake notify: QTSS_INTAKE_PLAYBOOK_NOTIFY_CHANNELS boş");
+        warn!("intake notify: intake_playbook_notify_channels empty (system_config worker / intake_playbook_notify_channels)");
         return;
     }
     let repo = NotifyOutboxRepository::new(pool.clone());
+    let sym_meta = symbol.map(|s| s.trim()).filter(|s| !s.is_empty());
     match repo
-        .enqueue_with_meta(None, Some(event_key), "info", None, None, None, title, body, channels)
+        .enqueue_with_meta(
+            None,
+            Some(event_key),
+            "info",
+            None,
+            None,
+            sym_meta,
+            title,
+            body,
+            channels,
+        )
         .await
     {
         Ok(row) => info!(%event_key, outbox_id = %row.id, "intake notification enqueued"),
@@ -676,7 +697,15 @@ async fn run_sweep(pool: &PgPool) -> Result<(), qtss_storage::StorageError> {
             conf,
             key_reason
         );
-        try_enqueue_intake_notification(pool, notify_on, "intake_market_mode", &title, &body).await;
+        try_enqueue_intake_notification(
+            pool,
+            notify_on,
+            "intake_market_mode",
+            &title,
+            &body,
+            None,
+        )
+        .await;
     }
 
     // Elite short / long
@@ -739,16 +768,52 @@ async fn run_sweep(pool: &PgPool) -> Result<(), qtss_storage::StorageError> {
 
     if triggered {
         if let Some(r) = ten.first() {
-            let title = format!("Intake 10x aday: {}", r.symbol);
-            let body = format!(
-                "Heuristik eşikleri sağlandı (token screener).\nSembol: {}\nNet flow (USD): {:.0}\nMCap: {:.0}\nLikidite: {:.0}\nFiyat %%: {:.2}",
-                r.symbol,
-                r.net_flow,
-                r.mcap_usd,
-                r.liquidity_usd,
-                r.price_change_pct
-            );
-            try_enqueue_intake_notification(pool, notify_on, "intake_ten_x_alert", &title, &body).await;
+            let sym_key = r.symbol.trim().to_uppercase();
+            let dedupe_secs = resolve_worker_tick_secs(
+                pool,
+                "worker",
+                "intake_playbook_notify_ten_x_dedupe_secs",
+                "QTSS_INTAKE_PLAYBOOK_NOTIFY_TEN_X_DEDUPE_SECS",
+                86_400,
+                0,
+            )
+            .await;
+            let outbox = NotifyOutboxRepository::new(pool.clone());
+            let within_dedupe_window = dedupe_secs > 0
+                && outbox
+                    .exists_recent_global_event_symbol(
+                        "intake_ten_x_alert",
+                        &sym_key,
+                        dedupe_secs.min(i64::MAX as u64) as i64,
+                    )
+                    .await
+                    .unwrap_or(false);
+            if within_dedupe_window {
+                debug!(
+                    symbol = %sym_key,
+                    secs = dedupe_secs,
+                    "intake ten_x notify skipped (dedupe window)"
+                );
+            } else {
+                let title = format!("Intake 10x aday: {}", r.symbol);
+                let body = format!(
+                    "Heuristik eşikleri sağlandı (token screener).\nSembol: {}\nNet flow (USD): {:.0}\nMCap: {:.0}\nLikidite: {:.0}\nFiyat %%: {:.2}",
+                    r.symbol,
+                    r.net_flow,
+                    r.mcap_usd,
+                    r.liquidity_usd,
+                    r.price_change_pct
+                );
+                try_enqueue_intake_notification(
+                    pool,
+                    notify_on,
+                    "intake_ten_x_alert",
+                    &title,
+                    &body,
+                    Some(sym_key.as_str()),
+                )
+                .await;
+            }
         }
     }
 

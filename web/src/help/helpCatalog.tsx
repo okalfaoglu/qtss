@@ -247,8 +247,9 @@ export const HELP_TOPICS: HelpTopic[] = [
           </li>
         </ul>
         <p className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.5, marginTop: "0.5rem" }}>
-          Setup çıktısı: <code className="mono">nansen_setup_runs</code> / <code className="mono">nansen_setup_rows</code> (migration{" "}
-          <code className="mono">0020</code>). En iyi <strong>5 LONG</strong> + <strong>5 SHORT</strong> satır gösterimi hedeflenir.
+          Setup çıktısı: <code className="mono">nansen_setup_runs</code> / <code className="mono">nansen_setup_rows</code> — tablolar{" "}
+          <code className="mono">migrations/0001_qtss_baseline.sql</code> içinde (eski tek dosya adı <code className="mono">0020</code> ile
+          birleştirilmiş olabilir). En iyi <strong>5 LONG</strong> + <strong>5 SHORT</strong> satır gösterimi hedeflenir.
         </p>
       </>
     ),
@@ -271,6 +272,9 @@ export const HELP_TOPICS: HelpTopic[] = [
       "light pipeline",
       "formations",
       "0005",
+      "0006",
+      "0007",
+      "dedupe",
     ]),
     body: (
       <>
@@ -278,21 +282,32 @@ export const HELP_TOPICS: HelpTopic[] = [
           <code className="mono">qtss-worker</code> içindeki <code className="mono">intake_playbook_engine</code>,{" "}
           <code className="mono">data_snapshots</code> (token screener, netflows, flow intelligence, perp trades, Binance funding) ile kural
           tabanlı tarama yapar; sonuçlar <code className="mono">intake_playbook_runs</code> ve{" "}
-          <code className="mono">intake_playbook_candidates</code> tablolarına yazılır (migration <code className="mono">0003_intake_playbook</code>
-          ).
+          <code className="mono">intake_playbook_candidates</code> tablolarına yazılır. Çıplak DB için{" "}
+          <code className="mono">0003</code>–<code className="mono">0007</code> migration dosyalarını uygulayın; tablolar ayrıca güncel{" "}
+          <code className="mono">0001</code> baseline ile de gelir.
         </p>
         <p className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.5 }}>
-          Aç/kapa: <code className="mono">QTSS_INTAKE_PLAYBOOK_ENABLED=1</code> veya <code className="mono">system_config</code> modül{" "}
-          <code className="mono">worker</code> anahtar <code className="mono">intake_playbook_loop_enabled</code> →{" "}
-          <code className="mono">{`{"enabled":true}`}</code>. Periyot: <code className="mono">intake_playbook_tick_secs</code> /{" "}
-          <code className="mono">QTSS_INTAKE_PLAYBOOK_TICK_SECS</code>.
+          <strong>Nansen &quot;aktif&quot; mi?</strong> Kredi paneli (ücretli plan) ayrı şey; worker tarafında ilgili{" "}
+          <code className="mono">system_config</code> döngü anahtarları ve <code className="mono">NANSEN_API_KEY</code> olmadan veri yazılmaz. Özet:{" "}
+          <code className="mono">GET …/analysis/nansen/snapshot</code> ve <code className="mono">GET …/analysis/data-snapshots</code> (JWT) ile satır
+          var mı bakın; <code className="mono">data_snapshots</code> içinde <code className="mono">nansen_token_screener</code> intake için kritiktir.
         </p>
         <p className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.5 }}>
-          Bildirim kuyruğu: <code className="mono">QTSS_INTAKE_PLAYBOOK_NOTIFY_ENABLED=1</code>, kanallar{" "}
-          <code className="mono">QTSS_INTAKE_PLAYBOOK_NOTIFY_CHANNELS=telegram</code> (virgülle çoklu).{" "}
+          Aç/kapa (tercihen DB): <code className="mono">system_config</code> modül <code className="mono">worker</code>, anahtar{" "}
+          <code className="mono">intake_playbook_loop_enabled</code> → <code className="mono">{`{"enabled":true}`}</code>. Periyot:{" "}
+          <code className="mono">intake_playbook_tick_secs</code> → <code className="mono">{`{"secs":300}`}</code>. Ortam değişkenleri aynı isimlerle yedek;
+          <code className="mono">QTSS_CONFIG_ENV_OVERRIDES=1</code> iken env önceliklidir.
+        </p>
+        <p className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.5 }}>
+          Bildirim kuyruğu: <code className="mono">intake_playbook_notify_enabled</code>, kanallar{" "}
+          <code className="mono">intake_playbook_notify_channels</code> (ör. <code className="mono">{`{"value":"telegram"}`}</code> veya virgüllü liste — tohum{" "}
+          <code className="mono">0007_intake_playbook_notify_channels</code>).{" "}
           <code className="mono">market_mode</code> önceki koşudan değişince ve <code className="mono">ten_x_alert</code> tetiklenince{" "}
           <code className="mono">notify_outbox</code> satırı eklenir — gönderim için <code className="mono">notify_outbox</code> worker döngüsü
-          açık olmalı (<code className="mono">worker.notify_outbox_enabled</code>).
+          açık olmalı (<code className="mono">worker.notify_outbox_enabled</code>). <code className="mono">intake_ten_x_alert</code> aynı sembol
+          için <code className="mono">intake_playbook_notify_ten_x_dedupe_secs</code> /{" "}
+          <code className="mono">QTSS_INTAKE_PLAYBOOK_NOTIFY_TEN_X_DEDUPE_SECS</code> (varsayılan 86400 sn,{" "}
+          <code className="mono">0</code> dedupe kapalı) içinde tekrar kuyruğa alınmaz.
         </p>
         <p className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.5 }}>
           API (JWT): <code className="mono">GET …/analysis/intake-playbook/latest?playbook_id=market_mode</code>,{" "}

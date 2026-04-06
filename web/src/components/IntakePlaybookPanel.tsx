@@ -139,10 +139,12 @@ export function IntakePlaybookPanel({ accessToken, canPromote, visible, onOpenHe
       <p className="tv-drawer__section-head">Intake playbook (smart-money adayları)</p>
       <p className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.4rem", lineHeight: 1.45 }}>
         Worker <code className="mono">intake_playbook_engine</code> — tablolar{" "}
-        <code className="mono">intake_playbook_runs</code> / <code className="mono">intake_playbook_candidates</code>. Açmak:{" "}
-        <code className="mono">QTSS_INTAKE_PLAYBOOK_ENABLED=1</code> veya <code className="mono">system_config</code>{" "}
-        <code className="mono">intake_playbook_loop_enabled</code>. Telegram vb.:{" "}
-        <code className="mono">QTSS_INTAKE_PLAYBOOK_NOTIFY_ENABLED=1</code> + <code className="mono">notify_outbox</code> döngüsü.
+        <code className="mono">intake_playbook_runs</code> / <code className="mono">intake_playbook_candidates</code>. Aç/kapa ve süre:{" "}
+        <code className="mono">system_config</code> modül <code className="mono">worker</code> —{" "}
+        <code className="mono">intake_playbook_loop_enabled</code>, <code className="mono">intake_playbook_tick_secs</code>. Bildirim:{" "}
+        <code className="mono">intake_playbook_notify_enabled</code>, <code className="mono">intake_playbook_notify_channels</code> +{" "}
+        <code className="mono">notify_outbox</code> döngüsü (<code className="mono">.env</code> yalnız{" "}
+        <code className="mono">QTSS_CONFIG_ENV_OVERRIDES=1</code> ile acil üzerine yazma).
         {onOpenHelpTopic ? (
           <>
             {" "}
@@ -193,9 +195,14 @@ export function IntakePlaybookPanel({ accessToken, canPromote, visible, onOpenHe
           ) : null}
         </>
       ) : !loading ? (
-        <p className="muted" style={{ fontSize: "0.75rem" }}>
-          Bu playbook için henüz run yok — worker’da intake açık mı ve migration <code>0003_intake_playbook</code> uygulandı
-          mı kontrol edin.
+        <p className="muted" style={{ fontSize: "0.75rem", lineHeight: 1.45 }}>
+          Bu playbook için henüz run yok. Kontrol listesi: (1) Admin <code className="mono">system_config</code>{" "}
+          <code className="mono">worker.intake_playbook_loop_enabled</code> → <code className="mono">{"{ \"enabled\": true }"}</code>; (2){" "}
+          <code className="mono">data_snapshots</code> dolu — özellikle{" "}
+          <code className="mono">nansen_token_screener</code> ve ilgili Nansen/Binance worker döngüleri + <code className="mono">NANSEN_API_KEY</code>
+          ; (3) çıplak kurulumda migration <code className="mono">0003</code>–<code className="mono">0007</code> uygulanmış olsun (tablolar{" "}
+          <code className="mono">0001_qtss_baseline</code> ile de gelir). API:{" "}
+          <code className="mono">GET …/analysis/intake-playbook/recent?limit=5</code> (JWT) — 200 ve <code>[]</code> ise motor henüz yazmamıştır.
         </p>
       ) : null}
 

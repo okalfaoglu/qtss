@@ -856,7 +856,7 @@ struct NansenSetupsLatestResponse {
     pub rows: Vec<NansenSetupRowDetail>,
 }
 
-/// Son başarılı `nansen_setup_scan` koşusu + en fazla 10 sıralı satır (`qtss-worker` + migration 0020).
+/// Son başarılı `nansen_setup_scan` koşusu + en fazla 10 sıralı satır (`qtss-worker`; tablolar `0001_qtss_baseline`).
 async fn get_nansen_setups_latest_api(
     State(st): State<SharedState>,
     Extension(loc): Extension<NegotiatedLocale>,

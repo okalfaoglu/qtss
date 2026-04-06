@@ -87,6 +87,35 @@ impl NotifyOutboxRepository {
         Ok(row)
     }
 
+    /// Worker/global intake alerts use `org_id IS NULL`. Used to avoid repeating the same `event_key` + `symbol`
+    /// within a lookback window (e.g. `intake_ten_x_alert` every sweep while screener rows stay hot).
+    pub async fn exists_recent_global_event_symbol(
+        &self,
+        event_key: &str,
+        symbol_trimmed_upper: &str,
+        lookback_secs: i64,
+    ) -> Result<bool, StorageError> {
+        if lookback_secs <= 0 || symbol_trimmed_upper.is_empty() {
+            return Ok(false);
+        }
+        let row: (bool,) = sqlx::query_as(
+            r#"SELECT EXISTS (
+                SELECT 1 FROM notify_outbox
+                WHERE org_id IS NULL
+                  AND event_key = $1
+                  AND symbol IS NOT NULL
+                  AND upper(trim(symbol)) = upper(trim($2))
+                  AND created_at > now() - ($3::bigint * interval '1 second')
+            )"#,
+        )
+        .bind(event_key)
+        .bind(symbol_trimmed_upper)
+        .bind(lookback_secs)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.0)
+    }
+
     pub async fn list_recent_for_org(
         &self,
         org_id: Uuid,

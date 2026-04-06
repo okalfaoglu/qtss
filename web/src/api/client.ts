@@ -1253,7 +1253,7 @@ export type NansenSetupsLatestApiResponse = {
   setup_endpoint_missing?: boolean;
 };
 
-/** Son setup taraması + en iyi 5 LONG ve 5 SHORT satırı (`nansen_setup_*`, migration 0020). */
+/** Son setup taraması + en iyi 5 LONG ve 5 SHORT satırı (`nansen_setup_*` tabloları; şema `0001_qtss_baseline`). */
 export async function fetchNansenSetupsLatest(accessToken: string): Promise<NansenSetupsLatestApiResponse> {
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/nansen/setups/latest`, accessToken, {});
   const t = await r.text();

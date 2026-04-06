@@ -4578,7 +4578,10 @@ export default function App() {
                             className="mono muted"
                           >
                             {dataSnapshots.length === 0 ? (
-                              <span>Henüz satır yok — worker yazımı veya migration 0022 kontrol edin.</span>
+                              <span>
+                                Henüz satır yok — ilgili worker döngüleri (Nansen, Binance, harici fetch) ve{" "}
+                                <code>data_snapshots</code> şeması; tablo <code>0001_qtss_baseline</code> içinde tanımlı.
+                              </span>
                             ) : (
                               dataSnapshots.map((d) => (
                                 <div key={d.source_key} style={{ marginBottom: "0.28rem" }}>
@@ -4933,8 +4936,8 @@ export default function App() {
                           <span>Sembol seçin — üst çubuktan.</span>
                         ) : contextTabOnchainEndpointMissing ? (
                           <span className="muted">
-                            <code>GET …/analysis/onchain-signals/breakdown</code> 404 — güncel{" "}
-                            <code>qtss-api</code> ve migration <code>0030_onchain_signal_scores</code>.
+                            <code>GET …/analysis/onchain-signals/breakdown</code> 404 — güncel <code>qtss-api</code> derlemesi; tablo{" "}
+                            <code>onchain_signal_scores</code> şemada yoksa <code>0001_qtss_baseline</code> migration&apos;ını uygulayın.
                           </span>
                         ) : !contextTabOnchainBreakdown?.latest_score_row ? (
                           <span className="muted">
@@ -5047,7 +5050,8 @@ export default function App() {
                       >
                         {contextTabExternalSources.length === 0 ? (
                           <span>
-                            Tanım yok veya tablo/migration eksik — <code>0021_external_data_fetch</code> sonrası seed / SQL.
+                            Tanım yok — <code>external_data_sources</code> satırı ekleyin (ops API veya SQL); şema{" "}
+                            <code>0001_qtss_baseline</code> içinde.
                           </span>
                         ) : (
                           contextTabExternalSources.map((s) => {
@@ -5153,9 +5157,13 @@ export default function App() {
                           </button>
                           {nansenPanelErr ? <p className="err">{nansenPanelErr}</p> : null}
                           {!nansenSnapshot ? (
-                            <p className="muted" style={{ marginTop: "0.5rem" }}>
-                              Henüz satır yok: migration <code>0019_nansen_snapshots</code>, worker restart ve geçerli{" "}
-                              <code>NANSEN_API_KEY</code> gerekir.
+                            <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.75rem", lineHeight: 1.45 }}>
+                              <code>nansen_snapshots</code> (kind <code>token_screener</code>) henüz yok. Aç: worker&apos;da token screener döngüsü (
+                              <code>nansen_token_screener_loop_enabled</code> / <code>NANSEN_TOKEN_SCREENER_ENABLED</code>), API anahtarı{" "}
+                              <code>system_config</code> <code>worker.nansen_api_key</code> (gizli) veya yedek <code>NANSEN_API_KEY</code>, çalışan{" "}
+                              <code>qtss-worker</code>. Şema: <code>0001_qtss_baseline</code>. API doğrulama
+                              (JWT): <code className="mono">GET /api/v1/analysis/nansen/snapshot</code> — 401/404 ise token veya API kökü (
+                              <code>VITE_API_BASE</code>) yanlış.
                             </p>
                           ) : null}
                           <p className="tv-drawer__section-head" style={{ marginTop: "0.85rem" }}>
@@ -5174,9 +5182,11 @@ export default function App() {
                               sonuna <code>/api/v1</code> eklemeyin.
                             </p>
                           ) : !nansenSetupsLatest.run && nansenSetupsLatest.rows.length === 0 ? (
-                            <p className="muted" style={{ marginTop: "0.25rem" }}>
-                              Henüz setup satırı yok: migration <code>0020</code>, worker, başarılı snapshot ve yeterli
-                              Nansen kredisi gerekir.
+                            <p className="muted" style={{ marginTop: "0.25rem", fontSize: "0.75rem", lineHeight: 1.45 }}>
+                              <code>nansen_setup_runs</code> / <code>nansen_setup_rows</code> boş: <code>setup_scan_engine</code> döngüsü açık mı,
+                              üstteki token screener snapshot dolu mu ve Nansen kredisi yeterli mi kontrol edin. Şema:{" "}
+                              <code>0001_qtss_baseline</code>. API (JWT):{" "}
+                              <code className="mono">GET /api/v1/analysis/nansen/setups/latest</code>.
                             </p>
                           ) : null}
                           {nansenSetupsLatest.run ? (
