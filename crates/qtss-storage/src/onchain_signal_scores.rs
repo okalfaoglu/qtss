@@ -183,7 +183,7 @@ pub async fn delete_onchain_signal_scores_older_than(
     let d = days.max(1);
     let res = sqlx::query(
         r#"DELETE FROM onchain_signal_scores
-           WHERE computed_at < NOW() - make_interval(days => $1)"#,
+           WHERE computed_at < NOW() - ($1::bigint * interval '1 day')"#,
     )
     .bind(d)
     .execute(pool)

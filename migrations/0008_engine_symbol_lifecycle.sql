@@ -39,3 +39,14 @@ VALUES
   ('worker', 'lifecycle_retire_stale_hours', '{"value": 48}'::jsonb,
    'Stale hours before force-retire non-manual lifecycle rows with no position.', false)
 ON CONFLICT (module, config_key) DO NOTHING;
+
+
+INSERT INTO app_config (key, value, description)
+VALUES (
+  'kill_switch_trading_halted',
+  'false'::jsonb,
+  'Trading halt — false: yeni emirlere izin (worker/API senkronu)'
+)
+ON CONFLICT (key) DO UPDATE SET
+  value = EXCLUDED.value,
+  updated_at = now();

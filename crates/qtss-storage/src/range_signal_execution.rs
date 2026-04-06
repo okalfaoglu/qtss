@@ -28,7 +28,7 @@ pub async fn list_range_signal_events_pending_paper_execution(
     limit: i64,
 ) -> Result<Vec<RangeSignalEventPendingExecutionRow>, StorageError> {
     let lim = limit.clamp(1, 200);
-    let hours: i32 = max_age_hours.clamp(1, 168) as i32;
+    let hours: i64 = max_age_hours.clamp(1, 168);
     let rows = sqlx::query_as::<_, RangeSignalEventPendingExecutionRow>(
         r#"SELECT
              r.id,
@@ -46,7 +46,7 @@ pub async fn list_range_signal_events_pending_paper_execution(
              SELECT 1 FROM range_signal_paper_executions x WHERE x.range_signal_event_id = r.id
            )
            AND r.event_kind IN ('long_entry', 'short_entry', 'long_exit', 'short_exit')
-           AND r.created_at > (now() - make_interval(hours => $1))
+           AND r.created_at > (now() - ($1::bigint * interval '1 hour'))
            ORDER BY r.created_at ASC
            LIMIT $2"#,
     )

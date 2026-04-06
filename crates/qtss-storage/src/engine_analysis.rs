@@ -496,10 +496,10 @@ pub async fn list_stale_lifecycle_engine_symbols(
                   exchange_id, market_id, instrument_id, bar_interval_id, lifecycle_state, created_at, updated_at
            FROM engine_symbols
            WHERE lifecycle_state NOT IN ('retired', 'manual')
-             AND updated_at < now() - make_interval(hours => $1)
+             AND updated_at < now() - ($1::bigint * interval '1 hour')
            ORDER BY updated_at ASC"#,
     )
-    .bind(stale_hours as f64)
+    .bind(stale_hours)
     .fetch_all(pool)
     .await?;
     Ok(rows)
