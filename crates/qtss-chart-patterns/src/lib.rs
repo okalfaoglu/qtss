@@ -23,6 +23,7 @@ mod find;
 mod ohlc;
 mod pattern_catalog;
 mod resolve;
+mod score_trend;
 mod scan;
 mod theme;
 mod trading_range;
@@ -57,6 +58,10 @@ pub use find::{
 };
 pub use ohlc::OhlcBar;
 pub use resolve::resolve_pattern_type_id;
+pub use score_trend::{
+    classify_position_scenario, classify_score_trend, roll_position_strength_history,
+    PositionScenarioKind, ScoreTrendKind, ScoreTrendOutcome,
+};
 pub use scan::{
     check_bar_ratio, get_ratio_diff, in_range, inspect_pick_best_three_point_line,
     inspect_two_point_line, trend_line_inspect,
