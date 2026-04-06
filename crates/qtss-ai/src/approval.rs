@@ -468,6 +468,14 @@ fn build_telegram_html_body(
             .operational_new_tp_pct
             .map(|x| format!("{x:.4}"))
             .unwrap_or_else(|| "—".into());
+        let trail = snapshot
+            .operational_trailing_callback_pct
+            .map(|x| format!("{x:.4}"))
+            .unwrap_or_else(|| "—".into());
+        let part = snapshot
+            .operational_partial_close_pct
+            .map(|x| format!("{x:.4}"))
+            .unwrap_or_else(|| "—".into());
         format!(
             "<b>📌 Operasyonel</b>\n\
              <b>Sembol:</b> <code>{sym_esc}</code>\n\
@@ -475,7 +483,39 @@ fn build_telegram_html_body(
              <b>Güncel fiyat:</b> <code>{lp_esc}</code>\n\
              <b>Eylem:</b> <code>{act_esc}</code>\n\
              <b>Yeni SL %:</b> <code>{sl}</code>  ·  <b>Yeni TP %:</b> <code>{tp}</code>\n\
+             <b>Trailing %:</b> <code>{trail}</code>  ·  <b>Kısmi kapat %:</b> <code>{part}</code>\n\
              <b>Yön / not:</b> {dir_en} {emoji}"
+        )
+    } else if snapshot.layer == "strategic" {
+        let rb = snapshot
+            .strategic_risk_budget_pct
+            .map(|x| format!("{x:.2}"))
+            .unwrap_or_else(|| "—".into());
+        let mx = snapshot
+            .strategic_max_open_positions
+            .map(|x| x.to_string())
+            .unwrap_or_else(|| "—".into());
+        let reg = snapshot
+            .strategic_preferred_regime
+            .as_deref()
+            .unwrap_or("—");
+        let reg_esc = escape_telegram_html(reg);
+        let scores_raw = snapshot
+            .strategic_symbol_scores_json
+            .as_deref()
+            .unwrap_or("{}");
+        let scores_short = truncate_chars(scores_raw, 900);
+        let scores_esc = escape_telegram_html(&scores_short);
+        format!(
+            "<b>📌 Portföy stratejisi</b>\n\
+             <b>Risk bütçesi %:</b> <code>{}</code>\n\
+             <b>Maks. açık pozisyon:</b> <code>{}</code>\n\
+             <b>Tercih edilen rejim:</b> <code>{}</code>\n\
+             <b>Sembol ağırlıkları (özet):</b>\n<pre>{}</pre>",
+            escape_telegram_html(&rb),
+            escape_telegram_html(&mx),
+            reg_esc,
+            scores_esc
         )
     } else {
         format!(
@@ -563,7 +603,11 @@ pub async fn maybe_auto_approve(
     if channels.is_empty() {
         return Ok(());
     }
-    let sym_short = symbol.unwrap_or("—");
+    let sym_short = match (symbol, snapshot.layer.as_str()) {
+        (Some(s), _) => s,
+        (None, "strategic") => "portfolio",
+        _ => "—",
+    };
     let title = format!("AI decision pending approval · {sym_short}");
     let body = build_plain_operator_body(
         decision_id,
@@ -592,9 +636,11 @@ pub async fn maybe_auto_approve(
             .with_telegram_html_message(tg_html)
             .with_telegram_reply_markup(markup);
         if let Some(sym) = symbol {
-            if let Some(png) = try_tactical_approval_png(sym, direction, confidence, snapshot) {
+            let png = try_tactical_approval_png(sym, direction, confidence, snapshot)
+                .or_else(|| try_operational_approval_png(sym, confidence, snapshot));
+            if let Some(bytes) = png {
                 let cap = photo_caption_plain(Some(sym), snapshot);
-                note = note.with_telegram_photo_png(png, cap);
+                note = note.with_telegram_photo_png(bytes, cap);
             }
         }
         note
@@ -617,6 +663,22 @@ pub async fn maybe_auto_approve(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn strategic_snapshot_reads_parsed_fields() {
+        let v = json!({
+            "risk_budget_pct": 1.5,
+            "max_open_positions": 4,
+            "preferred_regime": "trend",
+            "symbol_scores": {"BTCUSDT": 0.7}
+        });
+        let s = AiDecisionNotifySnapshot::from_strategic_parsed(&v);
+        assert_eq!(s.layer, "strategic");
+        assert!((s.strategic_risk_budget_pct.unwrap() - 1.5).abs() < 1e-9);
+        assert_eq!(s.strategic_max_open_positions, Some(4));
+        assert!(s.strategic_symbol_scores_json.as_deref().unwrap().contains("BTCUSDT"));
+    }
 
     #[test]
     fn auto_approve_requires_enabled_and_threshold() {

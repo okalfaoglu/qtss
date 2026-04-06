@@ -736,7 +736,7 @@ pub async fn run_strategic_sweep(rt: &AiRuntime) -> AiResult<()> {
     )
     .await?;
     insert_portfolio_directive(rt.pool(), decision_id, &parsed, Some(valid_until)).await?;
-    let notify_snap = crate::approval::AiDecisionNotifySnapshot::strategic_portfolio();
+    let notify_snap = crate::approval::AiDecisionNotifySnapshot::from_strategic_parsed(&parsed);
     maybe_auto_approve(
         rt.pool(),
         decision_id,

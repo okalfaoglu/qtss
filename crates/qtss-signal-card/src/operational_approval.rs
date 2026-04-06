@@ -75,7 +75,6 @@ pub fn try_render_operational_approval_card_png(
         .map_err(|e| SignalCardRenderError::Io(e.to_string()))?;
     let path: &Path = tmp.path();
     let w = OP_W as i32;
-    let h = OP_H as i32;
     const HEADER_H: i32 = 54;
     const LABEL_X: i32 = 14;
     const VALUE_X: i32 = 232;
@@ -159,13 +158,12 @@ pub fn try_render_operational_approval_card_png(
         let strength_word = strength_label_tr(strength).to_string();
         root.draw(&Text::new("Güven:", (LABEL_X, y + 6), style_row(&label_c)))
             .map_err(pe)?;
-        root.draw(
-            &Text::new(
-                format!("{strength}/10 {strength_word}").as_str(),
-                (VALUE_X, y + 6),
-                style_row(&gold),
-            ),
-        )
+        let strength_txt = format!("{strength}/10 {strength_word}");
+        root.draw(&Text::new(
+            strength_txt.as_str(),
+            (VALUE_X, y + 6),
+            style_row(&gold),
+        ))
         .map_err(pe)?;
 
         let box_w = 13_i32;
