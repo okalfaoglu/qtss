@@ -12,9 +12,10 @@ use chrono::Utc;
 
 use super::ConfluencePersist;
 use qtss_chart_patterns::{
-    analyze_trading_range, compute_signal_dashboard_v1_with_policy,
-    scan_formations, signal_dashboard_v2_envelope_from_v1, zigzag_from_ohlc_bars,
-    pivots_chronological, FormationParams, OhlcBar, SignalDirectionPolicy, TradingRangeParams,
+    analyze_trading_range, classify_position_scenario, classify_score_trend,
+    compute_signal_dashboard_v1_with_policy, roll_position_strength_history, scan_formations,
+    signal_dashboard_v2_envelope_from_v1, zigzag_from_ohlc_bars, pivots_chronological,
+    FormationParams, OhlcBar, PositionScenarioKind, SignalDirectionPolicy, TradingRangeParams,
     TradingRangeResult,
 };
 use qtss_ai::load_notify_config_merged;
@@ -458,6 +459,110 @@ async fn merge_confluence_and_onchain_into_dashboard_json(
                 }),
             );
         }
+    }
+}
+
+fn parse_position_strength_history_from_payload(v: &serde_json::Value) -> Option<Vec<u8>> {
+    v.get("position_strength_history_10")
+        .and_then(|x| x.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|el| el.as_u64().map(|u| u.min(10) as u8))
+                .collect()
+        })
+}
+
+fn dashboard_strength_u8(dash: &serde_json::Value) -> u8 {
+    dash.get("pozisyon_gucu_10")
+        .and_then(|x| {
+            x.as_u64()
+                .or_else(|| x.as_i64().map(|i| i.clamp(0, 10) as u64))
+        })
+        .map(|u| u.min(10) as u8)
+        .unwrap_or(5)
+}
+
+fn ascii_upper_durum(s: &str) -> String {
+    s.trim().to_uppercase().replace('İ', "I")
+}
+
+fn compute_entry_strength_for_payload(
+    prev: Option<&serde_json::Value>,
+    prev_dur: Option<&str>,
+    new_dur: &str,
+    current_strength: u8,
+) -> Option<u8> {
+    let nd = ascii_upper_durum(new_dur);
+    let long_short = nd == "LONG" || nd == "SHORT";
+    if !long_short {
+        return None;
+    }
+    let prev_notr = prev_dur
+        .map(|d| {
+            let u = ascii_upper_durum(d);
+            u == "NOTR" || u.is_empty()
+        })
+        .unwrap_or(true);
+    let prev_entry = prev
+        .and_then(|p| p.get("position_strength_entry_10"))
+        .and_then(|x| x.as_u64())
+        .map(|u| u.min(10) as u8);
+
+    if prev_notr || prev_entry.is_none() {
+        Some(current_strength)
+    } else {
+        prev_entry
+    }
+}
+
+/// `docs/SIGNAL_POSITION_SCORE_RULES.md` — rolling strength history, trend/scenario hints (after confluence merge).
+fn attach_position_score_signal_fields(
+    dash: &mut serde_json::Value,
+    prev: Option<&serde_json::Value>,
+) {
+    if dash.get("reason").and_then(|x| x.as_str()) == Some("insufficient_bars") {
+        return;
+    }
+    let current_strength = dashboard_strength_u8(dash);
+    let prev_hist = prev.and_then(parse_position_strength_history_from_payload);
+    let history = roll_position_strength_history(prev_hist.as_deref(), current_strength);
+    let trend = classify_score_trend(&history);
+
+    let prev_dur = prev
+        .and_then(|p| p.get("durum"))
+        .and_then(|x| x.as_str());
+    let new_dur = dash.get("durum").and_then(|x| x.as_str()).unwrap_or("NOTR");
+    let entry_opt = compute_entry_strength_for_payload(prev, prev_dur, new_dur, current_strength);
+
+    let scenario = entry_opt
+        .map(|e| classify_position_scenario(e, current_strength))
+        .unwrap_or(PositionScenarioKind::None);
+
+    if let Some(obj) = dash.as_object_mut() {
+        obj.insert("position_strength_history_10".into(), json!(history));
+        obj.insert("score_trend_kind".into(), json!(trend.kind.as_str()));
+        obj.insert("score_trend_action".into(), json!(trend.action));
+        if let Some(e) = entry_opt {
+            obj.insert("position_strength_entry_10".into(), json!(e));
+        } else {
+            obj.remove("position_strength_entry_10");
+        }
+        obj.insert("position_scenario_kind".into(), json!(scenario.as_str()));
+    }
+
+    if let Some(v2) = dash
+        .get_mut("signal_dashboard_v2")
+        .and_then(|x| x.as_object_mut())
+    {
+        v2.insert("position_strength_history_10".into(), json!(&history));
+        v2.insert("score_trend_kind".into(), json!(trend.kind.as_str()));
+        v2.insert("score_trend_action".into(), json!(trend.action));
+        if let Some(e) = entry_opt {
+            v2.insert("position_strength_entry_10".into(), json!(e));
+        } else {
+            v2.remove("position_strength_entry_10");
+        }
+        v2.insert("position_scenario_kind".into(), json!(scenario.as_str()));
     }
 }
 
@@ -1204,6 +1309,8 @@ async fn run_engines_for_symbol(
         }
 
         merge_confluence_and_onchain_into_dashboard_json(pool, &t, &mut dash_payload).await;
+
+        attach_position_score_signal_fields(&mut dash_payload, prev_dash_payload.as_ref());
 
         if let Err(e) = upsert_analysis_snapshot(
             pool,
