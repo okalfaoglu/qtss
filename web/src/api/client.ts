@@ -1395,6 +1395,7 @@ export async function fetchIntakePlaybookRecent(
 export type IntakePlaybookPromoteApiResponse = {
   engine_symbol: EngineSymbolApiRow;
   candidate_id: string;
+  linked_existing_row?: boolean;
   note: string;
 };
 
@@ -1415,6 +1416,30 @@ export async function postIntakePlaybookPromote(
   const t = await r.text();
   if (!r.ok) throwQtssApiError("intake-playbook/promote", r, t);
   return JSON.parse(t) as IntakePlaybookPromoteApiResponse;
+}
+
+export type IntakePlaybookPromoteBulkApiResponse = {
+  promoted: { candidate_id: string; engine_symbol: EngineSymbolApiRow; linked_existing_row: boolean }[];
+  errors: { candidate_id: string; message: string }[];
+};
+
+export async function postIntakePlaybookPromoteBulk(
+  accessToken: string,
+  body: {
+    candidate_ids: string[];
+    exchange?: string;
+    segment?: string;
+    interval?: string;
+  },
+): Promise<IntakePlaybookPromoteBulkApiResponse> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/intake-playbook/promote-bulk`, accessToken, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("intake-playbook/promote-bulk", r, t);
+  return JSON.parse(t) as IntakePlaybookPromoteBulkApiResponse;
 }
 
 export async function patchEngineSymbol(

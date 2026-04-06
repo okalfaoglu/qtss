@@ -23,8 +23,9 @@ use qtss_chart_patterns::{
 };
 use qtss_common::{log_business, QtssLogLevel};
 use qtss_storage::{
-    fetch_analysis_snapshot_payload, fetch_data_snapshot, fetch_intake_playbook_candidate_by_id,
-    fetch_intake_playbook_run_by_id, fetch_latest_intake_playbook_run,
+    fetch_analysis_snapshot_payload, fetch_data_snapshot, fetch_engine_symbol_by_series,
+    fetch_intake_playbook_candidate_by_id, fetch_intake_playbook_run_by_id,
+    fetch_latest_intake_playbook_run,
     fetch_latest_nansen_setup_with_rows, fetch_nansen_snapshot, fetch_range_engine_json,
     insert_engine_symbol, list_analysis_snapshots_with_symbols, list_data_snapshots,
     list_engine_symbols_all, list_engine_symbols_with_ingestion, list_engine_symbols_matching,
@@ -135,6 +136,10 @@ pub fn analysis_write_router() -> Router<SharedState> {
         .route(
             "/analysis/intake-playbook/promote",
             post(post_intake_playbook_promote_api),
+        )
+        .route(
+            "/analysis/intake-playbook/promote-bulk",
+            post(post_intake_playbook_promote_bulk_api),
         )
 }
 
@@ -990,18 +995,40 @@ struct PostIntakePromoteBody {
     interval: String,
 }
 
-/// Add `engine_symbols` row from an intake candidate (**disabled** until operator enables).
-async fn post_intake_playbook_promote_api(
-    State(st): State<SharedState>,
-    Extension(loc): Extension<NegotiatedLocale>,
-    Json(body): Json<PostIntakePromoteBody>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let c = fetch_intake_playbook_candidate_by_id(&st.pool, body.candidate_id)
+#[derive(Deserialize)]
+struct PostIntakePromoteBulkBody {
+    candidate_ids: Vec<Uuid>,
+    #[serde(default)]
+    exchange: Option<String>,
+    #[serde(default)]
+    segment: Option<String>,
+    #[serde(default = "default_intake_promote_interval")]
+    interval: String,
+}
+
+const INTAKE_PROMOTE_BULK_MAX: usize = 25;
+
+struct IntakePromoteOk {
+    engine_symbol: EngineSymbolRow,
+    candidate_id: Uuid,
+    linked_existing_row: bool,
+}
+
+/// Link intake candidate → `engine_symbols` (new row **disabled**, or existing row without toggling `enabled`).
+async fn promote_intake_candidate_core(
+    pool: &sqlx::PgPool,
+    loc: &NegotiatedLocale,
+    candidate_id: Uuid,
+    exchange: Option<String>,
+    segment: Option<String>,
+    interval: String,
+) -> Result<IntakePromoteOk, ApiError> {
+    let c = fetch_intake_playbook_candidate_by_id(pool, candidate_id)
         .await
         .map_err(|e| {
             map_analysis_storage_err(
                 e,
-                &loc,
+                loc,
                 "analysis.intake_promote_candidate_load_failed",
                 "Failed to load intake candidate.",
             )
@@ -1014,12 +1041,12 @@ async fn post_intake_playbook_promote_api(
             "candidate already promoted (merged_engine_symbol_id set)",
         ));
     }
-    let run = fetch_intake_playbook_run_by_id(&st.pool, c.run_id)
+    let run = fetch_intake_playbook_run_by_id(pool, c.run_id)
         .await
         .map_err(|e| {
             map_analysis_storage_err(
                 e,
-                &loc,
+                loc,
                 "analysis.intake_promote_run_load_failed",
                 "Failed to load intake playbook run.",
             )
@@ -1032,69 +1059,176 @@ async fn post_intake_playbook_promote_api(
     if sym.is_empty() {
         return Err(ApiError::bad_request("empty symbol after normalization"));
     }
-    let iv = body.interval.trim();
+    let iv = interval.trim();
     if iv.is_empty() {
         return Err(ApiError::bad_request("interval boş olamaz"));
     }
+    let ex = exchange
+        .unwrap_or_else(|| "binance".into())
+        .trim()
+        .to_lowercase();
+    let seg = segment
+        .unwrap_or_else(|| "futures".into())
+        .trim()
+        .to_lowercase();
+
+    if let Some(es) = fetch_engine_symbol_by_series(pool, &ex, &seg, &sym, iv)
+        .await
+        .map_err(|e| {
+            map_analysis_storage_err(
+                e,
+                loc,
+                "analysis.intake_promote_series_lookup_failed",
+                "Failed to look up engine_symbol series.",
+            )
+        })?
+    {
+        update_intake_candidate_merged_engine_symbol(pool, c.id, es.id)
+            .await
+            .map_err(|e| {
+                map_analysis_storage_err(
+                    e,
+                    loc,
+                    "analysis.intake_promote_merge_flag_failed",
+                    "Failed to record merged_engine_symbol_id.",
+                )
+            })?;
+        return Ok(IntakePromoteOk {
+            engine_symbol: es,
+            candidate_id: c.id,
+            linked_existing_row: true,
+        });
+    }
+
     let mode = signal_direction_mode_from_intake(&c.direction);
     let label = Some(format!("intake:{}", run.playbook_id));
     let row_ins = EngineSymbolInsert {
-        exchange: body
-            .exchange
-            .unwrap_or_else(|| "binance".into())
-            .trim()
-            .to_lowercase(),
-        segment: body
-            .segment
-            .unwrap_or_else(|| "futures".into())
-            .trim()
-            .to_lowercase(),
+        exchange: ex,
+        segment: seg,
         symbol: sym,
         interval: iv.to_string(),
         label,
         signal_direction_mode: mode,
     };
-    let es = insert_engine_symbol(&st.pool, &row_ins)
+    let es = insert_engine_symbol(pool, &row_ins)
         .await
         .map_err(|e| {
             map_analysis_storage_err(
                 e,
-                &loc,
+                loc,
                 "analysis.intake_promote_insert_engine_failed",
                 "Failed to insert engine_symbol.",
             )
         })?;
-    update_engine_symbol_enabled(&st.pool, es.id, false)
+    update_engine_symbol_enabled(pool, es.id, false)
         .await
         .map_err(|e| {
             map_analysis_storage_err(
                 e,
-                &loc,
+                loc,
                 "analysis.intake_promote_disable_failed",
                 "Failed to set engine_symbol enabled=false.",
             )
         })?;
-    update_intake_candidate_merged_engine_symbol(&st.pool, c.id, es.id)
+    update_intake_candidate_merged_engine_symbol(pool, c.id, es.id)
         .await
         .map_err(|e| {
             map_analysis_storage_err(
                 e,
-                &loc,
+                loc,
                 "analysis.intake_promote_merge_flag_failed",
                 "Failed to record merged_engine_symbol_id.",
             )
         })?;
+
+    Ok(IntakePromoteOk {
+        engine_symbol: es,
+        candidate_id: c.id,
+        linked_existing_row: false,
+    })
+}
+
+/// Add `engine_symbols` row from an intake candidate (**disabled** until operator enables).
+async fn post_intake_playbook_promote_api(
+    State(st): State<SharedState>,
+    Extension(loc): Extension<NegotiatedLocale>,
+    Json(body): Json<PostIntakePromoteBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let out = promote_intake_candidate_core(
+        &st.pool,
+        &loc,
+        body.candidate_id,
+        body.exchange,
+        body.segment,
+        body.interval,
+    )
+    .await?;
 
     log_business(
         QtssLogLevel::Info,
         "qtss_api::intake_playbook",
         "promote_candidate",
     );
+    let note = if out.linked_existing_row {
+        "Linked to existing engine_symbols row; enabled flag unchanged."
+    } else {
+        "Engine symbol created with enabled=false; enable from engine targets when ready."
+    };
     Ok(Json(json!({
-        "engine_symbol": es,
-        "candidate_id": c.id,
-        "note": "Engine symbol created with enabled=false; enable from engine targets when ready."
+        "engine_symbol": out.engine_symbol,
+        "candidate_id": out.candidate_id,
+        "linked_existing_row": out.linked_existing_row,
+        "note": note,
     })))
+}
+
+async fn post_intake_playbook_promote_bulk_api(
+    State(st): State<SharedState>,
+    Extension(loc): Extension<NegotiatedLocale>,
+    Json(body): Json<PostIntakePromoteBulkBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if body.candidate_ids.is_empty() {
+        return Err(ApiError::bad_request("candidate_ids boş olamaz"));
+    }
+    if body.candidate_ids.len() > INTAKE_PROMOTE_BULK_MAX {
+        return Err(ApiError::bad_request(format!(
+            "en fazla {INTAKE_PROMOTE_BULK_MAX} aday"
+        )));
+    }
+    let mut promoted = Vec::new();
+    let mut errors = Vec::new();
+    for cid in body.candidate_ids {
+        match promote_intake_candidate_core(
+            &st.pool,
+            &loc,
+            cid,
+            body.exchange.clone(),
+            body.segment.clone(),
+            body.interval.clone(),
+        )
+        .await
+        {
+            Ok(o) => {
+                promoted.push(json!({
+                    "candidate_id": o.candidate_id,
+                    "engine_symbol": o.engine_symbol,
+                    "linked_existing_row": o.linked_existing_row,
+                }));
+            }
+            Err(e) => {
+                errors.push(json!({
+                    "candidate_id": cid,
+                    "message": e.to_string(),
+                }));
+            }
+        }
+    }
+    log_business(
+        QtssLogLevel::Info,
+        "qtss_api::intake_playbook",
+        "promote_bulk",
+    );
+    Ok(Json(json!({ "promoted": promoted, "errors": errors })))
 }
 
 #[derive(Deserialize)]

@@ -508,6 +508,7 @@ async fn run_tactical_single(
     )
     .await?;
     insert_tactical_decision(pool, decision_id, sym, &parsed, valid_until).await?;
+    let notify_snap = crate::approval::AiDecisionNotifySnapshot::from_tactical_context(&ctx, &parsed);
     maybe_auto_approve(
         pool,
         decision_id,
@@ -517,6 +518,7 @@ async fn run_tactical_single(
         Some(sym),
         Some(direction),
         parsed.get("reasoning").and_then(|x| x.as_str()),
+        &notify_snap,
     )
     .await?;
     Ok(())
@@ -632,6 +634,8 @@ pub async fn run_operational_sweep(rt: &AiRuntime) -> AiResult<()> {
         )
         .await?;
         insert_position_directive(rt.pool(), decision_id, &sym, &parsed).await?;
+        let notify_snap =
+            crate::approval::AiDecisionNotifySnapshot::from_operational_context(&ctx, &parsed);
         maybe_auto_approve(
             rt.pool(),
             decision_id,
@@ -641,6 +645,7 @@ pub async fn run_operational_sweep(rt: &AiRuntime) -> AiResult<()> {
             Some(&sym),
             parsed.get("action").and_then(|x| x.as_str()),
             parsed.get("reasoning").and_then(|x| x.as_str()),
+            &notify_snap,
         )
         .await?;
     }
@@ -731,6 +736,7 @@ pub async fn run_strategic_sweep(rt: &AiRuntime) -> AiResult<()> {
     )
     .await?;
     insert_portfolio_directive(rt.pool(), decision_id, &parsed, Some(valid_until)).await?;
+    let notify_snap = crate::approval::AiDecisionNotifySnapshot::strategic_portfolio();
     maybe_auto_approve(
         rt.pool(),
         decision_id,
@@ -740,6 +746,7 @@ pub async fn run_strategic_sweep(rt: &AiRuntime) -> AiResult<()> {
         None,
         None,
         parsed.get("macro_note").and_then(|x| x.as_str()),
+        &notify_snap,
     )
     .await?;
     Ok(())

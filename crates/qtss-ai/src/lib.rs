@@ -4,6 +4,8 @@
 //! `docs/QTSS_MASTER_DEV_GUIDE.md` (FAZ 2–3).
 
 pub mod approval;
+
+pub use approval::AiDecisionNotifySnapshot;
 pub mod circuit_breaker;
 pub mod client;
 pub mod config;

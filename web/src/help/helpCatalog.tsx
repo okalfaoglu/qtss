@@ -254,6 +254,55 @@ export const HELP_TOPICS: HelpTopic[] = [
     ),
   },
   {
+    id: "intake-playbook",
+    title: "Intake playbook — market mode ve aday listeleri",
+    searchBlob: sb([
+      "intake",
+      "playbook",
+      "market_mode",
+      "elite",
+      "ten_x",
+      "aday",
+      "candidate",
+      "promote",
+      "engine_symbols",
+      "0003",
+      "smart money",
+    ]),
+    body: (
+      <>
+        <p className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.5 }}>
+          <code className="mono">qtss-worker</code> içindeki <code className="mono">intake_playbook_engine</code>,{" "}
+          <code className="mono">data_snapshots</code> (token screener, netflows, flow intelligence, perp trades, Binance funding) ile kural
+          tabanlı tarama yapar; sonuçlar <code className="mono">intake_playbook_runs</code> ve{" "}
+          <code className="mono">intake_playbook_candidates</code> tablolarına yazılır (migration <code className="mono">0003_intake_playbook</code>
+          ).
+        </p>
+        <p className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.5 }}>
+          Aç/kapa: <code className="mono">QTSS_INTAKE_PLAYBOOK_ENABLED=1</code> veya <code className="mono">system_config</code> modül{" "}
+          <code className="mono">worker</code> anahtar <code className="mono">intake_playbook_loop_enabled</code> →{" "}
+          <code className="mono">{`{"enabled":true}`}</code>. Periyot: <code className="mono">intake_playbook_tick_secs</code> /{" "}
+          <code className="mono">QTSS_INTAKE_PLAYBOOK_TICK_SECS</code>.
+        </p>
+        <p className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.5 }}>
+          API (JWT): <code className="mono">GET …/analysis/intake-playbook/latest?playbook_id=market_mode</code>,{" "}
+          <code className="mono">GET …/analysis/intake-playbook/recent</code>, trader/admin{" "}
+          <code className="mono">POST …/analysis/intake-playbook/promote</code> ve{" "}
+          <code className="mono">POST …/analysis/intake-playbook/promote-bulk</code> — motor hedefi{" "}
+          <strong>varsayılan kapalı</strong> oluşturulur; aynı borsa/segment/sembol/interval zaten varsa mevcut satıra bağlanır,{" "}
+          <code className="mono">enabled</code> değiştirilmez.
+        </p>
+        <p className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.5 }}>
+          Playbook kimlikleri: <code className="mono">market_mode</code>, <code className="mono">elite_short</code>,{" "}
+          <code className="mono">elite_long</code>, <code className="mono">ten_x_alert</code>, <code className="mono">institutional_exit</code>,{" "}
+          <code className="mono">institutional_accumulation</code>, <code className="mono">explosive_high_risk</code>,{" "}
+          <code className="mono">early_accumulation_24h</code>. Ayrıntılı LLM şeması:{" "}
+          <code className="mono">docs/prompts/nansen_smart_money_playbook.md</code>.
+        </p>
+      </>
+    ),
+  },
+  {
     id: "telegram-setup-analysis",
     title: "Telegram kurulum analizi (AI / Gemini)",
     searchBlob: sb([

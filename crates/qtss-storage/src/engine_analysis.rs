@@ -228,6 +228,33 @@ pub async fn fetch_engine_symbol_by_id(
     Ok(row)
 }
 
+/// Unique series key `(exchange, segment, symbol, interval)` — promote / dedup.
+pub async fn fetch_engine_symbol_by_series(
+    pool: &PgPool,
+    exchange: &str,
+    segment: &str,
+    symbol: &str,
+    interval: &str,
+) -> Result<Option<EngineSymbolRow>, StorageError> {
+    let row = sqlx::query_as::<_, EngineSymbolRow>(
+        r#"SELECT id, exchange, segment, symbol, interval, enabled, sort_order, label, signal_direction_mode,
+                  exchange_id, market_id, instrument_id, bar_interval_id, created_at, updated_at
+           FROM engine_symbols
+           WHERE LOWER(TRIM(exchange)) = LOWER(TRIM($1))
+             AND LOWER(TRIM(segment)) = LOWER(TRIM($2))
+             AND UPPER(TRIM(symbol)) = UPPER(TRIM($3))
+             AND TRIM(interval) = TRIM($4)
+           LIMIT 1"#,
+    )
+    .bind(exchange)
+    .bind(segment)
+    .bind(symbol)
+    .bind(interval)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 pub async fn insert_engine_symbol(
     pool: &PgPool,
     row: &EngineSymbolInsert,

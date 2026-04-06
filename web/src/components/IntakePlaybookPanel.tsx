@@ -3,9 +3,11 @@ import {
   fetchIntakePlaybookLatest,
   fetchIntakePlaybookRecent,
   postIntakePlaybookPromote,
+  postIntakePlaybookPromoteBulk,
   type IntakePlaybookCandidateApiRow,
   type IntakePlaybookRunApiRow,
 } from "../api/client";
+import { HelpCrossLink } from "../help/HelpCrossLink";
 
 const PLAYBOOK_IDS = [
   "market_mode",
@@ -22,9 +24,10 @@ type Props = {
   accessToken: string | null;
   canPromote: boolean;
   visible: boolean;
+  onOpenHelpTopic?: (topicId: string) => void;
 };
 
-export function IntakePlaybookPanel({ accessToken, canPromote, visible }: Props) {
+export function IntakePlaybookPanel({ accessToken, canPromote, visible, onOpenHelpTopic }: Props) {
   const [playbookId, setPlaybookId] = useState<string>("market_mode");
   const [latest, setLatest] = useState<{
     run: IntakePlaybookRunApiRow | null;
@@ -34,6 +37,8 @@ export function IntakePlaybookPanel({ accessToken, canPromote, visible }: Props)
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   const [promoteId, setPromoteId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!accessToken) {
@@ -64,6 +69,10 @@ export function IntakePlaybookPanel({ accessToken, canPromote, visible }: Props)
     void refresh();
   }, [visible, accessToken, refresh]);
 
+  useEffect(() => {
+    setSelected(new Set());
+  }, [playbookId, latest?.run?.id]);
+
   const summaryText = useMemo(() => {
     if (!latest?.run) return "";
     try {
@@ -72,6 +81,40 @@ export function IntakePlaybookPanel({ accessToken, canPromote, visible }: Props)
       return String(latest.run.summary_json);
     }
   }, [latest]);
+
+  const unpromotedIds = useMemo(
+    () => latest?.candidates.filter((c) => !c.merged_engine_symbol_id).map((c) => c.id) ?? [],
+    [latest],
+  );
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const onPromoteBulk = async (ids: string[]) => {
+    if (!accessToken || !canPromote || ids.length === 0) return;
+    setBulkBusy(true);
+    setErr("");
+    try {
+      const out = await postIntakePlaybookPromoteBulk(accessToken, { candidate_ids: ids });
+      if (out.errors.length > 0) {
+        setErr(
+          `${out.promoted.length} ok, ${out.errors.length} hata: ${out.errors.map((e) => `${e.candidate_id}: ${e.message}`).join("; ")}`,
+        );
+      }
+      setSelected(new Set());
+      await refresh();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   const onPromote = async (candidateId: string) => {
     if (!accessToken || !canPromote) return;
@@ -98,6 +141,12 @@ export function IntakePlaybookPanel({ accessToken, canPromote, visible }: Props)
         Worker <code>intake_playbook_engine</code> — tablolar <code>intake_playbook_runs</code> /{" "}
         <code>intake_playbook_candidates</code>. Açmak: <code>QTSS_INTAKE_PLAYBOOK_ENABLED=1</code> veya{" "}
         <code>system_config</code> <code>intake_playbook_loop_enabled</code>.
+        {onOpenHelpTopic ? (
+          <>
+            {" "}
+            <HelpCrossLink topicId="intake-playbook" onOpen={onOpenHelpTopic} label="Yardım" />
+          </>
+        ) : null}
       </p>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", alignItems: "center", marginBottom: "0.5rem" }}>
         <label className="muted" style={{ fontSize: "0.75rem" }}>
@@ -148,10 +197,34 @@ export function IntakePlaybookPanel({ accessToken, canPromote, visible }: Props)
         </p>
       ) : null}
 
+      {latest && latest.candidates.length > 0 && canPromote && unpromotedIds.length > 0 ? (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.45rem" }}>
+          <button
+            type="button"
+            className="theme-toggle"
+            style={{ fontSize: "0.7rem" }}
+            disabled={bulkBusy || selected.size === 0}
+            onClick={() => void onPromoteBulk(Array.from(selected))}
+          >
+            {bulkBusy ? "…" : `Seçilenleri ekle (${selected.size})`}
+          </button>
+          <button
+            type="button"
+            className="theme-toggle"
+            style={{ fontSize: "0.7rem" }}
+            disabled={bulkBusy}
+            onClick={() => void onPromoteBulk(unpromotedIds.slice(0, 25))}
+          >
+            Tümünü ekle (max 25)
+          </button>
+        </div>
+      ) : null}
+
       {latest && latest.candidates.length > 0 ? (
         <table className="nansen-api-table" style={{ marginTop: "0.5rem", fontSize: "0.72rem" }}>
           <thead>
             <tr>
+              {canPromote ? <th /> : null}
               <th>#</th>
               <th>Symbol</th>
               <th>Dir</th>
@@ -163,6 +236,19 @@ export function IntakePlaybookPanel({ accessToken, canPromote, visible }: Props)
           <tbody>
             {latest.candidates.map((c) => (
               <tr key={c.id}>
+                {canPromote ? (
+                  <td>
+                    {!c.merged_engine_symbol_id ? (
+                      <input
+                        type="checkbox"
+                        className="nansen-api-table__check"
+                        checked={selected.has(c.id)}
+                        onChange={() => toggleSelect(c.id)}
+                        aria-label={`select ${c.symbol}`}
+                      />
+                    ) : null}
+                  </td>
+                ) : null}
                 <td>{c.rank}</td>
                 <td className="mono">{c.symbol}</td>
                 <td>{c.direction}</td>

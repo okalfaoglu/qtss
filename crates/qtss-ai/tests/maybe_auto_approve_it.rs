@@ -3,7 +3,7 @@
 //! CI (`postgres-migrations` job) sets `DATABASE_URL`. Locally, skip if unset.
 
 use chrono::{Duration, Utc};
-use qtss_ai::approval::maybe_auto_approve;
+use qtss_ai::approval::{maybe_auto_approve, AiDecisionNotifySnapshot};
 use qtss_ai::config::AiEngineConfig;
 use qtss_ai::storage::{insert_ai_decision, insert_tactical_decision};
 use qtss_storage::{create_pool, run_migrations};
@@ -70,6 +70,7 @@ async fn maybe_auto_approve_marks_rows_approved_when_eligible() {
         Some("BTC"),
         Some("buy"),
         Some("it"),
+        &AiDecisionNotifySnapshot::default(),
     )
     .await
     .expect("maybe_auto_approve");
@@ -135,6 +136,7 @@ async fn maybe_auto_approve_leaves_pending_when_below_threshold() {
         Some("ETH"),
         None,
         None,
+        &AiDecisionNotifySnapshot::default(),
     )
     .await
     .expect("maybe_auto_approve");

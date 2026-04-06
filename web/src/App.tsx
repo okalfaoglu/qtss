@@ -5131,6 +5131,7 @@ export default function App() {
                         accessToken={token}
                         canPromote={rbacIsOps}
                         visible={drawerOpen && drawerTab === "nansen"}
+                        onOpenHelpTopic={jumpToHelp}
                       />
                       {token ? (
                         <>
