@@ -49,6 +49,18 @@ pub fn score_for_source_key(source_key: &str, response: &Value) -> f64 {
     if source_key.starts_with("binance_open_interest_") && source_key.ends_with("usdt") {
         return score_binance_open_interest_heat(response);
     }
+    if source_key == "nansen_whale_perp_aggregate" {
+        return score_whale_perp_aggregate(response);
+    }
+    if source_key == "nansen_smart_money_dex_trades" {
+        return score_smart_money_dex_trades(response);
+    }
+    if source_key == "nansen_perp_screener" {
+        return score_perp_screener_aggregate(response);
+    }
+    if source_key == "nansen_holdings" {
+        return score_nansen_holdings_signal(response);
+    }
     if source_key == "hl_meta_asset_ctxs" {
         return 0.0;
     }
@@ -366,6 +378,209 @@ pub fn score_coinglass_netflow_like(v: &Value) -> f64 {
         }
     }
     0.0
+}
+
+/// Whale perp aggregate: net long exposure from merged profiler/perp-positions.
+/// Positive → whales net long, negative → net short. [-1, 1].
+#[must_use]
+pub fn score_whale_perp_aggregate(response: &Value) -> f64 {
+    let rows = response
+        .get("data")
+        .and_then(|d| d.as_array())
+        .or_else(|| response.as_array());
+    let Some(arr) = rows else {
+        if let Some(pos) = parse_json_f64(response.get("net_position_usd"))
+            .or_else(|| parse_json_f64(response.get("netPositionUsd")))
+        {
+            return pos.signum().clamp(-1.0, 1.0);
+        }
+        return 0.0;
+    };
+    let mut long_n = 0_f64;
+    let mut short_n = 0_f64;
+    for row in arr.iter().take(500) {
+        let side = row
+            .get("side")
+            .or_else(|| row.get("direction"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let sz = parse_json_f64(row.get("position_value_usd"))
+            .or_else(|| parse_json_f64(row.get("notional_usd")))
+            .or_else(|| parse_json_f64(row.get("size_usd")))
+            .unwrap_or(0.0)
+            .max(0.0);
+        if side.contains("long") || side == "buy" {
+            long_n += sz;
+        } else if side.contains("short") || side == "sell" {
+            short_n += sz;
+        }
+    }
+    let t = long_n + short_n;
+    if t < 1e-12 {
+        return 0.0;
+    }
+    ((long_n - short_n) / t).clamp(-1.0, 1.0)
+}
+
+/// Smart-money DEX trades: buy vs sell aggression. Positive → SM buying, negative → SM selling.
+#[must_use]
+pub fn score_smart_money_dex_trades(response: &Value) -> f64 {
+    let Some(arr) = response.get("data").and_then(|d| d.as_array()) else {
+        return 0.0;
+    };
+    let mut buy_usd = 0_f64;
+    let mut sell_usd = 0_f64;
+    for row in arr.iter().take(2000) {
+        let side = row
+            .get("side")
+            .or_else(|| row.get("trade_type"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let usd = parse_json_f64(row.get("amount_usd"))
+            .or_else(|| parse_json_f64(row.get("volume_usd")))
+            .or_else(|| parse_json_f64(row.get("value_usd")))
+            .unwrap_or(0.0)
+            .max(0.0);
+        if side.contains("buy") {
+            buy_usd += usd;
+        } else if side.contains("sell") {
+            sell_usd += usd;
+        }
+    }
+    let t = buy_usd + sell_usd;
+    if t < 1e-12 {
+        return 0.0;
+    }
+    ((buy_usd - sell_usd) / t).clamp(-1.0, 1.0)
+}
+
+/// Perp screener: aggregate open-interest bias across tokens. Positive → long bias.
+#[must_use]
+pub fn score_perp_screener_aggregate(response: &Value) -> f64 {
+    let Some(arr) = response.get("data").and_then(|d| d.as_array()) else {
+        return 0.0;
+    };
+    let mut bullish = 0_usize;
+    let mut bearish = 0_usize;
+    for row in arr.iter().take(500) {
+        let funding = parse_json_f64(row.get("funding_rate"))
+            .or_else(|| parse_json_f64(row.get("fundingRate")))
+            .or_else(|| parse_json_f64(row.get("funding")))
+            .unwrap_or(0.0);
+        let oi_change = parse_json_f64(row.get("oi_change_pct"))
+            .or_else(|| parse_json_f64(row.get("openInterestChangePct")))
+            .unwrap_or(0.0);
+        if funding < -0.0001 && oi_change > 5.0 {
+            bullish += 1;
+        } else if funding > 0.0003 && oi_change > 5.0 {
+            bearish += 1;
+        }
+    }
+    let t = bullish + bearish;
+    if t == 0 {
+        return 0.0;
+    }
+    let ratio = bullish as f64 / t as f64;
+    ((ratio - 0.5) * 2.0).clamp(-1.0, 1.0)
+}
+
+/// Holdings snapshot: net position change signal. Positive → SM accumulating.
+#[must_use]
+pub fn score_nansen_holdings_signal(response: &Value) -> f64 {
+    let Some(arr) = response.get("data").and_then(|d| d.as_array()) else {
+        return 0.0;
+    };
+    let mut increasing = 0_usize;
+    let mut decreasing = 0_usize;
+    for row in arr.iter().take(500) {
+        let change = parse_json_f64(row.get("balance_change_pct"))
+            .or_else(|| parse_json_f64(row.get("balanceChangePct")))
+            .or_else(|| parse_json_f64(row.get("pct_change")))
+            .unwrap_or(0.0);
+        if change > 5.0 {
+            increasing += 1;
+        } else if change < -5.0 {
+            decreasing += 1;
+        }
+    }
+    let t = increasing + decreasing;
+    if t == 0 {
+        return 0.0;
+    }
+    let ratio = increasing as f64 / t as f64;
+    ((ratio - 0.5) * 2.0).clamp(-1.0, 1.0)
+}
+
+/// Extract entity labels (market maker names etc) from who-bought-sold or dex-trades data.
+/// Returns (buy_entities, sell_entities) as lowercased label sets.
+pub fn extract_entity_labels(response: &Value) -> (Vec<String>, Vec<String>) {
+    let Some(arr) = response.get("data").and_then(|d| d.as_array()) else {
+        return (vec![], vec![]);
+    };
+    let mut buys = Vec::new();
+    let mut sells = Vec::new();
+    for row in arr.iter().take(500) {
+        let label = row
+            .get("wallet_label")
+            .or_else(|| row.get("label"))
+            .or_else(|| row.get("entity_name"))
+            .or_else(|| row.get("from_label"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if label.is_empty() {
+            continue;
+        }
+        let side = row
+            .get("side")
+            .or_else(|| row.get("trade_type"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if side.contains("buy") || side.contains("accumul") {
+            buys.push(label);
+        } else if side.contains("sell") || side.contains("distribut") {
+            sells.push(label);
+        }
+    }
+    (buys, sells)
+}
+
+/// Known market maker entity names (lowercased).
+pub const KNOWN_MARKET_MAKERS: &[&str] = &[
+    "wintermute",
+    "cumberland",
+    "falconx",
+    "jump",
+    "amber",
+    "gsr",
+    "galaxy digital",
+    "coinbase prime",
+    "abraxas",
+    "b2c2",
+    "flow traders",
+    "genesis",
+    "jane street",
+];
+
+/// Check if any known market maker is in the entity list.
+pub fn has_market_maker_activity(entities: &[String]) -> bool {
+    entities.iter().any(|e| {
+        KNOWN_MARKET_MAKERS
+            .iter()
+            .any(|mm| e.contains(mm))
+    })
+}
+
+/// Count unique entity labels (proxy for "multiple wallets buying").
+pub fn count_unique_entities(entities: &[String]) -> usize {
+    let mut seen = std::collections::HashSet::new();
+    for e in entities {
+        seen.insert(e.as_str());
+    }
+    seen.len()
 }
 
 /// Likidasyon yönü: `longVol`/`shortVol`, `buyVol`/`sellVol`, `side` + `usd` listeleri.
