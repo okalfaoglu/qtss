@@ -265,9 +265,9 @@ async fn resolve_system_prompt(pool: &PgPool, config_key: &str, default_fn: impl
 fn tactical_system_prompt_default(cfg: &AiEngineConfig) -> String {
     let locale = cfg.output_locale.as_deref().unwrap_or("en");
     let reasoning_lang = if locale.to_lowercase().starts_with("tr") {
-        "`reasoning` alanını Türkçe ve kısa yaz."
+        "`reasoning` isteğe bağlı; kullanırsan MUTLAKA son alan olsun, Türkçe, tek kısa cümle, en fazla 120 karakter — aksi halde çıktı token sınırında kesilir ve JSON geçersiz olur."
     } else {
-        "Keep `reasoning` short in the requested locale."
+        "Optional `reasoning` must be the LAST JSON key if present: one short phrase, max 120 characters in the requested locale — otherwise output may truncate mid-string and break JSON."
     };
     let criteria = if locale.to_lowercase().starts_with("tr") {
         r#"Kurallar: onchain aggregate_score > 0.6 ve conflict yok → buy/strong_buy eğilimi; < -0.6 ve conflict yok → sell/strong_sell; conflict var → position_size_multiplier ≤ 0.5 veya no_trade; açık pozisyon + aynı yön → genelde no_trade; confidence < 0.5 → no_trade."#
@@ -277,9 +277,9 @@ fn tactical_system_prompt_default(cfg: &AiEngineConfig) -> String {
     format!(
         r#"You are a tactical trading advisor for QTSS. Reply with one JSON object only — raw JSON, no markdown fences (no ```json blocks).
 Locale: {locale}. {reasoning_lang}
-Required keys: "direction" (strong_buy|buy|neutral|sell|strong_sell|no_trade), "confidence" (0.0-1.0).
-Directional trades (not neutral/no_trade) MUST include positive "stop_loss_pct" (percent, > 0).
-Optional: "position_size_multiplier" (0.0-2.0), "take_profit_pct", "entry_price_hint", "reasoning".
+Required keys first: "direction" (strong_buy|buy|neutral|sell|strong_sell|no_trade), "confidence" (0.0-1.0).
+Then if applicable: positive "stop_loss_pct" for directional trades (not neutral/no_trade), then optional "position_size_multiplier" (0.0-2.0), "take_profit_pct", "entry_price_hint".
+Optional last: "reasoning" (omit entirely if unsure — prefer no reasoning over a long one).
 Context may include `portfolio_directive` from the strategic layer: honor `symbol_weight_0_1`, `preferred_regime`, and `risk_budget_pct` when deciding direction and size.
 Context may include `decision_history` — your recent decisions for this symbol with outcomes. Avoid flip-flopping; if your last decision was recent and the context hasn't materially changed, prefer consistency. Learn from outcomes (profit/loss).
 Context may include `ai_feedback` with past decision outcomes (win_rate, avg_pnl_pct): factor these into confidence calibration.

@@ -48,7 +48,8 @@ impl AiEngineConfig {
             model_tactical: "claude-haiku-4-5-20251001".into(),
             model_operational: "claude-haiku-4-5-20251001".into(),
             model_strategic: "claude-sonnet-4-20250514".into(),
-            max_tokens_tactical: 1024,
+            // Gemini and verbose prompts can exceed 1k tokens when `reasoning` is long; truncations yield parse errors.
+            max_tokens_tactical: 3072,
             max_tokens_operational: 512,
             max_tokens_strategic: 4096,
             decision_ttl_secs: 1800,
@@ -109,6 +110,18 @@ impl AiEngineConfig {
         }
         if let Some(s) = env_string("QTSS_AI_OUTPUT_LOCALE") {
             self.output_locale = Some(s);
+        }
+        if let Some(v) = env_u64("QTSS_AI_MAX_TOKENS_TACTICAL") {
+            let c = v.clamp(256, 8192) as u32;
+            self.max_tokens_tactical = c;
+        }
+        if let Some(v) = env_u64("QTSS_AI_MAX_TOKENS_OPERATIONAL") {
+            let c = v.clamp(128, 4096) as u32;
+            self.max_tokens_operational = c;
+        }
+        if let Some(v) = env_u64("QTSS_AI_MAX_TOKENS_STRATEGIC") {
+            let c = v.clamp(512, 16_384) as u32;
+            self.max_tokens_strategic = c;
         }
         if env_truthy("QTSS_AI_STRATEGIC_ENABLED") {
             self.strategic_layer_enabled = true;
