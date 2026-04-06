@@ -23,20 +23,22 @@ use qtss_chart_patterns::{
 };
 use qtss_common::{log_business, QtssLogLevel};
 use qtss_storage::{
-    fetch_analysis_snapshot_payload, fetch_data_snapshot, fetch_engine_symbol_by_series,
-    fetch_intake_playbook_candidate_by_id, fetch_intake_playbook_run_by_id,
-    fetch_latest_intake_playbook_run,
+    fetch_analysis_snapshot_payload, fetch_data_snapshot, fetch_engine_symbol_by_id,
+    fetch_engine_symbol_by_series, fetch_intake_playbook_candidate_by_id,
+    fetch_intake_playbook_run_by_id, fetch_latest_intake_playbook_run,
     fetch_latest_nansen_setup_with_rows, fetch_nansen_snapshot, fetch_range_engine_json,
-    insert_engine_symbol, list_analysis_snapshots_with_symbols, list_data_snapshots,
-    list_engine_symbols_all, list_engine_symbols_with_ingestion, list_engine_symbols_matching,
-    list_intake_playbook_candidates_for_run, list_market_confluence_snapshots_for_symbol,
-    list_market_context_summaries, list_range_signal_events_joined,
-    list_recent_intake_playbook_runs, merge_json_deep, update_engine_symbol_enabled,
-    update_engine_symbol_patch, update_intake_candidate_merged_engine_symbol,
-    upsert_range_engine_json, AnalysisSnapshotJoinedRow, DataSnapshotRow, EngineSymbolInsert,
-    EngineSymbolRow, IntakePlaybookCandidateRow, IntakePlaybookRunRow,
-    MarketConfluenceSnapshotRow, MarketContextSummaryRow, NansenSetupRowDetail, NansenSetupRunRow,
-    NansenSnapshotRow, EngineSymbolIngestionJoinedRow, RangeSignalEventJoinedRow,
+    insert_engine_symbol, lifecycle_state_summary, list_analysis_snapshots_with_symbols,
+    list_data_snapshots, list_engine_symbols_all, list_engine_symbols_with_ingestion,
+    list_engine_symbols_matching, list_intake_playbook_candidates_for_run,
+    list_market_confluence_snapshots_for_symbol, list_market_context_summaries,
+    list_range_signal_events_joined, list_recent_intake_playbook_runs, merge_json_deep,
+    update_engine_symbol_enabled, update_engine_symbol_lifecycle_and_enabled,
+    update_engine_symbol_lifecycle_state, update_engine_symbol_patch,
+    update_intake_candidate_merged_engine_symbol, upsert_range_engine_json,
+    AnalysisSnapshotJoinedRow, DataSnapshotRow, EngineSymbolInsert, EngineSymbolRow,
+    IntakePlaybookCandidateRow, IntakePlaybookRunRow, MarketConfluenceSnapshotRow,
+    MarketContextSummaryRow, NansenSetupRowDetail, NansenSetupRunRow, NansenSnapshotRow,
+    EngineSymbolIngestionJoinedRow, RangeSignalEventJoinedRow,
 };
 
 use crate::error::ApiError;
@@ -117,7 +119,10 @@ pub fn analysis_read_router() -> Router<SharedState> {
             "/analysis/intake-playbook/recent",
             get(list_intake_playbook_recent_api),
         )
-}
+        .route(
+            "/analysis/engine/lifecycle-summary",
+            get(get_lifecycle_summary_api),
+        )
 
 /// `engine_symbols` yazımı — `trader` / `admin` (`require_ops_roles`).
 pub fn analysis_write_router() -> Router<SharedState> {
@@ -132,6 +137,10 @@ pub fn analysis_write_router() -> Router<SharedState> {
         .route(
             "/analysis/range-engine/config",
             patch(patch_range_engine_config_api),
+        )
+        .route(
+            "/analysis/engine/symbols/{id}/lifecycle",
+            patch(patch_engine_symbol_lifecycle_api),
         )
         .route(
             "/analysis/intake-playbook/promote",
@@ -1120,14 +1129,14 @@ async fn promote_intake_candidate_core(
                 "Failed to insert engine_symbol.",
             )
         })?;
-    update_engine_symbol_enabled(pool, es.id, false)
+    update_engine_symbol_lifecycle_and_enabled(pool, es.id, "promoted", false)
         .await
         .map_err(|e| {
             map_analysis_storage_err(
                 e,
                 loc,
                 "analysis.intake_promote_disable_failed",
-                "Failed to set engine_symbol enabled=false.",
+                "Failed to set engine_symbol enabled=false, lifecycle=promoted.",
             )
         })?;
     update_intake_candidate_merged_engine_symbol(pool, c.id, es.id)
@@ -1945,4 +1954,72 @@ async fn channel_six_scan(
         }),
     )
         .into_response()
+}
+
+// --- Lifecycle endpoints ---
+
+async fn get_lifecycle_summary_api(
+    State(st): State<SharedState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let summary = lifecycle_state_summary(&st.pool)
+        .await
+        .map_err(|e| ApiError::internal(format!("lifecycle summary: {e}")))?;
+    let map: serde_json::Map<String, serde_json::Value> = summary
+        .into_iter()
+        .map(|(state, count)| (state, json!(count)))
+        .collect();
+    Ok(Json(json!({ "lifecycle_summary": map })))
+}
+
+#[derive(Deserialize)]
+struct PatchLifecycleBody {
+    lifecycle_state: String,
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+const VALID_LIFECYCLE_STATES: &[&str] = &[
+    "manual",
+    "promoted",
+    "analyzing",
+    "ready",
+    "trading",
+    "closing",
+    "cooldown",
+    "retired",
+];
+
+async fn patch_engine_symbol_lifecycle_api(
+    State(st): State<SharedState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PatchLifecycleBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let new_state = body.lifecycle_state.trim().to_lowercase();
+    if !VALID_LIFECYCLE_STATES.contains(&new_state.as_str()) {
+        return Err(ApiError::bad_request(format!(
+            "invalid lifecycle_state: {new_state}; valid: {VALID_LIFECYCLE_STATES:?}"
+        )));
+    }
+    let es = fetch_engine_symbol_by_id(&st.pool, id)
+        .await
+        .map_err(|e| ApiError::internal(format!("fetch: {e}")))?;
+    let Some(es) = es else {
+        return Err(ApiError::not_found("engine_symbol not found"));
+    };
+    if let Some(en) = body.enabled {
+        update_engine_symbol_lifecycle_and_enabled(&st.pool, id, &new_state, en)
+            .await
+            .map_err(|e| ApiError::internal(format!("update: {e}")))?;
+    } else {
+        update_engine_symbol_lifecycle_state(&st.pool, id, &new_state)
+            .await
+            .map_err(|e| ApiError::internal(format!("update: {e}")))?;
+    }
+    Ok(Json(json!({
+        "id": id,
+        "symbol": es.symbol,
+        "previous_state": es.lifecycle_state,
+        "new_state": new_state,
+        "enabled": body.enabled,
+    })))
 }

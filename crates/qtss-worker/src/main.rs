@@ -28,7 +28,9 @@ mod strategy_runner;
 mod ai_tactical_executor;
 mod worker_probe_http;
 mod engine_ingest;
+mod intake_auto_promote;
 mod intake_playbook_engine;
+mod lifecycle_manager;
 
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -171,6 +173,10 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(engine_ingest::engine_symbol_ingest_loop(ingest_pool));
         let intake_pool = pool.clone();
         tokio::spawn(intake_playbook_engine::intake_playbook_loop(intake_pool));
+        let auto_promote_pool = pool.clone();
+        tokio::spawn(intake_auto_promote::intake_auto_promote_loop(auto_promote_pool));
+        let lifecycle_pool = pool.clone();
+        tokio::spawn(lifecycle_manager::lifecycle_manager_loop(lifecycle_pool));
         let range_exec_pool = pool.clone();
         tokio::spawn(range_signal_execute_loop::range_signal_execute_loop(
             range_exec_pool,
