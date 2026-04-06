@@ -633,19 +633,19 @@ fn pick_short_candidates(rows: &[ScreenerRow], limit: usize) -> Vec<&ScreenerRow
     v
 }
 
-/// Elite long: SM inflow >$500K, buy/sell ≥2.0, multiple wallets, early stage (<10% move), MCap ≤$120M.
+/// Elite long: SM inflow >ELITE_FLOW_USD, buy/sell ≥1.5, early stage (<10% move), MCap ≤$250M.
 fn pick_elite_long<'a>(rows: &'a [ScreenerRow], aux: &AuxData) -> Vec<&'a ScreenerRow> {
     let mut v: Vec<&ScreenerRow> = rows
         .iter()
         .filter(|r| {
             r.net_flow > ELITE_FLOW_USD
-                && buy_to_sell_ratio(r) >= 2.0
+                && buy_to_sell_ratio(r) >= 1.5
                 && r.price_change_pct >= -2.0
                 && r.price_change_pct <= 10.0
                 && r.volume_usd > 0.0
-                && r.liquidity_usd >= 500_000.0
+                && r.liquidity_usd >= 10_000.0
                 && r.mcap_usd > 0.0
-                && r.mcap_usd <= 120_000_000.0
+                && r.mcap_usd <= 250_000_000.0
         })
         .collect();
     v.sort_by(|a, b| {
@@ -663,7 +663,7 @@ fn pick_elite_long<'a>(rows: &'a [ScreenerRow], aux: &AuxData) -> Vec<&'a Screen
     v
 }
 
-/// Elite short: SM outflow >$500K, retail still buying (buy_ratio>0.55), price pumped (≥3%),
+/// Elite short: SM outflow >ELITE_FLOW_USD, retail still buying, price pumped (≥3%),
 /// MM distributing is a bonus signal.
 fn pick_elite_short<'a>(rows: &'a [ScreenerRow], funding_avg: Option<f64>, aux: &AuxData) -> Vec<&'a ScreenerRow> {
     let funding_positive = funding_avg.map_or(false, |f| f >= 0.0003);
@@ -671,9 +671,8 @@ fn pick_elite_short<'a>(rows: &'a [ScreenerRow], funding_avg: Option<f64>, aux: 
         .iter()
         .filter(|r| {
             r.net_flow < -ELITE_FLOW_USD
-                && buy_ratio(r) > 0.55
                 && r.price_change_pct >= 3.0
-                && r.liquidity_usd >= 400_000.0
+                && r.liquidity_usd >= 10_000.0
         })
         .collect();
     v.sort_by(|a, b| {
@@ -691,14 +690,14 @@ fn pick_elite_short<'a>(rows: &'a [ScreenerRow], funding_avg: Option<f64>, aux: 
     v
 }
 
-/// 10x alert: SM inflow >$100K, fresh wallets, ≥3 SM wallets buying, MCap <$30M, low liq.
+/// 10x alert: SM inflow >TEN_X_FLOW_USD, ≥1 SM wallet buying, MCap <TEN_X_MCAP_MAX, low liq.
 fn pick_ten_x(rows: &[ScreenerRow]) -> Vec<&ScreenerRow> {
     let mut v: Vec<&ScreenerRow> = rows
         .iter()
         .filter(|r| {
             r.net_flow > TEN_X_FLOW_USD
-                && r.nof_traders >= 3.0
-                && buy_ratio(r) > 0.65
+                && r.nof_traders >= 1.0
+                && buy_ratio(r) > 0.55
                 && r.mcap_usd > 0.0
                 && r.mcap_usd < TEN_X_MCAP_MAX
                 && r.liquidity_usd >= TEN_X_LIQ_MIN
@@ -723,13 +722,21 @@ fn pick_ten_x(rows: &[ScreenerRow]) -> Vec<&ScreenerRow> {
 }
 
 /// Explosive setups with direction detection.
+/// Uses volume/liquidity ratio as proxy when volume_change_pct is unavailable.
 fn pick_explosive<'a>(rows: &'a [ScreenerRow], aux: &AuxData) -> Vec<(&'a ScreenerRow, &'static str)> {
     let mut v: Vec<(&ScreenerRow, &'static str)> = rows
         .iter()
         .filter(|r| {
-            r.volume_change_pct >= 200.0
-                && r.volume_usd >= 1_000_000.0
-                && r.liquidity_usd >= 500_000.0
+            let vol_liq_ratio = if r.liquidity_usd > 0.0 {
+                r.volume_usd / r.liquidity_usd
+            } else {
+                0.0
+            };
+            let has_volume_spike = r.volume_change_pct >= 200.0 || vol_liq_ratio >= 0.5;
+            has_volume_spike
+                && r.volume_usd >= 5_000.0
+                && r.liquidity_usd >= 10_000.0
+                && r.net_flow.abs() >= 1_000.0
         })
         .map(|r| {
             let dir = if r.net_flow > 0.0 && r.price_change_pct >= 3.0 && r.price_change_pct <= 12.0 {
@@ -747,9 +754,9 @@ fn pick_explosive<'a>(rows: &'a [ScreenerRow], aux: &AuxData) -> Vec<(&'a Screen
         })
         .collect();
     v.sort_by(|a, b| {
-        b.0.volume_change_pct
-            .partial_cmp(&a.0.volume_change_pct)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        let score_a = a.0.net_flow.abs() + a.0.volume_usd * 0.001;
+        let score_b = b.0.net_flow.abs() + b.0.volume_usd * 0.001;
+        score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
     });
     v.truncate(3);
     v
@@ -762,7 +769,6 @@ fn pick_early_accumulation(rows: &[ScreenerRow]) -> Vec<&ScreenerRow> {
             r.net_flow > 0.0
                 && r.price_change_pct > -3.0
                 && r.price_change_pct < 10.0
-                && r.volume_change_pct > 30.0
                 && r.mcap_usd > 0.0
                 && r.mcap_usd < 500_000_000.0
         })
@@ -783,8 +789,8 @@ fn institutional_exit_like<'a>(rows: &'a [ScreenerRow], aux: &AuxData) -> Vec<&'
         .filter(|r| {
             r.net_flow < -INSTITUTIONAL_FLOW_USD
                 && r.price_change_pct >= -2.0
-                && r.liquidity_usd >= 500_000.0
-                && r.token_age_days >= 7.0
+                && r.liquidity_usd >= 10_000.0
+                && r.token_age_days >= 3.0
         })
         .collect();
     v.sort_by(|a, b| {
@@ -807,8 +813,7 @@ fn institutional_accum_like<'a>(rows: &'a [ScreenerRow], aux: &AuxData) -> Vec<&
         .filter(|r| {
             r.net_flow > INSTITUTIONAL_FLOW_USD
                 && r.price_change_pct < 35.0
-                && r.liquidity_usd >= 500_000.0
-                && r.volume_change_pct > 0.0
+                && r.liquidity_usd >= 10_000.0
         })
         .collect();
     v.sort_by(|a, b| {
@@ -828,7 +833,7 @@ fn institutional_accum_like<'a>(rows: &'a [ScreenerRow], aux: &AuxData) -> Vec<&
 fn pick_token_analysis(rows: &[ScreenerRow], aux: &AuxData) -> Vec<Value> {
     let mut top: Vec<&ScreenerRow> = rows
         .iter()
-        .filter(|r| r.volume_usd >= 100_000.0 && r.liquidity_usd >= 200_000.0)
+        .filter(|r| r.volume_usd >= 500.0 && r.liquidity_usd >= 5_000.0)
         .collect();
     top.sort_by(|a, b| {
         b.net_flow
@@ -841,19 +846,19 @@ fn pick_token_analysis(rows: &[ScreenerRow], aux: &AuxData) -> Vec<Value> {
     let mut out = Vec::new();
     for r in top {
         let br = buy_ratio(r);
-        let sm_direction = if r.net_flow > 100_000.0 && br > 0.6 {
+        let sm_direction = if r.net_flow > 1_000.0 && br > 0.6 {
             "accumulating"
-        } else if r.net_flow < -100_000.0 && br < 0.45 {
+        } else if r.net_flow < -1_000.0 && br < 0.45 {
             "distributing"
         } else {
             "mixed"
         };
 
-        let market_phase = if r.price_change_pct < 5.0 && r.net_flow > 0.0 && r.volume_change_pct > 30.0 {
+        let market_phase = if r.price_change_pct < 5.0 && r.net_flow > 0.0 {
             "accumulation"
-        } else if r.price_change_pct > 15.0 && r.volume_change_pct > 100.0 {
+        } else if r.price_change_pct > 15.0 {
             "breakout"
-        } else if r.net_flow < -200_000.0 && r.price_change_pct > 10.0 {
+        } else if r.net_flow < -2_000.0 && r.price_change_pct > 10.0 {
             "distribution"
         } else {
             "consolidation"
