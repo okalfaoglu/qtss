@@ -3,6 +3,10 @@
 //! **Multi-symbol:** `run_engines_for_symbol` iterates every **enabled** `engine_symbols` row; each target loads its own
 //! `market_bars` series and upserts both snapshots. Spawned from `qtss-worker` as `engine_analysis_loop` (single task, not one process per symbol).
 //!
+//! **Light pipeline:** rows whose `label` starts with `engine_light_pipeline_label_prefix` (default `intake:` via
+//! `QTSS_ENGINE_LIGHT_PIPELINE_LABEL_PREFIX`) skip classic `formations` detection and use neutral formation inputs in TBM structure scoring;
+//! trading range, signal dashboard, and confluence still run.
+//!
 //! Optional sweep notify: `notify.notify_on_sweep` / `QTSS_NOTIFY_ON_SWEEP` + channel list (`notify_on_sweep_channels` / `QTSS_NOTIFY_ON_SWEEP_CHANNELS`). Same for range events: `notify_on_range_events` (+ channels). Credentials: `qtss_ai::load_notify_config_merged` (`dispatcher_config`, `telegram_*` rows, env when overrides on).
 
 use std::sync::Arc;
@@ -1230,7 +1234,25 @@ async fn run_engines_for_symbol(
         return;
     }
 
+    // Labels whose prefix matches skip classic `formations` work and neutralize TBM structure pillar
+    // formation boost (trading_range / signal_dashboard / confluence unchanged).
+    let light_pipeline_prefix = resolve_system_string(
+        pool,
+        "worker",
+        "engine_light_pipeline_label_prefix",
+        "QTSS_ENGINE_LIGHT_PIPELINE_LABEL_PREFIX",
+        "intake:",
+    )
+    .await;
+    let light_pipeline_prefix_norm = light_pipeline_prefix.trim().to_lowercase();
+
     for t in targets {
+        let light_pipeline = !light_pipeline_prefix_norm.is_empty()
+            && t.label.as_deref().is_some_and(|l| {
+                l.trim_start()
+                    .to_lowercase()
+                    .starts_with(&light_pipeline_prefix_norm)
+            });
         let prev_tr_payload =
             match fetch_analysis_snapshot_payload(pool, t.id, "trading_range").await {
                 Ok(p) => p,
@@ -1425,7 +1447,29 @@ async fn run_engines_for_symbol(
         }
 
         // ── Faz 2+3: Klasik formasyonlar (Double Top/Bottom, H&S, Triple, Flag) ──
-        {
+        if light_pipeline {
+            let mut stub = json!({
+                "skipped": true,
+                "reason": "light_pipeline_label",
+                "label_prefix": light_pipeline_prefix_norm,
+            });
+            attach_engine_context(&t, &mut stub);
+            if let Err(e) = upsert_analysis_snapshot(
+                pool,
+                t.id,
+                "formations",
+                &stub,
+                last_ot,
+                Some(n as i32),
+                Some("light_pipeline"),
+            )
+            .await
+            {
+                warn!(%e, symbol = %t.symbol, "formations snapshot (light_pipeline)");
+            } else {
+                info!(symbol = %t.symbol, "formations snapshot (light_pipeline stub)");
+            }
+        } else {
             let bar_map: std::collections::BTreeMap<i64, OhlcBar> =
                 bars.iter().map(|b| (b.bar_index, *b)).collect();
             let zz = zigzag_from_ohlc_bars(&bar_map, 8, 50, 0);
@@ -1551,9 +1595,20 @@ async fn run_engines_for_symbol(
                 .iter()
                 .map(|p| (p.point.index, p.point.price, p.dir))
                 .collect();
-            let formations = scan_formations(&pivot_triples, &bars, &FormationParams::default());
-            let best_formation = formations.iter().max_by(|a, b| a.quality.partial_cmp(&b.quality).unwrap_or(std::cmp::Ordering::Equal));
-            let (form_quality, form_name) = best_formation.map(|f| (f.quality, f.pattern_name)).unwrap_or((0.0, ""));
+            let (form_quality, form_name) = if light_pipeline {
+                (0.0, "")
+            } else {
+                let formations =
+                    scan_formations(&pivot_triples, &bars, &FormationParams::default());
+                let best_formation = formations.iter().max_by(|a, b| {
+                    a.quality
+                        .partial_cmp(&b.quality)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                best_formation
+                    .map(|f| (f.quality, f.pattern_name))
+                    .unwrap_or((0.0, ""))
+            };
 
             let get_val = |v: &[f64], i: usize| -> f64 {
                 if i < v.len() && !v[i].is_nan() { v[i] } else { 0.0 }

@@ -268,6 +268,9 @@ export const HELP_TOPICS: HelpTopic[] = [
       "engine_symbols",
       "0003",
       "smart money",
+      "light pipeline",
+      "formations",
+      "0005",
     ]),
     body: (
       <>
@@ -298,6 +301,13 @@ export const HELP_TOPICS: HelpTopic[] = [
           <code className="mono">POST …/analysis/intake-playbook/promote-bulk</code> — motor hedefi{" "}
           <strong>varsayılan kapalı</strong> oluşturulur; aynı borsa/segment/sembol/interval zaten varsa mevcut satıra bağlanır,{" "}
           <code className="mono">enabled</code> değiştirilmez.
+        </p>
+        <p className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.5 }}>
+          Motor döngüsü (<code className="mono">engine_analysis_loop</code>): <code className="mono">label</code> değeri{" "}
+          <code className="mono">engine_light_pipeline_label_prefix</code> ile başlıyorsa (varsayılan <code className="mono">intake:</code>, migration{" "}
+          <code className="mono">0005</code>, ortam <code className="mono">QTSS_ENGINE_LIGHT_PIPELINE_LABEL_PREFIX</code>) klasik{" "}
+          <code className="mono">formations</code> taraması atlanır, TBM yapı sütunu formasyon gücü olmadan hesaplanır;{" "}
+          <code className="mono">trading_range</code>, <code className="mono">signal_dashboard</code> ve confluence aynı kalır.
         </p>
         <p className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.5 }}>
           Playbook kimlikleri: <code className="mono">market_mode</code>, <code className="mono">elite_short</code>,{" "}
