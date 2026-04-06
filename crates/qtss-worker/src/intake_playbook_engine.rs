@@ -59,14 +59,14 @@ pub const PLAYBOOK_TOKEN_ANALYSIS: &str = "token_analysis";
 
 // -- Thresholds (centralised) -----------------------------------------------
 
-const MAJORS_INFLOW_USD_LONG: f64 = 10_000_000.0;
-const MAJORS_OUTFLOW_USD_SHORT: f64 = 10_000_000.0;
-const ELITE_FLOW_USD: f64 = 500_000.0;
-const INSTITUTIONAL_FLOW_USD: f64 = 300_000.0;
-const TEN_X_FLOW_USD: f64 = 100_000.0;
-const TEN_X_MCAP_MAX: f64 = 30_000_000.0;
-const TEN_X_LIQ_MIN: f64 = 300_000.0;
-const TEN_X_LIQ_MAX: f64 = 5_000_000.0;
+const MAJORS_INFLOW_USD_LONG: f64 = 500_000.0;
+const MAJORS_OUTFLOW_USD_SHORT: f64 = 500_000.0;
+const ELITE_FLOW_USD: f64 = 10_000.0;
+const INSTITUTIONAL_FLOW_USD: f64 = 5_000.0;
+const TEN_X_FLOW_USD: f64 = 2_000.0;
+const TEN_X_MCAP_MAX: f64 = 50_000_000.0;
+const TEN_X_LIQ_MIN: f64 = 10_000.0;
+const TEN_X_LIQ_MAX: f64 = 10_000_000.0;
 
 // -- JSON helpers -----------------------------------------------------------
 
@@ -601,8 +601,8 @@ fn pick_long_candidates(rows: &[ScreenerRow], limit: usize) -> Vec<&ScreenerRow>
             r.net_flow > 0.0
                 && r.price_change_pct > -8.0
                 && r.price_change_pct < 18.0
-                && r.liquidity_usd >= 500_000.0
-                && r.token_age_days >= 7.0
+                && r.liquidity_usd >= 10_000.0
+                && r.token_age_days >= 3.0
         })
         .collect();
     v.sort_by(|a, b| {
@@ -620,8 +620,8 @@ fn pick_short_candidates(rows: &[ScreenerRow], limit: usize) -> Vec<&ScreenerRow
         .filter(|r| {
             r.net_flow < 0.0
                 && r.price_change_pct > -5.0
-                && r.liquidity_usd >= 500_000.0
-                && r.token_age_days >= 7.0
+                && r.liquidity_usd >= 10_000.0
+                && r.token_age_days >= 3.0
         })
         .collect();
     v.sort_by(|a, b| {

@@ -14,10 +14,10 @@ use tracing::{debug, warn};
 
 pub fn default_token_screener_body() -> serde_json::Value {
     json!({
-        "chains": ["ethereum", "solana", "base", "arbitrum", "optimism"],
+        "chains": ["ethereum", "solana", "base", "arbitrum", "optimism", "bnb", "polygon"],
         "timeframe": "24h",
         "filters": {
-            "trader_type": "sm",
+            "trader_type": "all",
             "token_age_days": { "min": 1 },
             "liquidity": { "min": 5000 },
             "volume": { "min": 1000 },
@@ -27,7 +27,7 @@ pub fn default_token_screener_body() -> serde_json::Value {
             { "field": "volume", "direction": "DESC" },
             { "field": "netflow", "direction": "DESC" }
         ],
-        "pagination": { "page": 1, "per_page": 200 }
+        "pagination": { "page": 1, "per_page": 500 }
     })
 }
 
