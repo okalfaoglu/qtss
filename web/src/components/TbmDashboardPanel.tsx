@@ -65,7 +65,7 @@ interface ScoreDelta {
 
 type SortField = "score" | "symbol" | "interval" | "time" | "delta";
 type SortDir = "asc" | "desc";
-type ViewMode = "cards" | "heatmap" | "compare";
+type ViewMode = "cards" | "heatmap" | "compare" | "performance" | "correlation";
 type DirectionFilter = "all" | "bottom" | "top";
 type SignalFilter = "all" | "VeryStrong" | "Strong" | "Moderate" | "Weak" | "None";
 
@@ -583,6 +583,327 @@ function WebhookPanel({ config, setConfig }: { config: WebhookConfig; setConfig:
   );
 }
 
+/* ══════════════════════════ Browser Notifications ══════════════════════════ */
+
+const BROWSER_NOTIFY_KEY = "qtss_tbm_browser_notify";
+
+function browserNotifyEnabled(): boolean {
+  return localStorage.getItem(BROWSER_NOTIFY_KEY) === "true";
+}
+
+function setBrowserNotifyEnabled(v: boolean) {
+  localStorage.setItem(BROWSER_NOTIFY_KEY, v ? "true" : "false");
+}
+
+async function requestBrowserNotifyPermission(): Promise<boolean> {
+  if (!("Notification" in window)) return false;
+  if (Notification.permission === "granted") return true;
+  const result = await Notification.requestPermission();
+  return result === "granted";
+}
+
+function sendBrowserNotification(title: string, body: string) {
+  if (!browserNotifyEnabled()) return;
+  if (Notification.permission !== "granted") return;
+  try { new Notification(title, { body, icon: "/favicon.ico" }); } catch { /* ignore */ }
+}
+
+/* ══════════════════════════ Performance Tracker ══════════════════════════ */
+
+const PERF_STORAGE_KEY = "qtss_tbm_perf_log";
+
+interface PerfEntry {
+  ts: number;
+  symbol: string;
+  interval: string;
+  direction: string;
+  score: number;
+  signal: string;
+  price: number | null; // snapshot anindaki fiyat (bilinmiyorsa null)
+}
+
+function loadPerfLog(): PerfEntry[] {
+  try {
+    const raw = localStorage.getItem(PERF_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function savePerfLog(log: PerfEntry[]) {
+  localStorage.setItem(PERF_STORAGE_KEY, JSON.stringify(log.slice(-200)));
+}
+
+function logSetupPerf(items: SymbolTbm[]) {
+  const log = loadPerfLog();
+  const now = Date.now();
+  // Dedupe: skip if same symbol+interval+direction within last 5 min
+  for (const item of items) {
+    for (const s of item.tbm?.setups ?? []) {
+      const exists = log.some(
+        e => e.symbol === item.symbol && e.interval === item.interval && e.direction === s.direction && now - e.ts < 300000
+      );
+      if (!exists) {
+        log.push({ ts: now, symbol: item.symbol, interval: item.interval, direction: s.direction, score: s.score, signal: s.signal, price: null });
+      }
+    }
+  }
+  savePerfLog(log);
+  return log;
+}
+
+function PerformanceView({ perfLog }: { perfLog: PerfEntry[] }) {
+  if (perfLog.length === 0) {
+    return <div style={{ color: "#64748b", fontSize: 12, textAlign: "center", padding: 30 }}>Henuz setup kaydedilmedi. Setup tespit edildikce otomatik loglanir.</div>;
+  }
+
+  // Stats
+  const total = perfLog.length;
+  const bySignal: Record<string, number> = {};
+  const byDir: Record<string, number> = {};
+  const bySymbol: Record<string, number> = {};
+  const avgScore = perfLog.reduce((s, e) => s + e.score, 0) / total;
+
+  for (const e of perfLog) {
+    bySignal[e.signal] = (bySignal[e.signal] ?? 0) + 1;
+    byDir[e.direction] = (byDir[e.direction] ?? 0) + 1;
+    bySymbol[e.symbol] = (bySymbol[e.symbol] ?? 0) + 1;
+  }
+
+  const topSymbols = Object.entries(bySymbol).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  // Score distribution over time
+  const scores = perfLog.map(e => e.score);
+
+  return (
+    <div>
+      {/* Summary stats */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <div style={{ background: "#1e293b", borderRadius: 8, padding: "10px 14px", flex: 1, minWidth: 100 }}>
+          <div style={{ fontSize: 10, color: "#64748b" }}>TOPLAM SETUP</div>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>{total}</div>
+        </div>
+        <div style={{ background: "#1e293b", borderRadius: 8, padding: "10px 14px", flex: 1, minWidth: 100 }}>
+          <div style={{ fontSize: 10, color: "#64748b" }}>ORT. SKOR</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: avgScore >= 60 ? "#4ade80" : "#facc15" }}>{avgScore.toFixed(1)}</div>
+        </div>
+        <div style={{ background: "#1e293b", borderRadius: 8, padding: "10px 14px", flex: 1, minWidth: 100 }}>
+          <div style={{ fontSize: 10, color: "#64748b" }}>DIP / TEPE</div>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>
+            <span style={{ color: "#4ade80" }}>{byDir["Bottom"] ?? 0}</span>
+            {" / "}
+            <span style={{ color: "#f87171" }}>{byDir["Top"] ?? 0}</span>
+          </div>
+        </div>
+        <div style={{ background: "#1e293b", borderRadius: 8, padding: "10px 14px", flex: 1, minWidth: 100 }}>
+          <div style={{ fontSize: 10, color: "#64748b" }}>SINYAL DAGILIMI</div>
+          <div style={{ fontSize: 11 }}>
+            {Object.entries(bySignal).map(([s, c]) => (
+              <span key={s} style={{ marginRight: 6 }}>{signalBadge(s)} {c}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Score trend sparkline */}
+      <div style={{ background: "#0f172a", borderRadius: 8, padding: 12, marginBottom: 12, border: "1px solid #334155" }}>
+        <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>Skor Trendi</div>
+        <Sparkline values={scores} width={400} height={40} color="#818cf8" />
+      </div>
+
+      {/* Top symbols */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <div style={{ background: "#0f172a", borderRadius: 8, padding: 12, flex: 1, border: "1px solid #334155" }}>
+          <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>En Cok Setup Ureten</div>
+          {topSymbols.map(([sym, cnt]) => (
+            <div key={sym} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "2px 0" }}>
+              <span style={{ fontWeight: 600 }}>{sym}</span>
+              <span style={{ color: "#64748b" }}>{cnt} setup</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Recent log table */}
+      <div style={{ background: "#0f172a", borderRadius: 8, border: "1px solid #334155", overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+          <thead>
+            <tr style={{ background: "#1e293b" }}>
+              <th style={{ textAlign: "left", padding: "6px 10px", color: "#64748b" }}>Zaman</th>
+              <th style={{ textAlign: "left", padding: "6px 10px", color: "#64748b" }}>Sembol</th>
+              <th style={{ textAlign: "center", padding: "6px 10px", color: "#64748b" }}>TF</th>
+              <th style={{ textAlign: "center", padding: "6px 10px", color: "#64748b" }}>Yon</th>
+              <th style={{ textAlign: "center", padding: "6px 10px", color: "#64748b" }}>Sinyal</th>
+              <th style={{ textAlign: "right", padding: "6px 10px", color: "#64748b" }}>Skor</th>
+            </tr>
+          </thead>
+          <tbody>
+            {perfLog.slice().reverse().slice(0, 50).map((e, i) => (
+              <tr key={i} style={{ borderTop: "1px solid #1e293b" }}>
+                <td style={{ padding: "4px 10px", color: "#94a3b8" }}>{new Date(e.ts).toLocaleString("tr-TR", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}</td>
+                <td style={{ padding: "4px 10px", fontWeight: 600 }}>{e.symbol}</td>
+                <td style={{ padding: "4px 10px", textAlign: "center" }}>{e.interval}</td>
+                <td style={{ padding: "4px 10px", textAlign: "center" }}>
+                  <span style={{ background: e.direction === "Bottom" ? "#052e16" : "#2e0505", color: e.direction === "Bottom" ? "#4ade80" : "#f87171", padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600 }}>{e.direction === "Bottom" ? "DIP" : "TEPE"}</span>
+                </td>
+                <td style={{ padding: "4px 10px", textAlign: "center" }}>{signalBadge(e.signal)}</td>
+                <td style={{ padding: "4px 10px", textAlign: "right", fontWeight: 700 }}>{e.score.toFixed(1)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════ Pillar Contribution Analysis ══════════════════════════ */
+
+function PillarContributionView({ items }: { items: SymbolTbm[] }) {
+  // Aggregate pillar averages across all items
+  const pillarAggs: Record<string, { sum: number; count: number; maxSymbol: string; maxScore: number }> = {};
+  for (const kind of PILLAR_LABELS) {
+    pillarAggs[kind] = { sum: 0, count: 0, maxSymbol: "", maxScore: 0 };
+  }
+
+  for (const item of items) {
+    if (!item.tbm) continue;
+    const allPillars = [...item.tbm.bottom.pillars, ...item.tbm.top.pillars];
+    for (const p of allPillars) {
+      const agg = pillarAggs[p.kind];
+      if (!agg) continue;
+      agg.sum += p.score;
+      agg.count++;
+      if (p.score > agg.maxScore) { agg.maxScore = p.score; agg.maxSymbol = `${item.symbol} ${item.interval}`; }
+    }
+  }
+
+  const pillarAvgs = PILLAR_LABELS.map(kind => ({
+    kind,
+    avg: pillarAggs[kind].count > 0 ? pillarAggs[kind].sum / pillarAggs[kind].count : 0,
+    max: pillarAggs[kind].maxScore,
+    maxSymbol: pillarAggs[kind].maxSymbol,
+    count: pillarAggs[kind].count,
+  }));
+
+  // Contribution % (how much each pillar contributes on average)
+  const totalAvg = pillarAvgs.reduce((s, p) => s + p.avg, 0);
+
+  return (
+    <div>
+      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>Pillar Katki Analizi</div>
+
+      {/* Bar chart */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+        {pillarAvgs.map(p => (
+          <div key={p.kind} style={{ flex: 1, minWidth: 120, background: "#0f172a", borderRadius: 8, padding: 12, border: `1px solid ${PILLAR_COLORS[p.kind]}33` }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: PILLAR_COLORS[p.kind], marginBottom: 4 }}>{p.kind}</div>
+            <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 2 }}>{p.avg.toFixed(1)}</div>
+            <div style={{ background: "#1e293b", borderRadius: 3, height: 8, overflow: "hidden", marginBottom: 4 }}>
+              <div style={{ width: `${Math.min(p.avg, 100)}%`, height: "100%", background: PILLAR_COLORS[p.kind], borderRadius: 3 }} />
+            </div>
+            <div style={{ fontSize: 10, color: "#64748b" }}>
+              Katki: {totalAvg > 0 ? ((p.avg / totalAvg) * 100).toFixed(0) : 0}% | Max: {p.max.toFixed(0)} ({p.maxSymbol})
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Weakness detection */}
+      <div style={{ background: "#0f172a", borderRadius: 8, padding: 12, border: "1px solid #334155" }}>
+        <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>Zayif Noktalar</div>
+        {pillarAvgs.filter(p => p.avg < 30).length === 0 ? (
+          <div style={{ fontSize: 11, color: "#4ade80" }}>Tum pillar'lar yeterli seviyede</div>
+        ) : (
+          pillarAvgs.filter(p => p.avg < 30).map(p => (
+            <div key={p.kind} style={{ fontSize: 11, color: "#fb923c", marginBottom: 4 }}>
+              ⚠ <strong>{p.kind}</strong> ortalamasi dusuk ({p.avg.toFixed(1)}) — {p.kind === "Onchain" ? "On-chain veri akisi kontrol edin" : "Piyasa kosullari uygun degil"}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════ Correlation Matrix ══════════════════════════ */
+
+function CorrelationView({ items }: { items: SymbolTbm[] }) {
+  // Build pillar score vectors per symbol for bottom direction
+  const symbols = [...new Set(items.map(i => i.symbol))].sort();
+  if (symbols.length < 2) {
+    return <div style={{ color: "#64748b", fontSize: 12, textAlign: "center", padding: 30 }}>Korelasyon icin en az 2 sembol gerekli</div>;
+  }
+
+  // Aggregate bottom scores per symbol (average across TFs)
+  const symbolScores: Record<string, Record<string, number>> = {};
+  for (const sym of symbols) {
+    const symItems = items.filter(i => i.symbol === sym && i.tbm);
+    if (symItems.length === 0) continue;
+    const pillarSums: Record<string, number> = {};
+    const pillarCounts: Record<string, number> = {};
+    for (const item of symItems) {
+      for (const p of item.tbm!.bottom.pillars) {
+        pillarSums[p.kind] = (pillarSums[p.kind] ?? 0) + p.score;
+        pillarCounts[p.kind] = (pillarCounts[p.kind] ?? 0) + 1;
+      }
+    }
+    symbolScores[sym] = {};
+    for (const kind of PILLAR_LABELS) {
+      symbolScores[sym][kind] = pillarCounts[kind] ? pillarSums[kind] / pillarCounts[kind] : 0;
+    }
+  }
+
+  // Simple correlation: cosine similarity between symbol pillar vectors
+  function cosineSim(a: Record<string, number>, b: Record<string, number>): number {
+    let dot = 0, magA = 0, magB = 0;
+    for (const k of PILLAR_LABELS) {
+      dot += (a[k] ?? 0) * (b[k] ?? 0);
+      magA += (a[k] ?? 0) ** 2;
+      magB += (b[k] ?? 0) ** 2;
+    }
+    const mag = Math.sqrt(magA) * Math.sqrt(magB);
+    return mag > 0 ? dot / mag : 0;
+  }
+
+  const validSymbols = symbols.filter(s => symbolScores[s]);
+
+  return (
+    <div>
+      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>Sembol Korelasyon Matrisi (Pillar Benzerlik)</div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 11 }}>
+          <thead>
+            <tr>
+              <th style={{ padding: "6px 8px", color: "#64748b" }}></th>
+              {validSymbols.map(s => <th key={s} style={{ padding: "6px 8px", color: "#64748b", minWidth: 60, textAlign: "center" }}>{s}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {validSymbols.map(symA => (
+              <tr key={symA}>
+                <td style={{ padding: "4px 8px", fontWeight: 600, position: "sticky", left: 0, background: "#0f172a" }}>{symA}</td>
+                {validSymbols.map(symB => {
+                  const sim = symA === symB ? 1 : cosineSim(symbolScores[symA], symbolScores[symB]);
+                  const intensity = Math.floor(sim * 255);
+                  const bg = sim > 0.8 ? `rgba(34,197,94,${sim * 0.4})` : sim > 0.5 ? `rgba(250,204,21,${sim * 0.4})` : `rgba(100,116,139,${sim * 0.3})`;
+                  return (
+                    <td key={symB} style={{ padding: "4px 8px", textAlign: "center", background: bg, borderRadius: 2 }}>
+                      {(sim * 100).toFixed(0)}%
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 10, color: "#64748b", marginTop: 8 }}>
+        Cosine similarity: pillar skorlari arasindaki benzerlik. Yuksek korelasyon = benzer piyasa kosullari.
+      </div>
+    </div>
+  );
+}
+
 /* ══════════════════════════ Stat Cards ══════════════════════════ */
 
 function StatCard({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color?: string }) {
@@ -913,6 +1234,8 @@ function FilterBar({
         <button type="button" style={btnStyle(viewMode === "cards")} onClick={() => setViewMode("cards")}>Kartlar</button>
         <button type="button" style={btnStyle(viewMode === "heatmap")} onClick={() => setViewMode("heatmap")}>Heatmap</button>
         <button type="button" style={btnStyle(viewMode === "compare")} onClick={() => setViewMode("compare")}>Karsilastir</button>
+        <button type="button" style={btnStyle(viewMode === "performance")} onClick={() => setViewMode("performance")}>Performans</button>
+        <button type="button" style={btnStyle(viewMode === "correlation")} onClick={() => setViewMode("correlation")}>Korelasyon</button>
       </div>
 
       <div style={{ width: 1, height: 20, background: "#334155" }} />
@@ -1013,6 +1336,12 @@ export function TbmDashboardPanel({ accessToken }: Props) {
   const [webhookConfig, setWebhookConfig] = useState<WebhookConfig>(loadWebhookConfig);
   const [showWebhook, setShowWebhook] = useState(false);
 
+  // Performance log
+  const [perfLog, setPerfLog] = useState<PerfEntry[]>(loadPerfLog);
+
+  // Browser notifications
+  const [browserNotify, setBrowserNotify] = useState(browserNotifyEnabled);
+
   // Filters
   const [viewMode, setViewMode] = useState<ViewMode>("cards");
   const [direction, setDirection] = useState<DirectionFilter>("all");
@@ -1077,6 +1406,19 @@ export function TbmDashboardPanel({ accessToken }: Props) {
           for (const s of item.tbm.setups) {
             fireWebhook(webhookConfig, item, s);
           }
+        }
+      }
+
+      // Log performance
+      setPerfLog(logSetupPerf(result));
+
+      // Browser notifications for new setups
+      for (const item of result) {
+        for (const s of item.tbm?.setups ?? []) {
+          sendBrowserNotification(
+            `TBM ${s.direction} — ${item.symbol} ${item.interval}`,
+            `Skor: ${s.score.toFixed(1)} | Sinyal: ${s.signal}`
+          );
         }
       }
 
@@ -1191,6 +1533,21 @@ export function TbmDashboardPanel({ accessToken }: Props) {
           <span style={{ fontSize: 10, color: "#64748b", fontWeight: 400 }}>Enterprise</span>
         </h3>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {/* Browser notify toggle */}
+          <button
+            type="button"
+            onClick={async () => {
+              if (!browserNotify) {
+                const ok = await requestBrowserNotifyPermission();
+                if (ok) { setBrowserNotify(true); setBrowserNotifyEnabled(true); }
+              } else { setBrowserNotify(false); setBrowserNotifyEnabled(false); }
+            }}
+            style={{ background: "transparent", border: `1px solid ${browserNotify ? "#4ade80" : "#334155"}`, borderRadius: 4, padding: "3px 8px", fontSize: 10, color: browserNotify ? "#4ade80" : "#64748b", cursor: "pointer" }}
+            title={browserNotify ? "Browser bildirimleri aktif" : "Browser bildirimleri kapali"}
+          >
+            {browserNotify ? "🔔" : "🔕"}
+          </button>
+
           {/* Auto-refresh toggle */}
           <button
             type="button"
@@ -1313,7 +1670,16 @@ export function TbmDashboardPanel({ accessToken }: Props) {
         </div>
       )}
 
-      {viewMode === "heatmap" ? (
+      {viewMode === "performance" ? (
+        <PerformanceView perfLog={perfLog} />
+      ) : viewMode === "correlation" ? (
+        <div>
+          <CorrelationView items={filtered} />
+          <div style={{ marginTop: 16 }}>
+            <PillarContributionView items={filtered} />
+          </div>
+        </div>
+      ) : viewMode === "heatmap" ? (
         <HeatmapView items={filtered} direction={direction} />
       ) : viewMode === "compare" ? (
         <CompareView items={filtered} selectedKeys={compareKeys} setSelectedKeys={setCompareKeys} />

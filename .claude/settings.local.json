@@ -15,7 +15,8 @@
       "Bash(npx tsc:*)",
       "Bash(xargs wc:*)",
       "Bash(grep -r \"alert\\\\|notify\\\\|export\\\\|filter\\\\|sort\\\\|watchlist\" ./web/src --include=*.tsx --include=*.ts)",
-      "WebSearch"
+      "WebSearch",
+      "mcp__Claude_Preview__preview_start"
     ]
   }
 }

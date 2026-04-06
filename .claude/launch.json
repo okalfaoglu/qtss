@@ -1,0 +1,22 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5173
+    },
+    {
+      "name": "api-server",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "-p", "qtss-api"],
+      "port": 8080
+    },
+    {
+      "name": "worker",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "-p", "qtss-worker"]
+    }
+  ]
+}
