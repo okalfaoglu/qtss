@@ -16,7 +16,8 @@
       "Bash(xargs wc:*)",
       "Bash(grep -r \"alert\\\\|notify\\\\|export\\\\|filter\\\\|sort\\\\|watchlist\" ./web/src --include=*.tsx --include=*.ts)",
       "WebSearch",
-      "mcp__Claude_Preview__preview_start"
+      "mcp__Claude_Preview__preview_start",
+      "Read(///wsl.localhost/Ubuntu//**)"
     ]
   }
 }

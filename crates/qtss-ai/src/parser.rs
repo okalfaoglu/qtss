@@ -66,6 +66,16 @@ fn try_extract_json_object(s: &str) -> AiResult<String> {
             }
         }
     }
+
+    // Last resort: truncated string recovery — close open strings, trim trailing comma, add missing braces.
+    if let Some(repaired) = try_repair_truncated_json(slice) {
+        if let Ok(v) = serde_json::from_str::<Value>(&repaired) {
+            if v.is_object() {
+                return Ok(repaired);
+            }
+        }
+    }
+
     Err(AiError::parse("unbalanced JSON braces"))
 }
 
@@ -110,6 +120,73 @@ pub fn extract_json_block(raw: &str) -> AiResult<String> {
     }
 
     try_extract_json_object(t)
+}
+
+/// Attempt to repair truncated JSON by closing open strings and adding missing braces.
+/// Handles: `{"direction":"buy","confidence":0.7,"reasoning":"some long text that got trun`
+fn try_repair_truncated_json(s: &str) -> Option<String> {
+    let mut buf = s.to_string();
+    // Trim trailing whitespace
+    let trimmed = buf.trim_end();
+    buf = trimmed.to_string();
+
+    // Count open quotes (track string state)
+    let mut in_str = false;
+    let mut esc = false;
+    let mut depth = 0i32;
+    for b in buf.bytes() {
+        if in_str {
+            if esc { esc = false; }
+            else if b == b'\\' { esc = true; }
+            else if b == b'"' { in_str = false; }
+        } else {
+            match b {
+                b'"' => in_str = true,
+                b'{' | b'[' => depth += 1,
+                b'}' | b']' => depth -= 1,
+                _ => {}
+            }
+        }
+    }
+
+    // If we're inside a string, close it
+    if in_str {
+        buf.push('"');
+    }
+
+    // Remove trailing comma if any (after optional whitespace)
+    let t = buf.trim_end();
+    if t.ends_with(',') {
+        buf = t[..t.len() - 1].to_string();
+    }
+
+    // Recount depth after repairs
+    depth = 0;
+    in_str = false;
+    esc = false;
+    let mut brace_stack: Vec<u8> = Vec::new();
+    for b in buf.bytes() {
+        if in_str {
+            if esc { esc = false; }
+            else if b == b'\\' { esc = true; }
+            else if b == b'"' { in_str = false; }
+        } else {
+            match b {
+                b'"' => in_str = true,
+                b'{' => { depth += 1; brace_stack.push(b'}'); }
+                b'[' => { depth += 1; brace_stack.push(b']'); }
+                b'}' | b']' => { depth -= 1; brace_stack.pop(); }
+                _ => {}
+            }
+        }
+    }
+
+    // Close remaining open braces/brackets
+    while let Some(closer) = brace_stack.pop() {
+        buf.push(closer as char);
+    }
+
+    Some(buf)
 }
 
 fn find_matching_brace(s: &str) -> Option<usize> {
@@ -351,6 +428,24 @@ mod tests {
         let v = parse_tactical_decision(raw).unwrap();
         assert_eq!(v["direction"], "buy");
         assert_eq!(v["confidence"], 0.65);
+    }
+
+    #[test]
+    fn tactical_truncated_reasoning_repaired() {
+        // Gemini cuts mid-string in reasoning field
+        let raw = r#"{"direction": "neutral", "confidence": 0.51, "reasoning": "Conflicting signals: bullish chart patterns (Double/Triple Bottom) with unconfirmed breakout volume and bearish"#;
+        let v = parse_tactical_decision(raw).unwrap();
+        assert_eq!(v["direction"], "neutral");
+        assert_eq!(v["confidence"], 0.51);
+        // reasoning should be recovered (truncated but valid)
+        assert!(v["reasoning"].as_str().unwrap().starts_with("Conflicting"));
+    }
+
+    #[test]
+    fn tactical_truncated_after_comma() {
+        let raw = r#"{"direction": "buy", "confidence": 0.7, "reasoning": "test","#;
+        let v = parse_tactical_decision(raw).unwrap();
+        assert_eq!(v["direction"], "buy");
     }
 
     #[test]

@@ -84,6 +84,8 @@ struct PartText<'a> {
 struct GenerationConfig {
     max_output_tokens: u32,
     temperature: f32,
+    /// Force structured JSON output — prevents truncation mid-string.
+    response_mime_type: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -114,6 +116,7 @@ impl AiCompletionProvider for GeminiProvider {
             generation_config: GenerationConfig {
                 max_output_tokens: req.max_tokens.max(1),
                 temperature: req.temperature,
+                response_mime_type: "application/json",
             },
         };
         let url = self.url_generate(req.model.as_str());
