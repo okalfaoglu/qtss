@@ -23,6 +23,8 @@ export type SignalDashboardPayload = {
   momentum_1?: string;
   momentum_2?: string;
   giris_gercek?: number | null;
+  /** Frozen at setup formation; same as `giris_gercek` after worker attach. */
+  setup_entry_price?: number | null;
   stop_ilk?: number | null;
   kar_al_ilk?: number | null;
   stop_trail_aktif?: number | null;
@@ -66,6 +68,7 @@ export type SignalDashboardV2Payload = {
   momentum_rsi?: string;
   momentum_roc?: string;
   entry_price?: number | null;
+  setup_entry_price?: number | null;
   stop_initial?: number | null;
   take_profit_initial?: number | null;
   stop_trail?: number | null;
@@ -113,6 +116,21 @@ export function pickDashboardNum(
 export function pickDashboardBool(v2: boolean | undefined, v1: boolean | undefined): boolean | undefined {
   if (typeof v2 === "boolean") return v2;
   return v1;
+}
+
+function finiteNum(n: unknown): n is number {
+  return n != null && typeof n === "number" && Number.isFinite(n);
+}
+
+/** True when entry + initial SL + initial TP are all present (executable range setup). */
+export function hasExecutableSignalSetupLevels(
+  p: SignalDashboardPayload,
+  v2: SignalDashboardV2Payload | null,
+): boolean {
+  const e = v2?.entry_price ?? p.giris_gercek ?? p.setup_entry_price;
+  const sl = v2?.stop_initial ?? p.stop_ilk;
+  const tp = v2?.take_profit_initial ?? p.kar_al_ilk;
+  return finiteNum(e) && finiteNum(sl) && finiteNum(tp);
 }
 
 /** List row border / accent from effective status (and payload health). */

@@ -26,7 +26,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use tracing::{info, warn};
 
-use crate::data_sources::registry::REGISTERED_NANSEN_HTTP_KEYS;
+use crate::data_sources::registry::REGISTERED_NANSEN_HTTP_KEYS_COPY_LATENCY;
 use crate::signal_scorer::score_nansen_perp_direction;
 use crate::strategy_runner::dry_gateway_from_pool;
 
@@ -144,7 +144,7 @@ fn requires_human_approval() -> bool {
 async fn nansen_snapshot_bundle_age_ms(pool: &PgPool) -> Option<i64> {
     let mut max_secs: i64 = 0;
     let mut any = false;
-    for key in REGISTERED_NANSEN_HTTP_KEYS {
+    for key in REGISTERED_NANSEN_HTTP_KEYS_COPY_LATENCY {
         match data_snapshot_age_secs(pool, key).await {
             Ok(Some(secs)) => {
                 if secs < 0 {

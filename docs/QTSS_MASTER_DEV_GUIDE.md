@@ -28,7 +28,7 @@
 |---|-------------|-------|---------------|
 | 1 | `signal_scorer.rs` — Nansen bileşenleri ayrı skor fonksiyonlarına | ✅ DONE | `score_nansen_netflows`, `_perp_direction`, `_flow_intelligence`, `_buyer_quality`, `_dex_buy_sell_pressure` (514 satır) |
 | 2 | `onchain_signal_scorer.rs` — Coinglass/flow-intel çakışma yarı ağırlık | ✅ DONE | `coinglass_netflow_effective` mantığı + `meta_json` izleme (790 satır) |
-| 3 | `data_sources/registry.rs` — kayıt sistemi | ✅ DONE | `REGISTERED_DATA_SOURCES` (9) + `REGISTERED_NANSEN_HTTP_KEYS` (8) |
+| 3 | `data_sources/registry.rs` — kayıt sistemi | ✅ DONE | `REGISTERED_DATA_SOURCES` (18) + `REGISTERED_NANSEN_HTTP_KEYS` (17) + `REGISTERED_NANSEN_HTTP_KEYS_COPY_LATENCY` (8) |
 | 4 | `nansen_extended.rs` — tüm HTTP loop'lar | ✅ DONE | 7 loop: netflows, holdings, perp_trades, who_bought, flow_intel, perp_leaderboard, whale_perp_aggregate |
 | 5 | `qtss-strategy` crate — 4 strateji + risk | ✅ DONE | `signal_filter`, `whale_momentum`, `arb_funding`, `copy_trade`, `risk`, `conflict_policy`, `context` — `crates/qtss-strategy/src/*.rs` toplamı **1098** satır (`wc -l … \| tail -1`; asıl mantık modül dosyalarında) |
 | 6 | `strategy_runner.rs` — DryRunGateway spawn | ✅ DONE | `spawn_if_enabled` + env kontrolü (61 satır) |

@@ -566,6 +566,84 @@ fn attach_position_score_signal_fields(
     }
 }
 
+fn json_finite_f64(v: &serde_json::Value) -> Option<f64> {
+    v.as_f64().filter(|x| x.is_finite())
+}
+
+fn signal_levels_ready_json(d: &serde_json::Value) -> bool {
+    d.get("giris_gercek").and_then(json_finite_f64).is_some()
+        && d.get("stop_ilk").and_then(json_finite_f64).is_some()
+        && d.get("kar_al_ilk").and_then(json_finite_f64).is_some()
+}
+
+/// LONG/SHORT ve üçlü seviye varken giriş fiyatını kurulum anına sabitler (`setup_entry_price`); NOTR veya seviye yokken alan kaldırılır.
+fn attach_setup_entry_price(
+    dash: &mut serde_json::Value,
+    prev: Option<&serde_json::Value>,
+    last_close: f64,
+) {
+    if dash.get("reason").and_then(|x| x.as_str()) == Some("insufficient_bars") {
+        return;
+    }
+    let new_dur = dash.get("durum").and_then(|x| x.as_str()).unwrap_or("NOTR");
+    let nd = ascii_upper_durum(new_dur);
+    let active_setup = (nd == "LONG" || nd == "SHORT") && signal_levels_ready_json(dash);
+
+    if !active_setup {
+        if let Some(obj) = dash.as_object_mut() {
+            obj.remove("setup_entry_price");
+        }
+        if let Some(v2) = dash
+            .get_mut("signal_dashboard_v2")
+            .and_then(|x| x.as_object_mut())
+        {
+            v2.remove("setup_entry_price");
+        }
+        return;
+    }
+
+    let prev_dur_s = prev
+        .and_then(|p| p.get("durum"))
+        .and_then(|x| x.as_str());
+    let pd = prev_dur_s.map(ascii_upper_durum);
+    let prev_notr = pd
+        .as_ref()
+        .map_or(true, |d| d == "NOTR" || d.is_empty());
+    let prev_same_side = pd.as_ref().map(|d| *d == nd).unwrap_or(false);
+
+    let engine_giris = dash
+        .get("giris_gercek")
+        .and_then(json_finite_f64)
+        .unwrap_or(last_close);
+
+    let prev_frozen = prev
+        .and_then(|p| p.get("setup_entry_price"))
+        .and_then(json_finite_f64);
+    let prev_giris = prev
+        .and_then(|p| p.get("giris_gercek"))
+        .and_then(json_finite_f64);
+
+    let frozen = if prev_notr || !prev_same_side {
+        engine_giris
+    } else {
+        prev_frozen
+            .or(prev_giris)
+            .unwrap_or(engine_giris)
+    };
+
+    if let Some(obj) = dash.as_object_mut() {
+        obj.insert("setup_entry_price".into(), json!(frozen));
+        obj.insert("giris_gercek".into(), json!(frozen));
+    }
+    if let Some(v2) = dash
+        .get_mut("signal_dashboard_v2")
+        .and_then(|x| x.as_object_mut())
+    {
+        v2.insert("setup_entry_price".into(), json!(frozen));
+        v2.insert("entry_price".into(), json!(frozen));
+    }
+}
+
 fn enrich_dashboard_payload(
     dash: &qtss_chart_patterns::SignalDashboardV1,
     tr: &TradingRangeResult,
@@ -1311,6 +1389,11 @@ async fn run_engines_for_symbol(
         merge_confluence_and_onchain_into_dashboard_json(pool, &t, &mut dash_payload).await;
 
         attach_position_score_signal_fields(&mut dash_payload, prev_dash_payload.as_ref());
+        attach_setup_entry_price(
+            &mut dash_payload,
+            prev_dash_payload.as_ref(),
+            last_close,
+        );
 
         if let Err(e) = upsert_analysis_snapshot(
             pool,

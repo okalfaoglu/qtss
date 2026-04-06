@@ -7,6 +7,10 @@ Bu dosya FAZ **11.3** ile uyumludur. Bu repoda `system_config` DDL + tohumlar ta
 - Tek tablo, `key` / `value` (JSONB). Modül kolonu **yok**; anlamsal gruplama anahtar önekleriyle yapılır (`acp_chart_patterns`, `elliott_wave`, `ai_engine_config`, …).
 - Admin UI ve API: `GET/POST/DELETE /api/v1/config` (roller: bkz. `docs/PROJECT.md` §8).
 
+### Nansen — opt-in TGM `app_config` haritaları
+
+Worker’da `NANSEN_TGM_*_ENABLED=1` (veya `true`/`yes`/`on`) ile açılan döngüler, isteğe bağlı olarak **motor sembolü → Nansen istek gövdesi** haritası okur (ör. `BTC` ↔ `flow-intelligence` ile aynı kalıp). Anahtarlar: `nansen_tgm_flows_by_symbol`, `nansen_tgm_perp_trades_by_symbol`, `nansen_tgm_dex_trades_by_symbol`, `nansen_tgm_token_information_by_symbol`, `nansen_tgm_indicators_by_symbol`, `nansen_tgm_perp_positions_by_symbol`, `nansen_tgm_holders_by_symbol`. Tek sabit gövde için ilgili `NANSEN_*_BODY_JSON` ortam değişkenleri veya `nansen_perp_screener` / `smart-money/dex-trades` varsayılanları — özet: kök `.env.example` Nansen bölümü.
+
 ## `system_config` (`0044_system_config.sql`)
 
 | Alan | Açıklama |

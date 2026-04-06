@@ -170,6 +170,64 @@ pub async fn resolve_worker_enabled_flag(
     default_enabled
 }
 
+/// Nansen per-loop flag when the loop is **on by default** (unset env → run). Env disables only with `0`, `false`, `no`, `off` (same as `NANSEN_*_ENABLED` in `nansen_extended`).
+/// Precedence matches [`resolve_worker_enabled_flag`]: env overrides (when enabled), then `system_config` (`worker` / `config_key`, `{ "enabled": bool }`), then env, then `true`.
+pub async fn resolve_nansen_loop_default_on(pool: &PgPool, config_key: &str, env_key: &str) -> bool {
+    if qtss_common::env_overrides_enabled() {
+        if let Ok(s) = std::env::var(env_key) {
+            let t = s.trim();
+            if matches!(t, "0" | "false" | "no" | "off") {
+                return false;
+            }
+            if matches!(t, "1" | "true" | "yes" | "on") {
+                return true;
+            }
+        }
+    }
+
+    let repo = SystemConfigRepository::new(pool.clone());
+    if let Ok(Some(row)) = repo.get("worker", config_key).await {
+        if let Some(b) = bool_from_config_value(&row.value) {
+            return b;
+        }
+    }
+
+    if let Ok(s) = std::env::var(env_key) {
+        let t = s.trim();
+        if matches!(t, "0" | "false" | "no" | "off") {
+            return false;
+        }
+    }
+    true
+}
+
+/// Nansen per-loop **opt-in** (unset env → off). Env enables with `1`, `true`, `yes`, `on`. Same `system_config` shape as [`resolve_nansen_loop_default_on`].
+pub async fn resolve_nansen_loop_opt_in(pool: &PgPool, config_key: &str, env_key: &str) -> bool {
+    if qtss_common::env_overrides_enabled() {
+        if let Ok(s) = std::env::var(env_key) {
+            let t = s.trim().to_lowercase();
+            if matches!(t.as_str(), "1" | "true" | "yes" | "on") {
+                return true;
+            }
+            if matches!(t.as_str(), "0" | "false" | "no" | "off") {
+                return false;
+            }
+        }
+    }
+
+    let repo = SystemConfigRepository::new(pool.clone());
+    if let Ok(Some(row)) = repo.get("worker", config_key).await {
+        if let Some(b) = bool_from_config_value(&row.value) {
+            return b;
+        }
+    }
+
+    matches!(
+        std::env::var(env_key).ok().as_deref().map(str::trim),
+        Some("1") | Some("true") | Some("yes") | Some("on")
+    )
+}
+
 /// Resolution order: if `QTSS_CONFIG_ENV_OVERRIDES=1`, matching `env_key` wins; else `system_config`; else `env_key`; else `default_f64`.
 pub async fn resolve_system_f64(
     pool: &PgPool,

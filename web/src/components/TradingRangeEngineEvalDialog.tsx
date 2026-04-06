@@ -7,6 +7,7 @@ import {
   type EngineTargetLookup,
 } from "../lib/engineTargetMatch";
 import {
+  hasExecutableSignalSetupLevels,
   parseSignalDashboardV2,
   pickDashboardNum,
   pickDashboardStr,
@@ -108,13 +109,18 @@ export function TradingRangeEngineEvalDialog({
         : p.oynaklik_pct != null
           ? p.oynaklik_pct.toFixed(2)
           : "—";
+    const levelsOk = hasExecutableSignalSetupLevels(p, v2);
     return {
       insufficient: false as const,
       entry: pickDashboardNum(v2?.entry_price ?? undefined, p.giris_gercek ?? undefined),
       stop: pickDashboardNum(v2?.stop_initial ?? undefined, p.stop_ilk ?? undefined),
       tp: pickDashboardNum(v2?.take_profit_initial ?? undefined, p.kar_al_ilk ?? undefined),
-      stopTrail: pickDashboardNum(v2?.stop_trail ?? undefined, p.stop_trail_aktif ?? undefined),
-      tpDyn: pickDashboardNum(v2?.take_profit_dynamic ?? undefined, p.kar_al_dinamik ?? undefined),
+      stopTrail: levelsOk
+        ? pickDashboardNum(v2?.stop_trail ?? undefined, p.stop_trail_aktif ?? undefined)
+        : "—",
+      tpDyn: levelsOk
+        ? pickDashboardNum(v2?.take_profit_dynamic ?? undefined, p.kar_al_dinamik ?? undefined)
+        : "—",
       vol,
       m1: pickDashboardStr(v2?.momentum_rsi, p.momentum_1),
       m2: pickDashboardStr(v2?.momentum_roc, p.momentum_2),
@@ -172,11 +178,6 @@ export function TradingRangeEngineEvalDialog({
               <dl className="tv-engine-eval-dialog__dl">
                 <dt className="muted">{t("app.signalDashboard.row.entryActual")}</dt>
                 <dd className="mono">{dashSetupLevels.entry}</dd>
-              </dl>
-              <p className="muted" style={{ fontSize: "0.72rem", margin: "0 0 0.5rem" }}>
-                {t("app.signalDashboard.entryRefNote")}
-              </p>
-              <dl className="tv-engine-eval-dialog__dl">
                 <dt className="muted">{t("app.signalDashboard.row.stopInitial")}</dt>
                 <dd className="mono">{dashSetupLevels.stop}</dd>
                 <dt className="muted">{t("app.signalDashboard.row.takeProfitInitial")}</dt>

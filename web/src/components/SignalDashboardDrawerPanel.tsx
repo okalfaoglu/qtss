@@ -4,6 +4,7 @@ import type { EngineSnapshotJoinedApiRow } from "../api/client";
 import {
   dashboardValueTone,
   formatDashboardNumber,
+  hasExecutableSignalSetupLevels,
   parseSignalDashboardV2,
   pickDashboardBool,
   pickDashboardNum,
@@ -216,6 +217,7 @@ function SignalDashboardDetailBody({ snapshot }: { snapshot: EngineSnapshotJoine
 
   const exhaustionDisp = formatDetectionPanel(t, te);
   const structureDisp = formatDetectionPanel(t, ss);
+  const levelsOk = hasExecutableSignalSetupLevels(p, v2);
 
   const wireRow = (key: string, val: unknown) => {
     if (val === undefined || val === null) return null;
@@ -267,11 +269,6 @@ function SignalDashboardDetailBody({ snapshot }: { snapshot: EngineSnapshotJoine
           {rk("momentum1", formatMomentumPanel(t, v2?.momentum_rsi, p.momentum_1))}
           {rk("momentum2", formatMomentumPanel(t, v2?.momentum_roc, p.momentum_2))}
           {rk("entryActual", pickDashboardNum(v2?.entry_price ?? undefined, p.giris_gercek ?? undefined))}
-          <tr key="entryRefNote">
-            <td colSpan={2} className="muted" style={{ fontSize: "0.68rem", lineHeight: 1.35, padding: "0 0 0.35rem 0" }}>
-              {t("app.signalDashboard.entryRefNote")}
-            </td>
-          </tr>
           {rk("stopInitial", pickDashboardNum(v2?.stop_initial ?? undefined, p.stop_ilk ?? undefined))}
           {rk(
             "takeProfitInitial",
@@ -280,11 +277,15 @@ function SignalDashboardDetailBody({ snapshot }: { snapshot: EngineSnapshotJoine
           {sep}
           {rk(
             "stopTrailActive",
-            pickDashboardNum(v2?.stop_trail ?? undefined, p.stop_trail_aktif ?? undefined),
+            levelsOk
+              ? pickDashboardNum(v2?.stop_trail ?? undefined, p.stop_trail_aktif ?? undefined)
+              : "—",
           )}
           {rk(
             "takeProfitDynamic",
-            pickDashboardNum(v2?.take_profit_dynamic ?? undefined, p.kar_al_dinamik ?? undefined),
+            levelsOk
+              ? pickDashboardNum(v2?.take_profit_dynamic ?? undefined, p.kar_al_dinamik ?? undefined)
+              : "—",
           )}
           {rk("signalSource", formatTrendSignalSourcePanel(t), "accent")}
           {rk("trendExhaustion", exhaustionDisp.text, exhaustionDisp.toneKey)}
@@ -334,6 +335,7 @@ function SignalDashboardDetailBody({ snapshot }: { snapshot: EngineSnapshotJoine
               {wireRow("momentum_rsi", v2.momentum_rsi)}
               {wireRow("momentum_roc", v2.momentum_roc)}
               {wireRow("entry_price", v2.entry_price)}
+              {wireRow("setup_entry_price", v2.setup_entry_price)}
               {wireRow("stop_initial", v2.stop_initial)}
               {wireRow("take_profit_initial", v2.take_profit_initial)}
               {wireRow("stop_trail", v2.stop_trail)}

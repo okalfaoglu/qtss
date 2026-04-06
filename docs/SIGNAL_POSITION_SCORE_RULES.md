@@ -1,6 +1,6 @@
 # Position strength (0–10) — trend and scenario rules
 
-Canonical reference for QTSS signal UX and automation hints. **Code:** `qtss_chart_patterns::score_trend` (`roll_position_strength_history`, `classify_score_trend`, `classify_position_scenario`). **Payload:** `signal_dashboard` JSON after confluence merge — `position_strength_history_10`, `score_trend_kind`, `score_trend_action`, optional `position_strength_entry_10`, `position_scenario_kind`.
+Canonical reference for QTSS signal UX and automation hints. **Code:** `qtss_chart_patterns::score_trend` (`roll_position_strength_history`, `classify_score_trend`, `classify_position_scenario`). **Payload:** `signal_dashboard` JSON after confluence merge — `position_strength_history_10`, `score_trend_kind`, `score_trend_action`, optional `position_strength_entry_10`, `position_scenario_kind`, and **`setup_entry_price`** (frozen bar close when LONG/SHORT setup first becomes executable; carried until NOTR or side flip; mirrored in `giris_gercek` / v2 `entry_price`).
 
 ## Score trend (last three samples, oldest → newest)
 

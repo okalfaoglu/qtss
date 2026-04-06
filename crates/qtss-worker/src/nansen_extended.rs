@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use qtss_storage::{
-    list_enabled_engine_symbols, resolve_worker_enabled_flag, resolve_worker_tick_secs, upsert_data_snapshot,
-    AppConfigRepository,
+    list_enabled_engine_symbols, resolve_nansen_loop_default_on, resolve_nansen_loop_opt_in,
+    resolve_worker_enabled_flag, resolve_worker_tick_secs, upsert_data_snapshot, AppConfigRepository,
 };
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -16,8 +16,12 @@ use tracing::{debug, info, warn};
 
 use crate::data_sources::registry::{
     NANSEN_FLOW_INTEL_DATA_KEY, NANSEN_HOLDINGS_DATA_KEY, NANSEN_NETFLOWS_DATA_KEY,
-    NANSEN_PERP_LEADERBOARD_DATA_KEY, NANSEN_PERP_TRADES_DATA_KEY,
-    NANSEN_WHALE_PERP_AGGREGATE_DATA_KEY, NANSEN_WHALE_WATCHLIST_KEY, NANSEN_WHO_BOUGHT_DATA_KEY,
+    NANSEN_PERP_LEADERBOARD_DATA_KEY, NANSEN_PERP_SCREENER_DATA_KEY, NANSEN_PERP_TRADES_DATA_KEY,
+    NANSEN_SMART_MONEY_DEX_TRADES_DATA_KEY, NANSEN_TGM_DEX_TRADES_DATA_KEY,
+    NANSEN_TGM_FLOWS_DATA_KEY, NANSEN_TGM_HOLDERS_DATA_KEY, NANSEN_TGM_INDICATORS_DATA_KEY,
+    NANSEN_TGM_PERP_POSITIONS_DATA_KEY, NANSEN_TGM_PERP_TRADES_DATA_KEY,
+    NANSEN_TGM_TOKEN_INFORMATION_DATA_KEY, NANSEN_WHALE_PERP_AGGREGATE_DATA_KEY,
+    NANSEN_WHALE_WATCHLIST_KEY, NANSEN_WHO_BOUGHT_DATA_KEY,
 };
 
 fn nansen_api_base() -> String {
@@ -26,13 +30,6 @@ fn nansen_api_base() -> String {
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|| qtss_nansen::default_api_base().to_string())
-}
-
-fn loop_enabled(var: &str) -> bool {
-    !matches!(
-        std::env::var(var).ok().as_deref().map(str::trim),
-        Some("0") | Some("false") | Some("no") | Some("off")
-    )
 }
 
 fn default_pagination_body() -> Value {
@@ -230,16 +227,16 @@ async fn nansen_client() -> Option<Client> {
 }
 
 pub async fn nansen_netflows_loop(pool: PgPool) {
-    if !loop_enabled("NANSEN_NETFLOWS_ENABLED") {
-        info!("NANSEN_NETFLOWS_ENABLED kapalı — nansen_netflows döngüsü çıkıyor");
-        return;
-    }
     let Some(client) = nansen_client().await else {
         return;
     };
     let base = nansen_api_base();
     let body = default_netflows_request_body();
     loop {
+        if !resolve_nansen_loop_default_on(&pool, "nansen_loop_netflows_enabled", "NANSEN_NETFLOWS_ENABLED").await {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
         if !resolve_worker_enabled_flag(&pool, "worker", "nansen_enabled", "QTSS_NANSEN_ENABLED", true).await {
             tokio::time::sleep(Duration::from_secs(30)).await;
             continue;
@@ -260,8 +257,20 @@ pub async fn nansen_netflows_loop(pool: PgPool) {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
+        let netflow_path = std::env::var("NANSEN_SMART_MONEY_NETFLOW_PATH")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "api/v1/smart-money/netflow".to_string());
         let started = Instant::now();
-        let res = qtss_nansen::post_smart_money_netflows(&client, &base, key.trim(), &body).await;
+        let res = qtss_nansen::post_smart_money_netflow(
+            &client,
+            &base,
+            key.trim(),
+            &netflow_path,
+            &body,
+        )
+        .await;
         let mut next = tick;
         if res
             .as_ref()
@@ -277,16 +286,16 @@ pub async fn nansen_netflows_loop(pool: PgPool) {
 }
 
 pub async fn nansen_holdings_loop(pool: PgPool) {
-    if !loop_enabled("NANSEN_HOLDINGS_ENABLED") {
-        info!("NANSEN_HOLDINGS_ENABLED kapalı — nansen_holdings döngüsü çıkıyor");
-        return;
-    }
     let Some(client) = nansen_client().await else {
         return;
     };
     let base = nansen_api_base();
     let body = default_holdings_request_body();
     loop {
+        if !resolve_nansen_loop_default_on(&pool, "nansen_loop_holdings_enabled", "NANSEN_HOLDINGS_ENABLED").await {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
         if !resolve_worker_enabled_flag(&pool, "worker", "nansen_enabled", "QTSS_NANSEN_ENABLED", true).await {
             tokio::time::sleep(Duration::from_secs(30)).await;
             continue;
@@ -324,16 +333,22 @@ pub async fn nansen_holdings_loop(pool: PgPool) {
 }
 
 pub async fn nansen_perp_trades_loop(pool: PgPool) {
-    if !loop_enabled("NANSEN_PERP_TRADES_ENABLED") {
-        info!("NANSEN_PERP_TRADES_ENABLED kapalı — nansen_perp_trades döngüsü çıkıyor");
-        return;
-    }
     let Some(client) = nansen_client().await else {
         return;
     };
     let base = nansen_api_base();
     let body = default_pagination_body();
     loop {
+        if !resolve_nansen_loop_default_on(
+            &pool,
+            "nansen_loop_smart_money_perp_trades_enabled",
+            "NANSEN_PERP_TRADES_ENABLED",
+        )
+        .await
+        {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
         if !resolve_worker_enabled_flag(&pool, "worker", "nansen_enabled", "QTSS_NANSEN_ENABLED", true).await {
             tokio::time::sleep(Duration::from_secs(30)).await;
             continue;
@@ -372,10 +387,6 @@ pub async fn nansen_perp_trades_loop(pool: PgPool) {
 }
 
 pub async fn nansen_who_bought_loop(pool: PgPool) {
-    if !loop_enabled("NANSEN_WHO_BOUGHT_ENABLED") {
-        info!("NANSEN_WHO_BOUGHT_ENABLED kapalı — nansen_who_bought_sold döngüsü çıkıyor");
-        return;
-    }
     let tick: u64 = std::env::var("NANSEN_WHO_BOUGHT_TICK_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -386,6 +397,12 @@ pub async fn nansen_who_bought_loop(pool: PgPool) {
     };
     let base = nansen_api_base();
     loop {
+        if !resolve_nansen_loop_default_on(&pool, "nansen_loop_who_bought_sold_enabled", "NANSEN_WHO_BOUGHT_ENABLED")
+            .await
+        {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
         if !resolve_worker_enabled_flag(&pool, "worker", "nansen_enabled", "QTSS_NANSEN_ENABLED", true).await {
             tokio::time::sleep(Duration::from_secs(30)).await;
             continue;
@@ -424,15 +441,17 @@ pub async fn nansen_who_bought_loop(pool: PgPool) {
 }
 
 pub async fn nansen_flow_intel_loop(pool: PgPool) {
-    if !loop_enabled("NANSEN_FLOW_INTEL_ENABLED") {
-        info!("NANSEN_FLOW_INTEL_ENABLED kapalı — nansen_flow_intelligence döngüsü çıkıyor");
-        return;
-    }
     let Some(client) = nansen_client().await else {
         return;
     };
     let base = nansen_api_base();
     loop {
+        if !resolve_nansen_loop_default_on(&pool, "nansen_loop_flow_intelligence_enabled", "NANSEN_FLOW_INTEL_ENABLED")
+            .await
+        {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
         if !resolve_worker_enabled_flag(&pool, "worker", "nansen_enabled", "QTSS_NANSEN_ENABLED", true).await {
             tokio::time::sleep(Duration::from_secs(30)).await;
             continue;
@@ -540,10 +559,6 @@ fn merge_position_rows(into: &mut Vec<Value>, v: &Value) {
 }
 
 pub async fn nansen_perp_leaderboard_loop(pool: PgPool) {
-    if !loop_enabled("NANSEN_PERP_LEADERBOARD_ENABLED") {
-        info!("NANSEN_PERP_LEADERBOARD_ENABLED kapalı — perp_leaderboard döngüsü çıkıyor");
-        return;
-    }
     let Some(client) = nansen_client().await else {
         return;
     };
@@ -556,6 +571,16 @@ pub async fn nansen_perp_leaderboard_loop(pool: PgPool) {
         .unwrap_or_else(|| "api/v1/tgm/perp-pnl-leaderboard".to_string());
     let repo = AppConfigRepository::new(pool.clone());
     loop {
+        if !resolve_nansen_loop_default_on(
+            &pool,
+            "nansen_loop_perp_pnl_leaderboard_enabled",
+            "NANSEN_PERP_LEADERBOARD_ENABLED",
+        )
+        .await
+        {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
         if !resolve_worker_enabled_flag(&pool, "worker", "nansen_enabled", "QTSS_NANSEN_ENABLED", true).await {
             tokio::time::sleep(Duration::from_secs(30)).await;
             continue;
@@ -595,7 +620,7 @@ pub async fn nansen_perp_leaderboard_loop(pool: PgPool) {
                 .upsert(
                     NANSEN_WHALE_WATCHLIST_KEY,
                     cfg,
-                    Some("Whale watchlist from Nansen perp-leaderboard"),
+                    Some("Whale watchlist from Nansen tgm/perp-pnl-leaderboard"),
                     None,
                 )
                 .await
@@ -609,15 +634,21 @@ pub async fn nansen_perp_leaderboard_loop(pool: PgPool) {
 }
 
 pub async fn nansen_whale_perp_aggregate_loop(pool: PgPool) {
-    if !loop_enabled("NANSEN_WHALE_PERP_AGGREGATE_ENABLED") {
-        info!("NANSEN_WHALE_PERP_AGGREGATE_ENABLED kapalı — whale perp aggregate döngüsü çıkıyor");
-        return;
-    }
     let Some(client) = nansen_client().await else {
         return;
     };
     let base = nansen_api_base();
     loop {
+        if !resolve_nansen_loop_default_on(
+            &pool,
+            "nansen_loop_whale_perp_aggregate_enabled",
+            "NANSEN_WHALE_PERP_AGGREGATE_ENABLED",
+        )
+        .await
+        {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
         if !resolve_worker_enabled_flag(&pool, "worker", "nansen_enabled", "QTSS_NANSEN_ENABLED", true).await {
             tokio::time::sleep(Duration::from_secs(30)).await;
             continue;
@@ -711,5 +742,375 @@ pub async fn nansen_whale_perp_aggregate_loop(pool: PgPool) {
             }
         }
         tokio::time::sleep(Duration::from_secs(tick)).await;
+    }
+}
+
+macro_rules! nansen_opt_in_tgm_loop {
+    (
+        $fname:ident,
+        $cfg:literal,
+        $opt_in:literal,
+        $env_json:literal,
+        $app:literal,
+        $tdb:literal,
+        $tenv:literal,
+        $def:expr,
+        $min:expr,
+        $sk:expr,
+        $post:path
+    ) => {
+        pub async fn $fname(pool: PgPool) {
+            let Some(client) = nansen_client().await else {
+                return;
+            };
+            let base = nansen_api_base();
+            loop {
+                if !resolve_nansen_loop_opt_in(&pool, $cfg, $opt_in).await {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    continue;
+                }
+                if !resolve_worker_enabled_flag(
+                    &pool,
+                    "worker",
+                    "nansen_enabled",
+                    "QTSS_NANSEN_ENABLED",
+                    true,
+                )
+                .await
+                {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    continue;
+                }
+                let tick =
+                    resolve_worker_tick_secs(&pool, "worker", $tdb, $tenv, $def, $min).await;
+                let Some(api_key) = std::env::var("NANSEN_API_KEY")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+                else {
+                    tokio::time::sleep(Duration::from_secs(tick)).await;
+                    continue;
+                };
+
+                if let Ok(raw) = std::env::var($env_json) {
+                    if let Ok(b) = serde_json::from_str::<Value>(raw.trim()) {
+                        if b.is_object() {
+                            let started = Instant::now();
+                            let res = $post(&client, &base, api_key.trim(), &b).await;
+                            let mut next = tick;
+                            if res
+                                .as_ref()
+                                .err()
+                                .map(|e| e.is_insufficient_credits())
+                                .unwrap_or(false)
+                            {
+                                next = insufficient_sleep_default(tick);
+                            }
+                            persist_nansen_result(&pool, $sk, &b, res, started).await;
+                            tokio::time::sleep(Duration::from_secs(next)).await;
+                            continue;
+                        }
+                    }
+                }
+
+                let map_v = AppConfigRepository::get_value_json(&pool, $app)
+                    .await
+                    .ok()
+                    .flatten();
+                let Some(map_v) = map_v else {
+                    debug!(
+                        app_key = $app,
+                        slice = stringify!($fname),
+                        "nansen: app_config missing, skip tick"
+                    );
+                    tokio::time::sleep(Duration::from_secs(tick)).await;
+                    continue;
+                };
+                let Some(obj) = map_v.as_object() else {
+                    tokio::time::sleep(Duration::from_secs(tick)).await;
+                    continue;
+                };
+                if obj.is_empty() {
+                    tokio::time::sleep(Duration::from_secs(tick)).await;
+                    continue;
+                }
+                let rows = list_enabled_engine_symbols(&pool).await.unwrap_or_default();
+                let mut any = false;
+                for es in rows {
+                    let sym = es.symbol.trim().to_uppercase();
+                    let body = obj
+                        .get(&sym)
+                        .cloned()
+                        .or_else(|| obj.get(sym.as_str()).cloned());
+                    let Some(body) = body else {
+                        continue;
+                    };
+                    if !body.is_object() {
+                        continue;
+                    }
+                    any = true;
+                    let started = Instant::now();
+                    let res = $post(&client, &base, api_key.trim(), &body).await;
+                    persist_nansen_result(&pool, $sk, &body, res, started).await;
+                }
+                if !any {
+                    debug!(
+                        app_key = $app,
+                        slice = stringify!($fname),
+                        "nansen: no matching engine_symbol"
+                    );
+                }
+                tokio::time::sleep(Duration::from_secs(tick)).await;
+            }
+        }
+    };
+}
+
+nansen_opt_in_tgm_loop!(
+    nansen_tgm_flows_loop,
+    "nansen_loop_tgm_flows_enabled",
+    "NANSEN_TGM_FLOWS_ENABLED",
+    "NANSEN_TGM_FLOWS_BODY_JSON",
+    "nansen_tgm_flows_by_symbol",
+    "nansen_tgm_flows_tick_secs",
+    "NANSEN_TGM_FLOWS_TICK_SECS",
+    3600_u64,
+    600_u64,
+    NANSEN_TGM_FLOWS_DATA_KEY,
+    qtss_nansen::post_tgm_flows
+);
+
+nansen_opt_in_tgm_loop!(
+    nansen_tgm_perp_trades_tgm_loop,
+    "nansen_loop_tgm_perp_trades_enabled",
+    "NANSEN_TGM_PERP_TRADES_ENABLED",
+    "NANSEN_TGM_PERP_TRADES_BODY_JSON",
+    "nansen_tgm_perp_trades_by_symbol",
+    "nansen_tgm_perp_trades_tick_secs",
+    "NANSEN_TGM_PERP_TRADES_TICK_SECS",
+    3600_u64,
+    600_u64,
+    NANSEN_TGM_PERP_TRADES_DATA_KEY,
+    qtss_nansen::post_tgm_perp_trades
+);
+
+nansen_opt_in_tgm_loop!(
+    nansen_tgm_dex_trades_loop,
+    "nansen_loop_tgm_dex_trades_enabled",
+    "NANSEN_TGM_DEX_TRADES_ENABLED",
+    "NANSEN_TGM_DEX_TRADES_BODY_JSON",
+    "nansen_tgm_dex_trades_by_symbol",
+    "nansen_tgm_dex_trades_tick_secs",
+    "NANSEN_TGM_DEX_TRADES_TICK_SECS",
+    3600_u64,
+    600_u64,
+    NANSEN_TGM_DEX_TRADES_DATA_KEY,
+    qtss_nansen::post_tgm_dex_trades
+);
+
+nansen_opt_in_tgm_loop!(
+    nansen_tgm_token_information_loop,
+    "nansen_loop_tgm_token_information_enabled",
+    "NANSEN_TGM_TOKEN_INFORMATION_ENABLED",
+    "NANSEN_TGM_TOKEN_INFORMATION_BODY_JSON",
+    "nansen_tgm_token_information_by_symbol",
+    "nansen_tgm_token_information_tick_secs",
+    "NANSEN_TGM_TOKEN_INFORMATION_TICK_SECS",
+    7200_u64,
+    900_u64,
+    NANSEN_TGM_TOKEN_INFORMATION_DATA_KEY,
+    qtss_nansen::post_tgm_token_information
+);
+
+nansen_opt_in_tgm_loop!(
+    nansen_tgm_indicators_loop,
+    "nansen_loop_tgm_indicators_enabled",
+    "NANSEN_TGM_INDICATORS_ENABLED",
+    "NANSEN_TGM_INDICATORS_BODY_JSON",
+    "nansen_tgm_indicators_by_symbol",
+    "nansen_tgm_indicators_tick_secs",
+    "NANSEN_TGM_INDICATORS_TICK_SECS",
+    7200_u64,
+    900_u64,
+    NANSEN_TGM_INDICATORS_DATA_KEY,
+    qtss_nansen::post_tgm_indicators
+);
+
+nansen_opt_in_tgm_loop!(
+    nansen_tgm_perp_positions_loop,
+    "nansen_loop_tgm_perp_positions_enabled",
+    "NANSEN_TGM_PERP_POSITIONS_ENABLED",
+    "NANSEN_TGM_PERP_POSITIONS_BODY_JSON",
+    "nansen_tgm_perp_positions_by_symbol",
+    "nansen_tgm_perp_positions_tick_secs",
+    "NANSEN_TGM_PERP_POSITIONS_TICK_SECS",
+    3600_u64,
+    600_u64,
+    NANSEN_TGM_PERP_POSITIONS_DATA_KEY,
+    qtss_nansen::post_tgm_perp_positions
+);
+
+nansen_opt_in_tgm_loop!(
+    nansen_tgm_holders_loop,
+    "nansen_loop_tgm_holders_enabled",
+    "NANSEN_TGM_HOLDERS_ENABLED",
+    "NANSEN_TGM_HOLDERS_BODY_JSON",
+    "nansen_tgm_holders_by_symbol",
+    "nansen_tgm_holders_tick_secs",
+    "NANSEN_TGM_HOLDERS_TICK_SECS",
+    3600_u64,
+    600_u64,
+    NANSEN_TGM_HOLDERS_DATA_KEY,
+    qtss_nansen::post_tgm_holders
+);
+
+fn perp_screener_request_body() -> Value {
+    if let Ok(raw) = std::env::var("NANSEN_PERP_SCREENER_BODY_JSON") {
+        if let Ok(v) = serde_json::from_str::<Value>(raw.trim()) {
+            if v.is_object() {
+                return v;
+            }
+        }
+    }
+    let to = chrono::Utc::now().date_naive();
+    let from = to
+        .checked_sub_signed(chrono::Duration::days(6))
+        .unwrap_or(to);
+    json!({
+        "date": {
+            "from": from.format("%Y-%m-%d").to_string(),
+            "to": to.format("%Y-%m-%d").to_string(),
+        },
+        "pagination": { "page": 1, "per_page": 50 },
+        "filters": { "only_smart_money": true },
+    })
+}
+
+pub async fn nansen_perp_screener_loop(pool: PgPool) {
+    let Some(client) = nansen_client().await else {
+        return;
+    };
+    let base = nansen_api_base();
+    loop {
+        if !resolve_nansen_loop_opt_in(&pool, "nansen_loop_perp_screener_enabled", "NANSEN_PERP_SCREENER_ENABLED")
+            .await
+        {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
+        if !resolve_worker_enabled_flag(&pool, "worker", "nansen_enabled", "QTSS_NANSEN_ENABLED", true)
+            .await
+        {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
+        let tick = resolve_worker_tick_secs(
+            &pool,
+            "worker",
+            "nansen_perp_screener_tick_secs",
+            "NANSEN_PERP_SCREENER_TICK_SECS",
+            3600,
+            600,
+        )
+        .await;
+        let Some(api_key) = std::env::var("NANSEN_API_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+        else {
+            tokio::time::sleep(Duration::from_secs(tick)).await;
+            continue;
+        };
+        let body = perp_screener_request_body();
+        let started = Instant::now();
+        let res = qtss_nansen::post_perp_screener(&client, &base, api_key.trim(), &body).await;
+        let mut next = tick;
+        if res
+            .as_ref()
+            .err()
+            .map(|e| e.is_insufficient_credits())
+            .unwrap_or(false)
+        {
+            next = insufficient_sleep_default(tick);
+        }
+        persist_nansen_result(
+            &pool,
+            NANSEN_PERP_SCREENER_DATA_KEY,
+            &body,
+            res,
+            started,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(next)).await;
+    }
+}
+
+fn smart_money_dex_trades_request_body() -> Value {
+    if let Ok(raw) = std::env::var("NANSEN_SM_DEX_TRADES_BODY_JSON") {
+        if let Ok(v) = serde_json::from_str::<Value>(raw.trim()) {
+            if v.is_object() {
+                return v;
+            }
+        }
+    }
+    let mut body = default_pagination_body();
+    json_merge(&mut body, json!({ "chains": ["ethereum"] }));
+    body
+}
+
+pub async fn nansen_smart_money_dex_trades_loop(pool: PgPool) {
+    let Some(client) = nansen_client().await else {
+        return;
+    };
+    let base = nansen_api_base();
+    let body = smart_money_dex_trades_request_body();
+    loop {
+        if !resolve_nansen_loop_opt_in(&pool, "nansen_loop_smart_money_dex_trades_enabled", "NANSEN_SM_DEX_TRADES_ENABLED")
+            .await
+        {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
+        if !resolve_worker_enabled_flag(&pool, "worker", "nansen_enabled", "QTSS_NANSEN_ENABLED", true)
+            .await
+        {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
+        let tick = resolve_worker_tick_secs(
+            &pool,
+            "worker",
+            "nansen_sm_dex_trades_tick_secs",
+            "NANSEN_SM_DEX_TRADES_TICK_SECS",
+            3600,
+            900,
+        )
+        .await;
+        let Some(api_key) = std::env::var("NANSEN_API_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+        else {
+            tokio::time::sleep(Duration::from_secs(tick)).await;
+            continue;
+        };
+        let started = Instant::now();
+        let res =
+            qtss_nansen::post_smart_money_dex_trades(&client, &base, api_key.trim(), &body).await;
+        let mut next = tick;
+        if res
+            .as_ref()
+            .err()
+            .map(|e| e.is_insufficient_credits())
+            .unwrap_or(false)
+        {
+            next = insufficient_sleep_default(tick);
+        }
+        persist_nansen_result(
+            &pool,
+            NANSEN_SMART_MONEY_DEX_TRADES_DATA_KEY,
+            &body,
+            res,
+            started,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(next)).await;
     }
 }

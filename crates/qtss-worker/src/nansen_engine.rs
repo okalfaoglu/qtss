@@ -5,7 +5,10 @@ use std::time::Duration;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use qtss_common::log_critical;
-use qtss_storage::{resolve_system_string, resolve_worker_enabled_flag, resolve_worker_tick_secs, SystemConfigRepository};
+use qtss_storage::{
+    resolve_nansen_loop_default_on, resolve_system_string, resolve_worker_enabled_flag, resolve_worker_tick_secs,
+    SystemConfigRepository,
+};
 use reqwest::Client;
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -61,6 +64,17 @@ pub async fn nansen_token_screener_loop(pool: PgPool) {
         let mut next_sleep = secs;
 
         if !enabled {
+            tokio::time::sleep(Duration::from_secs(next_sleep)).await;
+            continue;
+        }
+
+        let screener_on = resolve_nansen_loop_default_on(
+            &pool,
+            "nansen_token_screener_loop_enabled",
+            "NANSEN_TOKEN_SCREENER_ENABLED",
+        )
+        .await;
+        if !screener_on {
             tokio::time::sleep(Duration::from_secs(next_sleep)).await;
             continue;
         }
@@ -131,6 +145,9 @@ pub async fn nansen_token_screener_loop(pool: PgPool) {
 // ADIM 3 — genişletilmiş Nansen HTTP döngüleri `nansen_extended.rs` içinde; buradan re-export.
 pub use crate::nansen_extended::{
     nansen_flow_intel_loop, nansen_holdings_loop, nansen_netflows_loop,
-    nansen_perp_leaderboard_loop, nansen_perp_trades_loop, nansen_whale_perp_aggregate_loop,
-    nansen_who_bought_loop,
+    nansen_perp_leaderboard_loop, nansen_perp_screener_loop, nansen_perp_trades_loop,
+    nansen_smart_money_dex_trades_loop, nansen_tgm_dex_trades_loop, nansen_tgm_flows_loop,
+    nansen_tgm_holders_loop, nansen_tgm_indicators_loop, nansen_tgm_perp_positions_loop,
+    nansen_tgm_perp_trades_tgm_loop, nansen_tgm_token_information_loop,
+    nansen_whale_perp_aggregate_loop, nansen_who_bought_loop,
 };

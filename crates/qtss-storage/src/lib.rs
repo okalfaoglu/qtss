@@ -40,8 +40,8 @@ pub use catalog::{
 pub use config::{AppConfigEntry, AppConfigRepository};
 pub use config_tick::{
     decimal_from_config_value, normalize_notify_locale_code, resolve_notify_default_locale,
-    resolve_system_csv, resolve_system_decimal, resolve_system_f64, resolve_system_string,
-    resolve_system_u64,
+    resolve_nansen_loop_default_on, resolve_nansen_loop_opt_in, resolve_system_csv,
+    resolve_system_decimal, resolve_system_f64, resolve_system_string, resolve_system_u64,
     resolve_worker_enabled_flag, resolve_worker_tick_secs, tick_secs_from_config_value,
 };
 pub use copy_trade::{CopySubscriptionRepository, CopySubscriptionRow};

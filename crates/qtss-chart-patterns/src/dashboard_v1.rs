@@ -326,10 +326,10 @@ pub fn compute_signal_dashboard_v1_with_policy(
         }
     }
 
-    let mid = rh.zip(rl).map(|(h, l)| (h + l) * 0.5);
-    // İlk TP sabit (`kar_al_ilk`); dinamik hedef ayrı alan — başlangıçta aynı, orta bant `mid` ile karıştırılmaz.
-    let mut kar_al_dinamik = kar_al_ilk.or(mid);
-    let mut stop_trail_aktif = stop_ilk;
+    // İlk TP (`kar_al_ilk`) ile dinamik TP aynı başlar; yürütülebilir kurulum yoksa trail/dinamik gösterilmez (orta bant yetim kalmaz).
+    let levels_geom_ok = giris_gercek.is_some() && stop_ilk.is_some() && kar_al_ilk.is_some();
+    let mut kar_al_dinamik = if levels_geom_ok { kar_al_ilk } else { None };
+    let mut stop_trail_aktif = if levels_geom_ok { stop_ilk } else { None };
 
     let mut durum = match direction_policy {
         SignalDirectionPolicy::Both => durum_model_raw.clone(),
@@ -346,7 +346,7 @@ pub fn compute_signal_dashboard_v1_with_policy(
         stop_ilk = None;
         kar_al_ilk = None;
         stop_trail_aktif = None;
-        kar_al_dinamik = mid;
+        kar_al_dinamik = None;
     }
     if direction_policy == SignalDirectionPolicy::ShortOnly
         && durum_model_raw == "LONG"
@@ -356,7 +356,7 @@ pub fn compute_signal_dashboard_v1_with_policy(
         stop_ilk = None;
         kar_al_ilk = None;
         stop_trail_aktif = None;
-        kar_al_dinamik = mid;
+        kar_al_dinamik = None;
     }
 
     // İlk etap: yürütülebilir üçlü (entry + SL + TP) yoksa etkin sinyal LONG/SHORT olamaz;

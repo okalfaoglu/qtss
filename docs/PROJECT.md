@@ -58,7 +58,7 @@ qtss/
     ├── qtss-binance/          # Binance spot + USDT-M REST, katalog senkronu, kline ayrıştırma
     ├── qtss-api/              # Axum HTTP API (OAuth, RBAC, piyasa uçları)
     ├── qtss-worker/           # Arka plan: heartbeat; isteğe bağlı kline WS → market_bars
-    ├── qtss-nansen/           # Nansen HTTP (screener, smart-money, TGM, `tgm/perp-pnl-leaderboard`, `profiler/perp-positions`)
+    ├── qtss-nansen/           # Nansen HTTP (screener, smart-money, TGM uçları, `perp-screener`, `profiler/perp-positions`, …)
     ├── qtss-notify/           # Telegram, webhook, … (`POST /notify/test` + worker uyarıları)
     ├── qtss-strategy/         # Dry strateji döngüleri (signal_filter, whale_momentum, risk, …)
     ├── qtss-analysis/         # `engine_symbols` → trading_range + signal_dashboard snapshot döngüsü (worker spawn)
@@ -81,7 +81,7 @@ qtss/
 
 **Nansen setup scan:** Tablolar `nansen_setup_runs` / `nansen_setup_rows` (baseline içinde); worker `setup_scan_engine` (`QTSS_SETUP_SCAN_SECS`, `QTSS_SETUP_MAX_SNAPSHOT_AGE_SECS`); varsayılan `QTSS_SETUP_SNAPSHOT_ONLY=1` ile setup Nansen’e ikinci HTTP göndermez (kredi yalnız `nansen_engine`); TP1 için 1h OHLC + 6h vol; `meta_json.spec_version` (ör. `nansen_setup_v3`); 5 LONG + 5 SHORT; API `GET /api/v1/analysis/nansen/setups/latest`.
 
-**Nansen extended HTTP:** `nansen_extended.rs` + `nansen_engine` re-export; `data_snapshots` anahtarları ve TGM **perp PnL leaderboard** → `app_config.nansen_whale_watchlist` → whale aggregate (`profiler/perp-positions`). Varsayılan leaderboard yolu: `api/v1/tgm/perp-pnl-leaderboard` (`NANSEN_PERP_LEADERBOARD_PATH`). Tam env listesi: kök `.env.example`, özet: [QTSS_MASTER_DEV_GUIDE.md §6](./QTSS_MASTER_DEV_GUIDE.md#6-ortam-de%C4%9Fi%C5%9Fkenleri).
+**Nansen extended HTTP:** `nansen_extended.rs` + `nansen_engine` re-export; `data_snapshots` anahtarları; TGM **perp PnL leaderboard** → `app_config.nansen_whale_watchlist` → whale aggregate (`profiler/perp-positions`). İsteğe bağlı (varsayılan kapalı, `NANSEN_*_ENABLED=1`): `tgm/flows`, `tgm/perp-trades`, `tgm/dex-trades`, `tgm/token-information`, `tgm/indicators`, `tgm/perp-positions`, `tgm/holders`, `perp-screener` (`/api/v1/perp-screener`), `smart-money/dex-trades`. `smart-money/netflow` yolu: `NANSEN_SMART_MONEY_NETFLOW_PATH` (varsayılan `api/v1/smart-money/netflow`, OpenAPI ile uyumlu). Copy-trade gecikme kontrolü yalnız çekirdek 8 anahtarı kullanır (`REGISTERED_NANSEN_HTTP_KEYS_COPY_LATENCY`). Varsayılan leaderboard: `api/v1/tgm/perp-pnl-leaderboard` (`NANSEN_PERP_LEADERBOARD_PATH`). Tam env: kök `.env.example`, özet: [QTSS_MASTER_DEV_GUIDE.md §6](./QTSS_MASTER_DEV_GUIDE.md#6-ortam-de%C4%9Fi%C5%9Fkenleri).
 
 **Planlanan genişlemeler** (henüz ayrı crate olarak yok veya kısmi):
 
@@ -104,7 +104,7 @@ Mevcut ayrı crate’ler: `qtss-nansen`, `qtss-notify`, `qtss-strategy`, `qtss-a
 | **qtss-storage** | Bağlantı havuzu, migrasyon, `app_config`, `engine_symbols`, `data_snapshots`, `onchain_signal_scores`, `market_bars`, paper, Nansen setup, … |
 | **qtss-execution** | `ExecutionGateway`, `BinanceLiveGateway`, `DryRunGateway`; `set_reference_price` (paper) |
 | **qtss-reconcile** | Binance spot/futures açık emir listesi ↔ `exchange_orders` yama mantığı |
-| **qtss-nansen** | Nansen HTTP istemcisi (token screener, smart-money, TGM — `perp-pnl-leaderboard` göreli yol — profiler perp-positions) |
+| **qtss-nansen** | Nansen HTTP istemcisi (token screener, smart-money, TGM, `perp-screener`, `perp-pnl-leaderboard` göreli yol, profiler perp-positions, …) |
 | **qtss-notify** | Telegram / webhook / … bildirim gönderimi |
 | **qtss-strategy** | `signal_filter`, `whale_momentum`, `arb_funding`, `copy_trade`, `risk` — worker `strategy_runner` ile dry |
 | **qtss-backtest** | Senkron backtest motoru, performans metrikleri, walk-forward ve parametre ızgarası optimizasyonu |

@@ -190,6 +190,24 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(nansen_engine::nansen_perp_leaderboard_loop(nansen_lb));
         let nansen_wh = pool.clone();
         tokio::spawn(nansen_engine::nansen_whale_perp_aggregate_loop(nansen_wh));
+        let nansen_tf = pool.clone();
+        tokio::spawn(nansen_engine::nansen_tgm_flows_loop(nansen_tf));
+        let nansen_tpt = pool.clone();
+        tokio::spawn(nansen_engine::nansen_tgm_perp_trades_tgm_loop(nansen_tpt));
+        let nansen_tdx = pool.clone();
+        tokio::spawn(nansen_engine::nansen_tgm_dex_trades_loop(nansen_tdx));
+        let nansen_tti = pool.clone();
+        tokio::spawn(nansen_engine::nansen_tgm_token_information_loop(nansen_tti));
+        let nansen_tind = pool.clone();
+        tokio::spawn(nansen_engine::nansen_tgm_indicators_loop(nansen_tind));
+        let nansen_tpp = pool.clone();
+        tokio::spawn(nansen_engine::nansen_tgm_perp_positions_loop(nansen_tpp));
+        let nansen_th = pool.clone();
+        tokio::spawn(nansen_engine::nansen_tgm_holders_loop(nansen_th));
+        let nansen_ps = pool.clone();
+        tokio::spawn(nansen_engine::nansen_perp_screener_loop(nansen_ps));
+        let nansen_smd = pool.clone();
+        tokio::spawn(nansen_engine::nansen_smart_money_dex_trades_loop(nansen_smd));
         let setup_pool = pool.clone();
         tokio::spawn(setup_scan_engine::nansen_setup_scan_loop(setup_pool));
         // Auto-sync: aktif engine_symbols için eksik Binance veri kaynaklarını oluştur

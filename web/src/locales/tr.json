@@ -505,7 +505,6 @@
     "signalDashboard": {
       "sectionTitle": "Sinyal panosu",
       "priorityLine": "Aşağıdaki alanlar varsa `signal_dashboard_v2` önceliklidir; yoksa eski Türkçe anahtarlar kullanılır.",
-      "entryRefNote": "KOPUŞ/DÖNÜŞ süpürmede bu rakam ayrı bir «kurulum giriş seviyesi» değildir; motor son işlenen mumun kapanışını referans alır. Aralık üst/alt ve orta çizgi için aşağıdaki «Bağlam ve aralık motoru (ham)» bölümüne bakın.",
       "detailMetaSummary": "Bağlam ve aralık motoru (ham)",
       "payloadEmpty": "Bu anlık görüntü satırında yük yok.",
       "insufficientBars": "Anlık görüntü atlandı: yetersiz mum.",
@@ -569,7 +568,7 @@
         "volatilityPct": "Oynaklık",
         "momentum1": "Momentum 1",
         "momentum2": "Momentum 2",
-        "entryActual": "Giriş referansı (son kapanış)",
+        "entryActual": "Giriş",
         "stopInitial": "Stop (ilk)",
         "takeProfitInitial": "Kar al (ilk)",
         "stopTrailActive": "Stop/Trail (aktif)",
