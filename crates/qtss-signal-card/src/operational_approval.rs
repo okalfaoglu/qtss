@@ -65,8 +65,30 @@ fn estimate_text_width(s: &str, px: f64) -> i32 {
     w as i32
 }
 
-/// Renders operational approval card (880×600).
+/// Renders operational approval card (880x600).
+///
+/// Wraps the plotters call in `catch_unwind` so a missing font degrades to an
+/// `Err` instead of killing a tokio worker thread.
 pub fn try_render_operational_approval_card_png(
+    input: &OperationalApprovalCardInput,
+) -> Result<Vec<u8>, SignalCardRenderError> {
+    let input = input.clone();
+    match std::panic::catch_unwind(move || render_operational_inner(&input)) {
+        Ok(result) => result,
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<String>()
+                .map(|s| s.as_str())
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("unknown panic");
+            Err(SignalCardRenderError::Plotters(format!(
+                "render panicked: {msg}"
+            )))
+        }
+    }
+}
+
+fn render_operational_inner(
     input: &OperationalApprovalCardInput,
 ) -> Result<Vec<u8>, SignalCardRenderError> {
     let tmp = tempfile::Builder::new()

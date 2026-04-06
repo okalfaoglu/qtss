@@ -56,7 +56,27 @@ fn style_small(color: &RGBColor) -> plotters::style::TextStyle<'_> {
 }
 
 /// Renders a PNG (RGB) suitable for Telegram `sendPhoto`.
+///
+/// Wraps the plotters call in `catch_unwind` so a missing font degrades to an
+/// `Err` instead of killing a tokio worker thread.
 pub fn render_signal_card_png(params: &SignalCardParams) -> Result<Vec<u8>, SignalCardRenderError> {
+    let params = params.clone();
+    match std::panic::catch_unwind(move || render_signal_card_inner(&params)) {
+        Ok(result) => result,
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<String>()
+                .map(|s| s.as_str())
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("unknown panic");
+            Err(SignalCardRenderError::Plotters(format!(
+                "render panicked: {msg}"
+            )))
+        }
+    }
+}
+
+fn render_signal_card_inner(params: &SignalCardParams) -> Result<Vec<u8>, SignalCardRenderError> {
     let w = if params.canvas_width > 0 {
         params.canvas_width
     } else {

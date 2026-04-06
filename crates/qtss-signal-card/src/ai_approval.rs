@@ -40,7 +40,29 @@ pub fn format_compact_price(x: f64) -> String {
 }
 
 /// Renders a wide dark card matching the standard signal layout (Turkish labels).
+///
+/// Wraps the plotters call in `catch_unwind` so a missing font (which plotters
+/// turns into a hard panic) degrades to an `Err` instead of killing a tokio worker thread.
 pub fn try_render_ai_approval_card_png(
+    input: &AiApprovalCardInput,
+) -> Result<Vec<u8>, SignalCardRenderError> {
+    let input = input.clone();
+    match std::panic::catch_unwind(move || render_ai_approval_inner(&input)) {
+        Ok(result) => result,
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<String>()
+                .map(|s| s.as_str())
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("unknown panic");
+            Err(SignalCardRenderError::Plotters(format!(
+                "render panicked: {msg}"
+            )))
+        }
+    }
+}
+
+fn render_ai_approval_inner(
     input: &AiApprovalCardInput,
 ) -> Result<Vec<u8>, SignalCardRenderError> {
     let ref_px = input.reference_price;

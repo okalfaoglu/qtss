@@ -50,3 +50,10 @@ VALUES (
 ON CONFLICT (key) DO UPDATE SET
   value = EXCLUDED.value,
   updated_at = now();
+
+INSERT INTO system_config (module, config_key, value, updated_at)
+VALUES
+  ('worker', 'intake_playbook_loop_enabled', '{"enabled": true}'::jsonb, now()),
+  ('worker', 'intake_auto_promote_enabled',  '{"enabled": true}'::jsonb, now())
+ON CONFLICT (module, config_key) DO UPDATE
+  SET value = EXCLUDED.value, updated_at = now();
