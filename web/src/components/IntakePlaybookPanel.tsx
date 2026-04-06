@@ -308,6 +308,50 @@ export function IntakePlaybookPanel({ accessToken, canPromote, visible, onOpenHe
           </ul>
         </>
       ) : null}
+
+      {lifecycleSummary ? (
+        <>
+          <p className="tv-drawer__section-head" style={{ marginTop: "0.75rem" }}>
+            Lifecycle summary
+          </p>
+          <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap", marginTop: "0.25rem" }}>
+            {Object.entries(lifecycleSummary.lifecycle_summary).map(([state, count]) => (
+              <LifecycleBadge key={state} state={state} count={count} />
+            ))}
+          </div>
+        </>
+      ) : null}
     </div>
+  );
+}
+
+const LIFECYCLE_BADGE_COLORS: Record<string, { bg: string; fg: string }> = {
+  promoted: { bg: "#3b82f6", fg: "#fff" },
+  analyzing: { bg: "#eab308", fg: "#000" },
+  ready: { bg: "#22c55e", fg: "#fff" },
+  trading: { bg: "#f97316", fg: "#fff" },
+  closing: { bg: "#ef4444", fg: "#fff" },
+  cooldown: { bg: "#6b7280", fg: "#fff" },
+  retired: { bg: "#374151", fg: "#9ca3af" },
+  manual: { bg: "#1f2937", fg: "#6b7280" },
+};
+
+function LifecycleBadge({ state, count }: { state: string; count: number }) {
+  const colors = LIFECYCLE_BADGE_COLORS[state] ?? { bg: "#374151", fg: "#d1d5db" };
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        fontSize: "0.62rem",
+        fontFamily: "monospace",
+        padding: "0.12rem 0.4rem",
+        borderRadius: "0.25rem",
+        backgroundColor: colors.bg,
+        color: colors.fg,
+        lineHeight: 1.5,
+      }}
+    >
+      {state}: {count}
+    </span>
   );
 }
