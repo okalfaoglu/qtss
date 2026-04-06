@@ -103,11 +103,49 @@ impl NotificationDispatcher {
     }
 
     async fn send_telegram(&self, n: &Notification) -> NotifyResult<DeliveryReceipt> {
+        use reqwest::multipart::{Form, Part};
+
         let c = self
             .config
             .telegram
             .as_ref()
             .ok_or_else(|| NotifyError::ChannelNotConfigured("telegram".into()))?;
+        let mut last_mid: Option<String> = None;
+
+        if let Some(png) = &n.telegram_photo_png {
+            let photo_url = format!("https://api.telegram.org/bot{}/sendPhoto", c.bot_token);
+            let part = Part::bytes(png.clone())
+                .file_name("ai_card.png")
+                .mime_str("image/png")
+                .map_err(|e| NotifyError::Transport(e.to_string()))?;
+            let mut form = Form::new()
+                .text("chat_id", c.chat_id.clone())
+                .part("photo", part);
+            if let Some(cap) = n.telegram_photo_caption_plain.as_deref() {
+                let cap = truncate_chars(cap, 1024);
+                if !cap.is_empty() {
+                    form = form.text("caption", cap);
+                }
+            }
+            let res = self
+                .client
+                .post(&photo_url)
+                .multipart(form)
+                .send()
+                .await
+                .map_err(|e| NotifyError::Transport(e.to_string()))?;
+            let status = res.status();
+            let txt = res.text().await.unwrap_or_default();
+            if !status.is_success() {
+                return Err(NotifyError::Http {
+                    status: status.as_u16(),
+                    body: txt,
+                });
+            }
+            let v: serde_json::Value = serde_json::from_str(&txt).unwrap_or(json!({}));
+            last_mid = v["result"]["message_id"].as_i64().map(|x| x.to_string());
+        }
+
         let url = format!("https://api.telegram.org/bot{}/sendMessage", c.bot_token);
         let text = n
             .telegram_text
@@ -135,7 +173,10 @@ impl NotificationDispatcher {
             });
         }
         let v: serde_json::Value = serde_json::from_str(&txt).unwrap_or(json!({}));
-        let mid = v["result"]["message_id"].as_i64().map(|x| x.to_string());
+        let mid = v["result"]["message_id"]
+            .as_i64()
+            .map(|x| x.to_string())
+            .or(last_mid);
         Ok(DeliveryReceipt {
             channel: NotificationChannel::Telegram,
             ok: true,

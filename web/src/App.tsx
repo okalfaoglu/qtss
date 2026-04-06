@@ -76,6 +76,7 @@ import { AiDashboardPanel } from "./components/AiDashboardPanel";
 import { AiPerformancePanel } from "./components/AiPerformancePanel";
 import { AiSettingsPanel } from "./components/AiSettingsPanel";
 import { NansenApiCreditsPanel } from "./components/NansenApiCreditsPanel";
+import { IntakePlaybookPanel } from "./components/IntakePlaybookPanel";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import { OperationsQueuesPanel } from "./components/OperationsQueuesPanel";
 import i18n from "./i18n";
@@ -5107,6 +5108,10 @@ export default function App() {
                     "endpoint",
                     "döngü",
                     "loop",
+                    "intake",
+                    "playbook",
+                    "aday",
+                    "candidate",
                   ) ? (
                     <div className="card">
                       <p className="tv-drawer__section-head">Nansen — Token Screener (rehber)</p>
@@ -5120,6 +5125,11 @@ export default function App() {
                       <NansenApiCreditsPanel
                         accessToken={token}
                         canAdmin={rbacIsAdmin}
+                        visible={drawerOpen && drawerTab === "nansen"}
+                      />
+                      <IntakePlaybookPanel
+                        accessToken={token}
+                        canPromote={rbacIsOps}
                         visible={drawerOpen && drawerTab === "nansen"}
                       />
                       {token ? (

@@ -69,6 +69,12 @@ pub struct Notification {
     /// Telegram `parse_mode` (e.g. `HTML`). Only applied when sending to Telegram.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegram_parse_mode: Option<String>,
+    /// Optional PNG sent with [`sendPhoto`](https://core.telegram.org/bots/api#sendphoto) before the text message (plain caption).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telegram_photo_png: Option<Vec<u8>>,
+    /// Short plain-text caption for `telegram_photo_png` (Telegram max 1024).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telegram_photo_caption_plain: Option<String>,
 }
 
 impl Notification {
@@ -80,6 +86,8 @@ impl Notification {
             telegram_reply_markup: None,
             telegram_text: None,
             telegram_parse_mode: None,
+            telegram_photo_png: None,
+            telegram_photo_caption_plain: None,
         }
     }
 
@@ -97,6 +105,17 @@ impl Notification {
 
     pub fn with_telegram_reply_markup(mut self, markup: serde_json::Value) -> Self {
         self.telegram_reply_markup = Some(markup);
+        self
+    }
+
+    /// Telegram-only PNG, sent before the HTML [`Self::telegram_text`] message. Use a plain caption (HTML applies only to `sendMessage`).
+    pub fn with_telegram_photo_png(
+        mut self,
+        png_bytes: Vec<u8>,
+        caption_plain: impl Into<String>,
+    ) -> Self {
+        self.telegram_photo_png = Some(png_bytes);
+        self.telegram_photo_caption_plain = Some(caption_plain.into());
         self
     }
 }

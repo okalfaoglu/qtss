@@ -8,6 +8,7 @@ license.workspace = true
 qtss-common.workspace = true
 qtss-storage.workspace = true
 qtss-notify.workspace = true
+qtss-signal-card.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 serde.workspace = true
