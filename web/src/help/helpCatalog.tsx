@@ -285,6 +285,13 @@ export const HELP_TOPICS: HelpTopic[] = [
           <code className="mono">QTSS_INTAKE_PLAYBOOK_TICK_SECS</code>.
         </p>
         <p className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.5 }}>
+          Bildirim kuyruğu: <code className="mono">QTSS_INTAKE_PLAYBOOK_NOTIFY_ENABLED=1</code>, kanallar{" "}
+          <code className="mono">QTSS_INTAKE_PLAYBOOK_NOTIFY_CHANNELS=telegram</code> (virgülle çoklu).{" "}
+          <code className="mono">market_mode</code> önceki koşudan değişince ve <code className="mono">ten_x_alert</code> tetiklenince{" "}
+          <code className="mono">notify_outbox</code> satırı eklenir — gönderim için <code className="mono">notify_outbox</code> worker döngüsü
+          açık olmalı (<code className="mono">worker.notify_outbox_enabled</code>).
+        </p>
+        <p className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.5 }}>
           API (JWT): <code className="mono">GET …/analysis/intake-playbook/latest?playbook_id=market_mode</code>,{" "}
           <code className="mono">GET …/analysis/intake-playbook/recent</code>, trader/admin{" "}
           <code className="mono">POST …/analysis/intake-playbook/promote</code> ve{" "}

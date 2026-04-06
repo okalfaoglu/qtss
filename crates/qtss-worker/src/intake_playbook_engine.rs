@@ -4,6 +4,9 @@
 //! `nansen_perp_trades`, `binance_premium_*`). Heuristics are best-effort; Nansen JSON shape may vary.
 //!
 //! Enable: `QTSS_INTAKE_PLAYBOOK_ENABLED=1` or `system_config` `worker` / `intake_playbook_loop_enabled` `{ "enabled": true }`.
+//!
+//! Optional alerts (async via `notify_outbox`): `QTSS_INTAKE_PLAYBOOK_NOTIFY_ENABLED=1`,
+//! `QTSS_INTAKE_PLAYBOOK_NOTIFY_CHANNELS=telegram` (comma-separated). Requires `notify_outbox` worker loop enabled.
 
 use chrono::{Duration, Utc};
 use serde_json::{json, Value};
@@ -11,9 +14,9 @@ use sqlx::PgPool;
 use tracing::{info, warn};
 
 use qtss_storage::{
-    fetch_data_snapshot, insert_intake_playbook_candidates, insert_intake_playbook_run,
-    resolve_worker_enabled_flag, resolve_worker_tick_secs, IntakePlaybookCandidateInsert,
-    IntakePlaybookRunInsert,
+    fetch_data_snapshot, fetch_latest_intake_playbook_run, insert_intake_playbook_candidates,
+    insert_intake_playbook_run, resolve_worker_enabled_flag, resolve_worker_tick_secs,
+    NotifyOutboxRepository, IntakePlaybookCandidateInsert, IntakePlaybookRunInsert,
 };
 
 use crate::data_sources::registry::{
@@ -508,6 +511,51 @@ fn candidates_from_rows<'a>(
         .collect()
 }
 
+async fn intake_notify_enabled(pool: &PgPool) -> bool {
+    resolve_worker_enabled_flag(
+        pool,
+        "worker",
+        "intake_playbook_notify_enabled",
+        "QTSS_INTAKE_PLAYBOOK_NOTIFY_ENABLED",
+        false,
+    )
+    .await
+}
+
+fn intake_notify_channel_list() -> Vec<String> {
+    std::env::var("QTSS_INTAKE_PLAYBOOK_NOTIFY_CHANNELS")
+        .unwrap_or_else(|_| "telegram".into())
+        .split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+async fn try_enqueue_intake_notification(
+    pool: &PgPool,
+    notify_on: bool,
+    event_key: &'static str,
+    title: &str,
+    body: &str,
+) {
+    if !notify_on {
+        return;
+    }
+    let channels = intake_notify_channel_list();
+    if channels.is_empty() {
+        warn!("intake notify: QTSS_INTAKE_PLAYBOOK_NOTIFY_CHANNELS boş");
+        return;
+    }
+    let repo = NotifyOutboxRepository::new(pool.clone());
+    match repo
+        .enqueue_with_meta(None, Some(event_key), "info", None, None, None, title, body, channels)
+        .await
+    {
+        Ok(row) => info!(%event_key, outbox_id = %row.id, "intake notification enqueued"),
+        Err(e) => warn!(%e, %event_key, "intake notification enqueue failed"),
+    }
+}
+
 async fn persist_playbook(
     pool: &PgPool,
     playbook_id: &str,
@@ -543,6 +591,8 @@ async fn persist_playbook(
 }
 
 async fn run_sweep(pool: &PgPool) -> Result<(), qtss_storage::StorageError> {
+    let notify_on = intake_notify_enabled(pool).await;
+
     let screener_j = fetch_data_snapshot(pool, NANSEN_TOKEN_SCREENER_DATA_KEY)
         .await?
         .and_then(|r| r.response_json);
@@ -601,6 +651,9 @@ async fn run_sweep(pool: &PgPool) -> Result<(), qtss_storage::StorageError> {
         "note": "Heuristic from data_snapshots; confirm with Nansen UI / LLM.",
     });
 
+    let prev_market = fetch_latest_intake_playbook_run(pool, PLAYBOOK_MARKET_MODE).await?;
+    let prev_mode = prev_market.as_ref().and_then(|r| r.market_mode.as_deref());
+
     persist_playbook(
         pool,
         PLAYBOOK_MARKET_MODE,
@@ -614,6 +667,17 @@ async fn run_sweep(pool: &PgPool) -> Result<(), qtss_storage::StorageError> {
         mode_candidates,
     )
     .await?;
+
+    if prev_mode != Some(mode_str) {
+        let title = format!("Intake: market mode → {mode_str}");
+        let body = format!(
+            "Önceki: {}\nGüven: {}%\nAna sebep: {}",
+            prev_mode.unwrap_or("(yok)"),
+            conf,
+            key_reason
+        );
+        try_enqueue_intake_notification(pool, notify_on, "intake_market_mode", &title, &body).await;
+    }
 
     // Elite short / long
     let elite_s = pick_elite_short(&rows);
@@ -672,6 +736,21 @@ async fn run_sweep(pool: &PgPool) -> Result<(), qtss_storage::StorageError> {
         candidates_from_rows(&ten, "LONG", "apex", 70),
     )
     .await?;
+
+    if triggered {
+        if let Some(r) = ten.first() {
+            let title = format!("Intake 10x aday: {}", r.symbol);
+            let body = format!(
+                "Heuristik eşikleri sağlandı (token screener).\nSembol: {}\nNet flow (USD): {:.0}\nMCap: {:.0}\nLikidite: {:.0}\nFiyat %%: {:.2}",
+                r.symbol,
+                r.net_flow,
+                r.mcap_usd,
+                r.liquidity_usd,
+                r.price_change_pct
+            );
+            try_enqueue_intake_notification(pool, notify_on, "intake_ten_x_alert", &title, &body).await;
+        }
+    }
 
     let ex = institutional_exit_like(&rows);
     persist_playbook(

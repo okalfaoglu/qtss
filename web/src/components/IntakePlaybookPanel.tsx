@@ -138,9 +138,11 @@ export function IntakePlaybookPanel({ accessToken, canPromote, visible, onOpenHe
     <div className="intake-playbook-panel" style={{ marginTop: "0.85rem" }}>
       <p className="tv-drawer__section-head">Intake playbook (smart-money adayları)</p>
       <p className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.4rem", lineHeight: 1.45 }}>
-        Worker <code>intake_playbook_engine</code> — tablolar <code>intake_playbook_runs</code> /{" "}
-        <code>intake_playbook_candidates</code>. Açmak: <code>QTSS_INTAKE_PLAYBOOK_ENABLED=1</code> veya{" "}
-        <code>system_config</code> <code>intake_playbook_loop_enabled</code>.
+        Worker <code className="mono">intake_playbook_engine</code> — tablolar{" "}
+        <code className="mono">intake_playbook_runs</code> / <code className="mono">intake_playbook_candidates</code>. Açmak:{" "}
+        <code className="mono">QTSS_INTAKE_PLAYBOOK_ENABLED=1</code> veya <code className="mono">system_config</code>{" "}
+        <code className="mono">intake_playbook_loop_enabled</code>. Telegram vb.:{" "}
+        <code className="mono">QTSS_INTAKE_PLAYBOOK_NOTIFY_ENABLED=1</code> + <code className="mono">notify_outbox</code> döngüsü.
         {onOpenHelpTopic ? (
           <>
             {" "}
