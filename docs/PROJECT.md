@@ -68,7 +68,7 @@ qtss/
     ├── qtss-indicators/       # Gösterge hesapları
     ├── qtss-tbm/              # TBM (dashboard) destek crate’i
     ├── qtss-telegram-setup-analysis/  # Telegram setup analizi (API webhook + worker ile ilişkili)
-    └── qtss-chart-patterns/   # ACP çizim JSON, kanal tarama; Pine tam parity değil — bkz. [ACP_PINE_PARITY_FIX.md](./ACP_PINE_PARITY_FIX.md)
+    └── qtss-chart-patterns/   # ACP çizim JSON, kanal tarama; Pine tam parity değil — bkz. [ACP_PINE_PARITY_FIX.md](./ACP_PINE_PARITY_FIX.md); pozisyon gücü (0–10) trend/senaryo kuralları: [SIGNAL_POSITION_SCORE_RULES.md](./SIGNAL_POSITION_SCORE_RULES.md) (`score_trend`), `signal_dashboard` yüküne `qtss-analysis` bağlar
 ```
 
 **Migrasyonları çalıştırma:** `qtss-api` veya `qtss-worker` başlarken bekleyen `migrations/*.sql` dosyaları otomatik uygulanır: `cargo run -p qtss-api`. İlk kurulumda örnek org + admin + OAuth istemcisi için: `cargo run -p qtss-api --bin qtss-seed` (binary adı `seed` değil, `qtss-seed`).

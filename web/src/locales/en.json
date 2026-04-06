@@ -513,6 +513,30 @@
       "ynNo": "No",
       "systemActive": "Active",
       "wireSummary": "Raw",
+      "scoreTrend": {
+        "kind": {
+          "insufficient_history": "Collecting samples (need 3 bars)",
+          "stable": "Stable",
+          "improving": "Improving",
+          "worsening": "Worsening",
+          "rapid_decline": "Rapid decline",
+          "free_fall": "Free fall"
+        },
+        "action": {
+          "insufficient_history": "Wait",
+          "watch_no_issue": "Watch — no issue",
+          "ease_toward_tp": "Hold — path toward take profit",
+          "tighten_stop": "Tighten stop",
+          "plan_exit_or_wait_sl": "Plan exit or wait for stop",
+          "act_immediately": "Act immediately"
+        },
+        "scenario": {
+          "strengthening_excellent": "Excellent — position strengthening",
+          "stable_good": "Good — stable",
+          "danger_reversal": "Danger — trend reversing",
+          "momentum_fading": "Caution — momentum fading"
+        }
+      },
       "panel": {
         "trendAxisUp": "UP",
         "trendAxisDown": "DOWN",
@@ -554,6 +578,9 @@
         "trendExhaustion": "Trend exhaustion",
         "structureShift": "Structure shift",
         "positionStrength": "Position strength",
+        "scoreAtEntry": "Strength at setup (entry)",
+        "scoreTrend": "Score trend (3 samples)",
+        "positionScenario": "Position scenario (vs entry)",
         "system": "System",
         "rangeHigh": "Range high",
         "rangeLow": "Range low",

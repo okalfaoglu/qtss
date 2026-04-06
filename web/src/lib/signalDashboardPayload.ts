@@ -31,6 +31,12 @@ export type SignalDashboardPayload = {
   trend_tukenmesi?: boolean;
   yapi_kaymasi?: boolean;
   pozisyon_gucu_10?: number;
+  /** Rolling 0–10 strength samples (oldest first); see `docs/SIGNAL_POSITION_SCORE_RULES.md`. */
+  position_strength_history_10?: number[];
+  score_trend_kind?: string;
+  score_trend_action?: string;
+  position_strength_entry_10?: number;
+  position_scenario_kind?: string;
   sistem_aktif?: boolean;
   last_bar_open_time?: string;
   /** Worker `enrich_dashboard_payload` — TR ile aynı pencere. */
@@ -68,6 +74,11 @@ export type SignalDashboardV2Payload = {
   trend_exhaustion?: boolean;
   structure_shift?: boolean;
   position_strength_10?: number;
+  position_strength_history_10?: number[];
+  score_trend_kind?: string;
+  score_trend_action?: string;
+  position_strength_entry_10?: number;
+  position_scenario_kind?: string;
   system_active?: boolean;
   rsi_14_last?: number | null;
 };
@@ -215,9 +226,43 @@ export function dashboardValueTone(rowKey: string, valueStr: string): DashboardV
       return "default";
     case "positionStrength":
       return "default";
+    case "scoreAtEntry":
+      return "default";
     case "system":
       return "default";
     default:
       return "default";
+  }
+}
+
+/** Row coloring from worker `score_trend_kind` (not translated label). */
+export function scoreTrendToneFromKind(kind: string | undefined): DashboardValueTone {
+  switch (kind?.trim()) {
+    case "free_fall":
+    case "rapid_decline":
+      return "bear";
+    case "worsening":
+      return "warn";
+    case "improving":
+      return "bull";
+    case "insufficient_history":
+      return "muted";
+    default:
+      return "default";
+  }
+}
+
+/** Row coloring from worker `position_scenario_kind`. */
+export function positionScenarioToneFromKind(kind: string | undefined): DashboardValueTone {
+  switch (kind?.trim()) {
+    case "danger_reversal":
+    case "momentum_fading":
+      return "warn";
+    case "strengthening_excellent":
+      return "bull";
+    case "stable_good":
+      return "default";
+    default:
+      return "muted";
   }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { useTranslation, type TFunction } from "react-i18next";
 import type { EngineSnapshotJoinedApiRow } from "../api/client";
 import {
   dashboardValueTone,
@@ -8,6 +8,8 @@ import {
   pickDashboardBool,
   pickDashboardNum,
   pickDashboardStr,
+  positionScenarioToneFromKind,
+  scoreTrendToneFromKind,
   signalDashboardRowAccent,
   type DashboardValueTone,
   type SignalDashboardPayload,
@@ -27,6 +29,23 @@ type Props = {
   snapshots: EngineSnapshotJoinedApiRow[];
   chartMatchedEngineSymbolId: string | null;
 };
+
+function formatScoreTrendDisplay(
+  t: TFunction,
+  kind: string | undefined,
+  action: string | undefined,
+): string {
+  if (!kind?.trim()) return "—";
+  const k = t(`app.signalDashboard.scoreTrend.kind.${kind}`, { defaultValue: kind });
+  if (!action?.trim()) return k;
+  const a = t(`app.signalDashboard.scoreTrend.action.${action}`, { defaultValue: action });
+  return `${k} — ${a}`;
+}
+
+function formatScenarioDisplay(t: TFunction, kind: string | undefined): string {
+  if (!kind?.trim() || kind === "none") return "—";
+  return t(`app.signalDashboard.scoreTrend.scenario.${kind}`, { defaultValue: kind });
+}
 
 function accentClass(accent: ReturnType<typeof signalDashboardRowAccent>): string {
   switch (accent) {
@@ -183,6 +202,18 @@ function SignalDashboardDetailBody({ snapshot }: { snapshot: EngineSnapshotJoine
           ? "bear"
           : "default"
       : "default";
+
+  const trendKindRaw = (v2?.score_trend_kind ?? p.score_trend_kind)?.trim();
+  const trendActionRaw = (v2?.score_trend_action ?? p.score_trend_action)?.trim();
+  const trendDisplay = formatScoreTrendDisplay(t, trendKindRaw, trendActionRaw);
+  const scenarioKindRaw = (v2?.position_scenario_kind ?? p.position_scenario_kind)?.trim();
+  const scenarioDisplay = formatScenarioDisplay(t, scenarioKindRaw);
+  const entryAtSetup = v2?.position_strength_entry_10 ?? p.position_strength_entry_10;
+  const entryAtSetupStr =
+    typeof entryAtSetup === "number" && Number.isFinite(entryAtSetup)
+      ? `${entryAtSetup} / 10`
+      : "—";
+
   const exhaustionDisp = formatDetectionPanel(t, te);
   const structureDisp = formatDetectionPanel(t, ss);
 
@@ -259,6 +290,9 @@ function SignalDashboardDetailBody({ snapshot }: { snapshot: EngineSnapshotJoine
           {rk("trendExhaustion", exhaustionDisp.text, exhaustionDisp.toneKey)}
           {rk("structureShift", structureDisp.text, structureDisp.toneKey)}
           {rk("positionStrength", posStr, psTone)}
+          {rk("scoreAtEntry", entryAtSetupStr)}
+          {rk("scoreTrend", trendDisplay, scoreTrendToneFromKind(trendKindRaw))}
+          {rk("positionScenario", scenarioDisplay, positionScenarioToneFromKind(scenarioKindRaw))}
           {rk("system", sysStr, sysTone)}
         </tbody>
       </table>
@@ -308,6 +342,11 @@ function SignalDashboardDetailBody({ snapshot }: { snapshot: EngineSnapshotJoine
               {wireRow("trend_exhaustion", v2.trend_exhaustion)}
               {wireRow("structure_shift", v2.structure_shift)}
               {wireRow("position_strength_10", v2.position_strength_10)}
+              {wireRow("position_strength_history_10", v2.position_strength_history_10)}
+              {wireRow("score_trend_kind", v2.score_trend_kind)}
+              {wireRow("score_trend_action", v2.score_trend_action)}
+              {wireRow("position_strength_entry_10", v2.position_strength_entry_10)}
+              {wireRow("position_scenario_kind", v2.position_scenario_kind)}
               {wireRow("system_active", v2.system_active)}
               {wireRow("rsi_14_last", v2.rsi_14_last)}
             </tbody>

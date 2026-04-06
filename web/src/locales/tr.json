@@ -513,6 +513,30 @@
       "ynNo": "Hayır",
       "systemActive": "Aktif",
       "wireSummary": "Ham",
+      "scoreTrend": {
+        "kind": {
+          "insufficient_history": "Örnek toplanıyor (3 mum gerekir)",
+          "stable": "Sabit",
+          "improving": "İyileşiyor",
+          "worsening": "Kötüleşiyor",
+          "rapid_decline": "Hızlı düşüş",
+          "free_fall": "Serbest düşüş"
+        },
+        "action": {
+          "insufficient_history": "Bekle",
+          "watch_no_issue": "İzle — sorun yok",
+          "ease_toward_tp": "Rahat bekle — TP yönü",
+          "tighten_stop": "SL’yi sıkılaştır",
+          "plan_exit_or_wait_sl": "Çıkışı planla veya SL bekle",
+          "act_immediately": "Hemen harekete geç"
+        },
+        "scenario": {
+          "strengthening_excellent": "Mükemmel — pozisyon güçleniyor",
+          "stable_good": "İyi — stabil",
+          "danger_reversal": "Tehlike — trend dönüyor",
+          "momentum_fading": "Dikkat — momentum bitiyor"
+        }
+      },
       "panel": {
         "trendAxisUp": "YUKARI",
         "trendAxisDown": "AŞAĞI",
@@ -554,6 +578,9 @@
         "trendExhaustion": "Trend tükenmesi",
         "structureShift": "Yapı kayması",
         "positionStrength": "Pozisyon gücü",
+        "scoreAtEntry": "Kurulumdaki güç (giriş)",
+        "scoreTrend": "Skor trendi (3 örnek)",
+        "positionScenario": "Pozisyon senaryosu (girişe göre)",
         "system": "Sistem",
         "rangeHigh": "Aralık üst",
         "rangeLow": "Aralık alt",
