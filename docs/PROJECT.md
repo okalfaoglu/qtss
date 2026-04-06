@@ -244,7 +244,7 @@ Yetersiz rol → HTTP **403** (`insufficient_scope`). Tam ağaç: `crates/qtss-a
 5. **Analiz motoru** — `qtss-analysis` crate + worker entegrasyonu (**kısmen**; genişletilmiş motor / tam API yüzeyi sonra)  
 6. **AI katmanı** — onay kuyruğu DB + HTTP (**kısmen**; worker/LLM/policy sonraki)  
 7. **Bildirim** — `qtss-notify` + `notify_outbox` worker (**kısmen**; retry/DLQ/çoklu tüketici sonra)  
-8. **Web UI** — grafik/Elliott temel akış + çekmece **Kuyruklar** (notify outbox + AI onay listesi/aksiyonları, `permissions` özeti) (**kısmen**; PnL grafikleri / emir defteri / audit UI sonra)  
+8. **Web UI** — grafik/Elliott temel akış + çekmece **AI → Outbox ve onay** alt sekmesi (`notify_outbox` + `ai_approval_requests`, `permissions` özeti) (**kısmen**; PnL grafikleri / emir defteri / audit UI sonra)  
 9. **Kurumsal** — API `/live` + `/ready` + `/metrics` + worker `QTSS_WORKER_HTTP_BIND` probe (**kısmen**); çok örnek HA, uyumluluk raporları sonra  
 10. **CI** — Repodaki `.github/workflows/*.yml` (ör. `ci.yml`): workspace `cargo check` / `cargo test`, `web` için `npm ci` + derleme / i18n kontrolleri; tanıma göre Postgres migrasyon job’u (**kısmen**; eksik job’lar sonraki iterasyon)  
 

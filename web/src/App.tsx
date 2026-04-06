@@ -2540,15 +2540,6 @@ export default function App() {
                 <button
                   type="button"
                   role="tab"
-                  aria-selected={drawerTab === "queues"}
-                  className={`tv-settings__tab ${drawerTab === "queues" ? "is-active" : ""}`}
-                  onClick={() => setDrawerTab("queues")}
-                >
-                  {t("drawer.queues")}
-                </button>
-                <button
-                  type="button"
-                  role="tab"
                   aria-selected={drawerTab === "ai"}
                   className={`tv-settings__tab ${drawerTab === "ai" ? "is-active" : ""}`}
                   onClick={() => setDrawerTab("ai")}
@@ -5322,33 +5313,18 @@ export default function App() {
                 </>
               ) : null}
 
-              {drawerTab === "queues" ? (
-                <>
-                  {matchesSetting(
-                    "kuyruk",
-                    "queue",
-                    "notify",
-                    "outbox",
-                    "bildirim",
-                    "ai",
-                    "onay",
-                    "approval",
-                    "ops",
-                    "worker",
-                  ) ? (
-                    <OperationsQueuesPanel
-                      accessToken={token}
-                      canOps={rbacIsOps}
-                      canAdmin={rbacIsAdmin}
-                    />
-                  ) : null}
-                </>
-              ) : null}
-
               {drawerTab === "ai" ? (
                 <>
                   <div style={{ display: "flex", gap: 4, marginBottom: 8, flexWrap: "wrap" }}>
-                    {(["ai_dashboard", "ai_decisions", "ai_performance", "ai_settings"] as const).map((sub) => (
+                    {(
+                      [
+                        "ai_dashboard",
+                        "ai_decisions",
+                        "ai_queues",
+                        "ai_performance",
+                        "ai_settings",
+                      ] as const
+                    ).map((sub) => (
                       <button
                         key={sub}
                         type="button"
@@ -5369,6 +5345,9 @@ export default function App() {
                   </div>
                   {aiSubtab === "ai_dashboard" && <AiDashboardPanel accessToken={token} />}
                   {aiSubtab === "ai_decisions" && <AiDecisionsPanel accessToken={token} canAdmin={rbacIsAdmin} />}
+                  {aiSubtab === "ai_queues" ? (
+                    <OperationsQueuesPanel accessToken={token} canOps={rbacIsOps} canAdmin={rbacIsAdmin} />
+                  ) : null}
                   {aiSubtab === "ai_performance" && (
                     <AiPerformancePanel accessToken={token} canAdmin={rbacIsAdmin} />
                   )}

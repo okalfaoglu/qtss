@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   fetchAiApprovalRequests,
   fetchNotifyOutbox,
@@ -22,6 +23,7 @@ function truncate(s: string, max: number): string {
 }
 
 export function OperationsQueuesPanel({ accessToken, canOps, canAdmin }: Props) {
+  const { t } = useTranslation();
   const [outbox, setOutbox] = useState<NotifyOutboxRowApi[]>([]);
   const [approvals, setApprovals] = useState<AiApprovalRequestRowApi[]>([]);
   const [busy, setBusy] = useState(false);
@@ -130,10 +132,9 @@ export function OperationsQueuesPanel({ accessToken, canOps, canAdmin }: Props) 
   return (
     <>
       <div className="card">
-        <p className="tv-drawer__section-head">Kuyruklar (ops)</p>
+        <p className="tv-drawer__section-head">{t("ai.queuesPanelHead")}</p>
         <p className="muted" style={{ fontSize: "0.75rem", marginBottom: "0.5rem" }}>
-          <code>notify_outbox</code> ve <code>ai_approval_requests</code> salt okunur listeler; kuyruğa ekleme için{" "}
-          <strong>trader/admin</strong>, AI kararı için <strong>admin</strong> rolü gerekir (sunucu RBAC).
+          {t("ai.queuesPanelIntro")}
         </p>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.65rem" }}>
           <button type="button" className="theme-toggle" disabled={busy} onClick={() => void refresh()}>

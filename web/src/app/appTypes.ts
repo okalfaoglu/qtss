@@ -15,7 +15,6 @@ export type SettingsTab =
   | "signal_dashboard"
   | "market_context"
   | "nansen"
-  | "queues"
   | "ai"
   | "notify"
   | "telegram_setup_analysis"
@@ -25,6 +24,11 @@ export type SettingsTab =
 
 export type TradingRangeDrawerSubtab = "main" | "data_entry" | "setup" | "trade_summary";
 
-export type AiDrawerSubtab = "ai_dashboard" | "ai_decisions" | "ai_performance" | "ai_settings";
+export type AiDrawerSubtab =
+  | "ai_dashboard"
+  | "ai_decisions"
+  | "ai_queues"
+  | "ai_performance"
+  | "ai_settings";
 
 export type ElliottLineStyle = "solid" | "dotted" | "dashed";
