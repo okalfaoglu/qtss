@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchIntakePlaybookLatest,
   fetchIntakePlaybookRecent,
+  fetchLifecycleSummary,
   postIntakePlaybookPromote,
   postIntakePlaybookPromoteBulk,
   type IntakePlaybookCandidateApiRow,
   type IntakePlaybookRunApiRow,
+  type LifecycleSummaryApiResponse,
 } from "../api/client";
 import { HelpCrossLink } from "../help/HelpCrossLink";
 
@@ -39,22 +41,26 @@ export function IntakePlaybookPanel({ accessToken, canPromote, visible, onOpenHe
   const [promoteId, setPromoteId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [lifecycleSummary, setLifecycleSummary] = useState<LifecycleSummaryApiResponse | null>(null);
 
   const refresh = useCallback(async () => {
     if (!accessToken) {
       setLatest(null);
       setRecent(null);
+      setLifecycleSummary(null);
       return;
     }
     setErr("");
     setLoading(true);
     try {
-      const [lat, rec] = await Promise.all([
+      const [lat, rec, lcs] = await Promise.all([
         fetchIntakePlaybookLatest(accessToken, playbookId),
         fetchIntakePlaybookRecent(accessToken, 25),
+        fetchLifecycleSummary(accessToken).catch(() => null),
       ]);
       setLatest(lat);
       setRecent(rec);
+      setLifecycleSummary(lcs);
     } catch (e) {
       setLatest(null);
       setRecent(null);

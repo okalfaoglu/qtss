@@ -872,6 +872,8 @@ export type EngineSymbolApiRow = {
   label: string | null;
   /** `both` | `long_only` | `short_only` | `auto_segment` */
   signal_direction_mode?: string;
+  /** `manual` | `promoted` | `analyzing` | `ready` | `trading` | `closing` | `cooldown` | `retired` */
+  lifecycle_state?: string;
   created_at: string;
   updated_at: string;
 };
@@ -895,6 +897,17 @@ export async function fetchEngineSymbols(accessToken: string): Promise<EngineSym
   const t = await r.text();
   if (!r.ok) throwQtssApiError("engine/symbols", r, t);
   return JSON.parse(t) as EngineSymbolApiRow[];
+}
+
+export type LifecycleSummaryApiResponse = {
+  lifecycle_summary: Record<string, number>;
+};
+
+export async function fetchLifecycleSummary(accessToken: string): Promise<LifecycleSummaryApiResponse> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/engine/lifecycle-summary`, accessToken, {});
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("engine/lifecycle-summary", r, t);
+  return JSON.parse(t) as LifecycleSummaryApiResponse;
 }
 
 export async function fetchEngineSnapshots(accessToken: string): Promise<EngineSnapshotJoinedApiRow[]> {
