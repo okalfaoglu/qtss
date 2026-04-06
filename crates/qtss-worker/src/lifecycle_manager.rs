@@ -13,7 +13,7 @@ use qtss_storage::{
     has_analysis_snapshots, has_applied_tactical_for_symbol, list_engine_symbols_by_lifecycle,
     list_stale_lifecycle_engine_symbols, net_filled_position_for_symbol, resolve_system_string,
     resolve_worker_enabled_flag, resolve_worker_tick_secs, update_engine_symbol_lifecycle_and_enabled,
-    update_engine_symbol_lifecycle_state, EngineSymbolRow,
+    update_engine_symbol_lifecycle_state,
 };
 
 async fn advance_promoted(pool: &PgPool) -> Result<u32, qtss_storage::StorageError> {

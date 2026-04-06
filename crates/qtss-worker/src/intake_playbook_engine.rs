@@ -86,6 +86,7 @@ fn parse_json_f64_opt(v: Option<&Value>) -> Option<f64> {
 struct ScreenerRow {
     symbol: String,
     chain: Option<String>,
+    #[allow(dead_code)]
     token_address: Option<String>,
     net_flow: f64,
     buy_vol: f64,
@@ -229,6 +230,7 @@ struct AuxData {
     sell_entities: Vec<String>,
     mm_buying: bool,
     mm_selling: bool,
+    #[allow(dead_code)]
     indicators_json: Option<Value>,
 }
 

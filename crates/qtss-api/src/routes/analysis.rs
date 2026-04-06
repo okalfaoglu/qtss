@@ -32,7 +32,7 @@ use qtss_storage::{
     list_engine_symbols_matching, list_intake_playbook_candidates_for_run,
     list_market_confluence_snapshots_for_symbol, list_market_context_summaries,
     list_range_signal_events_joined, list_recent_intake_playbook_runs, merge_json_deep,
-    update_engine_symbol_enabled, update_engine_symbol_lifecycle_and_enabled,
+    update_engine_symbol_lifecycle_and_enabled,
     update_engine_symbol_lifecycle_state, update_engine_symbol_patch,
     update_intake_candidate_merged_engine_symbol, upsert_range_engine_json,
     AnalysisSnapshotJoinedRow, DataSnapshotRow, EngineSymbolInsert, EngineSymbolRow,
@@ -123,6 +123,7 @@ pub fn analysis_read_router() -> Router<SharedState> {
             "/analysis/engine/lifecycle-summary",
             get(get_lifecycle_summary_api),
         )
+}
 
 /// `engine_symbols` yazımı — `trader` / `admin` (`require_ops_roles`).
 pub fn analysis_write_router() -> Router<SharedState> {
