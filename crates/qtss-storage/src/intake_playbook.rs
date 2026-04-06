@@ -113,6 +113,38 @@ pub async fn insert_intake_playbook_candidates(
 }
 
 /// Latest run for a playbook id (e.g. `market_mode`, `elite_long`).
+pub async fn fetch_intake_playbook_run_by_id(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<Option<IntakePlaybookRunRow>, StorageError> {
+    let row = sqlx::query_as::<_, IntakePlaybookRunRow>(
+        r#"SELECT id, playbook_id, computed_at, expires_at, market_mode, confidence_0_100,
+                  key_reason, neutral_guidance, summary_json, inputs_json, meta_json
+           FROM intake_playbook_runs
+           WHERE id = $1"#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn fetch_intake_playbook_candidate_by_id(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<Option<IntakePlaybookCandidateRow>, StorageError> {
+    let row = sqlx::query_as::<_, IntakePlaybookCandidateRow>(
+        r#"SELECT id, run_id, rank, symbol, chain, direction, intake_tier, confidence_0_100,
+                  detail_json, merged_engine_symbol_id, merged_at
+           FROM intake_playbook_candidates
+           WHERE id = $1"#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 pub async fn fetch_latest_intake_playbook_run(
     pool: &PgPool,
     playbook_id: &str,

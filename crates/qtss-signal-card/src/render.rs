@@ -3,8 +3,8 @@
 use plotters::prelude::*;
 use std::path::Path;
 
-const W: u32 = 720;
-const H: u32 = 520;
+const DEFAULT_W: u32 = 720;
+const DEFAULT_H: u32 = 520;
 const HEADER_H: i32 = 54;
 const ROW0: i32 = HEADER_H + 6;
 const ROW_H: i32 = 76;
@@ -28,6 +28,10 @@ pub struct SignalCardParams {
     pub entry_line: String,
     pub stop_line: String,
     pub tp_line: String,
+    /// When 0, [`DEFAULT_W`]×[`DEFAULT_H`] is used (720×520).
+    pub canvas_width: u32,
+    /// When 0, [`DEFAULT_H`] is used.
+    pub canvas_height: u32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -53,6 +57,16 @@ fn style_small(color: &RGBColor) -> plotters::style::TextStyle<'_> {
 
 /// Renders a PNG (RGB) suitable for Telegram `sendPhoto`.
 pub fn render_signal_card_png(params: &SignalCardParams) -> Result<Vec<u8>, SignalCardRenderError> {
+    let w = if params.canvas_width > 0 {
+        params.canvas_width
+    } else {
+        DEFAULT_W
+    };
+    let h = if params.canvas_height > 0 {
+        params.canvas_height
+    } else {
+        DEFAULT_H
+    };
     let tmp = tempfile::Builder::new()
         .suffix(".png")
         .tempfile()
@@ -60,11 +74,11 @@ pub fn render_signal_card_png(params: &SignalCardParams) -> Result<Vec<u8>, Sign
     let path: &Path = tmp.path();
 
     {
-        let root = BitMapBackend::new(path, (W, H)).into_drawing_area();
+        let root = BitMapBackend::new(path, (w, h)).into_drawing_area();
         root.fill(&RGBColor(5, 5, 5)).map_err(pe)?;
 
         let blue = RGBColor(59, 113, 243);
-        root.draw(&Rectangle::new([(0, 0), (W as i32, HEADER_H)], blue.filled()))
+        root.draw(&Rectangle::new([(0, 0), (w as i32, HEADER_H)], blue.filled()))
             .map_err(pe)?;
 
         let white = RGBColor(248, 250, 252);
@@ -76,7 +90,7 @@ pub fn render_signal_card_png(params: &SignalCardParams) -> Result<Vec<u8>, Sign
         .map_err(pe)?;
 
         let hw = estimate_text_width(params.header_right.as_str(), 21.0);
-        let hx = (W as i32 - hw - 16).max(16);
+        let hx = (w as i32 - hw - 16).max(16);
         root.draw(&Text::new(
             params.header_right.as_str(),
             (hx, 16),
@@ -88,7 +102,7 @@ pub fn render_signal_card_png(params: &SignalCardParams) -> Result<Vec<u8>, Sign
         let y1 = ROW0;
         let sep_y1 = y1 - 6 + ROW_H;
         root.draw(&Rectangle::new(
-            [(0, sep_y1), (W as i32, sep_y1 + 1)],
+            [(0, sep_y1), (w as i32, sep_y1 + 1)],
             RGBColor(48, 48, 48).filled(),
         ))
         .map_err(pe)?;
@@ -115,7 +129,7 @@ pub fn render_signal_card_png(params: &SignalCardParams) -> Result<Vec<u8>, Sign
         let y2 = y1 + ROW_H;
         let sep_y2 = y2 - 6 + ROW_H + 18;
         root.draw(&Rectangle::new(
-            [(0, sep_y2), (W as i32, sep_y2 + 1)],
+            [(0, sep_y2), (w as i32, sep_y2 + 1)],
             RGBColor(48, 48, 48).filled(),
         ))
         .map_err(pe)?;
@@ -178,7 +192,7 @@ pub fn render_signal_card_png(params: &SignalCardParams) -> Result<Vec<u8>, Sign
         let y3 = y2 + ROW_H + 18;
         let sep_y3 = y3 - 6 + ROW_H;
         root.draw(&Rectangle::new(
-            [(0, sep_y3), (W as i32, sep_y3 + 1)],
+            [(0, sep_y3), (w as i32, sep_y3 + 1)],
             RGBColor(48, 48, 48).filled(),
         ))
         .map_err(pe)?;
@@ -199,7 +213,7 @@ pub fn render_signal_card_png(params: &SignalCardParams) -> Result<Vec<u8>, Sign
         let y4 = y3 + ROW_H;
         let sep_y4 = y4 - 6 + ROW_H;
         root.draw(&Rectangle::new(
-            [(0, sep_y4), (W as i32, sep_y4 + 1)],
+            [(0, sep_y4), (w as i32, sep_y4 + 1)],
             RGBColor(48, 48, 48).filled(),
         ))
         .map_err(pe)?;
@@ -221,7 +235,7 @@ pub fn render_signal_card_png(params: &SignalCardParams) -> Result<Vec<u8>, Sign
         let y5 = y4 + ROW_H;
         let sep_y5 = y5 - 6 + ROW_H;
         root.draw(&Rectangle::new(
-            [(0, sep_y5), (W as i32, sep_y5 + 1)],
+            [(0, sep_y5), (w as i32, sep_y5 + 1)],
             RGBColor(48, 48, 48).filled(),
         ))
         .map_err(pe)?;

@@ -1328,6 +1328,95 @@ export async function postEngineSymbolsBulk(
   return JSON.parse(t) as EngineSymbolsBulkResponse;
 }
 
+/** GET …/analysis/intake-playbook/latest */
+export type IntakePlaybookRunApiRow = {
+  id: string;
+  playbook_id: string;
+  computed_at: string;
+  expires_at: string | null;
+  market_mode: string | null;
+  confidence_0_100: number;
+  key_reason: string | null;
+  neutral_guidance: string | null;
+  summary_json: unknown;
+  inputs_json: unknown;
+  meta_json: unknown;
+};
+
+export type IntakePlaybookCandidateApiRow = {
+  id: string;
+  run_id: string;
+  rank: number;
+  symbol: string;
+  chain: string | null;
+  direction: string;
+  intake_tier: string;
+  confidence_0_100: number;
+  detail_json: unknown;
+  merged_engine_symbol_id: string | null;
+  merged_at: string | null;
+};
+
+export type IntakePlaybookLatestApiResponse = {
+  run: IntakePlaybookRunApiRow | null;
+  candidates: IntakePlaybookCandidateApiRow[];
+};
+
+export async function fetchIntakePlaybookLatest(
+  accessToken: string,
+  playbookId: string,
+): Promise<IntakePlaybookLatestApiResponse> {
+  const params = new URLSearchParams({ playbook_id: playbookId });
+  const r = await fetchWithBearerRetry(
+    `${API_BASE}/api/v1/analysis/intake-playbook/latest?${params}`,
+    accessToken,
+    {},
+  );
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("intake-playbook/latest", r, t);
+  return JSON.parse(t) as IntakePlaybookLatestApiResponse;
+}
+
+export async function fetchIntakePlaybookRecent(
+  accessToken: string,
+  limit = 40,
+): Promise<IntakePlaybookRunApiRow[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const r = await fetchWithBearerRetry(
+    `${API_BASE}/api/v1/analysis/intake-playbook/recent?${params}`,
+    accessToken,
+    {},
+  );
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("intake-playbook/recent", r, t);
+  return JSON.parse(t) as IntakePlaybookRunApiRow[];
+}
+
+export type IntakePlaybookPromoteApiResponse = {
+  engine_symbol: EngineSymbolApiRow;
+  candidate_id: string;
+  note: string;
+};
+
+export async function postIntakePlaybookPromote(
+  accessToken: string,
+  body: {
+    candidate_id: string;
+    exchange?: string;
+    segment?: string;
+    interval?: string;
+  },
+): Promise<IntakePlaybookPromoteApiResponse> {
+  const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/analysis/intake-playbook/promote`, accessToken, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError("intake-playbook/promote", r, t);
+  return JSON.parse(t) as IntakePlaybookPromoteApiResponse;
+}
+
 export async function patchEngineSymbol(
   accessToken: string,
   id: string,

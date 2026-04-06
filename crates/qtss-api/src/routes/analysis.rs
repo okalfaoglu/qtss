@@ -23,13 +23,15 @@ use qtss_chart_patterns::{
 };
 use qtss_common::{log_business, QtssLogLevel};
 use qtss_storage::{
-    fetch_analysis_snapshot_payload, fetch_data_snapshot, fetch_latest_intake_playbook_run,
+    fetch_analysis_snapshot_payload, fetch_data_snapshot, fetch_intake_playbook_candidate_by_id,
+    fetch_intake_playbook_run_by_id, fetch_latest_intake_playbook_run,
     fetch_latest_nansen_setup_with_rows, fetch_nansen_snapshot, fetch_range_engine_json,
     insert_engine_symbol, list_analysis_snapshots_with_symbols, list_data_snapshots,
     list_engine_symbols_all, list_engine_symbols_with_ingestion, list_engine_symbols_matching,
     list_intake_playbook_candidates_for_run, list_market_confluence_snapshots_for_symbol,
     list_market_context_summaries, list_range_signal_events_joined,
-    list_recent_intake_playbook_runs, merge_json_deep, update_engine_symbol_patch,
+    list_recent_intake_playbook_runs, merge_json_deep, update_engine_symbol_enabled,
+    update_engine_symbol_patch, update_intake_candidate_merged_engine_symbol,
     upsert_range_engine_json, AnalysisSnapshotJoinedRow, DataSnapshotRow, EngineSymbolInsert,
     EngineSymbolRow, IntakePlaybookCandidateRow, IntakePlaybookRunRow,
     MarketConfluenceSnapshotRow, MarketContextSummaryRow, NansenSetupRowDetail, NansenSetupRunRow,
@@ -129,6 +131,10 @@ pub fn analysis_write_router() -> Router<SharedState> {
         .route(
             "/analysis/range-engine/config",
             patch(patch_range_engine_config_api),
+        )
+        .route(
+            "/analysis/intake-playbook/promote",
+            post(post_intake_playbook_promote_api),
         )
 }
 
@@ -946,6 +952,149 @@ async fn list_intake_playbook_recent_api(
             )
         })?;
     Ok(Json(rows))
+}
+
+fn normalize_intake_listing_symbol(raw: &str) -> String {
+    let u = raw.trim().to_uppercase();
+    if u.is_empty() {
+        return u;
+    }
+    if u.ends_with("USDT") || u.ends_with("USDC") || u.ends_with("BUSD") {
+        u
+    } else {
+        format!("{u}USDT")
+    }
+}
+
+fn signal_direction_mode_from_intake(direction: &str) -> Option<String> {
+    match direction.trim().to_uppercase().as_str() {
+        "LONG" | "WATCH" => Some("long_only".into()),
+        "SHORT" | "AVOID" => Some("short_only".into()),
+        "LONG_OR_SHORT" => Some("both".into()),
+        _ => Some("both".into()),
+    }
+}
+
+fn default_intake_promote_interval() -> String {
+    "15m".into()
+}
+
+#[derive(Deserialize)]
+struct PostIntakePromoteBody {
+    candidate_id: Uuid,
+    #[serde(default)]
+    exchange: Option<String>,
+    #[serde(default)]
+    segment: Option<String>,
+    #[serde(default = "default_intake_promote_interval")]
+    interval: String,
+}
+
+/// Add `engine_symbols` row from an intake candidate (**disabled** until operator enables).
+async fn post_intake_playbook_promote_api(
+    State(st): State<SharedState>,
+    Extension(loc): Extension<NegotiatedLocale>,
+    Json(body): Json<PostIntakePromoteBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let c = fetch_intake_playbook_candidate_by_id(&st.pool, body.candidate_id)
+        .await
+        .map_err(|e| {
+            map_analysis_storage_err(
+                e,
+                &loc,
+                "analysis.intake_promote_candidate_load_failed",
+                "Failed to load intake candidate.",
+            )
+        })?;
+    let Some(c) = c else {
+        return Err(ApiError::bad_request("intake candidate not found"));
+    };
+    if c.merged_engine_symbol_id.is_some() {
+        return Err(ApiError::bad_request(
+            "candidate already promoted (merged_engine_symbol_id set)",
+        ));
+    }
+    let run = fetch_intake_playbook_run_by_id(&st.pool, c.run_id)
+        .await
+        .map_err(|e| {
+            map_analysis_storage_err(
+                e,
+                &loc,
+                "analysis.intake_promote_run_load_failed",
+                "Failed to load intake playbook run.",
+            )
+        })?;
+    let Some(run) = run else {
+        return Err(ApiError::internal("intake run row missing"));
+    };
+
+    let sym = normalize_intake_listing_symbol(&c.symbol);
+    if sym.is_empty() {
+        return Err(ApiError::bad_request("empty symbol after normalization"));
+    }
+    let iv = body.interval.trim();
+    if iv.is_empty() {
+        return Err(ApiError::bad_request("interval boş olamaz"));
+    }
+    let mode = signal_direction_mode_from_intake(&c.direction);
+    let label = Some(format!("intake:{}", run.playbook_id));
+    let row_ins = EngineSymbolInsert {
+        exchange: body
+            .exchange
+            .unwrap_or_else(|| "binance".into())
+            .trim()
+            .to_lowercase(),
+        segment: body
+            .segment
+            .unwrap_or_else(|| "futures".into())
+            .trim()
+            .to_lowercase(),
+        symbol: sym,
+        interval: iv.to_string(),
+        label,
+        signal_direction_mode: mode,
+    };
+    let es = insert_engine_symbol(&st.pool, &row_ins)
+        .await
+        .map_err(|e| {
+            map_analysis_storage_err(
+                e,
+                &loc,
+                "analysis.intake_promote_insert_engine_failed",
+                "Failed to insert engine_symbol.",
+            )
+        })?;
+    update_engine_symbol_enabled(&st.pool, es.id, false)
+        .await
+        .map_err(|e| {
+            map_analysis_storage_err(
+                e,
+                &loc,
+                "analysis.intake_promote_disable_failed",
+                "Failed to set engine_symbol enabled=false.",
+            )
+        })?;
+    update_intake_candidate_merged_engine_symbol(&st.pool, c.id, es.id)
+        .await
+        .map_err(|e| {
+            map_analysis_storage_err(
+                e,
+                &loc,
+                "analysis.intake_promote_merge_flag_failed",
+                "Failed to record merged_engine_symbol_id.",
+            )
+        })?;
+
+    log_business(
+        QtssLogLevel::Info,
+        "qtss_api::intake_playbook",
+        "promote_candidate",
+    );
+    Ok(Json(json!({
+        "engine_symbol": es,
+        "candidate_id": c.id,
+        "note": "Engine symbol created with enabled=false; enable from engine targets when ready."
+    })))
 }
 
 #[derive(Deserialize)]

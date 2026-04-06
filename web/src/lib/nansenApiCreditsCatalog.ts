@@ -204,6 +204,17 @@ export const NANSEN_WORKER_LOOP_ROWS: NansenApiCatalogRow[] = [
     envKey: "NANSEN_PERP_SCREENER_ENABLED",
     kind: "worker_opt_in",
   },
+  {
+    id: "intake_playbook",
+    label: "Intake playbook sweep",
+    path: "(worker rule engine → intake_playbook_*)",
+    creditsLabel: "0",
+    purposeDetail:
+      "Nansen token screener ve `data_snapshots` (netflows, flow intelligence, perp trades, Binance funding) ile market_mode ve tarayıcı adaylarını DB’ye yazar. Ek Nansen çağrısı yok; screener döngüsü açık olmalı. API: GET …/analysis/intake-playbook/latest?playbook_id=…",
+    configKey: "intake_playbook_loop_enabled",
+    envKey: "QTSS_INTAKE_PLAYBOOK_ENABLED",
+    kind: "worker_opt_in",
+  },
 ];
 
 /** Documented APIs without a worker loop in this repo (reference / future). */

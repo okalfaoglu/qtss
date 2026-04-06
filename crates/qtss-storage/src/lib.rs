@@ -77,6 +77,7 @@ pub use ingestion_state::{
     EngineSymbolIngestionJoinedRow,
 };
 pub use intake_playbook::{
+    fetch_intake_playbook_candidate_by_id, fetch_intake_playbook_run_by_id,
     fetch_latest_intake_playbook_run, insert_intake_playbook_candidates, insert_intake_playbook_run,
     list_intake_playbook_candidates_for_run, list_recent_intake_playbook_runs,
     update_intake_candidate_merged_engine_symbol, IntakePlaybookCandidateInsert, IntakePlaybookCandidateRow,
