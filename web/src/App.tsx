@@ -75,6 +75,7 @@ import { AiDecisionsPanel } from "./components/AiDecisionsPanel";
 import { AiDashboardPanel } from "./components/AiDashboardPanel";
 import { AiPerformancePanel } from "./components/AiPerformancePanel";
 import { AiSettingsPanel } from "./components/AiSettingsPanel";
+import { NansenApiCreditsPanel } from "./components/NansenApiCreditsPanel";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import { OperationsQueuesPanel } from "./components/OperationsQueuesPanel";
 import i18n from "./i18n";
@@ -5101,6 +5102,11 @@ export default function App() {
                     "token",
                     "api",
                     "zincir",
+                    "kredi",
+                    "credit",
+                    "endpoint",
+                    "döngü",
+                    "loop",
                   ) ? (
                     <div className="card">
                       <p className="tv-drawer__section-head">Nansen — Token Screener (rehber)</p>
@@ -5111,6 +5117,11 @@ export default function App() {
                           docs.nansen.ai
                         </a>
                       </p>
+                      <NansenApiCreditsPanel
+                        accessToken={token}
+                        canAdmin={rbacIsAdmin}
+                        visible={drawerOpen && drawerTab === "nansen"}
+                      />
                       {token ? (
                         <>
                           <button
