@@ -796,7 +796,7 @@ fn decision_id_from_approval_payload(payload: &Value) -> Option<Uuid> {
 /// 2. If none, [`decision_id_from_approval_payload`] on `ai_approval_requests.payload` (API clients that
 ///    did not call the link endpoint).
 ///
-/// On approve, sends [`notify_ai_tactical_executor_wake`] once so the worker does not wait for the next poll tick.
+/// Successful [`admin_approve_ai_decision`] calls emit [`notify_ai_tactical_executor_wake`] when the parent row was pending.
 pub async fn mirror_approval_request_outcome_to_linked_ai_decisions(
     pool: &PgPool,
     approval_request_id: Uuid,
@@ -843,12 +843,6 @@ pub async fn mirror_approval_request_outcome_to_linked_ai_decisions(
                 decision_id = %id,
                 "mirror approval_request outcome: ai_decision not updated"
             );
-        }
-    }
-
-    if approve {
-        if let Err(e) = notify_ai_tactical_executor_wake(pool).await {
-            tracing::warn!(%e, "notify_ai_tactical_executor_wake after mirror approval_request");
         }
     }
 

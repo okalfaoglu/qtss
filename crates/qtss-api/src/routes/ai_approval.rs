@@ -24,6 +24,8 @@ pub struct ListApprovalQuery {
 pub struct CreateApprovalBody {
     /// Logical category (e.g. `strategy_intent`, `chat_reply`); default `generic`.
     pub kind: Option<String>,
+    /// When this row is approved (Telegram `a:` or REST), [`qtss_ai::mirror_approval_request_outcome_to_linked_ai_decisions`]
+    /// updates pending `ai_decisions` via `approval_request_id` **or**, if unset, `decision_id` / `ai_decision_id` / `decision.id` here.
     pub payload: serde_json::Value,
     pub model_hint: Option<String>,
 }
@@ -153,6 +155,22 @@ async fn decide_approval_request(
         return Err(ApiError::not_found(
             "kayıt bulunamadı, org eşleşmedi veya durum pending değil",
         ));
+    }
+    let decided_by = format!("jwt:{admin_id}");
+    let approve = st_norm == "approved";
+    if let Err(e) = qtss_ai::mirror_approval_request_outcome_to_linked_ai_decisions(
+        &st.pool,
+        id,
+        approve,
+        &decided_by,
+    )
+    .await
+    {
+        tracing::warn!(
+            error = %e,
+            approval_request_id = %id,
+            "mirror linked ai_decisions after REST approval-request decide"
+        );
     }
     Ok(Json(DecideResponse { updated: n }))
 }
