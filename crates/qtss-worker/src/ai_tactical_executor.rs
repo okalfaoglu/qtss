@@ -12,8 +12,9 @@
 //! - **Dry mode**: Uses `CommissionPolicy` (fixed bps or exchange API quote).
 //!   Configurable via `QTSS_AI_TACTICAL_EXECUTOR_MAKER_BPS` / `TAKER_BPS`.
 //!   Simulated fills are written to `exchange_orders` (no Binance request) when
-//!   `QTSS_AI_TACTICAL_EXECUTOR_ORG_ID` / `QTSS_AI_TACTICAL_EXECUTOR_USER_ID` are set
-//!   (preferred) or a prior filled order row for the same symbol supplies org/user.
+//!   `QTSS_AI_TACTICAL_EXECUTOR_ORG_ID` / `QTSS_AI_TACTICAL_EXECUTOR_USER_ID`, or
+//!   `worker.paper_org_id` / `worker.paper_user_id` (UUID strings), or a prior filled
+//!   `exchange_orders` row for the symbol (`dry_exchange_order` resolver).
 //! - **Live mode**: Exchange native commission applies; no local override needed.
 //!
 //! ## Config flags
@@ -46,9 +47,7 @@ use qtss_domain::commission::CommissionPolicy;
 use qtss_domain::exchange::{ExchangeId, MarketSegment};
 use qtss_domain::orders::{FuturesExecutionExtras, OrderIntent, OrderSide, OrderType, TimeInForce};
 use qtss_domain::symbol::InstrumentId;
-use qtss_execution::{
-    BinanceLiveGateway, DryRunGateway, ExecutionGateway, VirtualLedgerParams,
-};
+use qtss_execution::{BinanceLiveGateway, DryRunGateway, VirtualLedgerParams};
 use qtss_storage::{
     list_enabled_engine_symbols, list_recent_bars, resolve_system_decimal,
     resolve_worker_enabled_flag, resolve_worker_tick_secs, ExchangeAccountRepository,
@@ -117,19 +116,6 @@ fn net_position_for_symbol(filled: &[ExchangeOrderRow], symbol: &str) -> (Decima
         (Decimal::ZERO, net.abs())
     } else {
         (Decimal::ZERO, Decimal::ZERO)
-    }
-}
-
-fn executor_env_org_user() -> Option<(Uuid, Uuid)> {
-    let org = std::env::var("QTSS_AI_TACTICAL_EXECUTOR_ORG_ID")
-        .ok()
-        .and_then(|s| Uuid::parse_str(s.trim()).ok());
-    let user = std::env::var("QTSS_AI_TACTICAL_EXECUTOR_USER_ID")
-        .ok()
-        .and_then(|s| Uuid::parse_str(s.trim()).ok());
-    match (org, user) {
-        (Some(o), Some(u)) => Some((o, u)),
-        _ => None,
     }
 }
 
@@ -295,73 +281,40 @@ async fn execute_dry(
     td: &AiTacticalDecisionRow,
     sym: &str,
     direction: &str,
-    org_user: Option<(Uuid, Uuid)>,
+    filled_hint: &[ExchangeOrderRow],
     exchange_slug: &str,
     segment_db: &str,
 ) {
-    if let Err(e) = gw.set_reference_price(&intent.instrument, mark) {
-        warn!(%e, %sym, "ai_tactical_executor: dry set_reference_price");
-        return;
-    }
-    let out = match gw.place_detailed(intent.clone(), None) {
+    let extra = json!({
+        "ai_tactical_decision_row_id": td.id,
+        "ai_decision_id": td.decision_id,
+        "direction": direction,
+    });
+    let out = match crate::dry_exchange_order::persist_after_dry_place(
+        gw,
+        pool,
+        repo,
+        intent,
+        mark,
+        sym,
+        exchange_slug,
+        segment_db,
+        "ai_tactical_executor",
+        extra,
+        filled_hint,
+        None,
+        None,
+    )
+    .await
+    {
         Ok(o) => o,
         Err(e) => {
             warn!(%e, %sym, "ai_tactical_executor: dry place failed");
             return;
         }
     };
-    let cid = out.client_order_id;
-
-    if let Some((org_id, user_id)) = org_user {
-        let venue_response = json!({
-            "dry_run": true,
-            "simulation_source": "ai_tactical_executor",
-            "status": "FILLED",
-            "executedQty": out.fill.quantity.to_string(),
-            "avgPrice": out.fill.avg_price.to_string(),
-            "fee": out.fill.fee.to_string(),
-            "ai_tactical_decision_row_id": td.id,
-            "ai_decision_id": td.decision_id,
-            "direction": direction,
-            "note": "Simulated fill; no HTTP request sent to the exchange.",
-        });
-        match repo
-            .insert_dry_simulated_filled(
-                org_id,
-                user_id,
-                exchange_slug,
-                segment_db,
-                sym,
-                cid,
-                intent,
-                venue_response,
-            )
-            .await
-        {
-            Ok(row) => {
-                info!(
-                    %cid,
-                    exchange_order_row_id = %row.id,
-                    %sym,
-                    %direction,
-                    qty = %out.fill.quantity,
-                    "ai_tactical_executor: dry simulated order persisted to exchange_orders"
-                );
-            }
-            Err(e) => {
-                warn!(%e, %cid, %sym, "ai_tactical_executor: dry exchange_orders insert failed");
-            }
-        }
-    } else {
-        warn!(
-            %sym,
-            %cid,
-            "ai_tactical_executor: dry fill in-memory only — set QTSS_AI_TACTICAL_EXECUTOR_ORG_ID and QTSS_AI_TACTICAL_EXECUTOR_USER_ID (or place a live order for this symbol first) to persist exchange_orders"
-        );
-    }
-
     info!(
-        %cid,
+        cid = %out.client_order_id,
         %sym,
         %direction,
         qty = %out.fill.quantity,
@@ -465,15 +418,6 @@ async fn execute_live_binance(
 // ---------------------------------------------------------------------------
 // Resolve org_id / user_id from filled orders or engine config
 // ---------------------------------------------------------------------------
-
-fn resolve_user_org(filled: &[ExchangeOrderRow], sym: &str) -> Option<(Uuid, Uuid)> {
-    executor_env_org_user().or_else(|| {
-        filled
-            .iter()
-            .find(|r| r.symbol.eq_ignore_ascii_case(sym))
-            .map(|r| (r.org_id, r.user_id))
-    })
-}
 
 // ---------------------------------------------------------------------------
 // Main loop
@@ -623,7 +567,14 @@ pub async fn ai_tactical_executor_loop(pool: PgPool) {
                 }
             };
 
-            let account_pair = resolve_user_org(&filled_sym, &sym);
+            let account_pair = crate::dry_exchange_order::resolve_dry_exchange_order_party(
+                &pool,
+                None,
+                None,
+                &filled_sym,
+                &sym,
+            )
+            .await;
 
             // Live USDT-M: use exchange position; otherwise derive from recent fills for this symbol.
             let (long_qty, short_qty) = if live_on && segment == MarketSegment::Futures {
@@ -690,7 +641,6 @@ pub async fn ai_tactical_executor_loop(pool: PgPool) {
 
             // Execute.
             if let Some(ref gw) = dry_gateway {
-                let org_user = account_pair;
                 let exchange_slug = es.exchange.trim();
                 let segment_db = match segment {
                     MarketSegment::Futures => "futures",
@@ -705,14 +655,14 @@ pub async fn ai_tactical_executor_loop(pool: PgPool) {
                     &td,
                     &sym,
                     direction,
-                    org_user,
+                    &filled_sym,
                     exchange_slug,
                     segment_db,
                 )
                 .await;
             } else if live_on {
                 let Some((org_id, user_id)) = account_pair else {
-                    warn!(%sym, "ai_tactical_executor: no org_id/user_id for live execution (set QTSS_AI_TACTICAL_EXECUTOR_ORG_ID and QTSS_AI_TACTICAL_EXECUTOR_USER_ID or have a filled order for this symbol)");
+                    warn!(%sym, "ai_tactical_executor: no org_id/user_id for live execution — set worker.paper_org_id/paper_user_id (UUID), QTSS_AI_TACTICAL_EXECUTOR_ORG_ID/USER_ID, or ensure exchange_orders has a fill for this symbol");
                     continue;
                 };
                 execute_live_binance(

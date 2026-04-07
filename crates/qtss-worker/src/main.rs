@@ -8,6 +8,7 @@ mod binance_spot_reconcile;
 mod binance_user_stream;
 mod confluence;
 mod confluence_hook;
+mod dry_exchange_order;
 mod cex_flow_screener;
 mod copy_trade_follower;
 mod copy_trade_queue;

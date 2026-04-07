@@ -32,7 +32,7 @@ use qtss_domain::orders::{FuturesExecutionExtras, OrderIntent, OrderSide, OrderT
 use qtss_domain::symbol::InstrumentId;
 use qtss_execution::{
     venue_order_id_from_bybit_v5_response, venue_order_id_from_okx_v5_response, BinanceLiveGateway,
-    BybitLiveGateway, DryRunGateway, ExecutionGateway, OkxLiveGateway,
+    BybitLiveGateway, DryRunGateway, OkxLiveGateway,
 };
 use qtss_storage::{
     list_recent_bars, resolve_system_decimal, resolve_system_string, resolve_worker_enabled_flag,
@@ -40,7 +40,7 @@ use qtss_storage::{
 };
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
-use serde_json::Value as JsonValue;
+use serde_json::{json, Value as JsonValue};
 use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -605,30 +605,47 @@ pub async fn position_manager_loop(pool: PgPool) {
                 };
                 let mut close_executed = false;
                 if let Some(ref gw) = dry_gateway {
-                    if let Err(e) = gw.set_reference_price(&intent.instrument, mark) {
-                        warn!(%e, symbol = %key.symbol, "position_manager dry set_reference_price (directive close)");
-                    } else if let Err(e) = gw.place(intent).await {
-                        warn!(%e, symbol = %key.symbol, "position_manager: dry directive close place failed");
-                    } else {
-                        close_executed = true;
-                        if let Some(did) = ai_outcome_decision_id {
-                            let pnl_pct = entry.to_f64().and_then(|e| {
-                                mark.to_f64()
-                                    .and_then(|m| (e > 0.0).then_some((m - e) / e * 100.0))
-                            });
-                            if let Err(e) = record_decision_outcome(
-                                &pool,
-                                did,
-                                pnl_pct,
-                                None,
-                                outcome_db,
-                                None,
-                                Some(pnl_note),
-                            )
-                            .await
-                            {
-                                warn!(%e, symbol = %key.symbol, "record_decision_outcome (directive dry)");
+                    match crate::dry_exchange_order::persist_after_dry_place(
+                        gw.as_ref(),
+                        &pool,
+                        &repo,
+                        &intent,
+                        mark,
+                        &key.symbol,
+                        key.exchange.trim(),
+                        key.segment.trim(),
+                        "position_manager_ai_directive_close",
+                        json!({ "pnl_note": pnl_note }),
+                        &rows,
+                        agg.org_id,
+                        Some(key.user_id),
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            close_executed = true;
+                            if let Some(did) = ai_outcome_decision_id {
+                                let pnl_pct = entry.to_f64().and_then(|e| {
+                                    mark.to_f64()
+                                        .and_then(|m| (e > 0.0).then_some((m - e) / e * 100.0))
+                                });
+                                if let Err(e) = record_decision_outcome(
+                                    &pool,
+                                    did,
+                                    pnl_pct,
+                                    None,
+                                    outcome_db,
+                                    None,
+                                    Some(pnl_note),
+                                )
+                                .await
+                                {
+                                    warn!(%e, symbol = %key.symbol, "record_decision_outcome (directive dry)");
+                                }
                             }
+                        }
+                        Err(e) => {
+                            warn!(%e, symbol = %key.symbol, "position_manager: dry directive close place failed");
                         }
                     }
                 } else if live_on {
@@ -1217,13 +1234,29 @@ pub async fn position_manager_loop(pool: PgPool) {
             );
             let intent = market_reduce_long_intent(&key, book.qty);
             if let Some(ref gw) = dry_gateway {
-                if let Err(e) = gw.set_reference_price(&intent.instrument, mark) {
-                    warn!(%e, "position_manager dry set_reference_price");
-                    continue;
-                }
-                match gw.place(intent).await {
-                    Ok(cid) => {
-                        info!(%cid, symbol = %key.symbol, "position_manager: dry kapatma emri");
+                match crate::dry_exchange_order::persist_after_dry_place(
+                    gw.as_ref(),
+                    &pool,
+                    &repo,
+                    &intent,
+                    mark,
+                    &key.symbol,
+                    key.exchange.trim(),
+                    key.segment.trim(),
+                    "position_manager_sl_tp",
+                    json!({ "hit_sl": hit_sl, "hit_tp": hit_tp }),
+                    &rows,
+                    agg.org_id,
+                    Some(key.user_id),
+                )
+                .await
+                {
+                    Ok(out) => {
+                        info!(
+                            cid = %out.client_order_id,
+                            symbol = %key.symbol,
+                            "position_manager: dry kapatma emri (exchange_orders)"
+                        );
                         if let Some(did) = ai_outcome_decision_id {
                             let pnl_pct = entry.to_f64().and_then(|e| {
                                 mark.to_f64()
@@ -1246,7 +1279,7 @@ pub async fn position_manager_loop(pool: PgPool) {
                         }
                     }
                     Err(e) => {
-                        warn!(%e, symbol = %key.symbol, "position_manager: dry place başarısız")
+                        warn!(%e, symbol = %key.symbol, "position_manager: dry SL/TP place başarısız");
                     }
                 }
             } else if live_on {
