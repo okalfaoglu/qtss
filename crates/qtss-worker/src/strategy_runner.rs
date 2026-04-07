@@ -244,4 +244,21 @@ mod tests {
         assert_eq!(DRY_RUNNER_STRATEGIES.len(), 4);
         assert_eq!(dry_runner_strategy_count_dec(), Decimal::from(4u32));
     }
+
+    #[test]
+    fn dry_persistence_keys_uniform_uses_same_string() {
+        let k = DryPersistenceKeys::uniform("copy_trade_queue");
+        assert_eq!(k.paper_ledger_strategy_key, "copy_trade_queue");
+        assert_eq!(k.exchange_orders_mirror_strategy_key, "copy_trade_queue");
+    }
+
+    #[test]
+    fn dry_persistence_keys_strategy_runner_splits_paper_and_mirror_labels() {
+        let k = DryPersistenceKeys::strategy_runner("arb_funding");
+        assert_eq!(k.paper_ledger_strategy_key, "arb_funding");
+        assert_eq!(
+            k.exchange_orders_mirror_strategy_key,
+            "strategy_runner:arb_funding"
+        );
+    }
 }

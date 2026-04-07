@@ -1,7 +1,8 @@
 //! `range_signal_events` → isteğe bağlı **paper** ve/veya **Binance canlı** market emri.
 //!
-//! Paper: `worker.range_auto_paper_execute_enabled` / `QTSS_RANGE_AUTO_PAPER_EXECUTE_ENABLED=1` +
-//! `paper_ledger_enabled` + `paper_org_id` / `paper_user_id`.
+//! Paper / dry: `worker.range_auto_paper_execute_enabled` / `QTSS_RANGE_AUTO_PAPER_EXECUTE_ENABLED=1` plus either
+//! full paper ledger (`paper_ledger_enabled` + `paper_org_id` / `paper_user_id`) **or** only those UUIDs for an
+//! `exchange_orders`-only mirror when the ledger flag is off (same as [`crate::strategy_runner::wrap_shared_dry_gateway_for_persistence`]).
 //!
 //! Live (Binance only): `worker.range_auto_live_execute_enabled` +
 //! `range_auto_live_org_id` / `range_auto_live_user_id` + `exchange_accounts` (binance, segment) +
@@ -9,7 +10,7 @@
 //!
 //! Sıra: Binance + live koşulları (confirm, org/user, kill switch kapalı) ve `exchange_accounts` satırı varsa
 //! **live** market emri; borsa `place` hatası → `failed` (paper’a düşmez).
-//! Canlı denenmez veya hesap yoksa (`creds` yok) ve paper açıksa **paper** (referans fiyat gerekir).
+//! Canlı denenmez veya hesap yoksa (`creds` yok) ve paper yürütme açıksa **dry paper / mirror** (referans fiyat gerekir).
 //!
 //! `app_config.range_engine.execution_gates` ile uyumlu.
 
@@ -169,11 +170,16 @@ pub async fn range_signal_execute_loop(pool: PgPool) {
         } else {
             None
         };
-        if paper_on && paper_ledger.is_none() {
+        let paper_mirror = if paper_on && paper_ledger.is_none() {
+            qtss_strategy::paper_actor_uuids_from_db(&pool).await
+        } else {
+            None
+        };
+        if paper_on && paper_ledger.is_none() && paper_mirror.is_none() {
             warn!(
                 target: "qtss",
                 qtss_module = "qtss_worker::range_signal_execute",
-                "range auto paper: worker.paper_ledger_enabled + paper_org_id/paper_user_id required"
+                "range auto paper: no executor targets — enable paper_ledger_enabled with paper UUIDs, or set paper_org_id/paper_user_id for exchange_orders mirror only"
             );
         }
 
@@ -262,15 +268,26 @@ pub async fn range_signal_execute_loop(pool: PgPool) {
             }
         };
 
-        let paper_gw = paper_ledger.map(|(org_id, user_id)| {
-            qtss_strategy::PaperRecordingDryGateway::new(
-                Arc::clone(&dry),
-                pool.clone(),
-                org_id,
-                user_id,
-                "range_signal_auto",
-            )
-        });
+        let paper_gw: Option<Arc<dyn ExecutionGateway>> =
+            if let Some((org_id, user_id)) = paper_ledger {
+                Some(Arc::new(qtss_strategy::PaperRecordingDryGateway::new(
+                    Arc::clone(&dry),
+                    pool.clone(),
+                    org_id,
+                    user_id,
+                    "range_signal_auto",
+                )))
+            } else if let Some((org_id, user_id)) = paper_mirror {
+                Some(Arc::new(qtss_strategy::DryOrdersMirrorGateway::new(
+                    Arc::clone(&dry),
+                    pool.clone(),
+                    org_id,
+                    user_id,
+                    "range_signal_auto",
+                )))
+            } else {
+                None
+            };
 
         let live_base_ready =
             live_on && live_confirm && live_target.is_some() && !is_trading_halted();
@@ -439,7 +456,7 @@ pub async fn range_signal_execute_loop(pool: PgPool) {
                     row.id,
                     "skipped_no_executor",
                     None,
-                    Some("paper_disabled_or_no_ledger"),
+                    Some("paper_disabled_or_no_paper_targets"),
                 )
                 .await;
                 continue;

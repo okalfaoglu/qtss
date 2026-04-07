@@ -4,6 +4,11 @@
 //! Mevcut 6-pivot kanal/üçgen sistemi (ID 1–13) iki trend çizgisine dayalıdır.
 //! Bu modül zigzag pivotlarından farklı geometrik kalıpları tespit eder.
 //!
+//! **Literatür filtreleri** ([`FormationParams`]): dönüş kalıplarında isteğe bağlı önceki trend,
+//! boyun kırılımı ve kırılım hacmi; `bars` dilimi boşsa bu kontroller atlanır (pivot-only API uyumu).
+//! [`FormationParams::default`] önceki trend / boyun filtresi kapalıdır (gevşek tarama).
+//! Worker ve analiz API [`FormationParams::literature_standard`] kullanır (klasik M/W + önceki trend).
+//!
 //! Pattern IDs:
 //!   14 = Double Top
 //!   15 = Double Bottom
@@ -65,6 +70,24 @@ pub struct FormationParams {
     pub flag_min_flag_bars: usize,
     /// Flag bayrak gövdesi en fazla impulsive hareketin bu oranı kadar geri çekilebilir.
     pub flag_max_retrace: f64,
+    // --- Literature-style filters (need `bars` in `detect_*` / `scan_formations`) ---
+    /// Dönüş formasyonlarında, yapıdan önce destekleyici trend: tepe kalıplarında yükseliş, dip kalıplarında düşüş.
+    /// `bars` boşsa veya referans bar indeksi için yeterli geçmiş yoksa kontrol atlanır (geriye dönük uyum).
+    pub require_prior_trend: bool,
+    /// Önceki trend için kapanışların karşılaştırılacağı mum sayısı (referans bara göre geriye).
+    pub prior_trend_lookback_bars: usize,
+    /// Referans kapanışın, lookback başındaki kapanışa göre minimum göreli farkı (örn. `0.002` ≈ %0.2).
+    pub prior_trend_min_rel_move: f64,
+    /// Boyun kırılımı: son mum kapanışı boyun çizgisinin “doğru” tarafında olmalı (teyit edilmiş dönüş).
+    /// `bars` boşsa atlanır.
+    pub require_neckline_break: bool,
+    /// Boyun kırılımında fiyat toleransı (`neckline` ve kapanış büyüklüğüne göre göreli).
+    pub neckline_break_epsilon_rel: f64,
+    /// Boyun kırılımıyla birlikte son mum hacminin son `breakout_volume_lookback` mum ortalamasına göre yükselmesi.
+    /// Hacim verisi yetersizse kontrol atlanır.
+    pub require_breakout_volume_spike: bool,
+    pub breakout_volume_lookback: usize,
+    pub breakout_volume_ratio: f64,
 }
 
 impl Default for FormationParams {
@@ -76,11 +99,45 @@ impl Default for FormationParams {
             flag_min_pole_bars: 3,
             flag_min_flag_bars: 3,
             flag_max_retrace: 0.618,
+            require_prior_trend: false,
+            prior_trend_lookback_bars: 20,
+            prior_trend_min_rel_move: 0.002,
+            require_neckline_break: false,
+            neckline_break_epsilon_rel: 0.0004,
+            require_breakout_volume_spike: false,
+            breakout_volume_lookback: 20,
+            breakout_volume_ratio: 1.15,
         }
     }
 }
 
 impl FormationParams {
+    /// Motor / API için: klasik M/W (ikinci tepe birinciyi aşmaz, ikinci dip birincinin altına inmez) + önceki trend filtresi açık.
+    #[must_use]
+    pub fn literature_standard() -> Self {
+        Self {
+            double_top_second_peak_max_fraction_of_first: Some(1.0),
+            double_bottom_second_low_min_fraction_of_first: Some(1.0),
+            require_prior_trend: true,
+            require_neckline_break: false,
+            ..Self::default()
+        }
+    }
+
+    /// Boyun kırılımı teyidi (Bulkowski / klasik “completed pattern”).
+    #[must_use]
+    pub fn with_literature_neckline_confirmation(mut self) -> Self {
+        self.require_neckline_break = true;
+        self
+    }
+
+    /// Boyun kırılımında hacim artışı (son mum hacmi > ortalama × oran).
+    #[must_use]
+    pub fn with_literature_breakout_volume(mut self) -> Self {
+        self.require_breakout_volume_spike = true;
+        self
+    }
+
     /// Classical double-bottom lows: second trough must not print below the first (`b2 >= b1`).
     #[must_use]
     pub fn with_strict_double_bottom_lows(mut self) -> Self {
@@ -137,6 +194,160 @@ fn lows(pivots: &[PivotTriple]) -> Vec<PivotTriple> {
     pivots.iter().copied().filter(|(_, _, d)| *d < 0).collect()
 }
 
+#[derive(Clone, Copy)]
+enum ReversalFamily {
+    /// Çift/üçlü tepe, omuz-baş-omuz: önce yükseliş; teyitte kapanış boyunun altı.
+    Top { first_high_bar: i64 },
+    /// Çift/üçlü dip, ters omuz-baş-omuz: önce düşüş; teyitte kapanış boyunun üstü.
+    Bottom { first_low_bar: i64 },
+}
+
+fn bar_index_to_pos(bars: &[OhlcBar], bar_idx: i64) -> Option<usize> {
+    bars.iter().position(|b| b.bar_index == bar_idx)
+}
+
+/// Tepe formasyonundan önce: referans tepe barındaki kapanış, `lookback` önceki kapanıştan en az `min_rel_move` kadar yüksek.
+fn prior_uptrend_ok(bars: &[OhlcBar], end_bar_idx: i64, lookback: usize, min_rel_move: f64) -> bool {
+    let Some(end_pos) = bar_index_to_pos(bars, end_bar_idx) else {
+        return true;
+    };
+    if end_pos < lookback {
+        return true;
+    }
+    let start_pos = end_pos - lookback;
+    let c_end = bars[end_pos].close;
+    let c_start = bars[start_pos].close;
+    if !c_end.is_finite() || !c_start.is_finite() || c_start.abs() < 1e-12 {
+        return true;
+    }
+    c_end >= c_start * (1.0 + min_rel_move.max(0.0))
+}
+
+/// Dip formasyonundan önce: referans dip barındaki kapanış, lookback öncesine göre en az `min_rel_move` kadar düşük.
+fn prior_downtrend_ok(bars: &[OhlcBar], end_bar_idx: i64, lookback: usize, min_rel_move: f64) -> bool {
+    let Some(end_pos) = bar_index_to_pos(bars, end_bar_idx) else {
+        return true;
+    };
+    if end_pos < lookback {
+        return true;
+    }
+    let start_pos = end_pos - lookback;
+    let c_end = bars[end_pos].close;
+    let c_start = bars[start_pos].close;
+    if !c_end.is_finite() || !c_start.is_finite() || c_start.abs() < 1e-12 {
+        return true;
+    }
+    c_end <= c_start * (1.0 - min_rel_move.max(0.0))
+}
+
+fn neckline_break_bearish(bars: &[OhlcBar], neckline: f64, epsilon_rel: f64) -> bool {
+    let Some(last) = bars.last() else {
+        return false;
+    };
+    let c = last.close;
+    if !c.is_finite() || !neckline.is_finite() {
+        return false;
+    }
+    let m = neckline.abs().max(c.abs()).max(1.0);
+    let tol = m * epsilon_rel.max(1e-12);
+    c < neckline - tol
+}
+
+fn neckline_break_bullish(bars: &[OhlcBar], neckline: f64, epsilon_rel: f64) -> bool {
+    let Some(last) = bars.last() else {
+        return false;
+    };
+    let c = last.close;
+    if !c.is_finite() || !neckline.is_finite() {
+        return false;
+    }
+    let m = neckline.abs().max(c.abs()).max(1.0);
+    let tol = m * epsilon_rel.max(1e-12);
+    c > neckline + tol
+}
+
+fn breakout_volume_spike_ok(bars: &[OhlcBar], lookback: usize, ratio: f64) -> bool {
+    let n = bars.len();
+    let lb = lookback.max(3);
+    if n < lb + 1 {
+        return true;
+    }
+    let last = &bars[n - 1];
+    let Some(lv) = last.volume.filter(|v| v.is_finite() && *v >= 0.0) else {
+        return true;
+    };
+    let start = n.saturating_sub(lb + 1);
+    let mut sum = 0.0_f64;
+    let mut cnt = 0usize;
+    for b in &bars[start..n - 1] {
+        if let Some(v) = b.volume {
+            if v.is_finite() && v >= 0.0 {
+                sum += v;
+                cnt += 1;
+            }
+        }
+    }
+    let min_need = (lb * 7 / 10).max(3).min(lb);
+    if cnt < min_need {
+        return true;
+    }
+    let avg = sum / cnt as f64;
+    if avg <= 1e-18 {
+        return true;
+    }
+    lv >= avg * ratio.max(1.0)
+}
+
+fn literature_reversal_filters_pass(
+    bars: &[OhlcBar],
+    params: &FormationParams,
+    neckline: f64,
+    family: ReversalFamily,
+) -> bool {
+    if bars.is_empty() {
+        return true;
+    }
+    let look = params.prior_trend_lookback_bars.max(1);
+    let mv = params.prior_trend_min_rel_move;
+
+    if params.require_prior_trend {
+        let ok = match family {
+            ReversalFamily::Top { first_high_bar } => {
+                prior_uptrend_ok(bars, first_high_bar, look, mv)
+            }
+            ReversalFamily::Bottom { first_low_bar } => {
+                prior_downtrend_ok(bars, first_low_bar, look, mv)
+            }
+        };
+        if !ok {
+            return false;
+        }
+    }
+
+    if params.require_neckline_break {
+        let eps = params.neckline_break_epsilon_rel;
+        let ok = match family {
+            ReversalFamily::Top { .. } => neckline_break_bearish(bars, neckline, eps),
+            ReversalFamily::Bottom { .. } => neckline_break_bullish(bars, neckline, eps),
+        };
+        if !ok {
+            return false;
+        }
+    }
+
+    if params.require_breakout_volume_spike {
+        if !breakout_volume_spike_ok(
+            bars,
+            params.breakout_volume_lookback.max(3),
+            params.breakout_volume_ratio,
+        ) {
+            return false;
+        }
+    }
+
+    true
+}
+
 /// Simetri skoru: iki pivot arasındaki bar mesafesinin birbirine yakınlığı (0–1).
 fn symmetry_score(bar_diffs: &[i64]) -> f64 {
     if bar_diffs.len() < 2 {
@@ -165,7 +376,11 @@ fn symmetry_score(bar_diffs: &[i64]) -> f64 {
 /// - Hedef = neckline - (tepe_ortalaması − neckline)
 /// - İsteğe bağlı: [`FormationParams::double_top_second_peak_max_fraction_of_first`] ile ikinci tepenin birinciyi aşmaması (klasik M)
 #[must_use]
-pub fn detect_double_top(pivots: &[PivotTriple], params: &FormationParams) -> Option<FormationMatch> {
+pub fn detect_double_top(
+    pivots: &[PivotTriple],
+    bars: &[OhlcBar],
+    params: &FormationParams,
+) -> Option<FormationMatch> {
     if pivots.len() < 3 {
         return None;
     }
@@ -238,6 +453,17 @@ pub fn detect_double_top(pivots: &[PivotTriple], params: &FormationParams) -> Op
     let sym = symmetry_score(&[trough_bar - t1.0, t2.0 - trough_bar]);
     let quality = (price_q * 0.7 + sym * 0.3).clamp(0.0, 1.0);
 
+    if !literature_reversal_filters_pass(
+        bars,
+        params,
+        neckline,
+        ReversalFamily::Top {
+            first_high_bar: t1.0,
+        },
+    ) {
+        return None;
+    }
+
     let mut fpivots = vec![t1];
     fpivots.extend_from_slice(&between_lows);
     fpivots.push(t2);
@@ -265,6 +491,7 @@ pub fn detect_double_top(pivots: &[PivotTriple], params: &FormationParams) -> Op
 #[must_use]
 pub fn detect_double_bottom(
     pivots: &[PivotTriple],
+    bars: &[OhlcBar],
     params: &FormationParams,
 ) -> Option<FormationMatch> {
     if pivots.len() < 3 {
@@ -336,6 +563,17 @@ pub fn detect_double_bottom(
     let sym = symmetry_score(&[peak_bar - b1.0, b2.0 - peak_bar]);
     let quality = (price_q * 0.7 + sym * 0.3).clamp(0.0, 1.0);
 
+    if !literature_reversal_filters_pass(
+        bars,
+        params,
+        neckline,
+        ReversalFamily::Bottom {
+            first_low_bar: b1.0,
+        },
+    ) {
+        return None;
+    }
+
     let mut fpivots = vec![b1];
     fpivots.extend_from_slice(&between_highs);
     fpivots.push(b2);
@@ -362,6 +600,7 @@ pub fn detect_double_bottom(
 #[must_use]
 pub fn detect_head_and_shoulders(
     pivots: &[PivotTriple],
+    bars: &[OhlcBar],
     params: &FormationParams,
 ) -> Option<FormationMatch> {
     if pivots.len() < 5 {
@@ -428,6 +667,17 @@ pub fn detect_head_and_shoulders(
     let quality = (head_prominence * 0.3 + shoulder_q * 0.25 + trough_q * 0.2 + sym * 0.25)
         .clamp(0.0, 1.0);
 
+    if !literature_reversal_filters_pass(
+        bars,
+        params,
+        neckline,
+        ReversalFamily::Top {
+            first_high_bar: ls.0,
+        },
+    ) {
+        return None;
+    }
+
     let mut fpivots = vec![ls];
     fpivots.extend(left_troughs.iter().copied());
     fpivots.push(head);
@@ -453,6 +703,7 @@ pub fn detect_head_and_shoulders(
 #[must_use]
 pub fn detect_inverse_head_and_shoulders(
     pivots: &[PivotTriple],
+    bars: &[OhlcBar],
     params: &FormationParams,
 ) -> Option<FormationMatch> {
     if pivots.len() < 5 {
@@ -518,6 +769,17 @@ pub fn detect_inverse_head_and_shoulders(
     let quality =
         (head_prominence * 0.3 + shoulder_q * 0.25 + peak_q * 0.2 + sym * 0.25).clamp(0.0, 1.0);
 
+    if !literature_reversal_filters_pass(
+        bars,
+        params,
+        neckline,
+        ReversalFamily::Bottom {
+            first_low_bar: ls.0,
+        },
+    ) {
+        return None;
+    }
+
     let mut fpivots = vec![ls];
     fpivots.extend(left_peaks.iter().copied());
     fpivots.push(head);
@@ -543,6 +805,7 @@ pub fn detect_inverse_head_and_shoulders(
 #[must_use]
 pub fn detect_triple_top(
     pivots: &[PivotTriple],
+    bars: &[OhlcBar],
     params: &FormationParams,
 ) -> Option<FormationMatch> {
     if pivots.len() < 5 {
@@ -603,6 +866,17 @@ pub fn detect_triple_top(
     let sym = symmetry_score(&bar_diffs);
     let quality = (price_q * 0.6 + sym * 0.4).clamp(0.0, 1.0);
 
+    if !literature_reversal_filters_pass(
+        bars,
+        params,
+        neckline,
+        ReversalFamily::Top {
+            first_high_bar: t1.0,
+        },
+    ) {
+        return None;
+    }
+
     let mut fpivots = vec![t1];
     fpivots.extend(l1.iter().copied());
     fpivots.push(t2);
@@ -628,6 +902,7 @@ pub fn detect_triple_top(
 #[must_use]
 pub fn detect_triple_bottom(
     pivots: &[PivotTriple],
+    bars: &[OhlcBar],
     params: &FormationParams,
 ) -> Option<FormationMatch> {
     if pivots.len() < 5 {
@@ -685,6 +960,17 @@ pub fn detect_triple_bottom(
     let bar_diffs = [b2.0 - b1.0, b3.0 - b2.0];
     let sym = symmetry_score(&bar_diffs);
     let quality = (price_q * 0.6 + sym * 0.4).clamp(0.0, 1.0);
+
+    if !literature_reversal_filters_pass(
+        bars,
+        params,
+        neckline,
+        ReversalFamily::Bottom {
+            first_low_bar: b1.0,
+        },
+    ) {
+        return None;
+    }
 
     let mut fpivots = vec![b1];
     fpivots.extend(h1.iter().copied());
@@ -889,22 +1175,22 @@ pub fn scan_formations(
 ) -> Vec<FormationMatch> {
     let mut results = Vec::new();
 
-    if let Some(m) = detect_double_top(pivots, params) {
+    if let Some(m) = detect_double_top(pivots, bars, params) {
         results.push(m);
     }
-    if let Some(m) = detect_double_bottom(pivots, params) {
+    if let Some(m) = detect_double_bottom(pivots, bars, params) {
         results.push(m);
     }
-    if let Some(m) = detect_head_and_shoulders(pivots, params) {
+    if let Some(m) = detect_head_and_shoulders(pivots, bars, params) {
         results.push(m);
     }
-    if let Some(m) = detect_inverse_head_and_shoulders(pivots, params) {
+    if let Some(m) = detect_inverse_head_and_shoulders(pivots, bars, params) {
         results.push(m);
     }
-    if let Some(m) = detect_triple_top(pivots, params) {
+    if let Some(m) = detect_triple_top(pivots, bars, params) {
         results.push(m);
     }
-    if let Some(m) = detect_triple_bottom(pivots, params) {
+    if let Some(m) = detect_triple_bottom(pivots, bars, params) {
         results.push(m);
     }
     if let Some(m) = detect_bullish_flag(pivots, bars, params) {
@@ -952,7 +1238,7 @@ mod tests {
             (5, 90.0, -1),
             (10, 100.5, 1),
         ];
-        let result = detect_double_top(&pivots, &default_params());
+        let result = detect_double_top(&pivots, &[], &default_params());
         assert!(result.is_some());
         let m = result.unwrap();
         assert_eq!(m.pattern_type_id, 14);
@@ -968,7 +1254,7 @@ mod tests {
             (5, 90.0, -1),
             (10, 110.0, 1), // 10% difference > default tolerance
         ];
-        assert!(detect_double_top(&pivots, &default_params()).is_none());
+        assert!(detect_double_top(&pivots, &[], &default_params()).is_none());
     }
 
     #[test]
@@ -978,9 +1264,9 @@ mod tests {
             (5, 92.0, -1),
             (10, 100.5, 1), // within default tolerance vs first peak
         ];
-        assert!(detect_double_top(&pivots, &default_params()).is_some());
+        assert!(detect_double_top(&pivots, &[], &default_params()).is_some());
         let strict = FormationParams::default().with_strict_double_top_peaks();
-        assert!(detect_double_top(&pivots, &strict).is_none());
+        assert!(detect_double_top(&pivots, &[], &strict).is_none());
     }
 
     #[test]
@@ -990,7 +1276,7 @@ mod tests {
             (5, 60.0, 1),
             (10, 50.5, -1),
         ];
-        let result = detect_double_bottom(&pivots, &default_params());
+        let result = detect_double_bottom(&pivots, &[], &default_params());
         assert!(result.is_some());
         let m = result.unwrap();
         assert_eq!(m.pattern_type_id, 15);
@@ -1005,10 +1291,10 @@ mod tests {
             (5, 110.0, 1),
             (10, 99.0, -1), // ~1% below first vs avg 99.5 → pct_diff under tightened tolerance
         ];
-        assert!(detect_double_bottom(&pivots, &default_params()).is_some());
+        assert!(detect_double_bottom(&pivots, &[], &default_params()).is_some());
         let strict = FormationParams::default().with_strict_double_bottom_lows();
         assert!(
-            detect_double_bottom(&pivots, &strict).is_none(),
+            detect_double_bottom(&pivots, &[], &strict).is_none(),
             "second low below first should not pass classical W rule"
         );
     }
@@ -1023,7 +1309,7 @@ mod tests {
             (15, 91.0, -1),  // right trough
             (20, 101.0, 1),  // right shoulder
         ];
-        let result = detect_head_and_shoulders(&pivots, &default_params());
+        let result = detect_head_and_shoulders(&pivots, &[], &default_params());
         assert!(result.is_some());
         let m = result.unwrap();
         assert_eq!(m.pattern_type_id, 16);
@@ -1040,7 +1326,7 @@ mod tests {
             (15, 91.0, -1),
             (20, 100.0, 1),
         ];
-        assert!(detect_head_and_shoulders(&pivots, &default_params()).is_none());
+        assert!(detect_head_and_shoulders(&pivots, &[], &default_params()).is_none());
     }
 
     #[test]
@@ -1052,7 +1338,7 @@ mod tests {
             (15, 59.0, 1),  // right peak
             (20, 49.0, -1), // right shoulder
         ];
-        let result = detect_inverse_head_and_shoulders(&pivots, &default_params());
+        let result = detect_inverse_head_and_shoulders(&pivots, &[], &default_params());
         assert!(result.is_some());
         let m = result.unwrap();
         assert_eq!(m.pattern_type_id, 17);
@@ -1068,7 +1354,7 @@ mod tests {
             (15, 89.0, -1),
             (20, 100.5, 1),
         ];
-        let result = detect_triple_top(&pivots, &default_params());
+        let result = detect_triple_top(&pivots, &[], &default_params());
         assert!(result.is_some());
         let m = result.unwrap();
         assert_eq!(m.pattern_type_id, 18);
@@ -1083,7 +1369,7 @@ mod tests {
             (15, 61.0, 1),
             (20, 49.95, -1),
         ];
-        let result = detect_triple_bottom(&pivots, &default_params());
+        let result = detect_triple_bottom(&pivots, &[], &default_params());
         assert!(result.is_some());
         let m = result.unwrap();
         assert_eq!(m.pattern_type_id, 19);
@@ -1170,11 +1456,81 @@ mod tests {
     }
 
     #[test]
+    fn literature_prior_trend_rejects_flat_market_double_top() {
+        let pivots = vec![
+            (20_i64, 100.0, 1),
+            (22, 90.0, -1),
+            (30, 100.0, 1),
+        ];
+        let bars: Vec<OhlcBar> = (0..35)
+            .map(|i| OhlcBar {
+                open: 100.0,
+                high: 101.0,
+                low: 99.0,
+                close: 100.0,
+                bar_index: i,
+                volume: None,
+            })
+            .collect();
+        assert!(
+            detect_double_top(&pivots, &bars, &FormationParams::literature_standard()).is_none(),
+            "flat closes should fail prior uptrend into first peak"
+        );
+    }
+
+    #[test]
+    fn literature_prior_trend_accepts_rising_closes_double_top() {
+        let pivots = vec![
+            (20_i64, 100.0, 1),
+            (22, 90.0, -1),
+            (30, 100.0, 1),
+        ];
+        let bars: Vec<OhlcBar> = (0..35)
+            .map(|i| OhlcBar {
+                open: 60.0 + i as f64,
+                high: 61.0 + i as f64,
+                low: 59.0 + i as f64,
+                close: 60.0 + i as f64,
+                bar_index: i,
+                volume: None,
+            })
+            .collect();
+        assert!(detect_double_top(&pivots, &bars, &FormationParams::literature_standard()).is_some());
+    }
+
+    #[test]
+    fn literature_neckline_break_required_double_bottom() {
+        let pivots = vec![
+            (0_i64, 50.0, -1),
+            (5, 60.0, 1),
+            (10, 50.5, -1),
+        ];
+        let mut params = FormationParams::default().with_literature_neckline_confirmation();
+        params.require_prior_trend = false;
+        let bars_fail: Vec<OhlcBar> = (0..12)
+            .map(|i| OhlcBar {
+                open: 55.0,
+                high: 58.0,
+                low: 52.0,
+                close: 55.0,
+                bar_index: i,
+                volume: None,
+            })
+            .collect();
+        assert!(detect_double_bottom(&pivots, &bars_fail, &params).is_none());
+        let mut bars_ok = bars_fail;
+        if let Some(b) = bars_ok.last_mut() {
+            b.close = 65.0;
+        }
+        assert!(detect_double_bottom(&pivots, &bars_ok, &params).is_some());
+    }
+
+    #[test]
     fn insufficient_pivots_returns_none() {
         let pivots: Vec<PivotTriple> = vec![(0, 100.0, 1), (5, 90.0, -1)];
         let params = default_params();
-        assert!(detect_double_top(&pivots, &params).is_none());
-        assert!(detect_head_and_shoulders(&pivots, &params).is_none());
-        assert!(detect_triple_top(&pivots, &params).is_none());
+        assert!(detect_double_top(&pivots, &[], &params).is_none());
+        assert!(detect_head_and_shoulders(&pivots, &[], &params).is_none());
+        assert!(detect_triple_top(&pivots, &[], &params).is_none());
     }
 }

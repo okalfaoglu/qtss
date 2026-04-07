@@ -1536,7 +1536,7 @@ async fn run_engines_for_symbol(
                 .iter()
                 .map(|p| (p.point.index, p.point.price, p.dir))
                 .collect();
-            let formations = scan_formations(&pivot_triples, &bars, &FormationParams::default());
+            let formations = scan_formations(&pivot_triples, &bars, &FormationParams::literature_standard());
             if !formations.is_empty() {
                 let payload = json!({
                     "formations": formations,
@@ -1657,7 +1657,7 @@ async fn run_engines_for_symbol(
                 (0.0, "")
             } else {
                 let formations =
-                    scan_formations(&pivot_triples, &bars, &FormationParams::default());
+                    scan_formations(&pivot_triples, &bars, &FormationParams::literature_standard());
                 let best_formation = formations.iter().max_by(|a, b| {
                     a.quality
                         .partial_cmp(&b.quality)

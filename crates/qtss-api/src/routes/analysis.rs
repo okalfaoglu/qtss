@@ -1909,7 +1909,7 @@ async fn channel_six_scan(
             .map(|p| (p.point.index, p.point.price, p.dir))
             .collect();
         let bars_vec: Vec<OhlcBar> = map.values().copied().collect();
-        let fms_all = scan_formations(&pivot_triples, &bars_vec, &FormationParams::default());
+        let fms_all = scan_formations(&pivot_triples, &bars_vec, &FormationParams::literature_standard());
         let fms: Vec<_> = if body.allowed_pattern_ids.is_empty() {
             fms_all
         } else {
