@@ -35,8 +35,8 @@ pub use audit_log::{
     insert_http_audit, list_recent as audit_list_recent, AuditHttpListRow, AuditHttpRow,
 };
 pub use catalog::{
-    resolve_series_catalog_ids, ui_segment_to_market_keys, BarIntervalRow, CatalogRepository,
-    ExchangeRow, InstrumentRow, MarketRow, SeriesCatalogIds,
+    is_binance_futures_tradable, resolve_series_catalog_ids, ui_segment_to_market_keys,
+    BarIntervalRow, CatalogRepository, ExchangeRow, InstrumentRow, MarketRow, SeriesCatalogIds,
 };
 pub use config::{AppConfigEntry, AppConfigRepository};
 pub use config_tick::{

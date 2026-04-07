@@ -11,9 +11,10 @@ use tracing::{debug, info, warn};
 
 use qtss_storage::{
     count_engine_symbols_by_lifecycle, fetch_engine_symbol_by_series, fetch_intake_playbook_run_by_id,
-    insert_engine_symbol, list_promotable_intake_candidates, resolve_system_csv, resolve_system_string,
-    resolve_worker_enabled_flag, resolve_worker_tick_secs, update_engine_symbol_lifecycle_and_enabled,
-    update_intake_candidate_merged_engine_symbol, EngineSymbolInsert, NotifyOutboxRepository,
+    insert_engine_symbol, is_binance_futures_tradable, list_promotable_intake_candidates,
+    resolve_system_csv, resolve_system_string, resolve_worker_enabled_flag, resolve_worker_tick_secs,
+    update_engine_symbol_lifecycle_and_enabled, update_intake_candidate_merged_engine_symbol,
+    EngineSymbolInsert, NotifyOutboxRepository,
 };
 
 fn normalize_symbol(raw: &str) -> String {
@@ -106,6 +107,11 @@ async fn run_auto_promote(pool: &PgPool) -> Result<u32, qtss_storage::StorageErr
     for c in &candidates {
         let sym = normalize_symbol(&c.symbol);
         if sym.is_empty() {
+            continue;
+        }
+
+        if !is_binance_futures_tradable(pool, &sym).await.unwrap_or(false) {
+            debug!(symbol = %sym, raw = %c.symbol, "auto-promote: skipped — not on Binance futures");
             continue;
         }
 

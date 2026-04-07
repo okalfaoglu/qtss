@@ -527,6 +527,30 @@ impl CatalogRepository {
     }
 }
 
+/// Returns `true` when `native_symbol` (e.g. `BTCUSDT`) is listed and actively trading
+/// on Binance USDT-M futures, based on the locally-synced `instruments` catalog.
+pub async fn is_binance_futures_tradable(
+    pool: &PgPool,
+    native_symbol: &str,
+) -> Result<bool, StorageError> {
+    let sym = native_symbol.trim().to_uppercase();
+    let exists: Option<bool> = sqlx::query_scalar(
+        r#"SELECT i.is_trading
+           FROM instruments i
+           INNER JOIN markets m ON m.id = i.market_id
+           INNER JOIN exchanges e ON e.id = m.exchange_id
+           WHERE LOWER(TRIM(e.code)) = 'binance'
+             AND m.segment = 'futures'
+             AND m.contract_kind = 'usdt_m'
+             AND UPPER(i.native_symbol) = $1
+           LIMIT 1"#,
+    )
+    .bind(&sym)
+    .fetch_optional(pool)
+    .await?;
+    Ok(exists.unwrap_or(false))
+}
+
 /// `engine_symbols` / `market_bars` metin alanlarından katalog FK çözümü (yoksa None).
 #[derive(Debug, Clone, Default)]
 pub struct SeriesCatalogIds {

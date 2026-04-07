@@ -425,17 +425,17 @@ fn build_telegram_html_body(
         });
         let levels = side_long_from_direction(direction).and_then(|side| {
             tactical_price_levels(snapshot, side).map(|(ref_px, sl_px, tp_px)| {
-                let sl_pct = (sl_px - ref_px) / ref_px * 100.0;
-                let tp_pct = (tp_px - ref_px) / ref_px * 100.0;
+                let sl_risk_pct = ((sl_px - ref_px) / ref_px * 100.0).abs();
+                let tp_reward_pct = ((tp_px - ref_px) / ref_px * 100.0).abs();
                 format!(
                     "<b>Giriş (ort):</b> <code>{}</code>\n\
-                     <b>Stop (SL):</b> <code>{}</code> <i>({:+.2}%)</i>\n\
-                     <b>Kar al (TP):</b> <code>{}</code> <i>({:+.2}%)</i>",
+                     <b>Stop (SL):</b> <code>{}</code> <i>(-{:.2}%)</i>\n\
+                     <b>Kar al (TP):</b> <code>{}</code> <i>(+{:.2}%)</i>",
                     escape_telegram_html(&format_compact_price(ref_px)),
                     escape_telegram_html(&format_compact_price(sl_px)),
-                    sl_pct,
+                    sl_risk_pct,
                     escape_telegram_html(&format_compact_price(tp_px)),
-                    tp_pct,
+                    tp_reward_pct,
                 )
             })
         });
