@@ -202,3 +202,38 @@ pub async fn persist_after_dry_place(
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use qtss_execution::FillEvent;
+    use rust_decimal::Decimal;
+    use std::collections::HashMap;
+
+    fn sample_outcome() -> DryPlaceOutcome {
+        let cid = Uuid::from_u128(1u128);
+        DryPlaceOutcome {
+            client_order_id: cid,
+            fill: FillEvent {
+                client_order_id: cid,
+                avg_price: Decimal::new(42_000, 0),
+                quantity: Decimal::new(1, 3),
+                fee: Decimal::new(5, 2),
+            },
+            quote_balance_after: Decimal::ZERO,
+            base_positions_after: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn merge_dry_venue_response_merges_extra_into_base() {
+        let out = sample_outcome();
+        let v = merge_dry_venue_response("unit_test", &out, json!({ "trace": "x" }));
+        assert_eq!(v["dry_run"], true);
+        assert_eq!(v["simulation_source"], "unit_test");
+        assert_eq!(v["status"], "FILLED");
+        assert_eq!(v["executedQty"], "0.001");
+        assert_eq!(v["avgPrice"], "42000");
+        assert_eq!(v["trace"], "x");
+    }
+}

@@ -10,11 +10,13 @@ use qtss_domain::orders::{OrderIntent, OrderSide};
 use qtss_domain::symbol::InstrumentId;
 use qtss_execution::{DryPlaceOutcome, DryRunGateway, ExecutionError, ExecutionGateway};
 use qtss_storage::{
-    resolve_system_string, resolve_worker_enabled_flag, PaperLedgerRepository, StorageError,
+    resolve_system_string, resolve_worker_enabled_flag, ExchangeOrderRepository,
+    PaperLedgerRepository, StorageError,
 };
 use rust_decimal::Decimal;
+use serde_json::json;
 use sqlx::PgPool;
-use tracing::error;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 /// `worker.paper_*` — her iki UUID de geçerli olmalı.
@@ -128,6 +130,43 @@ impl PaperRecordingDryGateway {
             )
             .await?;
         tx.commit().await?;
+
+        // Mirror to `exchange_orders` (same shape as live fills) so position_manager / analytics
+        // see paper strategy + range_auto fills alongside AI dry rows.
+        let sym_u = intent.instrument.symbol.trim().to_uppercase();
+        let venue = json!({
+            "dry_run": true,
+            "simulation_source": "paper_recording_dry_gateway",
+            "strategy_key": self.strategy_key,
+            "status": "FILLED",
+            "executedQty": out.fill.quantity.to_string(),
+            "avgPrice": out.fill.avg_price.to_string(),
+            "fee": out.fill.fee.to_string(),
+            "note": "Paper ledger fill mirrored to exchange_orders; no venue HTTP.",
+        });
+        let orders = ExchangeOrderRepository::new(self.pool.clone());
+        if let Err(e) = orders
+            .insert_dry_simulated_filled(
+                self.org_id,
+                self.user_id,
+                exchange_code(intent.instrument.exchange),
+                segment_code(intent.instrument.segment),
+                &sym_u,
+                out.client_order_id,
+                intent,
+                venue,
+            )
+            .await
+        {
+            warn!(
+                %e,
+                client_order_id = %out.client_order_id,
+                strategy_key = %self.strategy_key,
+                symbol = %sym_u,
+                "paper_recording_dry_gateway: exchange_orders mirror failed (paper_fills committed)"
+            );
+        }
+
         Ok(())
     }
 }
