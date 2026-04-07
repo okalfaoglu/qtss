@@ -67,15 +67,28 @@ fn pick_u64(row: &Value, keys: &[&str]) -> Option<u64> {
     None
 }
 
-fn row_symbol(row: &Value) -> Option<String> {
-    let s = row
-        .get("symbol")
-        .or_else(|| row.get("token_symbol"))
-        .or_else(|| row.get("tokenSymbol"))
-        .and_then(|x| x.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())?;
+fn str_field_upper(v: &Value) -> Option<String> {
+    let s = v.as_str()?.trim();
+    if s.is_empty() {
+        return None;
+    }
     Some(s.to_uppercase())
+}
+
+fn row_symbol(row: &Value) -> Option<String> {
+    for k in ["symbol", "token_symbol", "tokenSymbol", "ticker", "base_symbol"] {
+        if let Some(s) = row.get(k).and_then(str_field_upper) {
+            return Some(s);
+        }
+    }
+    if let Some(tok) = row.get("token").filter(|x| x.is_object()) {
+        for k in ["symbol", "ticker", "token_symbol"] {
+            if let Some(s) = tok.get(k).and_then(str_field_upper) {
+                return Some(s);
+            }
+        }
+    }
+    None
 }
 
 /// When gross flows exist, use them. Otherwise derive from signed `net_flow` with `net ≈ outflow - inflow`.
@@ -109,10 +122,13 @@ fn row_flow_triple(row: &Value) -> (f64, f64, f64) {
         &[
             "net_flow",
             "netFlow",
+            "netFlowUsd",
+            "netflow",
             "net_volume",
             "netUsd",
             "net_usd",
             "netflow_usd",
+            "net",
         ],
     );
 
@@ -222,15 +238,68 @@ fn passes_mcap_band(mcap: Option<f64>) -> bool {
     m >= 5_000_000.0 && m <= 1_000_000_000.0
 }
 
-fn netflow_tokens_rows(v: &Value) -> Vec<&Value> {
-    let data = match v.get("data") {
-        Some(d) => d,
-        None => return vec![],
-    };
-    if let Some(a) = data.as_array() {
-        return a.iter().collect();
+/// Nansen / API sürümleri: `data` dizi veya `data.tokens` / `items` / …
+fn try_extract_row_array<'a>(node: Option<&'a Value>) -> Option<Vec<&'a Value>> {
+    let n = node?;
+    if let Some(a) = n.as_array() {
+        return Some(a.iter().collect());
     }
-    vec![data]
+    let obj = n.as_object()?;
+    for key in [
+        "tokens", "items", "results", "rows", "list", "records", "data", "tokens_data",
+    ] {
+        if let Some(a) = obj.get(key).and_then(|x| x.as_array()) {
+            if !a.is_empty() {
+                return Some(a.iter().collect());
+            }
+        }
+    }
+    None
+}
+
+fn netflow_tokens_rows(v: &Value) -> Vec<&Value> {
+    if let Some(r) = try_extract_row_array(v.get("data")) {
+        if !r.is_empty() {
+            return r;
+        }
+    }
+    for key in ["tokens", "items", "results", "rows"] {
+        if let Some(r) = try_extract_row_array(v.get(key)) {
+            if !r.is_empty() {
+                return r;
+            }
+        }
+    }
+    if let Some(r) = try_extract_row_array(Some(v)) {
+        if !r.is_empty() {
+            return r;
+        }
+    }
+    vec![]
+}
+
+fn response_shape_hints(v: &Value) -> Vec<String> {
+    let mut hints = Vec::new();
+    if let Some(keys) = v.as_object().map(|o| {
+        let mut k: Vec<_> = o.keys().map(String::as_str).collect();
+        k.sort_unstable();
+        k.join(", ")
+    }) {
+        hints.push(format!("response_keys=[{keys}]"));
+    }
+    match v.get("data") {
+        None => hints.push("data=missing".into()),
+        Some(d) if d.is_array() => hints.push(format!("data=array(len={})", d.as_array().map(|a| a.len()).unwrap_or(0))),
+        Some(d) if d.is_object() => {
+            let dk: Vec<_> = d
+                .as_object()
+                .map(|o| o.keys().map(String::as_str).collect())
+                .unwrap_or_default();
+            hints.push(format!("data=object keys=[{}]", dk.join(", ")));
+        }
+        Some(_) => hints.push("data=non_object_non_array".into()),
+    }
+    hints
 }
 
 #[derive(Debug, Clone)]
@@ -248,8 +317,21 @@ struct ParsedRow {
 
 fn parse_rows(netflows: &Value) -> (Vec<ParsedRow>, Vec<String>) {
     let mut notes = Vec::new();
+    let raw_rows = netflow_tokens_rows(netflows);
+    let raw_len = raw_rows.len();
+    let sample_row_keys = raw_rows
+        .first()
+        .and_then(|r| r.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>().join(", ")))
+        .unwrap_or_else(|| "(not an object)".into());
+    if raw_len == 0 {
+        notes.extend(response_shape_hints(netflows));
+        notes.push(
+            "no token rows extracted from snapshot — see response_keys / data= above; compare with Nansen smart-money netflow JSON."
+                .into(),
+        );
+    }
     let mut rows = Vec::new();
-    for row in netflow_tokens_rows(netflows) {
+    for row in raw_rows {
         let Some(sym) = row_symbol(row) else {
             continue;
         };
@@ -276,11 +358,12 @@ fn parse_rows(netflows: &Value) -> (Vec<ParsedRow>, Vec<String>) {
             sm_net: smart_money_net(row),
         });
     }
-    if rows.is_empty() {
-        notes.push(
-            "no rows after filters — check nansen_netflows freshness and JSON shape (inflow/outflow/net_flow)."
-                .into(),
-        );
+    if rows.is_empty() && raw_len == 0 {
+        // hints already pushed
+    } else if rows.is_empty() {
+        notes.push(format!(
+            "parsed {raw_len} raw rows but all skipped (symbol/flow zero/stable/mcap?); sample row keys: {sample_row_keys}",
+        ));
     }
     (rows, notes)
 }
@@ -759,5 +842,19 @@ mod tests {
         let top = payload["top"].as_array().unwrap();
         assert_eq!(top[0]["symbol"], "AAA");
         assert_eq!(top[0]["primary_flow_usd"], 1000.0);
+    }
+
+    #[test]
+    fn parse_nested_data_tokens() {
+        let v = json!({
+            "data": {
+                "tokens": [
+                    { "symbol": "ZZZ", "netflow": -2_000_000.0 },
+                    { "token": { "symbol": "NEST" }, "net_flow": 100.0 }
+                ]
+            }
+        });
+        let (rows, _notes) = parse_rows(&v);
+        assert_eq!(rows.len(), 2);
     }
 }
