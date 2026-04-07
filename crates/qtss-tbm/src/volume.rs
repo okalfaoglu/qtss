@@ -22,25 +22,21 @@ pub fn score_volume(
     let mut score = 0.0_f64;
     let mut details = Vec::new();
 
-    // 1) MFI oversold/overbought (max 30 puan)
+    // 1) MFI (max 30 puan) — tek doğrusal bant; klasik yorumla uyumlu (düşük = dip sinyali, yüksek = tepe).
+    //
+    // Eski formül hatası: `30*(20-mfi)/20` ile mfi≈19 neredeyse 0 puana düşüyor, oysa 20–35 bandında
+    // düz +10 vardı → **daha derin oversold (ör. 15)**, daha zayıf bölgeden (ör. 32) **daha az** puan alıyordu.
+    // Tepe tarafında aynı ayna sorunu (ör. mfi=85 < mfi=70’nin +10’u).
     if is_bottom_search {
-        if mfi < 20.0 {
-            let pts = 30.0 * (20.0 - mfi) / 20.0;
+        if mfi < 35.0 {
+            let pts = (30.0 * (35.0 - mfi) / 35.0).clamp(0.0, 30.0);
             score += pts;
-            details.push(format!("MFI oversold {mfi:.1} (+{pts:.1})"));
-        } else if mfi < 35.0 {
-            score += 10.0;
-            details.push(format!("MFI low zone {mfi:.1} (+10)"));
+            details.push(format!("MFI oversold / dip zone {mfi:.1} (+{pts:.1})"));
         }
-    } else {
-        if mfi > 80.0 {
-            let pts = 30.0 * (mfi - 80.0) / 20.0;
-            score += pts;
-            details.push(format!("MFI overbought {mfi:.1} (+{pts:.1})"));
-        } else if mfi > 65.0 {
-            score += 10.0;
-            details.push(format!("MFI high zone {mfi:.1} (+10)"));
-        }
+    } else if mfi > 65.0 {
+        let pts = (30.0 * (mfi - 65.0) / 35.0).clamp(0.0, 30.0);
+        score += pts;
+        details.push(format!("MFI overbought / top zone {mfi:.1} (+{pts:.1})"));
     }
 
     // 2) OBV trend (max 25 puan)
@@ -95,5 +91,25 @@ mod tests {
     fn top_distribution() {
         let s = score_volume(85.0, -100.0, -50.0, 500.0, 1000.0, false);
         assert!(s.score > 50.0);
+    }
+
+    #[test]
+    fn mfi_lower_reading_scores_higher_on_bottom_search() {
+        let deep = score_volume(12.0, 0.0, 0.0, 0.0, 1.0, true);
+        let mild = score_volume(30.0, 0.0, 0.0, 0.0, 1.0, true);
+        assert!(
+            deep.score > mild.score,
+            "deeper oversold MFI should contribute more to bottom pillar than mid band"
+        );
+    }
+
+    #[test]
+    fn mfi_higher_reading_scores_higher_on_top_search() {
+        let strong = score_volume(92.0, 0.0, 0.0, 0.0, 1.0, false);
+        let weak = score_volume(68.0, 0.0, 0.0, 0.0, 1.0, false);
+        assert!(
+            strong.score > weak.score,
+            "stronger overbought MFI should contribute more to top pillar"
+        );
     }
 }

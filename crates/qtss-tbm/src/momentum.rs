@@ -54,22 +54,38 @@ pub fn score_momentum(
         }
     }
 
-    // 2) MACD histogram momentum shift (max 20 puan)
+    // 2) MACD histogram momentum shift (max 20 puan — tek koşul, üst üste binmez)
+    //
+    // **Shadowing:** İlk dal `prev < 0 && hist > prev` iken +20 verir. Negatiften pozitife tek mumda
+    // sıçrama (`prev < 0`, `hist > 0`) her zaman `hist > prev` olduğundan yine bu dal tetiklenir;
+    // `else if` (sıfırı yukarı kesme +15) bu senaryoda **hiç çalışmaz**. +15 yalnızca tipik olarak
+    // `prev == 0` ve `hist > 0` gibi “önceki bar tam sıfır / üst sınır” durumlarında kalır — kasıtlı
+    // ayrım değilse birleştirilebilir veya mesaj tekilleştirilir.
     if is_bottom_search {
-        if macd_hist > macd_hist_prev && macd_hist_prev < 0.0 {
+        if macd_hist_prev < 0.0 && macd_hist > macd_hist_prev {
             score += 20.0;
-            details.push("MACD hist turning up from negative".into());
+            let msg = if macd_hist > 0.0 {
+                "MACD hist rising from negative (incl. cross above zero)"
+            } else {
+                "MACD hist turning up from negative"
+            };
+            details.push(msg.into());
         } else if macd_hist > 0.0 && macd_hist_prev <= 0.0 {
             score += 15.0;
-            details.push("MACD hist crossed zero up".into());
+            details.push("MACD hist crossed zero up (from flat/zero)".into());
         }
     } else {
-        if macd_hist < macd_hist_prev && macd_hist_prev > 0.0 {
+        if macd_hist_prev > 0.0 && macd_hist < macd_hist_prev {
             score += 20.0;
-            details.push("MACD hist turning down from positive".into());
+            let msg = if macd_hist < 0.0 {
+                "MACD hist falling from positive (incl. cross below zero)"
+            } else {
+                "MACD hist turning down from positive"
+            };
+            details.push(msg.into());
         } else if macd_hist < 0.0 && macd_hist_prev >= 0.0 {
             score += 15.0;
-            details.push("MACD hist crossed zero down".into());
+            details.push("MACD hist crossed zero down (from flat/zero)".into());
         }
     }
 
@@ -150,5 +166,59 @@ mod tests {
             false,
         );
         assert!(s.score > 20.0);
+    }
+
+    #[test]
+    fn macd_cross_from_negative_uses_first_branch_not_zero_cross_points() {
+        let s = score_momentum(
+            50.0,
+            50.0,
+            0.05,
+            -0.5,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            &[],
+            &[],
+            true,
+        );
+        let macd_lines: Vec<&str> = s
+            .details
+            .iter()
+            .filter(|d| d.contains("MACD hist"))
+            .map(String::as_str)
+            .collect();
+        assert_eq!(macd_lines.len(), 1);
+        assert!(
+            macd_lines[0].contains("rising from negative") && macd_lines[0].contains("cross above zero"),
+            "expected combined message, got {:?}",
+            macd_lines
+        );
+        // 20 from MACD block only (no stoch/ema/div)
+        assert!((s.score - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn macd_cross_up_from_exact_zero_hits_second_branch() {
+        let s = score_momentum(
+            50.0,
+            50.0,
+            0.1,
+            0.0,
+            0.0,
+            0.0,
+            &[],
+            &[],
+            &[],
+            &[],
+            true,
+        );
+        assert!(
+            s.details.iter().any(|d| d.contains("crossed zero up")),
+            "{:?}",
+            s.details
+        );
+        assert!((s.score - 15.0).abs() < 1e-9);
     }
 }
