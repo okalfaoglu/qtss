@@ -8,7 +8,8 @@
 //! boyun kırılımı ve kırılım hacmi; `bars` dilimi boşsa bu kontroller atlanır (pivot-only API uyumu).
 //! [`FormationParams::default`] önceki trend / boyun / tekilleştirme / bayrak eğimi kapalıdır (gevşek tarama).
 //! Worker ve analiz API [`FormationParams::literature_standard`] kullanır (klasik M/W, önceki trend,
-//! çakışan formasyonlarda kaliteye göre tekilleştirme, bayrak karşı-trend pivot eğimi).
+//! uç hacim oranı, çakışan formasyonlarda yapısal öncelik + kalite ile tekilleştirme,
+//! bayrak karşı-trend pivot eğimi).
 //!
 //! Pattern IDs:
 //!   14 = Double Top
@@ -96,6 +97,11 @@ pub struct FormationParams {
     /// Bayrak konsolidasyonunda karşı-trend eğim: bull flag’te ardışık **tepe** pivotları zayıflamalı;
     /// bear flag’te ardışık **dip** pivotları yükselmeli (literatürdeki dar karşı kanal).
     pub flag_require_countertrend_pivot_slope: bool,
+    /// Dönüş kalıplarında son uç (ikinci/üçüncü tepe veya dip, sağ omuz) hacminin ilk uca göre “patlamaması”.
+    /// İlgili pivot barlarında `OhlcBar.volume` yoksa kontrol atlanır.
+    pub require_reversal_extreme_volume_decay: bool,
+    /// Son uç hacmi ≤ ilk uç hacmi × bu oran (örn. `1.12` ≈ en fazla %12 daha yüksek ikinci tepe hacmi).
+    pub reversal_extreme_volume_max_ratio_vs_first: f64,
 }
 
 impl Default for FormationParams {
@@ -117,6 +123,8 @@ impl Default for FormationParams {
             breakout_volume_ratio: 1.15,
             dedupe_overlapping: false,
             flag_require_countertrend_pivot_slope: false,
+            require_reversal_extreme_volume_decay: false,
+            reversal_extreme_volume_max_ratio_vs_first: 1.12,
         }
     }
 }
@@ -132,6 +140,7 @@ impl FormationParams {
             require_neckline_break: false,
             dedupe_overlapping: true,
             flag_require_countertrend_pivot_slope: true,
+            require_reversal_extreme_volume_decay: true,
             ..Self::default()
         }
     }
@@ -147,6 +156,13 @@ impl FormationParams {
     #[must_use]
     pub fn with_literature_breakout_volume(mut self) -> Self {
         self.require_breakout_volume_spike = true;
+        self
+    }
+
+    /// İkinci/üçüncü tepe veya dip (ve omuz) hacminin ilk uca göre patlamamasını zorunlu kılar.
+    #[must_use]
+    pub fn with_reversal_extreme_volume_decay(mut self) -> Self {
+        self.require_reversal_extreme_volume_decay = true;
         self
     }
 
@@ -216,6 +232,42 @@ enum ReversalFamily {
 
 fn bar_index_to_pos(bars: &[OhlcBar], bar_idx: i64) -> Option<usize> {
     bars.iter().position(|b| b.bar_index == bar_idx)
+}
+
+fn volume_at_bar(bars: &[OhlcBar], bar_idx: i64) -> Option<f64> {
+    bar_index_to_pos(bars, bar_idx)
+        .and_then(|i| bars[i].volume)
+        .filter(|v| v.is_finite() && *v >= 0.0)
+}
+
+/// Son uç (ör. ikinci tepe) hacmi, ilk uca göre `max_ratio` ile sınırlı; hacim eksikse geçilir.
+fn reversal_last_extreme_volume_vs_first_ok(
+    bars: &[OhlcBar],
+    first_bar: i64,
+    last_bar: i64,
+    max_ratio: f64,
+) -> bool {
+    let Some(v0) = volume_at_bar(bars, first_bar) else {
+        return true;
+    };
+    let Some(v1) = volume_at_bar(bars, last_bar) else {
+        return true;
+    };
+    if v0 <= 1e-18 {
+        return true;
+    }
+    v1 <= v0 * max_ratio.max(1.0)
+}
+
+/// Tekilleştirmede öncelik: üçlü > omuz-baş-omuz > çift > bayrak (aynı kalitede daha “zengin” yapı kazanır).
+fn pattern_structural_rank(pattern_type_id: i32) -> i32 {
+    match pattern_type_id {
+        18 | 19 => 4, // triple
+        16 | 17 => 3, // head & shoulders / inverse
+        14 | 15 => 2, // double
+        20 | 21 => 1, // flags
+        _ => 0,
+    }
 }
 
 /// Tepe formasyonundan önce: referans tepe barındaki kapanış, `lookback` önceki kapanıştan en az `min_rel_move` kadar yüksek.
@@ -405,9 +457,13 @@ fn formation_shares_pivot_bar(a: &FormationMatch, b: &FormationMatch) -> bool {
 
 fn dedupe_formations_greedy_by_pivot_overlap(mut v: Vec<FormationMatch>) -> Vec<FormationMatch> {
     v.sort_by(|a, b| {
-        b.quality
-            .partial_cmp(&a.quality)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        pattern_structural_rank(b.pattern_type_id)
+            .cmp(&pattern_structural_rank(a.pattern_type_id))
+            .then_with(|| {
+                b.quality
+                    .partial_cmp(&a.quality)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     });
     let mut out: Vec<FormationMatch> = Vec::new();
     for m in v {
@@ -524,6 +580,17 @@ pub fn detect_double_top(
     let sym = symmetry_score(&[trough_bar - t1.0, t2.0 - trough_bar]);
     let quality = (price_q * 0.7 + sym * 0.3).clamp(0.0, 1.0);
 
+    if params.require_reversal_extreme_volume_decay
+        && !reversal_last_extreme_volume_vs_first_ok(
+            bars,
+            t1.0,
+            t2.0,
+            params.reversal_extreme_volume_max_ratio_vs_first,
+        )
+    {
+        return None;
+    }
+
     if !literature_reversal_filters_pass(
         bars,
         params,
@@ -634,6 +701,17 @@ pub fn detect_double_bottom(
     let sym = symmetry_score(&[peak_bar - b1.0, b2.0 - peak_bar]);
     let quality = (price_q * 0.7 + sym * 0.3).clamp(0.0, 1.0);
 
+    if params.require_reversal_extreme_volume_decay
+        && !reversal_last_extreme_volume_vs_first_ok(
+            bars,
+            b1.0,
+            b2.0,
+            params.reversal_extreme_volume_max_ratio_vs_first,
+        )
+    {
+        return None;
+    }
+
     if !literature_reversal_filters_pass(
         bars,
         params,
@@ -738,6 +816,17 @@ pub fn detect_head_and_shoulders(
     let quality = (head_prominence * 0.3 + shoulder_q * 0.25 + trough_q * 0.2 + sym * 0.25)
         .clamp(0.0, 1.0);
 
+    if params.require_reversal_extreme_volume_decay
+        && !reversal_last_extreme_volume_vs_first_ok(
+            bars,
+            ls.0,
+            rs.0,
+            params.reversal_extreme_volume_max_ratio_vs_first,
+        )
+    {
+        return None;
+    }
+
     if !literature_reversal_filters_pass(
         bars,
         params,
@@ -840,6 +929,17 @@ pub fn detect_inverse_head_and_shoulders(
     let quality =
         (head_prominence * 0.3 + shoulder_q * 0.25 + peak_q * 0.2 + sym * 0.25).clamp(0.0, 1.0);
 
+    if params.require_reversal_extreme_volume_decay
+        && !reversal_last_extreme_volume_vs_first_ok(
+            bars,
+            ls.0,
+            rs.0,
+            params.reversal_extreme_volume_max_ratio_vs_first,
+        )
+    {
+        return None;
+    }
+
     if !literature_reversal_filters_pass(
         bars,
         params,
@@ -937,6 +1037,17 @@ pub fn detect_triple_top(
     let sym = symmetry_score(&bar_diffs);
     let quality = (price_q * 0.6 + sym * 0.4).clamp(0.0, 1.0);
 
+    if params.require_reversal_extreme_volume_decay
+        && !reversal_last_extreme_volume_vs_first_ok(
+            bars,
+            t1.0,
+            t3.0,
+            params.reversal_extreme_volume_max_ratio_vs_first,
+        )
+    {
+        return None;
+    }
+
     if !literature_reversal_filters_pass(
         bars,
         params,
@@ -1031,6 +1142,17 @@ pub fn detect_triple_bottom(
     let bar_diffs = [b2.0 - b1.0, b3.0 - b2.0];
     let sym = symmetry_score(&bar_diffs);
     let quality = (price_q * 0.6 + sym * 0.4).clamp(0.0, 1.0);
+
+    if params.require_reversal_extreme_volume_decay
+        && !reversal_last_extreme_volume_vs_first_ok(
+            bars,
+            b1.0,
+            b3.0,
+            params.reversal_extreme_volume_max_ratio_vs_first,
+        )
+    {
+        return None;
+    }
 
     if !literature_reversal_filters_pass(
         bars,
@@ -1670,6 +1792,67 @@ mod tests {
                 assert!(!overlap, "deduped matches must not share pivot bars");
             }
         }
+    }
+
+    #[test]
+    fn double_top_rejected_when_second_peak_volume_explodes() {
+        let pivots = vec![
+            (10_i64, 100.0, 1),
+            (15, 90.0, -1),
+            (20, 100.0, 1),
+        ];
+        let mut bars: Vec<OhlcBar> = (0..25)
+            .map(|i| OhlcBar {
+                open: 95.0,
+                high: 101.0,
+                low: 89.0,
+                close: 95.0,
+                bar_index: i,
+                volume: Some(1000.0),
+            })
+            .collect();
+        bars[20].volume = Some(5000.0);
+        let mut p = default_params();
+        p.require_reversal_extreme_volume_decay = true;
+        p.reversal_extreme_volume_max_ratio_vs_first = 1.15;
+        assert!(detect_double_top(&pivots, &bars, &p).is_none());
+        bars[20].volume = Some(1100.0);
+        assert!(detect_double_top(&pivots, &bars, &p).is_some());
+    }
+
+    #[test]
+    fn dedupe_prefers_triple_top_over_overlapping_double_top() {
+        let pivots: Vec<PivotTriple> = vec![
+            (0, 100.0, 1),
+            (5, 90.0, -1),
+            (10, 101.0, 1),
+            (15, 89.0, -1),
+            (20, 100.5, 1),
+        ];
+        let bars: Vec<OhlcBar> = (0..25)
+            .map(|i| OhlcBar {
+                open: 95.0,
+                high: 101.0,
+                low: 89.0,
+                close: 95.0,
+                bar_index: i,
+                volume: None,
+            })
+            .collect();
+        let full = scan_formations(&pivots, &bars, &default_params());
+        assert!(
+            full.iter().any(|m| m.pattern_type_id == 18),
+            "fixture should yield triple top"
+        );
+        assert!(
+            full.iter().any(|m| m.pattern_type_id == 14),
+            "fixture should yield double top"
+        );
+        let mut p = default_params();
+        p.dedupe_overlapping = true;
+        let deduped = scan_formations(&pivots, &bars, &p);
+        assert!(deduped.iter().any(|m| m.pattern_type_id == 18));
+        assert!(!deduped.iter().any(|m| m.pattern_type_id == 14));
     }
 
     #[test]
