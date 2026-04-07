@@ -281,7 +281,7 @@ VALUES (
         "avoid_overlap": true,
         "repaint": false,
         "pivot_tail_skip_max": 0,
-        "max_zigzag_levels": 2,
+        "max_zigzag_levels": 0,
         "upper_direction": 1,
         "lower_direction": -1,
         "ignore_if_entry_crossed": false,

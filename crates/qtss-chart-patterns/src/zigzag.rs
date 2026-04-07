@@ -242,7 +242,9 @@ impl ZigzagLite {
             }
         }
 
-        let p_dir = Self::last_trend_dir(self.pivots[0].dir);
+        // Pine `calculate`: adım 2 ve 3 `pDir` ile çalışır; `pDir` adım 1 öncesi `lastPivot` ile atanır,
+        // adım 1 sonrası yeniden okunmaz (`05_ZigzagLite.pine`).
+        let p_dir = p_dir_before;
 
         // 2) Karşı pivot (Pine: `not newPivot || forceDouble`; burada adım başında newPivot temiz).
         let allow_opp = !self.flags.new_pivot || force_double;

@@ -1751,6 +1751,20 @@ async fn channel_six_scan(
         map.insert(b.bar_index, *b);
     }
 
+    if let (Some(&min_bar), Some(&max_bar)) = (map.keys().next(), map.keys().next_back()) {
+        let dense_len = (max_bar - min_bar + 1) as usize;
+        if map.len() != dense_len {
+            tracing::warn!(
+                target: "qtss_api",
+                bars_in_map = map.len(),
+                dense_bar_count = dense_len,
+                min_bar,
+                max_bar,
+                "channel_six_scan: bar_index gaps — trend_line_inspect uses dense indices; score/total may differ from TradingView if series is not contiguous"
+            );
+        }
+    }
+
     let mut overlap_ranges: Vec<(i64, i64)> = body
         .existing_pattern_ranges
         .iter()
