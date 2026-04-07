@@ -31,6 +31,7 @@ mod engine_ingest;
 mod intake_auto_promote;
 mod intake_playbook_engine;
 mod lifecycle_manager;
+mod position_status_notify;
 
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -242,6 +243,10 @@ async fn main() -> anyhow::Result<()> {
         let live_notify_pool = pool.clone();
         tokio::spawn(live_position_notify::live_position_notify_loop(
             live_notify_pool,
+        ));
+        let pos_status_pool = pool.clone();
+        tokio::spawn(position_status_notify::position_status_notify_loop(
+            pos_status_pool,
         ));
         let ks_pool = pool.clone();
         tokio::spawn(kill_switch::kill_switch_loop(ks_pool));
