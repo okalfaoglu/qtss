@@ -771,19 +771,67 @@ pub async fn admin_reject_ai_decision(pool: &PgPool, id: Uuid, approved_by: &str
     Ok(n)
 }
 
-/// After `ai_approval_requests` is resolved (e.g. Telegram), apply the same outcome to linked `ai_decisions` (pending only).
+fn decision_id_from_approval_payload(payload: &Value) -> Option<Uuid> {
+    for key in ["decision_id", "ai_decision_id"] {
+        if let Some(v) = payload.get(key) {
+            if let Some(s) = v.as_str() {
+                if let Ok(u) = Uuid::parse_str(s.trim()) {
+                    return Some(u);
+                }
+            }
+        }
+    }
+    payload
+        .get("decision")
+        .and_then(|d| d.get("id"))
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s.trim()).ok())
+}
+
+/// After `ai_approval_requests` is resolved (e.g. Telegram or REST), apply the same outcome to linked
+/// `ai_decisions` (pending only).
+///
+/// Resolution order:
+/// 1. Rows with `ai_decisions.approval_request_id` matching this request.
+/// 2. If none, [`decision_id_from_approval_payload`] on `ai_approval_requests.payload` (API clients that
+///    did not call the link endpoint).
+///
+/// On approve, sends [`notify_ai_tactical_executor_wake`] once so the worker does not wait for the next poll tick.
 pub async fn mirror_approval_request_outcome_to_linked_ai_decisions(
     pool: &PgPool,
     approval_request_id: Uuid,
     approve: bool,
     decided_by: &str,
 ) -> AiResult<()> {
-    let ids: Vec<Uuid> = sqlx::query_scalar(
+    use std::collections::BTreeSet;
+
+    let linked: Vec<Uuid> = sqlx::query_scalar(
         "SELECT id FROM ai_decisions WHERE approval_request_id = $1 AND status = 'pending_approval'",
     )
     .bind(approval_request_id)
     .fetch_all(pool)
     .await?;
+
+    let mut ids: BTreeSet<Uuid> = linked.into_iter().collect();
+
+    if ids.is_empty() {
+        let payload: Option<Value> = sqlx::query_scalar(
+            "SELECT payload FROM ai_approval_requests WHERE id = $1",
+        )
+        .bind(approval_request_id)
+        .fetch_optional(pool)
+        .await?;
+
+        if let Some(p) = payload.as_ref().and_then(decision_id_from_approval_payload) {
+            tracing::info!(
+                %approval_request_id,
+                decision_id = %p,
+                "mirror approval_request: using decision_id from payload (no approval_request_id link on ai_decisions)"
+            );
+            ids.insert(p);
+        }
+    }
+
     for id in ids {
         let n = if approve {
             admin_approve_ai_decision(pool, id, decided_by).await?
@@ -797,6 +845,13 @@ pub async fn mirror_approval_request_outcome_to_linked_ai_decisions(
             );
         }
     }
+
+    if approve {
+        if let Err(e) = notify_ai_tactical_executor_wake(pool).await {
+            tracing::warn!(%e, "notify_ai_tactical_executor_wake after mirror approval_request");
+        }
+    }
+
     Ok(())
 }
 
