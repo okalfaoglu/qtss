@@ -7,10 +7,8 @@ description = "PNG trading signal card for Telegram (plotters bitmap)."
 
 [features]
 default = []
-# Enables plotters text (font-kit + fontconfig). Without it, PNG cards skip drawing or panic is caught.
-# Debian/Ubuntu: sudo apt install libfontconfig1-dev libfreetype6-dev pkg-config
-# RHEL/Alma: sudo dnf install fontconfig-devel freetype-devel pkgconf-pkg-config
-plotters_ttf = ["plotters/ttf"]
+# Kept for older manifests; embedded DejaVu + `plotters/ttf` is always used for text.
+plotters_ttf = []
 
 [dependencies]
 thiserror.workspace = true
@@ -19,5 +17,6 @@ plotters = { version = "0.3.7", default-features = false, features = [
     "bitmap_backend",
     "bitmap_encoder",
     "image",
+    "ttf",
 ] }
 tempfile = "3"

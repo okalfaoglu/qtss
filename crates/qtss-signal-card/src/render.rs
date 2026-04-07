@@ -1,5 +1,6 @@
 //! Bitmap card layout (reference: Telegram signal share mock).
 
+use crate::embedded_font::ensure_dejavu_sans_registered;
 use plotters::prelude::*;
 use std::path::Path;
 
@@ -77,6 +78,7 @@ pub fn render_signal_card_png(params: &SignalCardParams) -> Result<Vec<u8>, Sign
 }
 
 fn render_signal_card_inner(params: &SignalCardParams) -> Result<Vec<u8>, SignalCardRenderError> {
+    ensure_dejavu_sans_registered();
     let w = if params.canvas_width > 0 {
         params.canvas_width
     } else {

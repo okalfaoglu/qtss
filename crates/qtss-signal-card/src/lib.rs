@@ -1,9 +1,10 @@
 //! Telegram-friendly PNG cards for multi-timeframe signal snapshots.
 //!
-//! Rendering uses plotters `BitMapBackend` + a system/embedded sans font (Turkish labels).
-//! Install `fonts-dejavu-core` (or set `QTSS_SIGNAL_CARD_FONT_FAMILY`) on minimal servers.
+//! Text uses plotters `ttf` + [`embedded_font`] — DejaVu Sans bytes are bundled at compile time
+//! (see `assets/DejaVuSans.ttf`, fetched by `build.rs` if missing). No system fontconfig required.
 
 mod ai_approval;
+mod embedded_font;
 mod operational_approval;
 mod render;
 mod subscores;

@@ -1,5 +1,6 @@
 //! PNG card for operational AI decisions (action + risk knobs, same visual language as tactical approval).
 
+use crate::embedded_font::ensure_dejavu_sans_registered;
 use plotters::prelude::*;
 use std::path::Path;
 
@@ -91,6 +92,7 @@ pub fn try_render_operational_approval_card_png(
 fn render_operational_inner(
     input: &OperationalApprovalCardInput,
 ) -> Result<Vec<u8>, SignalCardRenderError> {
+    ensure_dejavu_sans_registered();
     let tmp = tempfile::Builder::new()
         .suffix(".png")
         .tempfile()
