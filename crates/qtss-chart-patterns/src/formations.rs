@@ -6,8 +6,9 @@
 //!
 //! **Literatür filtreleri** ([`FormationParams`]): dönüş kalıplarında isteğe bağlı önceki trend,
 //! boyun kırılımı ve kırılım hacmi; `bars` dilimi boşsa bu kontroller atlanır (pivot-only API uyumu).
-//! [`FormationParams::default`] önceki trend / boyun filtresi kapalıdır (gevşek tarama).
-//! Worker ve analiz API [`FormationParams::literature_standard`] kullanır (klasik M/W + önceki trend).
+//! [`FormationParams::default`] önceki trend / boyun / tekilleştirme / bayrak eğimi kapalıdır (gevşek tarama).
+//! Worker ve analiz API [`FormationParams::literature_standard`] kullanır (klasik M/W, önceki trend,
+//! çakışan formasyonlarda kaliteye göre tekilleştirme, bayrak karşı-trend pivot eğimi).
 //!
 //! Pattern IDs:
 //!   14 = Double Top
@@ -18,6 +19,8 @@
 //!   19 = Triple Bottom
 //!   20 = Bullish Flag
 //!   21 = Bearish Flag
+
+use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
@@ -88,6 +91,11 @@ pub struct FormationParams {
     pub require_breakout_volume_spike: bool,
     pub breakout_volume_lookback: usize,
     pub breakout_volume_ratio: f64,
+    /// Ortak pivot barı olan eşleşmelerde kaliteye göre açgözlü tekilleştirme (üst üste üçlü+çift tepe vb.).
+    pub dedupe_overlapping: bool,
+    /// Bayrak konsolidasyonunda karşı-trend eğim: bull flag’te ardışık **tepe** pivotları zayıflamalı;
+    /// bear flag’te ardışık **dip** pivotları yükselmeli (literatürdeki dar karşı kanal).
+    pub flag_require_countertrend_pivot_slope: bool,
 }
 
 impl Default for FormationParams {
@@ -107,6 +115,8 @@ impl Default for FormationParams {
             require_breakout_volume_spike: false,
             breakout_volume_lookback: 20,
             breakout_volume_ratio: 1.15,
+            dedupe_overlapping: false,
+            flag_require_countertrend_pivot_slope: false,
         }
     }
 }
@@ -120,6 +130,8 @@ impl FormationParams {
             double_bottom_second_low_min_fraction_of_first: Some(1.0),
             require_prior_trend: true,
             require_neckline_break: false,
+            dedupe_overlapping: true,
+            flag_require_countertrend_pivot_slope: true,
             ..Self::default()
         }
     }
@@ -346,6 +358,65 @@ fn literature_reversal_filters_pass(
     }
 
     true
+}
+
+/// Bull flag: konsolidasyondaki tepe pivotları zayıflamalı (ardışık yükselen tepe yok).
+fn flag_bull_highs_non_rising(flag_pivots: &[PivotTriple], ref_price: f64, price_tol: f64) -> bool {
+    let peaks: Vec<f64> = flag_pivots
+        .iter()
+        .filter(|(_, _, d)| *d > 0)
+        .map(|(_, p, _)| *p)
+        .collect();
+    if peaks.len() < 2 {
+        return true;
+    }
+    let tol = ref_price.abs().max(1.0) * price_tol;
+    for w in peaks.windows(2) {
+        if w[1] > w[0] + tol {
+            return false;
+        }
+    }
+    true
+}
+
+/// Bear flag: konsolidasyondaki dip pivotları genelde yükselir (ardışık daha düşük dip yok).
+fn flag_bear_lows_non_falling(flag_pivots: &[PivotTriple], ref_price: f64, price_tol: f64) -> bool {
+    let troughs: Vec<f64> = flag_pivots
+        .iter()
+        .filter(|(_, _, d)| *d < 0)
+        .map(|(_, p, _)| *p)
+        .collect();
+    if troughs.len() < 2 {
+        return true;
+    }
+    let tol = ref_price.abs().max(1.0) * price_tol;
+    for w in troughs.windows(2) {
+        if w[1] < w[0] - tol {
+            return false;
+        }
+    }
+    true
+}
+
+fn formation_shares_pivot_bar(a: &FormationMatch, b: &FormationMatch) -> bool {
+    let bars_a: HashSet<i64> = a.pivots.iter().map(|(ix, _, _)| *ix).collect();
+    b.pivots.iter().any(|(ix, _, _)| bars_a.contains(ix))
+}
+
+fn dedupe_formations_greedy_by_pivot_overlap(mut v: Vec<FormationMatch>) -> Vec<FormationMatch> {
+    v.sort_by(|a, b| {
+        b.quality
+            .partial_cmp(&a.quality)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut out: Vec<FormationMatch> = Vec::new();
+    for m in v {
+        if out.iter().any(|k| formation_shares_pivot_bar(k, &m)) {
+            continue;
+        }
+        out.push(m);
+    }
+    out
 }
 
 /// Simetri skoru: iki pivot arasındaki bar mesafesinin birbirine yakınlığı (0–1).
@@ -1057,6 +1128,12 @@ pub fn detect_bullish_flag(
         return None;
     }
 
+    if params.flag_require_countertrend_pivot_slope
+        && !flag_bull_highs_non_rising(&flag_pivots, pole_top.1, params.price_tolerance)
+    {
+        return None;
+    }
+
     let target = pole_top.1 + pole_height; // measured move
 
     // Kalite: küçük retrace = daha iyi
@@ -1142,6 +1219,12 @@ pub fn detect_bearish_flag(
         return None;
     }
 
+    if params.flag_require_countertrend_pivot_slope
+        && !flag_bear_lows_non_falling(&flag_pivots, pole_bottom.1, params.price_tolerance)
+    {
+        return None;
+    }
+
     let target = pole_bottom.1 - pole_height; // measured move down
 
     let retrace_q = (1.0 - retrace / params.flag_max_retrace).clamp(0.0, 1.0);
@@ -1215,6 +1298,10 @@ pub fn scan_formations(
         }
     }
 
+    if params.dedupe_overlapping && results.len() > 1 {
+        results = dedupe_formations_greedy_by_pivot_overlap(results);
+    }
+
     results
 }
 
@@ -1222,6 +1309,8 @@ pub fn scan_formations(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     fn default_params() -> FormationParams {
@@ -1523,6 +1612,64 @@ mod tests {
             b.close = 65.0;
         }
         assert!(detect_double_bottom(&pivots, &bars_ok, &params).is_some());
+    }
+
+    #[test]
+    fn bullish_flag_rejected_when_countertrend_highs_rise() {
+        let pivots: Vec<PivotTriple> = vec![
+            (0, 50.0, -1),
+            (5, 100.0, 1),
+            (8, 92.0, -1),
+            (11, 98.0, 1),
+            (14, 94.0, -1),
+            (17, 99.0, 1),
+        ];
+        let bars: Vec<OhlcBar> = (0..20)
+            .map(|i| OhlcBar {
+                open: 70.0,
+                high: 71.0,
+                low: 69.0,
+                close: 70.0,
+                bar_index: i,
+                volume: None,
+            })
+            .collect();
+        let mut p = default_params();
+        p.flag_require_countertrend_pivot_slope = true;
+        assert!(detect_bullish_flag(&pivots, &bars, &p).is_none());
+    }
+
+    #[test]
+    fn scan_dedupe_removes_pivot_overlaps() {
+        let pivots: Vec<PivotTriple> = vec![
+            (0, 100.0, 1),
+            (5, 90.0, -1),
+            (10, 101.0, 1),
+            (15, 89.0, -1),
+            (20, 100.5, 1),
+        ];
+        let bars: Vec<OhlcBar> = (0..25)
+            .map(|i| OhlcBar {
+                open: 95.0,
+                high: 101.0,
+                low: 89.0,
+                close: 95.0,
+                bar_index: i,
+                volume: None,
+            })
+            .collect();
+        let full = scan_formations(&pivots, &bars, &default_params());
+        let mut p = default_params();
+        p.dedupe_overlapping = true;
+        let deduped = scan_formations(&pivots, &bars, &p);
+        assert!(deduped.len() <= full.len());
+        for i in 0..deduped.len() {
+            for j in (i + 1)..deduped.len() {
+                let sa: HashSet<i64> = deduped[i].pivots.iter().map(|(x, _, _)| *x).collect();
+                let overlap = deduped[j].pivots.iter().any(|(x, _, _)| sa.contains(x));
+                assert!(!overlap, "deduped matches must not share pivot bars");
+            }
+        }
     }
 
     #[test]
