@@ -16,6 +16,26 @@ fn parse_channels(raw: &[String]) -> Vec<NotificationChannel> {
         .collect()
 }
 
+/// Outbox rows produced with Telegram HTML (`parse_mode: HTML`) — without this, tags show as literal text.
+fn outbox_body_looks_like_telegram_html(body: &str) -> bool {
+    let t = body.trim_start();
+    t.starts_with("<b>")
+        || t.starts_with("<i>")
+        || t.starts_with("<pre>")
+        || (t.contains("<code>") && t.contains("</code>"))
+}
+
+/// Plain-text fallback for email and other non-Telegram channels when [`outbox_body_looks_like_telegram_html`] is true.
+fn strip_minimal_telegram_html_to_plain(html: &str) -> String {
+    let mut s = html.to_string();
+    for tag in [
+        "<b>", "</b>", "<i>", "</i>", "<code>", "</code>", "<pre>", "</pre>",
+    ] {
+        s = s.replace(tag, "");
+    }
+    s
+}
+
 pub async fn notify_outbox_loop(pool: PgPool) {
     let pool_tick = pool.clone();
     let repo = NotifyOutboxRepository::new(pool);
@@ -66,7 +86,15 @@ pub async fn notify_outbox_loop(pool: PgPool) {
                 }
                 continue;
             }
-            let n = Notification::new(row.title.clone(), row.body.clone());
+            let n = if outbox_body_looks_like_telegram_html(&row.body) {
+                Notification::new(
+                    row.title.clone(),
+                    strip_minimal_telegram_html_to_plain(&row.body),
+                )
+                .with_telegram_html_message(row.body.clone())
+            } else {
+                Notification::new(row.title.clone(), row.body.clone())
+            };
             let receipts = dispatcher.send_all(&channels, &n).await;
             let detail = serde_json::to_value(&receipts).unwrap_or_else(|_| json!([]));
             let all_ok = receipts.iter().all(|r| r.ok);

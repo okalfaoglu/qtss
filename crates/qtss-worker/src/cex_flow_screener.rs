@@ -545,15 +545,71 @@ fn channel_list_csv(channels: &[NotificationChannel]) -> Vec<String> {
     channels.iter().map(|c| c.as_str().to_string()).collect()
 }
 
+fn format_usd_compact(v: f64) -> String {
+    if !v.is_finite() {
+        return "—".into();
+    }
+    let a = v.abs();
+    let sign = if v < -1e-9 {
+        "-"
+    } else if v > 1e-9 {
+        "+"
+    } else {
+        ""
+    };
+    if a >= 1e9 {
+        format!("{}{:.2}B", sign, a / 1e9)
+    } else if a >= 1e6 {
+        format!("{}{:.2}M", sign, a / 1e6)
+    } else if a >= 1e3 {
+        format!("{}{:.1}k", sign, a / 1e3)
+    } else {
+        format!("{}{:.0}", sign, a)
+    }
+}
+
+fn truncate_sym_for_table(sym: &str, max_chars: usize) -> String {
+    let t = sym.trim();
+    let mut it = t.chars();
+    let head: String = it.by_ref().take(max_chars).collect();
+    if it.next().is_some() {
+        format!("{}…", head.trim_end())
+    } else {
+        head
+    }
+}
+
 fn format_telegram_html(title: &str, payload: &Value) -> String {
-    let mut lines = vec![format!("<b>{}</b>", escape_telegram_html(title)), String::new()];
+    let emoji = if title.contains("OUTFLOW") {
+        "📤 "
+    } else if title.contains("INFLOW") {
+        "📥 "
+    } else {
+        ""
+    };
+    let mut parts = vec![format!(
+        "<b>{}{}</b>",
+        emoji,
+        escape_telegram_html(title)
+    )];
     if let Some(arr) = payload.get("top").and_then(|x| x.as_array()) {
+        let mut pre_lines: Vec<String> = vec![
+            format!(
+                "{:<3} {:<8} {:>11} {:>11} {:>4} {:>6} {:>6} {:>3} {}",
+                "#", "Symbol", "Primary$", "Net$", "WH", "SM", "Vol%", "Sc", "!"
+            ),
+            format!("{}", "=".repeat(58)),
+        ];
         for row in arr.iter().take(25) {
-            let sym = row
-                .get("symbol")
-                .and_then(|x| x.as_str())
-                .unwrap_or("?");
+            let sym = truncate_sym_for_table(
+                row.get("symbol").and_then(|x| x.as_str()).unwrap_or("?"),
+                8,
+            );
             let rank = row.get("rank").and_then(|x| x.as_u64()).unwrap_or(0);
+            let primary = row
+                .get("primary_flow_usd")
+                .and_then(|x| x.as_f64())
+                .unwrap_or(0.0);
             let net = row
                 .get("net_flow_usd")
                 .and_then(|x| x.as_f64())
@@ -578,23 +634,27 @@ fn format_telegram_html(title: &str, payload: &Value) -> String {
             let fv = row
                 .get("flow_to_volume_pct")
                 .and_then(|x| x.as_f64())
-                .map(|p| format!("{p:.2}%"))
+                .map(|p| format!("{p:.1}%"))
                 .unwrap_or_else(|| "—".into());
-            let spike_s = if spike { " ⚠️" } else { "" };
-            lines.push(format!(
-                "{}. <code>{}</code> net={:.0} wh={} sm={} vol%={} sc={}{}",
+            let note = if spike { "*" } else { "" };
+            pre_lines.push(format!(
+                "{:<3} {:<8} {:>11} {:>11} {:>4} {:>6} {:>6} {:>3} {}",
                 rank,
-                escape_telegram_html(sym),
-                net,
+                sym,
+                format_usd_compact(primary),
+                format_usd_compact(net),
                 wh,
-                escape_telegram_html(sm),
-                escape_telegram_html(&fv),
+                sm,
+                fv,
                 sc,
-                spike_s
+                note
             ));
         }
+        let pre_body = escape_telegram_html(&pre_lines.join("\n"));
+        parts.push(format!("<pre>{pre_body}</pre>"));
+        parts.push("<i>* = extreme flow vs peer median</i>".to_string());
     }
-    lines.join("\n")
+    parts.join("\n")
 }
 
 async fn maybe_enqueue(
@@ -865,6 +925,29 @@ mod tests {
         });
         let (rows, _notes) = parse_rows(&v);
         assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn format_telegram_html_uses_pre_table_and_emoji() {
+        let payload = json!({
+            "top": [{
+                "rank": 1,
+                "symbol": "AAA",
+                "primary_flow_usd": 1_500_000.0,
+                "net_flow_usd": -500_000.0,
+                "smart_money_activity": "sell",
+                "flow_to_volume_pct": 2.5,
+                "extreme_spike": true,
+                "score_1_10": 10
+            }]
+        });
+        let html = format_telegram_html(TITLE_ACCUMULATION, &payload);
+        assert!(html.contains("📤"));
+        assert!(html.contains("<pre>"));
+        assert!(html.contains("1.50M"));
+        assert!(html.contains("-500") || html.contains("-0.50M"));
+        let html_in = format_telegram_html(TITLE_DISTRIBUTION, &payload);
+        assert!(html_in.contains("📥"));
     }
 
     #[test]
