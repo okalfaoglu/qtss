@@ -1,4 +1,4 @@
-//! CEX flow screeners derived from latest `nansen_netflowsData snapshot (Nansen smart-money netflow).
+//! CEX flow screeners derived from latest `nansen_netflows` snapshot (Nansen smart-money netflow).
 //!
 //! Two independent jobs (enable separately):
 //! - [`crate::data_sources::registry::CEX_FLOW_ACCUMULATION_REPORT_KEY`] — CEX OUTFLOW / accumulation bias.
@@ -212,7 +212,7 @@ fn is_blocked_symbol(sym: &str) -> bool {
             | "WBNB"
             | "WMATIC"
             | "WAVAX"
-    ) || (t.starts_with("USD") && t.len() <= 5)
+    )
 }
 
 fn passes_mcap_band(mcap: Option<f64>) -> bool {
@@ -229,8 +229,8 @@ fn netflow_tokens_rows(v: &Value) -> Vec<&Value> {
     };
     if let Some(a) = data.as_array() {
         return a.iter().collect();
-    vec![data]
     }
+    vec![data]
 }
 
 #[derive(Debug, Clone)]
@@ -350,7 +350,7 @@ fn build_ranked_payload(
     parsed: Vec<ParsedRow>,
     rank_by: impl Fn(&ParsedRow) -> f64,
     top_n: usize,
-    mut notes: Vec<String>,
+    notes: Vec<String>,
     sm_label_fn: fn(Option<f64>, f64) -> &'static str,
     whale_pick: fn(&ParsedRow) -> Option<u64>,
     flow_for_ratio: impl Copy + Fn(&ParsedRow) -> f64,
@@ -450,14 +450,7 @@ async fn recent_global_event(pool: &PgPool, event_key: &str, lookback_secs: i64)
 }
 
 fn channel_list_csv(channels: &[NotificationChannel]) -> Vec<String> {
-    channels
-        .iter()
-        .map(|c| match c {
-            NotificationChannel::Telegram => "telegram".into(),
-            NotificationChannel::Email => "email".into(),
-            NotificationChannel::Webhook => "webhook".into(),
-        })
-        .collect()
+    channels.iter().map(|c| c.as_str().to_string()).collect()
 }
 
 fn format_telegram_html(title: &str, payload: &Value) -> String {
@@ -571,8 +564,6 @@ pub async fn cex_flow_screener_loop(pool: PgPool) {
             100,
         )
         .await as usize;
-
-        tokio::time::sleep(Duration::from_secs(tick)).await;
 
         let acc_on = resolve_worker_enabled_flag(
             &pool,
@@ -732,6 +723,8 @@ pub async fn cex_flow_screener_loop(pool: PgPool) {
             )
             .await;
         }
+
+        tokio::time::sleep(Duration::from_secs(tick)).await;
     }
 }
 

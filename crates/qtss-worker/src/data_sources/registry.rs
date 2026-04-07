@@ -7,6 +7,11 @@ pub const NANSEN_TOKEN_SCREENER_DATA_KEY: &str = "nansen_token_screener";
 
 /// Optional `data_snapshots` keys for Nansen extended HTTP (`docs/QTSS_CURSOR_DEV_GUIDE.md` §4 ADIM 2–3).
 pub const NANSEN_NETFLOWS_DATA_KEY: &str = "nansen_netflows";
+
+/// Derived TOP-N CEX **outflow / accumulation** screener (`cex_flow_screener` → `data_snapshots.response_json`).
+pub const CEX_FLOW_ACCUMULATION_REPORT_KEY: &str = "cex_flow_accumulation_top25";
+/// Derived TOP-N CEX **inflow / distribution (dump risk)** screener.
+pub const CEX_FLOW_DISTRIBUTION_REPORT_KEY: &str = "cex_flow_distribution_top25";
 pub const NANSEN_PERP_TRADES_DATA_KEY: &str = "nansen_perp_trades";
 pub const NANSEN_FLOW_INTELLIGENCE_DATA_KEY: &str = "nansen_flow_intelligence";
 /// Alias for dev-guide naming (`NANSEN_FLOW_INTEL_DATA_KEY`).
@@ -161,6 +166,16 @@ pub const REGISTERED_DATA_SOURCES: &[RegisteredDataSource] = &[
         source_key: NANSEN_SMART_MONEY_DEX_TRADES_DATA_KEY,
         provider_kind: "NansenHttpLoop",
         description: "opt-in `smart-money/dex-trades`; `NANSEN_SM_DEX_TRADES_BODY_JSON` or default `chains`",
+    },
+    RegisteredDataSource {
+        source_key: CEX_FLOW_ACCUMULATION_REPORT_KEY,
+        provider_kind: "CexFlowScreenerLoop",
+        description: "`cex_flow_screener` ranks tokens by CEX outflow (accumulation); source=nansen_netflows",
+    },
+    RegisteredDataSource {
+        source_key: CEX_FLOW_DISTRIBUTION_REPORT_KEY,
+        provider_kind: "CexFlowScreenerLoop",
+        description: "`cex_flow_screener` ranks tokens by CEX inflow (distribution); source=nansen_netflows",
     },
     RegisteredDataSource {
         source_key: "*",

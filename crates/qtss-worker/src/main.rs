@@ -8,6 +8,7 @@ mod binance_spot_reconcile;
 mod binance_user_stream;
 mod confluence;
 mod confluence_hook;
+mod cex_flow_screener;
 mod copy_trade_follower;
 mod copy_trade_queue;
 mod data_sources;
@@ -234,6 +235,8 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(engines::external_misc_loop(misc_pool));
         let onchain_pool = pool.clone();
         tokio::spawn(onchain_signal_scorer::onchain_signal_loop(onchain_pool));
+        let cex_flow_pool = pool.clone();
+        tokio::spawn(cex_flow_screener::cex_flow_screener_loop(cex_flow_pool));
         let paper_notify_pool = pool.clone();
         tokio::spawn(paper_fill_notify::paper_position_notify_loop(
             paper_notify_pool,
