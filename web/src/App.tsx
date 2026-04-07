@@ -591,6 +591,12 @@ export default function App() {
     atr_period: "",
     atr_sma_period: "",
     require_range_regime: false,
+    rsi_period: "",
+    rsi_oversold: "",
+    rsi_overbought: "",
+    volume_avg_lookback: "",
+    volume_spike_ratio_full: "",
+    volume_spike_ratio_partial: "",
   });
   const [nansenSnapshot, setNansenSnapshot] = useState<NansenSnapshotApiRow | null>(null);
   const [nansenSetupsLatest, setNansenSetupsLatest] = useState<NansenSetupsLatestApiResponse>({
@@ -638,6 +644,23 @@ export default function App() {
       atr_sma_period:
         p.atr_sma_period != null && Number.isFinite(p.atr_sma_period) ? String(p.atr_sma_period) : "",
       require_range_regime: p.require_range_regime === true,
+      rsi_period: p.rsi_period != null && Number.isFinite(p.rsi_period) ? String(p.rsi_period) : "",
+      rsi_oversold:
+        p.rsi_oversold != null && Number.isFinite(p.rsi_oversold) ? String(p.rsi_oversold) : "",
+      rsi_overbought:
+        p.rsi_overbought != null && Number.isFinite(p.rsi_overbought) ? String(p.rsi_overbought) : "",
+      volume_avg_lookback:
+        p.volume_avg_lookback != null && Number.isFinite(p.volume_avg_lookback)
+          ? String(p.volume_avg_lookback)
+          : "",
+      volume_spike_ratio_full:
+        p.volume_spike_ratio_full != null && Number.isFinite(p.volume_spike_ratio_full)
+          ? String(p.volume_spike_ratio_full)
+          : "",
+      volume_spike_ratio_partial:
+        p.volume_spike_ratio_partial != null && Number.isFinite(p.volume_spike_ratio_partial)
+          ? String(p.volume_spike_ratio_partial)
+          : "",
     });
   }, [rangeEngineConfig]);
 
@@ -1645,9 +1668,21 @@ export default function App() {
       const n = parseInt(x, 10);
       return Number.isFinite(n) ? n : null;
     };
+    const floatOrNull = (s: string): number | null => {
+      const x = s.trim();
+      if (x === "") return null;
+      const n = parseFloat(x);
+      return Number.isFinite(n) ? n : null;
+    };
     tp.lookback = numOrNull(trParamsDraft.lookback);
     tp.atr_period = numOrNull(trParamsDraft.atr_period);
     tp.atr_sma_period = numOrNull(trParamsDraft.atr_sma_period);
+    tp.rsi_period = numOrNull(trParamsDraft.rsi_period);
+    tp.rsi_oversold = floatOrNull(trParamsDraft.rsi_oversold);
+    tp.rsi_overbought = floatOrNull(trParamsDraft.rsi_overbought);
+    tp.volume_avg_lookback = numOrNull(trParamsDraft.volume_avg_lookback);
+    tp.volume_spike_ratio_full = floatOrNull(trParamsDraft.volume_spike_ratio_full);
+    tp.volume_spike_ratio_partial = floatOrNull(trParamsDraft.volume_spike_ratio_partial);
     await patchRangeEnginePartial({ trading_range_params: tp });
   }, [trParamsDraft, patchRangeEnginePartial]);
 
@@ -4195,6 +4230,81 @@ export default function App() {
                                       setTrParamsDraft((d) => ({ ...d, atr_sma_period: e.target.value }))
                                     }
                                     placeholder="50"
+                                  />
+                                </label>
+                                <label>
+                                  <span className="muted">{t("app.engineDrawer.trRsiPeriod")}</span>
+                                  <input
+                                    className="mono"
+                                    value={trParamsDraft.rsi_period}
+                                    onChange={(e) =>
+                                      setTrParamsDraft((d) => ({ ...d, rsi_period: e.target.value }))
+                                    }
+                                    placeholder="14"
+                                  />
+                                </label>
+                                <label>
+                                  <span className="muted">{t("app.engineDrawer.trRsiOversold")}</span>
+                                  <input
+                                    className="mono"
+                                    value={trParamsDraft.rsi_oversold}
+                                    onChange={(e) =>
+                                      setTrParamsDraft((d) => ({ ...d, rsi_oversold: e.target.value }))
+                                    }
+                                    placeholder="30"
+                                  />
+                                </label>
+                                <label>
+                                  <span className="muted">{t("app.engineDrawer.trRsiOverbought")}</span>
+                                  <input
+                                    className="mono"
+                                    value={trParamsDraft.rsi_overbought}
+                                    onChange={(e) =>
+                                      setTrParamsDraft((d) => ({ ...d, rsi_overbought: e.target.value }))
+                                    }
+                                    placeholder="70"
+                                  />
+                                </label>
+                                <label>
+                                  <span className="muted">{t("app.engineDrawer.trVolumeAvgLookback")}</span>
+                                  <input
+                                    className="mono"
+                                    value={trParamsDraft.volume_avg_lookback}
+                                    onChange={(e) =>
+                                      setTrParamsDraft((d) => ({
+                                        ...d,
+                                        volume_avg_lookback: e.target.value,
+                                      }))
+                                    }
+                                    placeholder="20"
+                                  />
+                                </label>
+                                <label>
+                                  <span className="muted">{t("app.engineDrawer.trVolumeSpikeFull")}</span>
+                                  <input
+                                    className="mono"
+                                    value={trParamsDraft.volume_spike_ratio_full}
+                                    onChange={(e) =>
+                                      setTrParamsDraft((d) => ({
+                                        ...d,
+                                        volume_spike_ratio_full: e.target.value,
+                                      }))
+                                    }
+                                    placeholder="1.5"
+                                  />
+                                </label>
+                                <label>
+                                  <span className="muted">{t("app.engineDrawer.trVolumeSpikePartial")}</span>
+                                  <input
+                                    className="mono"
+                                    value={trParamsDraft.volume_spike_ratio_partial}
+                                    onChange={(e) =>
+                                      setTrParamsDraft((d) => ({
+                                        ...d,
+                                        volume_spike_ratio_partial: e.target.value,
+                                      }))
+                                    }
+                                    placeholder="1.15"
                                   />
                                 </label>
                               </div>
