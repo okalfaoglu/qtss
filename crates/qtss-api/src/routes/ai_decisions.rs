@@ -47,15 +47,20 @@ pub fn ai_decisions_read_router() -> Router<SharedState> {
         .route("/ai/directives/portfolio", get(active_portfolio_directive))
 }
 
-pub fn ai_decisions_admin_router() -> Router<SharedState> {
+/// Onay / red / bağlantı — trader veya admin (`require_ops_roles`).
+pub fn ai_decisions_ops_router() -> Router<SharedState> {
     Router::new()
-        .route("/ai/decisions", delete(delete_ai_decisions_by_status))
         .route("/ai/decisions/{id}/approve", post(approve_ai_decision))
         .route("/ai/decisions/{id}/reject", post(reject_ai_decision))
         .route(
             "/ai/decisions/{id}/link-approval-request",
             post(link_decision_to_approval_request),
         )
+}
+
+/// Toplu silme (yalnızca `error`) — yalnız admin (`require_admin`).
+pub fn ai_decisions_admin_router() -> Router<SharedState> {
+    Router::new().route("/ai/decisions", delete(delete_ai_decisions_by_status))
 }
 
 async fn list_ai_decisions(

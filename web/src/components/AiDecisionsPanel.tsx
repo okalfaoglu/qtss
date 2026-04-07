@@ -11,10 +11,15 @@ import {
 
 type Props = {
   accessToken: string | null;
-  canAdmin: boolean;
+  /** Trader veya admin — onay/red API ile uyumlu (`require_ops_roles`). */
+  canDecide: boolean;
 };
 
-export function AiDecisionsPanel({ accessToken, canAdmin }: Props) {
+function isPendingApprovalStatus(status: string): boolean {
+  return status.trim().toLowerCase() === "pending_approval";
+}
+
+export function AiDecisionsPanel({ accessToken, canDecide }: Props) {
   const { t } = useTranslation();
   const [rows, setRows] = useState<AiDecisionListRowApi[]>([]);
   const [portfolio, setPortfolio] = useState<unknown>(null);
@@ -63,7 +68,7 @@ export function AiDecisionsPanel({ accessToken, canAdmin }: Props) {
   };
 
   const act = async (id: string, kind: "approve" | "reject") => {
-    if (!accessToken || !canAdmin) return;
+    if (!accessToken || !canDecide) return;
     setErr("");
     setInfo("");
     setBusy(true);
@@ -91,6 +96,11 @@ export function AiDecisionsPanel({ accessToken, canAdmin }: Props) {
     <div className="card" style={{ marginTop: "1rem" }}>
       <p className="tv-drawer__section-head">{t("aiDecisions.title")}</p>
       {err ? <p className="tv-drawer__error">{err}</p> : null}
+      {canDecide ? (
+        <p className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.5rem", lineHeight: 1.45 }}>
+          {t("aiDecisions.decideHint")}
+        </p>
+      ) : null}
       {info ? (
         <p className="muted" style={{ color: "var(--success-fg, #81c784)", marginBottom: "0.5rem" }}>
           {info}
@@ -129,7 +139,7 @@ export function AiDecisionsPanel({ accessToken, canAdmin }: Props) {
               <th>{t("aiDecisions.colStatus")}</th>
               <th>{t("aiDecisions.colConf")}</th>
               <th>{t("aiDecisions.colModel")}</th>
-              {canAdmin ? <th>{t("aiDecisions.colAction")}</th> : null}
+              {canDecide ? <th>{t("aiDecisions.colAction")}</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -141,9 +151,9 @@ export function AiDecisionsPanel({ accessToken, canAdmin }: Props) {
                 <td>{r.status}</td>
                 <td>{r.confidence != null ? r.confidence.toFixed(3) : "—"}</td>
                 <td className="mono">{r.model_id ?? "—"}</td>
-                {canAdmin ? (
+                {canDecide ? (
                   <td>
-                    {r.status === "pending_approval" ? (
+                    {isPendingApprovalStatus(r.status) ? (
                       <>
                         <button type="button" disabled={busy} onClick={() => void act(r.id, "approve")}>
                           {t("aiDecisions.approve")}

@@ -2027,7 +2027,8 @@ export async function postAiDecisionApprove(
 ): Promise<{ updated: number }> {
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/decisions/${encodeURIComponent(id)}/approve`, accessToken, {
     method: "POST",
-    headers: {},
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
   });
   const t = await r.text();
   if (!r.ok) throwQtssApiError("ai/decisions approve", r, t);
@@ -2040,7 +2041,8 @@ export async function postAiDecisionReject(
 ): Promise<{ updated: number }> {
   const r = await fetchWithBearerRetry(`${API_BASE}/api/v1/ai/decisions/${encodeURIComponent(id)}/reject`, accessToken, {
     method: "POST",
-    headers: {},
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
   });
   const t = await r.text();
   if (!r.ok) throwQtssApiError("ai/decisions reject", r, t);

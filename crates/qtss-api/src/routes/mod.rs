@@ -88,6 +88,9 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(ai_decisions::ai_decisions_read_router())
         .merge(ai_approval::ai_approval_read_router().layer(from_fn(require_dashboard_roles)))
         .merge(ai_approval::ai_approval_submit_router().layer(from_fn(require_ops_roles)))
+        .merge(
+            ai_decisions::ai_decisions_ops_router().layer(from_fn(require_ops_roles)),
+        )
         .merge(ai_decisions::ai_decisions_admin_router().layer(from_fn(require_admin)))
         .merge(ai_approval::ai_approval_admin_router().layer(from_fn(require_admin)))
         .merge(

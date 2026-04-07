@@ -21,6 +21,7 @@
     "colConf": "Confidence",
     "colModel": "Model",
     "colAction": "Action",
+    "decideHint": "Approve/reject only updates the decision row. Opening a venue position requires qtss-worker ai_tactical_executor, an enabled engine_symbols target, and matching dry/live settings.",
     "approve": "Approve",
     "reject": "Reject",
     "approveOk": "Saved as approved. Opening a position is separate: qtss-worker must run ai_tactical_executor, the symbol must be enabled in engine_symbols, and dry/live flags (QTSS_AI_TACTICAL_EXECUTOR_DRY / _LIVE) must match what you expect.",

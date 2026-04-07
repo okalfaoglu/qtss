@@ -21,6 +21,7 @@
     "colConf": "Güven",
     "colModel": "Model",
     "colAction": "İşlem",
+    "decideHint": "Onay/red yalnızca karar satırını günceller. Borsada pozisyon açmak için qtss-worker içinde ai_tactical_executor etkin olmalı, sembol engine_symbols’ta açık olmalı ve dry/live (QTSS_AI_TACTICAL_EXECUTOR_*) ayarlarınız uygun olmalıdır.",
     "approve": "Onayla",
     "reject": "Reddet",
     "approveOk": "Onay kaydedildi (approved). Borsada pozisyon açmak ayrı bir adımdır: qtss-worker içinde ai_tactical_executor açık olmalı, sembol engine_symbols listesinde etkin olmalı ve dry/live (QTSS_AI_TACTICAL_EXECUTOR_DRY / _LIVE) beklediğiniz gibi ayarlı olmalı.",

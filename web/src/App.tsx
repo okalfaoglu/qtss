@@ -5393,7 +5393,9 @@ export default function App() {
                     ))}
                   </div>
                   {aiSubtab === "ai_dashboard" && <AiDashboardPanel accessToken={token} />}
-                  {aiSubtab === "ai_decisions" && <AiDecisionsPanel accessToken={token} canAdmin={rbacIsAdmin} />}
+                  {aiSubtab === "ai_decisions" && (
+                    <AiDecisionsPanel accessToken={token} canDecide={rbacIsOps} />
+                  )}
                   {aiSubtab === "ai_queues" ? (
                     <OperationsQueuesPanel accessToken={token} canOps={rbacIsOps} canAdmin={rbacIsAdmin} />
                   ) : null}
