@@ -330,7 +330,7 @@ pub async fn insert_portfolio_directive(
             decision_id, valid_until, risk_budget_pct, max_open_positions,
             preferred_regime, symbol_scores, macro_note, status
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'active')
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending_approval')
         RETURNING id
         "#,
     )
@@ -485,17 +485,48 @@ pub async fn mark_tactical_execution_failed(pool: &PgPool, tactical_child_id: Uu
     Ok(())
 }
 
+/// Expire pending parent rows past `expires_at` and align tactical / operational / portfolio children
+/// so they do not stay `pending_approval` or legacy `active` while the parent is `expired`.
 pub async fn expire_stale_decisions(pool: &PgPool) -> AiResult<u64> {
-    let res = sqlx::query(
+    let mut tx = pool.begin().await?;
+    let ids: Vec<Uuid> = sqlx::query_scalar(
         r#"UPDATE ai_decisions
            SET status = 'expired'
            WHERE status = 'pending_approval'
              AND expires_at IS NOT NULL
-             AND expires_at < now()"#,
+             AND expires_at < now()
+           RETURNING id"#,
     )
-    .execute(pool)
+    .fetch_all(&mut *tx)
     .await?;
-    Ok(res.rows_affected())
+
+    if !ids.is_empty() {
+        sqlx::query(
+            r#"UPDATE ai_tactical_decisions SET status = 'expired'
+               WHERE decision_id = ANY($1) AND status = 'pending_approval'"#,
+        )
+        .bind(&ids)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            r#"UPDATE ai_position_directives SET status = 'expired'
+               WHERE decision_id = ANY($1) AND status = 'pending_approval'"#,
+        )
+        .bind(&ids)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            r#"UPDATE ai_portfolio_directives SET status = 'expired'
+               WHERE decision_id = ANY($1)
+                 AND status IN ('pending_approval', 'active', 'approved')"#,
+        )
+        .bind(&ids)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(ids.len() as u64)
 }
 
 /// Duplicate prompt suppression within `ttl_minutes` (Postgres `interval`).
