@@ -45,6 +45,14 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), StorageError> {
                      Çift önek / checksum: docs/QTSS_CURSOR_DEV_GUIDE.md §6."
                 ));
             }
+            if msg.contains("previously applied but is missing in the resolved migrations") {
+                return StorageError::Other(format!(
+                    "{msg}\n\
+                     [QTSS] `_sqlx_migrations` lists a migration version the running binary did not embed at compile time (sqlx::migrate! reads `migrations/` when you `cargo build`). \
+                     Fix: on the build host, ensure `migrations/` includes every numbered file up to that version (e.g. `0009_*.sql`), then rebuild and redeploy `qtss-worker` from that tree (`cargo build --release -p qtss-worker`). \
+                     Do not delete `_sqlx_migrations` rows unless you know the SQL was never applied. See docs/QTSS_CURSOR_DEV_GUIDE.md §6."
+                ));
+            }
             StorageError::Migrate(e)
         })?;
     Ok(())
