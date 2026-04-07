@@ -14,8 +14,8 @@ VALUES (
         "operational_layer_enabled": true,
         "strategic_layer_enabled": false,
         "auto_approve_enabled": true,
-        "auto_approve_threshold": 0.60,
-        "require_min_confidence": 0.60,
+        "auto_approve_threshold": 0.55,
+        "require_min_confidence": 0.50,
         "tactical_tick_secs": 900,
         "operational_tick_secs": 120,
         "strategic_tick_secs": 86400,
@@ -30,7 +30,7 @@ VALUES (
         "max_tokens_strategic": 4096,
         "decision_ttl_secs": 1800
     }'::jsonb,
-    'AI engine master config — auto-approve enabled at 60% confidence'
+    'AI engine master config — auto-approve at 55%, persist at 50%'
 )
 ON CONFLICT (key) DO UPDATE SET
     value = EXCLUDED.value,

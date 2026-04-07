@@ -270,9 +270,9 @@ fn tactical_system_prompt_default(cfg: &AiEngineConfig) -> String {
         "Optional `reasoning` must be the LAST JSON key if present: one short phrase, max 120 characters in the requested locale — otherwise output may truncate mid-string and break JSON."
     };
     let criteria = if locale.to_lowercase().starts_with("tr") {
-        r#"Kurallar: onchain aggregate_score > 0.6 ve conflict yok → buy/strong_buy eğilimi; < -0.6 ve conflict yok → sell/strong_sell; conflict var → position_size_multiplier ≤ 0.5 veya no_trade; açık pozisyon + aynı yön → genelde no_trade; confidence < 0.5 → no_trade."#
+        r#"Kurallar: aggregate_score > 0.3 ve conflict yok → buy/strong_buy eğilimi; < -0.3 ve conflict yok → sell/strong_sell; conflict var → position_size_multiplier ≤ 0.5; açık pozisyon + aynı yön → no_trade; tbm_scores veya chart_formations net yön veriyorsa aggregate_score zayıf olsa bile trade aç; no_trade YALNIZCA hiçbir sinyal yoksa kullan."#
     } else {
-        r#"Rules: aggregate_score > 0.6 without conflict → buy bias; < -0.6 without conflict → sell bias; on conflict → multiplier ≤ 0.5 or no_trade; existing position same direction → prefer no_trade; confidence < 0.5 → no_trade."#
+        r#"Rules: aggregate_score > 0.3 without conflict → buy bias; < -0.3 without conflict → sell bias; on conflict → multiplier ≤ 0.5; existing position same direction → no_trade; if tbm_scores or chart_formations give a clear direction, trade even when aggregate_score is weak; use no_trade ONLY when there is genuinely no signal at all."#
     };
     format!(
         r#"You are a tactical trading advisor for QTSS. Reply with one JSON object only — raw JSON, no markdown fences (no ```json blocks).
@@ -290,7 +290,7 @@ Context may include `tbm_scores` (Top/Bottom Mining) with reversal detection acr
 Context may include `tbm_mtf` (Multi-Timeframe confirmation) — aggregated TBM scores across timeframes (15m, 1h, 4h, 1d, 1w). Key fields: bottom_score, top_score, bottom_alignment (how many TFs agree), has_conflict (opposing signals). Full alignment across 3+ TFs is a very strong signal. MTF conflict reduces confidence significantly. Higher timeframe signals (D1, W1) carry more weight than lower ones.
 Context may include `trading_range` and `signal_dashboard` (primary engine row, slim summaries) plus `engine_timeframes`: same symbol across other `engine_symbols` intervals (each entry: interval, enabled, is_primary, slim `trading_range` + `signal_dashboard`). Prefer alignment across timeframes; when `engine_timeframes` disagree, weight higher intervals more unless `is_primary` interval shows a clear imminent setup.
 {criteria}
-Temperature: conservative; output JSON only."#
+Temperature: balanced — prefer action over inaction when there is any directional signal; output JSON only."#
     )
 }
 
