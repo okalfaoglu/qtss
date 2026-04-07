@@ -1,5 +1,6 @@
 import type { SeriesMarker, UTCTimestamp } from "lightweight-charts";
 import type { ChannelSixResponse, FormationTradeLevelsJson, PatternMatchPayloadJson } from "../api/client";
+import { formatDisplayPrice } from "./chartPriceFormat";
 import type { ChartOhlcRow } from "./marketBarsToCandles";
 import { outcomePivotBarRange } from "./channelSixLiveSignal";
 
@@ -75,12 +76,6 @@ function timeSpanRightOfFormation(
   return { tL: tLsec as UTCTimestamp, tR: tRsec as UTCTimestamp };
 }
 
-function fmtPrice(n: number): string {
-  const a = Math.abs(n);
-  if (a >= 10_000) return n.toFixed(2);
-  if (a >= 1) return n.toFixed(4);
-  return n.toFixed(6);
-}
 
 const ROW_PALETTE = ["#26a69a", "#7e57c2", "#ff9800", "#42a5f5", "#ec407a", "#66bb6a"];
 
@@ -128,12 +123,12 @@ export function buildFormationTradeLevelSpecs(
       });
     };
 
-    push(levels.entry, `Enter: ${fmtPrice(levels.entry)}`, rowHue);
-    push(levels.stop_loss, `SL: ${fmtPrice(levels.stop_loss)}`, "#ef5350");
+    push(levels.entry, `Enter: ${formatDisplayPrice(levels.entry)}`, rowHue);
+    push(levels.stop_loss, `SL: ${formatDisplayPrice(levels.stop_loss)}`, "#ef5350");
     for (let j = 0; j < levels.take_profits.length; j++) {
       const tp = levels.take_profits[j]!;
       const tag = tp.id.includes("1618") ? "TP*" : `TP${j + 1}`;
-      push(tp.price, `${tag}: ${fmtPrice(tp.price)}`, "#29b6f6");
+      push(tp.price, `${tag}: ${formatDisplayPrice(tp.price)}`, "#29b6f6");
     }
   }
 

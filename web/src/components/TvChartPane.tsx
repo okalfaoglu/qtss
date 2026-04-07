@@ -18,13 +18,6 @@ const FIBO_LEVELS: { ratio: number; label: string }[] = [
   { ratio: 1, label: "100%" },
 ];
 
-function formatChartPrice(n: number): string {
-  const a = Math.abs(n);
-  if (a >= 10_000) return n.toFixed(2);
-  if (a >= 1) return n.toFixed(4);
-  return n.toFixed(6);
-}
-
 function barsBetweenInclusive(candles: CandlestickData<UTCTimestamp>[], tLo: number, tHi: number): number {
   let n = 0;
   for (const c of candles) {
@@ -40,6 +33,7 @@ import {
   chartZoomIn,
   chartZoomOut,
 } from "../lib/chartTimeScaleNav";
+import { formatDisplayPrice, lwcPriceFormatFromOhlcBars } from "../lib/chartPriceFormat";
 import { marketBarsToCandles, type ChartOhlcRow } from "../lib/marketBarsToCandles";
 import type { PatternLayerOverlay, ZigzagLayerKind } from "../lib/patternDrawingBatchOverlay";
 import {
@@ -490,7 +484,7 @@ export function TvChartPane({
                 position: "belowBar",
                 color: labelColor,
                 shape: "circle",
-                text: `${label} (${formatChartPrice(y)})`,
+                text: `${label} (${formatDisplayPrice(y)})`,
               },
             ],
           );
@@ -499,7 +493,7 @@ export function TvChartPane({
         const t1 = d.t1 as UTCTimestamp;
         const t2 = d.t2 as UTCTimestamp;
         const dp = d.p2 - d.p1;
-        const deltaStr = (dp >= 0 ? "+" : "") + formatChartPrice(dp);
+        const deltaStr = (dp >= 0 ? "+" : "") + formatDisplayPrice(dp);
         const pct =
           d.p1 !== 0 && Number.isFinite(d.p1) ? `${((dp / d.p1) * 100).toFixed(2)}%` : "—";
         const tLo = Math.min(d.t1, d.t2);
@@ -590,6 +584,12 @@ export function TvChartPane({
     const syncData = () => {
       const data = marketBarsToCandles(barsRef.current);
       series.setData(data);
+      series.applyOptions({ priceFormat: lwcPriceFormatFromOhlcBars(barsRef.current) });
+      chart.applyOptions({
+        localization: {
+          priceFormatter: (p: number) => formatDisplayPrice(p),
+        },
+      });
       applyPatternLayers(uppers, lowers, zigs, layersRef.current ?? []);
       applyUserDrawings(chart, data, theme);
       applyTradeLevelSpecs(chart, tradeLevelSpecsRef.current);
@@ -662,6 +662,12 @@ export function TvChartPane({
     if (!series || !chart) return;
     const data = marketBarsToCandles(bars);
     series.setData(data);
+    series.applyOptions({ priceFormat: lwcPriceFormatFromOhlcBars(bars) });
+    chart.applyOptions({
+      localization: {
+        priceFormatter: (p: number) => formatDisplayPrice(p),
+      },
+    });
     applyPatternLayers(upperRefs.current, lowerRefs.current, zigRefs.current, patternLayers, theme);
     applyUserDrawings(chart, data, theme);
     applyTradeLevelSpecs(chart, tradeLevelSpecs ?? []);

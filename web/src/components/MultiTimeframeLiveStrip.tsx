@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchMultiTimeframeLiveCells, type TimeframeLiveCell } from "../api/fetchMultiTimeframeLive";
 import { CHART_INTERVALS } from "../lib/chartIntervals";
+import { formatDisplayPrice } from "../lib/chartPriceFormat";
 
 /** 0 = çoklu TF canlı şerit kapalı. Ana grafik `VITE_LIVE_POLL_MS` ile ayrı kalır. */
 function readMtfPollMs(): number {
@@ -14,14 +15,6 @@ function formatPct(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return "—";
   const sign = n > 0 ? "+" : "";
   return `${sign}${n.toFixed(2)}%`;
-}
-
-function formatPrice(n: number): string {
-  if (!Number.isFinite(n)) return "—";
-  const abs = Math.abs(n);
-  if (abs >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
-  if (abs >= 1) return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 });
-  return n.toLocaleString(undefined, { maximumFractionDigits: 6 });
 }
 
 type Props = {
@@ -113,9 +106,9 @@ export function MultiTimeframeLiveStrip({
             .join(" ");
 
           const titleParts = [
-            `${cell.interval} · kapanış ${cell.stats ? formatPrice(cell.stats.close) : "—"}`,
+            `${cell.interval} · kapanış ${cell.stats ? formatDisplayPrice(cell.stats.close) : "—"}`,
             cell.stats
-              ? `H ${formatPrice(cell.stats.high)} · L ${formatPrice(cell.stats.low)} · A ${formatPrice(cell.stats.open)}`
+              ? `H ${formatDisplayPrice(cell.stats.high)} · L ${formatDisplayPrice(cell.stats.low)} · A ${formatDisplayPrice(cell.stats.open)}`
               : "",
             `Mum içi: ${formatPct(pO)}`,
             pP != null && Number.isFinite(pP) ? `Önceki kapanışa göre: ${formatPct(pP)}` : "",
