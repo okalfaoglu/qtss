@@ -839,7 +839,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn volume_spike_at_support_zones_long_only() {
         let mut v: Vec<OhlcBar> = Vec::new();
         for i in 0..25i64 {

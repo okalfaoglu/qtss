@@ -944,11 +944,13 @@ mod tests {
 
     #[test]
     fn double_top_detected() {
-        // H-L-H pattern: two peaks at ~100, trough at 90
+        // H-L-H pattern: two peaks at ~100, trough at 90.
+        // Second peak 101 vs 100 keeps `pct_diff` within `price_tolerance` but drives `price_q` down
+        // (quality = 0.7 * price_q + 0.3 * symmetry); use 100.5 so quality stays above 0.5.
         let pivots: Vec<PivotTriple> = vec![
             (0, 100.0, 1),
             (5, 90.0, -1),
-            (10, 101.0, 1),
+            (10, 100.5, 1),
         ];
         let result = detect_double_top(&pivots, &default_params());
         assert!(result.is_some());
