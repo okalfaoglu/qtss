@@ -54,6 +54,11 @@ pub struct FormationParams {
     /// - `Some(1.0)`: klasik W — ikinci dip **birinci dipten düşük olamaz** (hafif yukarı / eşit kabul).
     /// - `Some(0.98)`: en fazla %2 “undercut” (stop avı) toleri.
     pub double_bottom_second_low_min_fraction_of_first: Option<f64>,
+    /// Double top: ikinci tepe fiyatının birinciye göre üst sınırı (oran × ilk tepe).
+    /// - `None`: ek kısıt yok.
+    /// - `Some(1.0)`: ikinci tepe **birinci tepeden yüksek olamaz** (klasik M — “equal highs” / başarısız kırılım yok).
+    /// - `Some(1.02)`: en fazla %2 ikinci tepe yüksekliği toleri.
+    pub double_top_second_peak_max_fraction_of_first: Option<f64>,
     /// Flag formasyonlarında impulsive bacağın minimum bar sayısı.
     pub flag_min_pole_bars: usize,
     /// Flag formasyonlarında konsolidasyon alanının minimum bar sayısı.
@@ -67,6 +72,7 @@ impl Default for FormationParams {
         Self {
             price_tolerance: 0.02,
             double_bottom_second_low_min_fraction_of_first: None,
+            double_top_second_peak_max_fraction_of_first: None,
             flag_min_pole_bars: 3,
             flag_min_flag_bars: 3,
             flag_max_retrace: 0.618,
@@ -81,6 +87,13 @@ impl FormationParams {
         self.double_bottom_second_low_min_fraction_of_first = Some(1.0);
         self
     }
+
+    /// Classical double-top highs: second peak must not exceed the first (`t2 <= t1`).
+    #[must_use]
+    pub fn with_strict_double_top_peaks(mut self) -> Self {
+        self.double_top_second_peak_max_fraction_of_first = Some(1.0);
+        self
+    }
 }
 
 // ─── Yardımcı fonksiyonlar ─────────────────────────────────────────
@@ -93,6 +106,25 @@ fn pct_diff(a: f64, b: f64) -> f64 {
         return 0.0;
     }
     (a - b).abs() / avg
+}
+
+/// Boyun / dip–tepe eşlemesinde mutlak `1e-9` büyük fiyatlarda yetersiz; göreli + mutlak karışık tolerans.
+#[inline]
+fn approx_same_price(a: f64, b: f64) -> bool {
+    let m = a.abs().max(b.abs()).max(1.0);
+    (a - b).abs() <= m * 1e-10_f64 || (a - b).abs() <= 1e-6_f64
+}
+
+#[inline]
+fn top_pattern_extremes_valid(peak_avg: f64, neckline: f64) -> bool {
+    let m = peak_avg.abs().max(neckline.abs()).max(1.0);
+    peak_avg > neckline + m * 1e-12_f64
+}
+
+#[inline]
+fn bottom_pattern_extremes_valid(trough_avg: f64, neckline: f64) -> bool {
+    let m = trough_avg.abs().max(neckline.abs()).max(1.0);
+    trough_avg < neckline - m * 1e-12_f64
 }
 
 /// Pivotlardan sadece tepe (dir > 0) olanları filtreler.
@@ -128,8 +160,10 @@ fn symmetry_score(bar_diffs: &[i64]) -> f64 {
 /// Gereksinimler:
 /// - En az 3 pivot: H-L-H (tepe-dip-tepe)
 /// - İki tepe fiyatı `price_tolerance` dahilinde yakın
-/// - Neckline = aradaki dip fiyatı
-/// - Hedef = neckline - (tepe - neckline)
+/// - Ortalama tepe fiyatı boyun çizgisinden anlamlı şekilde yüksek (ters geometri elenir)
+/// - Neckline = aradaki dip(ler)in en düşüğü
+/// - Hedef = neckline - (tepe_ortalaması − neckline)
+/// - İsteğe bağlı: [`FormationParams::double_top_second_peak_max_fraction_of_first`] ile ikinci tepenin birinciyi aşmaması (klasik M)
 #[must_use]
 pub fn detect_double_top(pivots: &[PivotTriple], params: &FormationParams) -> Option<FormationMatch> {
     if pivots.len() < 3 {
@@ -167,8 +201,22 @@ pub fn detect_double_top(pivots: &[PivotTriple], params: &FormationParams) -> Op
         return None;
     }
 
+    if let Some(frac) = params.double_top_second_peak_max_fraction_of_first {
+        if t1.1 <= 1e-15 || !frac.is_finite() || frac <= 0.0 {
+            return None;
+        }
+        let max_second = t1.1 * frac;
+        let eps = t1.1.abs().max(1.0) * 1e-12_f64;
+        if t2.1 > max_second + eps {
+            return None;
+        }
+    }
+
     let neckline = between_lows.iter().map(|(_, p, _)| *p).fold(f64::MAX, f64::min);
     let peak_avg = (t1.1 + t2.1) / 2.0;
+    if !top_pattern_extremes_valid(peak_avg, neckline) {
+        return None;
+    }
     let height = (peak_avg - neckline).abs();
     let target = neckline - height;
 
@@ -177,7 +225,7 @@ pub fn detect_double_top(pivots: &[PivotTriple], params: &FormationParams) -> Op
     let price_q = 1.0 - (diff / params.price_tolerance).min(1.0);
     let trough_bar = between_lows
         .iter()
-        .filter(|(_, p, _)| (*p - neckline).abs() < 1e-9)
+        .filter(|(_, p, _)| approx_same_price(*p, neckline))
         .map(|(b, _, _)| *b)
         .min()
         .unwrap_or_else(|| {
@@ -266,13 +314,16 @@ pub fn detect_double_bottom(
         .map(|(_, p, _)| *p)
         .fold(f64::MIN, f64::max);
     let trough_avg = (b1.1 + b2.1) / 2.0;
+    if !bottom_pattern_extremes_valid(trough_avg, neckline) {
+        return None;
+    }
     let height = (neckline - trough_avg).abs();
     let target = neckline + height;
 
     let price_q = 1.0 - (diff / params.price_tolerance).min(1.0);
     let peak_bar = between_highs
         .iter()
-        .filter(|(_, p, _)| (*p - neckline).abs() < 1e-9)
+        .filter(|(_, p, _)| approx_same_price(*p, neckline))
         .map(|(b, _, _)| *b)
         .max()
         .unwrap_or_else(|| {
@@ -487,7 +538,8 @@ pub fn detect_inverse_head_and_shoulders(
 
 // ─── Triple Top (ID 18) ───────────────────────────────────────────
 
-/// Triple Top: Üç benzer yükseklikte tepe + aralarında iki dip.
+/// Triple Top: Üç benzer yükseklikte tepe + aralarında iki dip bölgesi.
+/// Boyun: iki vadinin yerel minimumlarının daha düşüğü; tepe ortalaması boyundan yüksek olmalıdır.
 #[must_use]
 pub fn detect_triple_top(
     pivots: &[PivotTriple],
@@ -540,6 +592,9 @@ pub fn detect_triple_top(
     let l2_min = l2.iter().map(|(_, p, _)| *p).fold(f64::MAX, f64::min);
     let neckline = l1_min.min(l2_min);
     let peak_avg = (t1.1 + t2.1 + t3.1) / 3.0;
+    if !top_pattern_extremes_valid(peak_avg, neckline) {
+        return None;
+    }
     let height = (peak_avg - neckline).abs();
     let target = neckline - height;
 
@@ -568,7 +623,8 @@ pub fn detect_triple_top(
 
 // ─── Triple Bottom (ID 19) ─────────────────────────────────────────
 
-/// Triple Bottom: Üç benzer dip + aralarında iki tepe.
+/// Triple Bottom: Üç benzer dip + aralarında iki tepe bölgesi.
+/// Boyun: iki tepenin yerel maksimumlarının daha yükseği; dip ortalaması boyundan düşük olmalıdır.
 #[must_use]
 pub fn detect_triple_bottom(
     pivots: &[PivotTriple],
@@ -619,6 +675,9 @@ pub fn detect_triple_bottom(
     let h2_max = h2.iter().map(|(_, p, _)| *p).fold(f64::MIN, f64::max);
     let neckline = h1_max.max(h2_max);
     let trough_avg = (b1.1 + b2.1 + b3.1) / 3.0;
+    if !bottom_pattern_extremes_valid(trough_avg, neckline) {
+        return None;
+    }
     let height = (neckline - trough_avg).abs();
     let target = neckline + height;
 
@@ -908,6 +967,18 @@ mod tests {
             (10, 110.0, 1), // 10% difference > 2% tolerance
         ];
         assert!(detect_double_top(&pivots, &default_params()).is_none());
+    }
+
+    #[test]
+    fn double_top_rejected_when_second_peak_higher_under_strict_rule() {
+        let pivots: Vec<PivotTriple> = vec![
+            (0, 100.0, 1),
+            (5, 92.0, -1),
+            (10, 100.5, 1), // within 2% tolerance vs first peak
+        ];
+        assert!(detect_double_top(&pivots, &default_params()).is_some());
+        let strict = FormationParams::default().with_strict_double_top_peaks();
+        assert!(detect_double_top(&pivots, &strict).is_none());
     }
 
     #[test]
