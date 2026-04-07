@@ -1006,17 +1006,14 @@ mod tests {
         let mut zz = ZigzagLite::new(3, 32, 0);
         for i in (0..8).rev() {
             let dir = if i % 2 == 0 { 1 } else { -1 };
-            zz.pivots.insert(
-                0,
-                ZigzagPivot::new(
-                    ChartPoint {
-                        index: i,
-                        price: 100.0,
-                        time_ms: i,
-                    },
-                    dir,
-                ),
-            );
+            zz.pivots.push_front(ZigzagPivot::new(
+                ChartPoint {
+                    index: i,
+                    price: 100.0,
+                    time_ms: i,
+                },
+                dir,
+            ));
         }
         assert_eq!(
             six_pivots_chrono_tail_skip(&zz, 0).expect("six"),

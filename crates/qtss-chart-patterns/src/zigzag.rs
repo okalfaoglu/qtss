@@ -5,9 +5,22 @@
 //!
 //! Pine `addnewpivot` / `shift` + `addnewpivot` güncelleme yolu — `reference/trendoscope_zigzag_transcript_excerpt.pine`.
 
+use std::collections::VecDeque;
+
+/// Boyutsuz oran alanları (`ratio`, `bar_ratio`, `size_ratio`): sabit 3 ondalık, çok küçük fiyat rejimlerinde
+/// anlamlı farkları sıfırlayabilir; yaklaşık 6 anlamlı basamak kullanılır.
 #[inline]
-fn round3(x: f64) -> f64 {
-    (x * 1000.0).round() / 1000.0
+fn snap_ratio(x: f64) -> f64 {
+    if !x.is_finite() {
+        return x;
+    }
+    let ax = x.abs();
+    if ax == 0.0 {
+        return 0.0;
+    }
+    let mag = ax.log10().floor();
+    let scale = 10f64.powf(5.0 - mag);
+    (x * scale).round() / scale
 }
 
 /// Grafik noktası (`chart.point` benzeri).
@@ -57,8 +70,8 @@ pub struct ZigzagLite {
     pub number_of_pivots: usize,
     pub offset: usize,
     pub level: i32,
-    /// `[0]` = en yeni pivot (Pine `unshift`).
-    pub pivots: Vec<ZigzagPivot>,
+    /// Ön uç = en yeni pivot (Pine `unshift`); `VecDeque` ile O(1) başa ekleme.
+    pub pivots: VecDeque<ZigzagPivot>,
     pub flags: ZigzagFlags,
 }
 
@@ -70,7 +83,7 @@ impl ZigzagLite {
             number_of_pivots: number_of_pivots.max(1),
             offset,
             level: 0,
-            pivots: Vec::new(),
+            pivots: VecDeque::new(),
             flags: ZigzagFlags::default(),
         }
     }
@@ -86,14 +99,14 @@ impl ZigzagLite {
             return;
         }
         if self.pivots.is_empty() {
-            self.pivots.insert(0, pivot);
-            if self.pivots.len() > self.number_of_pivots {
-                self.pivots.pop();
+            self.pivots.push_front(pivot);
+            while self.pivots.len() > self.number_of_pivots {
+                self.pivots.pop_back();
             }
             self.flags.new_pivot = true;
             return;
         }
-        let last = &self.pivots[0];
+        let last = self.pivots.front().expect("non-empty has front");
         if last.dir.signum() == incoming_sign {
             return;
         }
@@ -106,18 +119,18 @@ impl ZigzagLite {
             let doubled = (dir as f64) * value > (dir as f64) * llast_value;
             pivot.dir = if doubled { dir * 2 } else { dir };
             let den_seg = (last_value - llast_value).abs().max(1e-15);
-            pivot.ratio = round3((value - last_value).abs() / den_seg);
+            pivot.ratio = snap_ratio((value - last_value).abs() / den_seg);
             let den_bar = (llast.point.index - last.point.index).abs().max(1);
-            pivot.bar_ratio = round3((last.point.index - pivot.point.index).abs() as f64 / den_bar as f64);
+            pivot.bar_ratio = snap_ratio((last.point.index - pivot.point.index).abs() as f64 / den_bar as f64);
             if self.pivots.len() >= 3 {
                 let lllast = &self.pivots[2];
                 let den_sz = (llast.point.price - lllast.point.price).abs().max(1e-15);
-                pivot.size_ratio = round3((last_value - value).abs() / den_sz);
+                pivot.size_ratio = snap_ratio((last_value - value).abs() / den_sz);
             }
         }
-        self.pivots.insert(0, pivot);
-        if self.pivots.len() > self.number_of_pivots {
-            self.pivots.pop();
+        self.pivots.push_front(pivot);
+        while self.pivots.len() > self.number_of_pivots {
+            self.pivots.pop_back();
         }
         self.flags.new_pivot = true;
     }
@@ -202,8 +215,8 @@ impl ZigzagLite {
             return;
         }
 
-        let p_dir_before = Self::last_trend_dir(self.pivots[0].dir);
-        let last_ix = self.pivots[0].point.index;
+        let p_dir_before = Self::last_trend_dir(self.pivots.front().expect("checked non-empty").dir);
+        let last_ix = self.pivots.front().expect("checked non-empty").point.index;
         let distance = new_bar - last_ix;
         let overflow = distance >= self.length as i64;
 
@@ -223,12 +236,12 @@ impl ZigzagLite {
 
         // 1) Aynı yönde uç güncelle — Pine: `shift` + `Pivot.new` + `addnewpivot` (yerinde atama değil).
         if (p_dir_before == 1 && p_high_bar == 0) || (p_dir_before == -1 && p_low_bar == 0) {
-            let lp = self.pivots[0].clone();
+            let lp = self.pivots.front().expect("non-empty").clone();
             let value = if p_dir_before == 1 { p_high } else { p_low };
             let remove_old = value * f64::from(lp.dir) >= lp.point.price * f64::from(lp.dir);
             if remove_old {
                 self.flags.update_last_pivot = true;
-                self.pivots.remove(0);
+                self.pivots.pop_front();
                 let t = times_ms.get(idx).copied().unwrap_or(0);
                 let base_dir = lp.dir.signum();
                 self.add_new_pivot(ZigzagPivot::new(
@@ -357,14 +370,14 @@ pub fn next_level_from_zigzag(source: &ZigzagLite) -> ZigzagLite {
         let new_dir = dir.signum();
         let value = lp.point.price;
 
-        let last_dir = next_level.pivots[0].dir.signum();
-        let last_value = next_level.pivots[0].point.price;
+        let last_dir = next_level.pivots.front().expect("non-empty after first add").dir.signum();
+        let last_value = next_level.pivots.front().expect("non-empty").point.price;
 
         if dir.abs() == 2 {
             if last_dir == new_dir {
                 // Same direction: keep the more extreme pivot; otherwise try inserting opposite temp as a bridge.
                 if (dir as f64) * last_value < (dir as f64) * value {
-                    next_level.pivots.remove(0);
+                    next_level.pivots.pop_front();
                 } else {
                     let temp = if new_dir > 0 { &temp_bearish } else { &temp_bullish };
                     if let Some(tp) = temp {
@@ -495,7 +508,7 @@ mod tests {
     fn next_level_from_zigzag_uses_only_double_dirs() {
         let mut src = ZigzagLite::new(3, 32, 0);
         // En yeni başta olacak şekilde koyuyoruz.
-        src.pivots = vec![
+        src.pivots = VecDeque::from(vec![
             ZigzagPivot::new(
                 ChartPoint {
                     index: 4,
@@ -528,22 +541,22 @@ mod tests {
                 },
                 1,
             ),
-        ];
+        ]);
         let nl = next_level_from_zigzag(&src);
         assert_eq!(nl.level, 1);
         // Pine parity: nextlevel can carry pivots with |dir|==2 as well; at minimum we expect alternating signs.
         assert!(nl.pivots.len() >= 2);
-        assert!(nl
-            .pivots
-            .windows(2)
-            .all(|w| w[0].dir.signum() != 0 && w[1].dir.signum() != 0 && w[0].dir.signum() != w[1].dir.signum()));
+        let seq: Vec<_> = nl.pivots.iter().collect();
+        assert!(seq.windows(2).all(|w| {
+            w[0].dir.signum() != 0 && w[1].dir.signum() != 0 && w[0].dir.signum() != w[1].dir.signum()
+        }));
     }
 
     #[test]
     fn next_level_from_zigzag_compresses_same_sign_candidates() {
         let mut src = ZigzagLite::new(3, 32, 0);
         // En yeni başta; kronolojik akışta +2,+2,-2,-2,+2 görülür.
-        src.pivots = vec![
+        src.pivots = VecDeque::from(vec![
             ZigzagPivot::new(
                 ChartPoint {
                     index: 5,
@@ -584,7 +597,7 @@ mod tests {
                 },
                 2,
             ),
-        ];
+        ]);
         let nl = next_level_from_zigzag(&src);
         let ch = pivots_chronological(&nl);
         // +2 kümesinden yüksek olan 13, -2 kümesinden düşük olan 8, son +2 = 14
@@ -601,12 +614,12 @@ mod tests {
     fn next_level_from_zigzag_pine_no_temp_while_next_level_was_empty() {
         let mut src = ZigzagLite::new(3, 32, 0);
         // Chrono oldest → newest: +1 @100, -1 @80, -2 @50, +2 @90
-        src.pivots = vec![
+        src.pivots = VecDeque::from(vec![
             ZigzagPivot::new(ChartPoint { index: 4, price: 90.0, time_ms: 4 }, 2),
             ZigzagPivot::new(ChartPoint { index: 3, price: 50.0, time_ms: 3 }, -2),
             ZigzagPivot::new(ChartPoint { index: 2, price: 80.0, time_ms: 2 }, -1),
             ZigzagPivot::new(ChartPoint { index: 1, price: 100.0, time_ms: 1 }, 1),
-        ];
+        ]);
         let nl = next_level_from_zigzag(&src);
         let ch = pivots_chronological(&nl);
         assert_eq!(ch.len(), 2, "{ch:?}");

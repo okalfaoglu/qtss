@@ -1,5 +1,10 @@
 //! Opsiyonel dry-run strateji döngüleri (`worker.strategy_runner_enabled`, dev guide ADIM 7 + §7.2).
 //!
+//! Mimari not: strateji adları ve bakiye anahtarları şu an bu dosyada dağınık sabit dizelerdir.
+//! Yeni strateji eklemek için [`DRY_RUNNER_STRATEGIES`], [`worker_balance_key`], spawn listesi ve env
+//! soneklerinin hepsi güncellenir; ileride `RunnableStrategy` trait + kayıt defteri (registry) ile
+//! tek kaynaktan türetilmelidir.
+//!
 //! Her strateji **ayrı** [`DryRunGateway`] ile çalışır (paylaşılan sanal bakiye yok).
 //! - Toplam: `worker.strategy_runner_quote_balance_usdt` (varsayılan 100000 USDT), strateji başına = toplam / N.
 //! - Override: `worker.strategy_*_balance` veya env `QTSS_STRATEGY_<NAME>_BALANCE`.

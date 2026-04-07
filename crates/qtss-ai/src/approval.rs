@@ -1,4 +1,7 @@
 //! Auto-approve gate + human notification when below threshold (FAZ 4.3).
+//!
+//! Katman (`tactical` / `operational` / `strategic`) ve LLM yön dizeleri şu an serbest metinle eşleniyor.
+//! İleride `enum` + serde katmanı ile derleme zamanı güvenliği sağlanabilir.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -621,13 +624,14 @@ pub async fn maybe_auto_approve(
 ) -> AiResult<()> {
     let approve = auto_approve_eligible(confidence, cfg);
     if approve {
+        let mut tx = pool.begin().await?;
         let n = sqlx::query(
             r#"UPDATE ai_decisions
                SET status = 'approved', approved_at = now(), approved_by = 'auto'
                WHERE id = $1 AND status = 'pending_approval'"#,
         )
         .bind(decision_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
         sqlx::query(
@@ -636,7 +640,7 @@ pub async fn maybe_auto_approve(
                WHERE decision_id = $1 AND status = 'pending_approval'"#,
         )
         .bind(decision_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
         sqlx::query(
             r#"UPDATE ai_position_directives
@@ -644,8 +648,10 @@ pub async fn maybe_auto_approve(
                WHERE decision_id = $1 AND status = 'pending_approval'"#,
         )
         .bind(decision_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
+
         crate::storage::sync_linked_approval_request_status(
             pool,
             decision_id,

@@ -4,6 +4,14 @@
 //! yanıtlarından (`executedQty` / `cummulativeQuoteQty`) günlük/haftalık/aylık/yıllık hacim ve
 //! ücret özeti üretir. Basit realized P&L hesaplaması (average cost) ile `realized_pnl` ve
 //! pozisyon kapandı sayımı ile `closed_trade_count` üretir.
+//!
+//! ## Mimari not
+//! Binance’a özgü JSON ayrıştırması şu an bu dosyada (venue yanıtı şeması). Yeni borsa eklenirken
+//! ayrıştırma `qtss-binance` / venue adapter katmanına taşınıp buraya normalize edilmiş fill
+//! struct’ları iletilmeli (soyutlama sızıntısını gidermek için).
+//!
+//! `rebuild_live_rollups_from_exchange_orders` tüm `live` rollup satırlarını siler ve baştan üretir;
+//! büyük tablolarda kilit süresi riski vardır — ileride artımlı (incremental) yeniden hesap tercih edilmeli.
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -177,6 +185,12 @@ async fn fetch_instrument_assets(
     Ok(row.map(|(base_asset, quote_asset)| InstrumentAssets { base_asset, quote_asset }))
 }
 
+fn price_lookup_bucket_10m(at: DateTime<Utc>) -> i64 {
+    at.timestamp() / 600
+}
+
+type AssetQuotePriceCacheKey = (String, String, String, String, i64);
+
 async fn fetch_asset_price_in_quote(
     pool: &PgPool,
     exchange: &str,
@@ -210,6 +224,7 @@ async fn fetch_asset_price_in_quote(
 
 async fn normalize_commission_to_quote(
     pool: &PgPool,
+    price_cache: &mut HashMap<AssetQuotePriceCacheKey, Option<Decimal>>,
     exchange: &str,
     segment: &str,
     base_asset: &str,
@@ -232,11 +247,32 @@ async fn normalize_commission_to_quote(
     if ca.eq_ignore_ascii_case(base_asset) {
         return Ok(commission * fill_price_quote_per_base);
     }
-    if let Some(px) = fetch_asset_price_in_quote(pool, exchange, segment, ca, quote_asset, at).await? {
-        return Ok(commission * px);
-    }
-    // Best effort fallback: do not mix units; treat as zero if cannot convert.
-    Ok(Decimal::ZERO)
+    let bucket = price_lookup_bucket_10m(at);
+    let cache_key = (
+        exchange.to_string(),
+        segment.to_string(),
+        ca.to_uppercase(),
+        quote_asset.to_uppercase(),
+        bucket,
+    );
+    let px = if let Some(hit) = price_cache.get(&cache_key) {
+        *hit
+    } else {
+        let fetched = fetch_asset_price_in_quote(pool, exchange, segment, ca, quote_asset, at).await?;
+        price_cache.insert(cache_key.clone(), fetched);
+        fetched
+    };
+    let Some(px) = px else {
+        tracing::warn!(
+            exchange = %exchange,
+            segment = %segment,
+            commission_asset = %ca,
+            quote_asset = %quote_asset,
+            "pnl: cannot convert commission asset to quote; fee treated as zero (realized PnL may be overstated)"
+        );
+        return Ok(Decimal::ZERO);
+    };
+    Ok(commission * px)
 }
 
 fn position_side_key(v: &serde_json::Value) -> &'static str {
@@ -420,6 +456,7 @@ impl PnlRollupRepository {
     ) -> Result<PnlRebuildStats, StorageError> {
         let mut tx = self.pool.begin().await?;
 
+        tracing::info!("pnl: rebuilding all live rollups (full DELETE + recompute; may lock pnl_rollups briefly)");
         sqlx::query(r#"DELETE FROM pnl_rollups WHERE ledger = 'live'"#)
             .execute(&mut *tx)
             .await?;
@@ -448,6 +485,7 @@ impl PnlRollupRepository {
         let mut acc: HashMap<RollupAggKey, RollupAcc> = HashMap::new();
         let mut pos: HashMap<(Uuid, String, String, &'static str), PositionAcc> = HashMap::new();
         let mut instrument_cache: HashMap<(String, String, String), InstrumentAssets> = HashMap::new();
+        let mut commission_price_cache: HashMap<AssetQuotePriceCacheKey, Option<Decimal>> = HashMap::new();
 
         for o in &orders {
             let vr = &o.venue_response;
@@ -481,6 +519,7 @@ impl PnlRollupRepository {
                 for f in &parsed.fills {
                     fees += normalize_commission_to_quote(
                         &self.pool,
+                        &mut commission_price_cache,
                         &o.exchange,
                         &o.segment,
                         &inst.base_asset,

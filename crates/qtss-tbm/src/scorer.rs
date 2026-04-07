@@ -35,6 +35,13 @@ pub fn score_tbm(pillars: Vec<PillarScore>) -> TbmScore {
     let mut total_weight = 0.0;
     let mut weighted_sum = 0.0;
     for p in &pillars {
+        if p.weight < 0.0 {
+            tracing::warn!(
+                weight = p.weight,
+                pillar = ?p.kind,
+                "tbm scorer: negative pillar weight clamped to zero; fix configuration"
+            );
+        }
         let w = p.weight.max(0.0);
         total_weight += w;
         weighted_sum += p.score * w;
