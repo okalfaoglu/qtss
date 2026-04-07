@@ -650,6 +650,14 @@ pub async fn maybe_auto_approve(
         .bind(decision_id)
         .execute(&mut *tx)
         .await?;
+        sqlx::query(
+            r#"UPDATE ai_portfolio_directives
+               SET status = 'approved'
+               WHERE decision_id = $1 AND status IN ('pending_approval', 'active')"#,
+        )
+        .bind(decision_id)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
 
         crate::storage::sync_linked_approval_request_status(

@@ -6,6 +6,7 @@ Applied at API/worker startup via `qtss_storage::run_migrations` (SQLx).
 
 - **`0001_qtss_baseline.sql`** — tüm şema + tohumlar + sonradan eklenen parçalar (`-- >>> merged from:` / `-- >>> squashed from:` bölüm başlıklarıyla). Eski zincir `0001`…`0063` ve son delta parçaları burada birleşiktir.
 - **`0002_ai_provider_system_config_ensure.sql`** — `system_config` `ai.*` sağlayıcı satırlarını idempotent ekler; `app_config.ai_engine_config` içinde eksik `output_locale` anahtarını tamamlar. Bir sonraki squash öncesi geçici delta; operatör kopyası: `docs/sql/ai_provider_system_config_ensure.sql`.
+- **`0013_ai_portfolio_directive_status_alignment.sql`** — stratejik `ai_portfolio_directives` satırlarını ebeveyn `ai_decisions` durumuyla hizalar; sütun varsayılanı `pending_approval` olur.
 
 Normalde squash sonrası yalnız `0001` kalır. Yeni şema değişikliği veya `0002` sonrası birleştirme: geçici olarak `0002_*.sql` ekleyip `python3 scripts/squash_migrations_into_one.py` ile tekrar tek dosyaya indir (üretimde uygulanmış baseline’ı elleme — yeni numaralı dosya + squash / dokümantasyondaki reset kuralları).
 

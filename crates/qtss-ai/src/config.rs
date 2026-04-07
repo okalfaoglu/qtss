@@ -25,7 +25,7 @@ pub struct AiEngineConfig {
     pub max_tokens_strategic: u32,
     pub decision_ttl_secs: u64,
     pub require_min_confidence: f64,
-    /// Target locale hint for prompts / reasoning (FAZ 9.5 placeholder).
+    /// Target locale hint for prompts / reasoning (`QTSS_AI_OUTPUT_LOCALE` / FAZ 9.5).
     #[serde(default)]
     pub output_locale: Option<String>,
 }

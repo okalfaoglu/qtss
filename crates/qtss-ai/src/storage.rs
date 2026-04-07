@@ -738,6 +738,7 @@ pub async fn fetch_ai_decision_detail(pool: &PgPool, id: Uuid) -> AiResult<Optio
 }
 
 pub async fn admin_approve_ai_decision(pool: &PgPool, id: Uuid, approved_by: &str) -> AiResult<u64> {
+    let mut tx = pool.begin().await?;
     let n = sqlx::query(
         r#"UPDATE ai_decisions
            SET status = 'approved', approved_at = now(), approved_by = $2
@@ -745,21 +746,30 @@ pub async fn admin_approve_ai_decision(pool: &PgPool, id: Uuid, approved_by: &st
     )
     .bind(id)
     .bind(approved_by)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?
     .rows_affected();
     sqlx::query(
         "UPDATE ai_tactical_decisions SET status = 'approved' WHERE decision_id = $1 AND status = 'pending_approval'",
     )
     .bind(id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(
         "UPDATE ai_position_directives SET status = 'approved' WHERE decision_id = $1 AND status = 'pending_approval'",
     )
     .bind(id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    sqlx::query(
+        r#"UPDATE ai_portfolio_directives SET status = 'approved'
+           WHERE decision_id = $1 AND status IN ('pending_approval', 'active')"#,
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
     let decider = approved_by
         .strip_prefix("jwt:")
         .and_then(|s| Uuid::parse_str(s.trim()).ok());
@@ -773,6 +783,7 @@ pub async fn admin_approve_ai_decision(pool: &PgPool, id: Uuid, approved_by: &st
 }
 
 pub async fn admin_reject_ai_decision(pool: &PgPool, id: Uuid, approved_by: &str) -> AiResult<u64> {
+    let mut tx = pool.begin().await?;
     let n = sqlx::query(
         r#"UPDATE ai_decisions
            SET status = 'rejected', approved_at = now(), approved_by = $2
@@ -780,21 +791,31 @@ pub async fn admin_reject_ai_decision(pool: &PgPool, id: Uuid, approved_by: &str
     )
     .bind(id)
     .bind(approved_by)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?
     .rows_affected();
     sqlx::query(
         "UPDATE ai_tactical_decisions SET status = 'rejected' WHERE decision_id = $1 AND status = 'pending_approval'",
     )
     .bind(id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(
         "UPDATE ai_position_directives SET status = 'rejected' WHERE decision_id = $1 AND status = 'pending_approval'",
     )
     .bind(id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    sqlx::query(
+        r#"UPDATE ai_portfolio_directives SET status = 'rejected'
+           WHERE decision_id = $1
+             AND status IN ('pending_approval', 'active', 'approved')"#,
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
     let decider = approved_by
         .strip_prefix("jwt:")
         .and_then(|s| Uuid::parse_str(s.trim()).ok());
@@ -881,13 +902,18 @@ pub async fn mirror_approval_request_outcome_to_linked_ai_decisions(
 }
 
 /// Latest active portfolio directive (FAZ 7.1).
+/// Latest portfolio directive whose parent decision was approved (or applied after use).
+/// Excludes rows tied to `pending_approval` / `rejected` / `expired` parents and legacy `active` children
+/// that were written before approval alignment.
 pub async fn fetch_active_portfolio_directive(pool: &PgPool) -> AiResult<Option<AiPortfolioDirectiveRow>> {
     let row = sqlx::query_as::<_, AiPortfolioDirectiveRow>(
-        r#"SELECT id, decision_id, created_at, valid_until, risk_budget_pct, max_open_positions,
-                  preferred_regime, symbol_scores, macro_note, status
-           FROM ai_portfolio_directives
-           WHERE status IN ('active', 'approved')
-           ORDER BY created_at DESC
+        r#"SELECT p.id, p.decision_id, p.created_at, p.valid_until, p.risk_budget_pct, p.max_open_positions,
+                  p.preferred_regime, p.symbol_scores, p.macro_note, p.status
+           FROM ai_portfolio_directives p
+           INNER JOIN ai_decisions d ON d.id = p.decision_id
+           WHERE p.status IN ('active', 'approved')
+             AND d.status IN ('approved', 'applied')
+           ORDER BY p.created_at DESC
            LIMIT 1"#,
     )
     .fetch_optional(pool)
