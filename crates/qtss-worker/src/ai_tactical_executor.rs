@@ -11,6 +11,9 @@
 //! ## Commission
 //! - **Dry mode**: Uses `CommissionPolicy` (fixed bps or exchange API quote).
 //!   Configurable via `QTSS_AI_TACTICAL_EXECUTOR_MAKER_BPS` / `TAKER_BPS`.
+//!   Simulated fills are written to `exchange_orders` (no Binance request) when
+//!   `QTSS_AI_TACTICAL_EXECUTOR_ORG_ID` / `QTSS_AI_TACTICAL_EXECUTOR_USER_ID` are set
+//!   or a prior order row supplies org/user for the symbol.
 //! - **Live mode**: Exchange native commission applies; no local override needed.
 //!
 //! ## Config flags
@@ -49,6 +52,7 @@ use qtss_storage::{
 };
 use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
+use serde_json::json;
 use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -203,30 +207,87 @@ async fn load_executor_config(pool: &PgPool) -> ExecutorConfig {
 async fn execute_dry(
     gw: &DryRunGateway,
     pool: &PgPool,
+    repo: &ExchangeOrderRepository,
     intent: &OrderIntent,
     mark: Decimal,
     td: &AiTacticalDecisionRow,
     sym: &str,
     direction: &str,
-    qty: Decimal,
+    org_user: Option<(Uuid, Uuid)>,
+    exchange_slug: &str,
+    segment_db: &str,
 ) {
     if let Err(e) = gw.set_reference_price(&intent.instrument, mark) {
         warn!(%e, %sym, "ai_tactical_executor: dry set_reference_price");
         return;
     }
-    match gw.place(intent.clone()).await {
-        Ok(cid) => {
-            info!(
-                %cid, %sym, %direction, %qty,
-                multiplier = %td.position_size_multiplier,
-                "ai_tactical_executor: dry entry placed"
-            );
-            let _ = mark_applied(pool, AiRecordTable::TacticalChild, td.id).await;
-        }
+    let out = match gw.place_detailed(intent.clone(), None) {
+        Ok(o) => o,
         Err(e) => {
             warn!(%e, %sym, "ai_tactical_executor: dry place failed");
+            return;
         }
+    };
+    let cid = out.client_order_id;
+
+    if let Some((org_id, user_id)) = org_user {
+        let venue_response = json!({
+            "dry_run": true,
+            "simulation_source": "ai_tactical_executor",
+            "status": "FILLED",
+            "executedQty": out.fill.quantity.to_string(),
+            "avgPrice": out.fill.avg_price.to_string(),
+            "fee": out.fill.fee.to_string(),
+            "ai_tactical_decision_row_id": td.id,
+            "ai_decision_id": td.decision_id,
+            "direction": direction,
+            "note": "Simulated fill; no HTTP request sent to the exchange.",
+        });
+        match repo
+            .insert_submitted(
+                org_id,
+                user_id,
+                exchange_slug,
+                segment_db,
+                sym,
+                cid,
+                intent,
+                None,
+                Some(venue_response),
+            )
+            .await
+        {
+            Ok(row) => {
+                info!(
+                    %cid,
+                    exchange_order_row_id = %row.id,
+                    %sym,
+                    %direction,
+                    qty = %out.fill.quantity,
+                    "ai_tactical_executor: dry simulated order persisted to exchange_orders"
+                );
+            }
+            Err(e) => {
+                warn!(%e, %cid, %sym, "ai_tactical_executor: dry exchange_orders insert failed");
+            }
+        }
+    } else {
+        warn!(
+            %sym,
+            %cid,
+            "ai_tactical_executor: dry fill in-memory only — set QTSS_AI_TACTICAL_EXECUTOR_ORG_ID and QTSS_AI_TACTICAL_EXECUTOR_USER_ID (or place a live order for this symbol first) to persist exchange_orders"
+        );
     }
+
+    info!(
+        %cid,
+        %sym,
+        %direction,
+        qty = %out.fill.quantity,
+        multiplier = %td.position_size_multiplier,
+        "ai_tactical_executor: dry entry placed"
+    );
+    let _ = mark_applied(pool, AiRecordTable::TacticalChild, td.id).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -477,7 +538,26 @@ pub async fn ai_tactical_executor_loop(pool: PgPool) {
 
             // Execute.
             if let Some(ref gw) = dry_gateway {
-                execute_dry(gw, &pool, &intent, mark, &td, &sym, direction, qty).await;
+                let org_user = resolve_user_org(&filled, &sym);
+                let exchange_slug = es.exchange.trim();
+                let segment_db = match segment {
+                    MarketSegment::Futures => "futures",
+                    _ => "spot",
+                };
+                execute_dry(
+                    gw,
+                    &pool,
+                    &repo,
+                    &intent,
+                    mark,
+                    &td,
+                    &sym,
+                    direction,
+                    org_user,
+                    exchange_slug,
+                    segment_db,
+                )
+                .await;
             } else if live_on {
                 let Some((org_id, user_id)) = resolve_user_org(&filled, &sym) else {
                     warn!(%sym, "ai_tactical_executor: no org_id/user_id for live execution");

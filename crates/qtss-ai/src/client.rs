@@ -11,7 +11,7 @@ use crate::circuit_breaker::CircuitBreaker;
 use crate::config::AiEngineConfig;
 use crate::error::AiResult;
 use crate::parser::{parse_operational_decision, parse_portfolio_decision, parse_tactical_decision};
-use crate::providers::{AiCompletionProvider, AiRequest, AiResponse, LayerKind};
+use crate::providers::{AiCompletionProvider, AiRequest, AiResponse, AiUsage, LayerKind};
 use crate::providers;
 use crate::safety::{SafetyConfig, validate_ai_decision_safety, validate_operational_decision_safety, validate_strategic_decision_safety};
 use crate::storage::{
@@ -23,6 +23,36 @@ use qtss_storage::{
     list_enabled_engine_symbols, symbols_with_open_positions_from_fills, AppConfigRepository,
     ExchangeOrderRepository,
 };
+
+/// After a successful completion: log provider-reported token usage when present; otherwise a rough
+/// input estimate `(system + user char len) / 4` at `debug` (output size unknown).
+fn log_llm_call_metrics(layer: &'static str, symbol: Option<&str>, req: &AiRequest, resp: &AiResponse) {
+    let sym = symbol.unwrap_or("");
+    if let Some(u) = resp.usage.as_ref().filter(|u| {
+        u.input_tokens.is_some() || u.output_tokens.is_some()
+    }) {
+        tracing::info!(
+            layer,
+            symbol = sym,
+            model = %resp.model,
+            provider = %resp.provider_id,
+            input_tokens = u.input_tokens,
+            output_tokens = u.output_tokens,
+            "llm token usage"
+        );
+    } else {
+        let sys_len = req.system.as_ref().map(|s| s.len()).unwrap_or(0);
+        let approx_in = ((sys_len + req.user.len()) as u64).saturating_div(4);
+        tracing::debug!(
+            layer,
+            symbol = sym,
+            model = %resp.model,
+            provider = %resp.provider_id,
+            approx_input_tokens = approx_in,
+            "llm usage not reported by provider; rough input estimate (chars/4)"
+        );
+    }
+}
 
 /// Provider call with exponential backoff retry (max 3 attempts) and circuit breaker.
 /// Retries on transient HTTP errors (timeout, 429, 5xx); non-retryable errors propagate immediately.
@@ -435,6 +465,7 @@ async fn run_tactical_single(
             return Ok(());
         }
     };
+    log_llm_call_metrics("tactical", Some(sym), &req, &resp);
     let mut parsed = match parse_tactical_decision(&resp.text) {
         Ok(p) => p,
         Err(err) => {
@@ -588,6 +619,7 @@ pub async fn run_operational_sweep(rt: &AiRuntime) -> AiResult<()> {
                 continue;
             }
         };
+        log_llm_call_metrics("operational", Some(sym.as_str()), &req, &resp);
         let parsed = match parse_operational_decision(&resp.text) {
             Ok(p) => p,
             Err(err) => {
@@ -689,6 +721,7 @@ pub async fn run_strategic_sweep(rt: &AiRuntime) -> AiResult<()> {
         force_json_mime: false,
     };
     let resp = complete_with_retry(provider.as_ref(), &req, rt.strategic_breaker()).await?;
+    log_llm_call_metrics("strategic", None, &req, &resp);
     let parsed = match parse_portfolio_decision(&resp.text) {
         Ok(p) => p,
         Err(e) => {

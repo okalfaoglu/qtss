@@ -3,7 +3,7 @@
 -- Idempotent: ON CONFLICT DO UPDATE ensures re-runs overwrite with the latest desired values.
 
 -- ============================================================================
--- 1. app_config: ai_engine_config — enable auto-approve at 60% confidence
+-- 1. app_config: ai_engine_config — auto-approve when confidence meets persist bar
 -- ============================================================================
 INSERT INTO app_config (key, value, description)
 VALUES (
@@ -14,7 +14,7 @@ VALUES (
         "operational_layer_enabled": true,
         "strategic_layer_enabled": false,
         "auto_approve_enabled": true,
-        "auto_approve_threshold": 0.55,
+        "auto_approve_threshold": 0.50,
         "require_min_confidence": 0.50,
         "tactical_tick_secs": 900,
         "operational_tick_secs": 120,
@@ -31,7 +31,7 @@ VALUES (
         "decision_ttl_secs": 1800,
         "output_locale": "tr"
     }'::jsonb,
-    'AI engine master config — auto-approve at 55%, persist at 50%'
+    'AI engine master config — auto-approve and persist both at 50% confidence'
 )
 ON CONFLICT (key) DO UPDATE SET
     value = EXCLUDED.value,
