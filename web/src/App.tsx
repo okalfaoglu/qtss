@@ -1290,6 +1290,12 @@ export default function App() {
     liveRobotTradeTargetsRowIndex,
   ]);
 
+  const acpAllowedPatternIdSet = useMemo((): ReadonlySet<number> | undefined => {
+    const ids = acpEnabledPatternIds(acpConfig);
+    if (ids === undefined) return undefined;
+    return new Set(ids);
+  }, [acpConfig]);
+
   const multiOverlay = useMemo(() => {
     if (!lastChannelScan?.matched) return null;
     const scanBars = channelScanOverlayBars;
@@ -1301,6 +1307,7 @@ export default function App() {
       scanBars,
       acpConfig.display,
       undefined,
+      acpAllowedPatternIdSet,
     );
     if (fromMatches) {
       return fromMatches;
@@ -1317,7 +1324,7 @@ export default function App() {
       }
     }
     return fromMatches;
-  }, [lastChannelScan, channelScanOverlayBars, acpConfig.display]);
+  }, [lastChannelScan, channelScanOverlayBars, acpConfig.display, acpAllowedPatternIdSet]);
 
   const dbTradingRangeSnapshot = useMemo(() => {
     if (!engineSnapshots.length) return null;

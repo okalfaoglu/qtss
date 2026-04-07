@@ -301,6 +301,8 @@ export function buildMultiPatternOverlayFromScan(
   for (const p of payloads) {
     const raw = p.pattern_drawing_batch;
     if (!raw) continue;
+    const rowPid = raw.pattern_type_id ?? p.outcome?.scan?.pattern_type_id;
+    if (!acpPatternTypeAllowed(rowPid, allowedPatternIdSet)) continue;
     const filtered = filterDrawingBatchForDisplay(raw, display);
     if (!filtered) continue;
     const o = patternDrawingBatchToOverlay(barsChrono, filtered, chartBarsChrono);
@@ -330,6 +332,7 @@ export function buildMultiPatternOverlayFromScan(
   // Faz 2 formasyonları (Double Top/Bottom, H&S, Triple, Flag)
   if (res.formation_drawing_batches?.length) {
     for (const batch of res.formation_drawing_batches) {
+      if (!acpPatternTypeAllowed(batch.pattern_type_id, allowedPatternIdSet)) continue;
       const filtered = filterDrawingBatchForDisplay(batch, display);
       if (!filtered) continue;
       const o = patternDrawingBatchToOverlay(barsChrono, filtered, chartBarsChrono);
