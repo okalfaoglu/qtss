@@ -147,11 +147,16 @@ fn screener_rows(response: &Value) -> Vec<ScreenerRow> {
             .or_else(|| parse_json_f64_opt(row.get("dex_sell_volume")))
             .unwrap_or(0.0)
             .max(0.0);
-        let price_change_pct = parse_json_f64_opt(row.get("price_change_pct"))
+        let price_change_raw = parse_json_f64_opt(row.get("price_change_pct"))
             .or_else(|| parse_json_f64_opt(row.get("priceChangePct")))
             .or_else(|| parse_json_f64_opt(row.get("price_change_24h")))
             .or_else(|| parse_json_f64_opt(row.get("price_change")))
             .unwrap_or(0.0);
+        let price_change_pct = if price_change_raw.abs() < 5.0 {
+            price_change_raw * 100.0
+        } else {
+            price_change_raw
+        };
         let volume_usd = parse_json_f64_opt(row.get("volume"))
             .or_else(|| parse_json_f64_opt(row.get("volume_usd")))
             .or_else(|| parse_json_f64_opt(row.get("volumeUsd")))
@@ -1054,6 +1059,21 @@ async fn run_sweep(pool: &PgPool) -> Result<(), qtss_storage::StorageError> {
         .map(|j| screener_rows(j))
         .unwrap_or_default();
 
+    if rows.is_empty() {
+        warn!("intake_playbook sweep: screener_rows parsed 0 rows from snapshot");
+    } else {
+        info!(
+            count = rows.len(),
+            sample_symbol = %rows[0].symbol,
+            sample_net_flow = rows[0].net_flow,
+            sample_price_pct = rows[0].price_change_pct,
+            sample_liq = rows[0].liquidity_usd,
+            sample_mcap = rows[0].mcap_usd,
+            sample_vol = rows[0].volume_usd,
+            "intake_playbook sweep: screener_rows parsed"
+        );
+    }
+
     let aux = load_aux_data(pool).await;
 
     let majors_nf = majors_netflow_usd(nf_j.as_ref());
@@ -1135,6 +1155,7 @@ async fn run_sweep(pool: &PgPool) -> Result<(), qtss_storage::StorageError> {
 
     // === Playbook 2: Elite Short (pump->distribution->dump) ===
     let elite_s = pick_elite_short(&rows, funding_avg, &aux);
+    info!(count = elite_s.len(), "intake pick: elite_short");
     let elite_s_summary = json!({
         "goal": "pump_distribution_dump",
         "horizon_hours": [1, 4],
@@ -1160,6 +1181,7 @@ async fn run_sweep(pool: &PgPool) -> Result<(), qtss_storage::StorageError> {
 
     // === Playbook 3: Elite Long (pre-pump breakout) ===
     let elite_l = pick_elite_long(&rows, &aux);
+    info!(count = elite_l.len(), "intake pick: elite_long");
     let elite_l_summary = json!({
         "goal": "pre_pump_breakout",
         "horizon_hours": [1, 6],
@@ -1184,6 +1206,7 @@ async fn run_sweep(pool: &PgPool) -> Result<(), qtss_storage::StorageError> {
 
     // === Playbook 4: 10x Alert ===
     let ten = pick_ten_x(&rows);
+    info!(count = ten.len(), "intake pick: ten_x");
     let triggered = !ten.is_empty();
     let ten_summary = json!({
         "triggered": triggered,
@@ -1258,6 +1281,7 @@ async fn run_sweep(pool: &PgPool) -> Result<(), qtss_storage::StorageError> {
 
     // === Playbook 5: Institutional Exit (entity-enriched) ===
     let ex = institutional_exit_like(&rows, &aux);
+    info!(count = ex.len(), "intake pick: institutional_exit");
     let ex_summary = json!({
         "direction": "SHORT",
         "target_pct": [-15, -25],
@@ -1282,6 +1306,7 @@ async fn run_sweep(pool: &PgPool) -> Result<(), qtss_storage::StorageError> {
 
     // === Playbook 6: Institutional Accumulation (entity-enriched) ===
     let acc = institutional_accum_like(&rows, &aux);
+    info!(count = acc.len(), "intake pick: institutional_accum");
     let acc_summary = json!({
         "direction": "LONG",
         "target_pct": [15, 30],
@@ -1305,6 +1330,7 @@ async fn run_sweep(pool: &PgPool) -> Result<(), qtss_storage::StorageError> {
 
     // === Playbook 7: Explosive with direction detection ===
     let exp = pick_explosive(&rows, &aux);
+    info!(count = exp.len(), "intake pick: explosive");
     let exp_directions: Vec<&str> = exp.iter().map(|(_, d)| *d).collect();
     let exp_summary = json!({
         "min_volume_change_pct": 200,
@@ -1341,6 +1367,7 @@ async fn run_sweep(pool: &PgPool) -> Result<(), qtss_storage::StorageError> {
 
     // === Playbook 8: Early Accumulation ===
     let early = pick_early_accumulation(&rows);
+    info!(count = early.len(), "intake pick: early_accumulation");
     let early_summary = json!({
         "horizon_hours": [6, 24],
         "criteria": "flat_price_rising_flow_fresh_wallets",
@@ -1361,6 +1388,7 @@ async fn run_sweep(pool: &PgPool) -> Result<(), qtss_storage::StorageError> {
 
     // === Playbook 9: Token Analysis (deep per-token verdict) ===
     let analyses = pick_token_analysis(&rows, &aux);
+    info!(count = analyses.len(), "intake pick: token_analysis");
     let analysis_summary = json!({
         "count": analyses.len(),
         "tokens": analyses,
