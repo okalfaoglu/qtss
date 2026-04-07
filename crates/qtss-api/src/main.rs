@@ -100,10 +100,10 @@ async fn main() -> anyhow::Result<()> {
 
     let x_request_id = HeaderName::from_static("x-request-id");
 
-    let app = Router::new()
+    // Telegram Bot API posts every inline-button tap to the webhook. Those requests must not be
+    // throttled by the global HTTP governor (shared egress IPs → false 429 and “dead” buttons).
+    let rate_limited = Router::new()
         .merge(health_router())
-        .merge(telegram_webhook::telegram_webhook_router())
-        .merge(telegram_setup_analysis_webhook::telegram_setup_analysis_router())
         .route("/metrics", get(metrics::prometheus_metrics_gate))
         .route("/oauth/token", post(oauth::oauth_token))
         .nest(
@@ -112,13 +112,21 @@ async fn main() -> anyhow::Result<()> {
                 .merge(routes::public_bootstrap_routes())
                 .merge(routes::api_router(state.clone())),
         )
+        .layer(GovernorLayer {
+            config: governor_conf,
+        });
+
+    let telegram_inbound = Router::new()
+        .merge(telegram_webhook::telegram_webhook_router())
+        .merge(telegram_setup_analysis_webhook::telegram_setup_analysis_router());
+
+    let app = Router::new()
+        .merge(telegram_inbound)
+        .merge(rate_limited)
         .layer(middleware::from_fn(metrics::count_http_requests_middleware))
         .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
         .layer(SetRequestIdLayer::new(x_request_id, MakeRequestUuid))
         .layer(TraceLayer::new_for_http())
-        .layer(GovernorLayer {
-            config: governor_conf,
-        })
         .layer(cors)
         .with_state(state);
 

@@ -645,6 +645,19 @@ pub async fn delete_ai_decisions_with_status(pool: &PgPool, status: &str) -> AiR
     Ok(res.rows_affected())
 }
 
+/// Postgres `LISTEN` / `NOTIFY` channel — `qtss-worker` `ai_tactical_executor_loop` interrupts tick sleep when a decision is approved.
+pub const AI_TACTICAL_EXECUTOR_WAKE_NOTIFY_CHANNEL: &str = "qtss_ai_tactical_wake";
+
+/// Wake `ai_tactical_executor_loop` immediately (best-effort) after manual or auto-approve.
+pub async fn notify_ai_tactical_executor_wake(pool: &PgPool) -> AiResult<()> {
+    sqlx::query(r#"SELECT pg_notify($1, $2)"#)
+        .bind(AI_TACTICAL_EXECUTOR_WAKE_NOTIFY_CHANNEL)
+        .bind("")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn fetch_ai_decision_detail(pool: &PgPool, id: Uuid) -> AiResult<Option<AiDecisionDetailRow>> {
     let row = sqlx::query_as::<_, AiDecisionDetailRow>(
         r#"SELECT id, created_at, layer, symbol, model_id, prompt_hash, input_snapshot,
@@ -685,6 +698,11 @@ pub async fn admin_approve_ai_decision(pool: &PgPool, id: Uuid, approved_by: &st
         .strip_prefix("jwt:")
         .and_then(|s| Uuid::parse_str(s.trim()).ok());
     sync_linked_approval_request_status(pool, id, "approved", None, decider).await?;
+    if n > 0 {
+        if let Err(e) = notify_ai_tactical_executor_wake(pool).await {
+            tracing::warn!(%e, "notify_ai_tactical_executor_wake after admin approve");
+        }
+    }
     Ok(n)
 }
 

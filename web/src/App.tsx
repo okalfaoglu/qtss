@@ -1293,12 +1293,13 @@ export default function App() {
     if (!lastChannelScan?.matched) return null;
     const scanBars = channelScanOverlayBars;
     if (!scanBars?.length) return null;
-    const chartChrono = bars?.length ? chartOhlcRowsSortedChrono(bars) : [];
+    // Pine parity / Bug-9: coordinates are indexed into the scan payload only. Remapping via live
+    // `bars` during the in-flight window can shift `bar_index` ↔ `open_time` alignment; use snapshot rows only.
     const fromMatches = buildMultiPatternOverlayFromScan(
       lastChannelScan,
       scanBars,
       acpConfig.display,
-      chartChrono.length ? chartChrono : undefined,
+      undefined,
     );
     if (fromMatches) {
       return fromMatches;
@@ -1315,7 +1316,7 @@ export default function App() {
       }
     }
     return fromMatches;
-  }, [lastChannelScan, channelScanOverlayBars, acpConfig.display, bars]);
+  }, [lastChannelScan, channelScanOverlayBars, acpConfig.display]);
 
   const dbTradingRangeSnapshot = useMemo(() => {
     if (!engineSnapshots.length) return null;

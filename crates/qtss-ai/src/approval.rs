@@ -621,14 +621,15 @@ pub async fn maybe_auto_approve(
 ) -> AiResult<()> {
     let approve = auto_approve_eligible(confidence, cfg);
     if approve {
-        sqlx::query(
+        let n = sqlx::query(
             r#"UPDATE ai_decisions
                SET status = 'approved', approved_at = now(), approved_by = 'auto'
                WHERE id = $1 AND status = 'pending_approval'"#,
         )
         .bind(decision_id)
         .execute(pool)
-        .await?;
+        .await?
+        .rows_affected();
         sqlx::query(
             r#"UPDATE ai_tactical_decisions
                SET status = 'approved'
@@ -653,6 +654,11 @@ pub async fn maybe_auto_approve(
             None,
         )
         .await?;
+        if n > 0 {
+            if let Err(e) = crate::storage::notify_ai_tactical_executor_wake(pool).await {
+                tracing::warn!(%e, "notify_ai_tactical_executor_wake after auto-approve");
+            }
+        }
         return Ok(());
     }
 

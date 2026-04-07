@@ -26,6 +26,9 @@ pub use client::{
 };
 pub use feedback::{outcome_stats_for_prompt, record_decision_outcome};
 pub use storage::mirror_approval_request_outcome_to_linked_ai_decisions;
+pub use storage::{
+    notify_ai_tactical_executor_wake, AI_TACTICAL_EXECUTOR_WAKE_NOTIFY_CHANNEL,
+};
 pub use config::AiEngineConfig;
 pub use error::{AiError, AiResult};
 pub use notify_telegram_config::load_notify_config_merged;

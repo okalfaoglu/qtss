@@ -6,9 +6,27 @@ use axum::routing::post;
 use axum::{Json, Router};
 use qtss_storage::SystemConfigRepository;
 use serde_json::{json, Value};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::state::SharedState;
+
+async fn answer_cq(
+    disp: &qtss_notify::NotificationDispatcher,
+    cq_id: &str,
+    text: &str,
+) {
+    if cq_id.is_empty() {
+        return;
+    }
+    match disp.telegram_answer_callback_query(cq_id, Some(text)).await {
+        Ok(()) => {}
+        Err(e) => warn!(
+            %e,
+            "telegram webhook: answerCallbackQuery failed — check notify.telegram bot_token matches the bot that sent the message"
+        ),
+    }
+}
 
 pub fn telegram_webhook_router() -> Router<SharedState> {
     Router::new().route("/telegram/webhook/{secret}", post(handle_update))
@@ -53,6 +71,10 @@ async fn handle_update(
     Json(update): Json<Value>,
 ) -> Result<Json<Value>, StatusCode> {
     if !webhook_secret_matches(&st.pool, &secret).await {
+        warn!(
+            path_secret_configured = !secret.trim().is_empty(),
+            "telegram AI webhook: secret mismatch or notify.telegram_webhook_secret missing — expect POST https://<api-host>/telegram/webhook/<secret> (not under /api/v1); setWebhook must match DB"
+        );
         return Err(StatusCode::NOT_FOUND);
     }
 
@@ -61,8 +83,18 @@ async fn handle_update(
         _ => return Ok(Json(json!({ "ok": true }))),
     };
 
-    let cq_id = cq.get("id").and_then(|x| x.as_str()).unwrap_or("");
+    let cq_id = cq
+        .get("id")
+        .map(|x| match x {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            _ => String::new(),
+        })
+        .unwrap_or_default();
     let data = cq.get("data").and_then(|x| x.as_str()).unwrap_or("");
+    if !data.is_empty() {
+        info!(callback_len = data.len(), "telegram webhook: callback_query");
+    }
     let from_id = cq
         .get("from")
         .and_then(|u| u.get("id"))
@@ -82,12 +114,12 @@ async fn handle_update(
             .await;
         match result {
             Ok(0) => {
-                let _ = disp
-                    .telegram_answer_callback_query(
-                        cq_id,
-                        Some("No pending approval (wrong id or already decided)"),
-                    )
-                    .await;
+                answer_cq(
+                    &disp,
+                    &cq_id,
+                    "No pending approval (wrong id or already decided)",
+                )
+                .await;
             }
             Ok(_) => {
                 let by = format!("telegram:{from_id}");
@@ -100,7 +132,7 @@ async fn handle_update(
                     )
                     .await
                 {
-                    tracing::warn!(
+                    warn!(
                         error = %e,
                         "mirror linked ai_decisions after approval_request telegram"
                     );
@@ -110,22 +142,19 @@ async fn handle_update(
                 } else {
                     "Approval request rejected"
                 };
-                let _ = disp.telegram_answer_callback_query(cq_id, Some(msg)).await;
+                answer_cq(&disp, &cq_id, msg).await;
             }
             Err(e) => {
-                tracing::warn!(error = %e, "telegram approval_request webhook");
-                let _ = disp
-                    .telegram_answer_callback_query(cq_id, Some("Server error"))
-                    .await;
+                warn!(error = %e, "telegram approval_request webhook");
+                answer_cq(&disp, &cq_id, "Server error").await;
             }
         }
         return Ok(Json(json!({ "ok": true })));
     }
 
     let Some((decision_id, approve)) = parse_decision_callback(data) else {
-        let _ = disp
-            .telegram_answer_callback_query(cq_id, Some("Invalid callback"))
-            .await;
+        warn!(%data, "telegram webhook: unrecognized callback_data (expected d:<uuid>:a|r)");
+        answer_cq(&disp, &cq_id, "Invalid callback").await;
         return Ok(Json(json!({ "ok": true })));
     };
 
@@ -138,22 +167,21 @@ async fn handle_update(
 
     match result {
         Ok(0) => {
-            let _ = disp
-                .telegram_answer_callback_query(
-                    cq_id,
-                    Some("No pending decision (already decided or expired)"),
-                )
-                .await;
+            answer_cq(
+                &disp,
+                &cq_id,
+                "No pending decision (already decided or expired)",
+            )
+            .await;
         }
-        Ok(_) => {
+        Ok(rows) => {
+            info!(%decision_id, approve, rows_updated = rows, "telegram webhook: ai_decision approve/reject applied");
             let msg = if approve { "Approved" } else { "Rejected" };
-            let _ = disp.telegram_answer_callback_query(cq_id, Some(msg)).await;
+            answer_cq(&disp, &cq_id, msg).await;
         }
         Err(e) => {
-            tracing::warn!(error = %e, "telegram AI decision approve/reject webhook");
-            let _ = disp
-                .telegram_answer_callback_query(cq_id, Some("Server error"))
-                .await;
+            warn!(error = %e, "telegram AI decision approve/reject webhook");
+            answer_cq(&disp, &cq_id, "Server error").await;
         }
     }
 

@@ -323,9 +323,10 @@ pub fn next_level_from_pivot_prices(prices: &[f64], bar_indices: &[i64], times_m
 
 /// Pine `ZigzagLite.nextlevel` parity:
 /// - kronolojik pivot akışını (eski → yeni) yürütür,
-/// - `|dir|==1` pivotları geçici tamponlarda (`tempBullishPivot`/`tempBearishPivot`) tutar,
-/// - `|dir|==2` pivot geldiğinde son pivota göre gerektiğinde `shift` ve/veya temp geçişi ekler,
-/// - ardından pivotu ekler ve temp’leri temizler.
+/// - `nextLevel` boşken yalnızca `|dir|==2` pivot eklenir; `|dir|==1` atlanır (Pine `else if math.abs(dir)==2`),
+/// - doluyken `|dir|==1` pivotları geçici tamponlarda (`tempBullishPivot`/`tempBearishPivot`) tutulur,
+/// - `|dir|==2` pivot geldiğinde son pivota göre gerektiğinde `shift` ve/veya temp geçişi eklenir,
+/// - ardından pivot eklenir ve temp’ler temizlenir.
 #[must_use]
 pub fn next_level_from_zigzag(source: &ZigzagLite) -> ZigzagLite {
     let mut next_level = ZigzagLite::new(source.length, source.number_of_pivots, 0);
@@ -338,19 +339,21 @@ pub fn next_level_from_zigzag(source: &ZigzagLite) -> ZigzagLite {
         let mut lp = p_ref.clone();
         lp.level += 1;
         let dir = lp.dir;
-        let new_dir = dir.signum();
-        let value = lp.point.price;
 
         if next_level.pivots.is_empty() {
+            // Pine: when `nextLevel.zigzagPivots.size() == 0`, only `math.abs(dir)==2` calls `addnewpivot`.
+            // Single-dir pivots are not buffered in temps until at least one major pivot exists.
             if dir.abs() == 2 {
                 next_level.add_new_pivot(lp);
-            } else if new_dir > 0 {
-                temp_bullish = Some(lp);
-            } else {
-                temp_bearish = Some(lp);
+                // Pine: temps were never filled while `nextLevel` was empty; keep buffers aligned.
+                temp_bullish = None;
+                temp_bearish = None;
             }
             continue;
         }
+
+        let new_dir = dir.signum();
+        let value = lp.point.price;
 
         let last_dir = next_level.pivots[0].dir.signum();
         let last_value = next_level.pivots[0].point.price;
@@ -587,5 +590,25 @@ mod tests {
         assert!((ch[0].point.price - 13.0).abs() < 1e-9);
         assert!((ch[1].point.price - 8.0).abs() < 1e-9);
         assert!((ch[2].point.price - 14.0).abs() < 1e-9);
+    }
+
+    /// Pine `nextlevel`: while `nextLevel` is empty, `|dir|==1` iterations do nothing (no temp buffers).
+    /// Seeding temps in Rust caused stale `tempBullish`/`tempBearish` after the first `|dir|==2` add (empty branch
+    /// does not clear temps), so a later bridge could inject spurious pivots — diverging from Pine.
+    #[test]
+    fn next_level_from_zigzag_pine_no_temp_while_next_level_was_empty() {
+        let mut src = ZigzagLite::new(3, 32, 0);
+        // Chrono oldest → newest: +1 @100, -1 @80, -2 @50, +2 @90
+        src.pivots = vec![
+            ZigzagPivot::new(ChartPoint { index: 4, price: 90.0, time_ms: 4 }, 2),
+            ZigzagPivot::new(ChartPoint { index: 3, price: 50.0, time_ms: 3 }, -2),
+            ZigzagPivot::new(ChartPoint { index: 2, price: 80.0, time_ms: 2 }, -1),
+            ZigzagPivot::new(ChartPoint { index: 1, price: 100.0, time_ms: 1 }, 1),
+        ];
+        let nl = next_level_from_zigzag(&src);
+        let ch = pivots_chronological(&nl);
+        assert_eq!(ch.len(), 2, "{ch:?}");
+        assert!((ch[0].point.price - 50.0).abs() < 1e-9);
+        assert!((ch[1].point.price - 90.0).abs() < 1e-9);
     }
 }

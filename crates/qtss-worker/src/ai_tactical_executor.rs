@@ -20,7 +20,8 @@
 //! - `QTSS_AI_TACTICAL_EXECUTOR_ENABLED=1`          — master switch
 //! - `QTSS_AI_TACTICAL_EXECUTOR_DRY=1`              — paper execution (default)
 //! - `QTSS_AI_TACTICAL_EXECUTOR_LIVE=1`             — live exchange execution
-//! - `QTSS_AI_TACTICAL_EXECUTOR_TICK_SECS`          — poll interval (default 30s)
+//! - `QTSS_AI_TACTICAL_EXECUTOR_TICK_SECS`          — poll interval (default 30s); sleep is interrupted
+//!   early when Postgres `NOTIFY qtss_ai_tactical_wake` fires (after UI/Telegram/auto approve).
 //! - `QTSS_AI_TACTICAL_EXECUTOR_BASE_QTY_USDT`     — base notional per trade (default 100)
 //! - `QTSS_AI_TACTICAL_EXECUTOR_QUOTE_BALANCE`      — dry ledger initial balance (default 100,000)
 //! - `QTSS_AI_TACTICAL_EXECUTOR_LEVERAGE`            — futures leverage (default 1)
@@ -31,10 +32,12 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use qtss_ai::AI_TACTICAL_EXECUTOR_WAKE_NOTIFY_CHANNEL;
 use qtss_ai::storage::{
     fetch_latest_approved_tactical, mark_applied, mark_tactical_execution_failed, AiRecordTable,
     AiTacticalDecisionRow,
 };
+use qtss_common::postgres_url_from_env_or_default;
 use qtss_binance::{
     venue_order_id_from_binance_order_response, BinanceClient, BinanceClientConfig,
 };
@@ -54,7 +57,9 @@ use qtss_storage::{
 use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
+use sqlx::postgres::PgListener;
 use sqlx::PgPool;
+use tokio::sync::Notify;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -474,6 +479,47 @@ fn resolve_user_org(filled: &[ExchangeOrderRow], sym: &str) -> Option<(Uuid, Uui
 // Main loop
 // ---------------------------------------------------------------------------
 
+fn spawn_pg_listen_tactical_wake(wake: Arc<Notify>) {
+    tokio::spawn(async move {
+        let url = postgres_url_from_env_or_default("postgres://qtss:qtss@127.0.0.1:5432/qtss");
+        let channel = AI_TACTICAL_EXECUTOR_WAKE_NOTIFY_CHANNEL;
+        loop {
+            let mut listener = match PgListener::connect(&url).await {
+                Ok(l) => l,
+                Err(e) => {
+                    warn!(
+                        %e,
+                        "ai_tactical_executor: PgListener connect failed, retry in 5s"
+                    );
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+            if let Err(e) = listener.listen(channel).await {
+                warn!(%e, %channel, "ai_tactical_executor: LISTEN failed, retry in 5s");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+            info!(%channel, "ai_tactical_executor: LISTEN active (wake on approve via NOTIFY)");
+            loop {
+                match listener.recv().await {
+                    Ok(n) => {
+                        info!(
+                            pg_channel = %n.channel(),
+                            "ai_tactical_executor: pg_notify — next tick runs immediately"
+                        );
+                        wake.notify_one();
+                    }
+                    Err(e) => {
+                        warn!(%e, "ai_tactical_executor: PgListener recv ended, reconnecting");
+                        break;
+                    }
+                }
+            }
+        }
+    });
+}
+
 pub async fn ai_tactical_executor_loop(pool: PgPool) {
     let enabled = resolve_worker_enabled_flag(
         &pool, "worker", "ai_tactical_executor_enabled",
@@ -518,12 +564,20 @@ pub async fn ai_tactical_executor_loop(pool: PgPool) {
         "ai_tactical_executor_loop started"
     );
 
+    let wake = Arc::new(Notify::new());
+    spawn_pg_listen_tactical_wake(wake.clone());
+
     loop {
         let tick_secs = resolve_worker_tick_secs(
             &pool, "worker", "ai_tactical_executor_tick_secs",
             "QTSS_AI_TACTICAL_EXECUTOR_TICK_SECS", 30, 10,
         ).await;
-        tokio::time::sleep(Duration::from_secs(tick_secs)).await;
+        tokio::select! {
+            _ = wake.notified() => {
+                info!("ai_tactical_executor: tick wake (NOTIFY after approve)");
+            }
+            _ = tokio::time::sleep(Duration::from_secs(tick_secs)) => {}
+        }
 
         if is_trading_halted() {
             continue;
@@ -554,7 +608,7 @@ pub async fn ai_tactical_executor_loop(pool: PgPool) {
 
             // Block short entries on spot markets.
             if is_short_entry(direction) && segment != MarketSegment::Futures {
-                tracing::debug!(
+                info!(
                     %sym, %direction,
                     "ai_tactical_executor: short entry not supported on spot — skipping"
                 );
@@ -594,11 +648,17 @@ pub async fn ai_tactical_executor_loop(pool: PgPool) {
             let min_q = Decimal::new(1, 8);
 
             if is_long_entry(direction) && long_qty > min_q {
-                tracing::debug!(%sym, %long_qty, "ai_tactical_executor: already long — skipping");
+                info!(
+                    %sym, %long_qty,
+                    "ai_tactical_executor: already long — skipping new entry"
+                );
                 continue;
             }
             if is_short_entry(direction) && short_qty > min_q {
-                tracing::debug!(%sym, %short_qty, "ai_tactical_executor: already short — skipping");
+                info!(
+                    %sym, %short_qty,
+                    "ai_tactical_executor: already short — skipping new entry"
+                );
                 continue;
             }
 
@@ -610,7 +670,10 @@ pub async fn ai_tactical_executor_loop(pool: PgPool) {
             let mark = match get_mark_price(&pool, es).await {
                 Some(m) if m > Decimal::ZERO => m,
                 _ => {
-                    tracing::debug!(%sym, "ai_tactical_executor: no bar data");
+                    info!(
+                        %sym,
+                        "ai_tactical_executor: no bar data for mark — skipping entry"
+                    );
                     continue;
                 }
             };
