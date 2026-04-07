@@ -17,7 +17,7 @@ pub struct OnchainMetrics {
 }
 
 /// Onchain pillar skoru hesaplar.
-/// Veri yoksa nötr (50) döner, düşük ağırlıkla.
+/// Veri yoksa skor 0 ve ağırlık 0 (pillar TBM birleşimine girmez). Bileşen başına üst sınır: smart money 30, exchange netflow 25, funding 25, whale 20.
 #[must_use]
 pub fn score_onchain(metrics: &OnchainMetrics, is_bottom_search: bool) -> PillarScore {
     let mut score = 0.0_f64;
