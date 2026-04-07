@@ -793,14 +793,14 @@ pub fn analyze_channel_six_from_bars(
     // Pine `getZigzagAndPattern`: `while(mlzigzag.zigzagPivots.size() >= 6+offset)` — gösterge `ScanProperties` ilk `offset=0`.
     // 5 pivotlu desen seçili olsa bile döngüye girmek için en az **6** zigzag pivotu gerekir (Trendoscope ACP v6).
     let pine_zz_floor: usize = 6;
-    // Pine parity: `max_zigzag_levels == 0` => unlimited levels (until pivot floor breaks).
-    let unlimited_levels = max_zigzag_levels == 0;
-    let mut level_iter: usize = 0;
-    'levels: loop {
-        if !unlimited_levels && level_iter > max_zigzag_levels {
-            break;
-        }
-        level_iter += 1;
+    // BUG-7 / Pine parity: `max_zigzag_levels == 0` means unlimited `nextlevel` passes (Pine `while` until pivot floor).
+    // Non-zero caps iterations to `0..=max_zigzag_levels` inclusive (same count as prior `level_iter` logic).
+    let max_level_inclusive = if max_zigzag_levels == 0 {
+        usize::MAX
+    } else {
+        max_zigzag_levels
+    };
+    'levels: for _ in 0..=max_level_inclusive {
         let ch = pivots_chronological(&zz);
         let need = scan_params.number_of_pivots;
         let min_zz = pine_zz_floor.max(need);
@@ -868,7 +868,7 @@ pub fn analyze_channel_six_from_bars(
         }
         zz = next_level_from_zigzag(&zz);
         if zz.pivots.len() < scan_params.number_of_pivots {
-            break;
+            break 'levels;
         }
     }
 

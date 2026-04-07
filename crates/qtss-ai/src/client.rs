@@ -16,6 +16,7 @@ use crate::providers;
 use crate::safety::{SafetyConfig, validate_ai_decision_safety, validate_operational_decision_safety, validate_strategic_decision_safety};
 use crate::storage::{
     decision_exists_for_hash, expire_stale_decisions, insert_ai_decision, insert_ai_decision_error,
+    tactical_symbol_blocked_by_active_decision,
     insert_portfolio_directive, insert_position_directive, insert_tactical_decision,
 };
 use qtss_notify::NotificationDispatcher;
@@ -429,6 +430,13 @@ async fn run_tactical_single(
     system_prompt: &str,
 ) -> AiResult<()> {
     let safety = SafetyConfig::from_ai_engine_config(config);
+    if tactical_symbol_blocked_by_active_decision(pool, sym).await? {
+        tracing::debug!(
+            %sym,
+            "tactical sweep: skip LLM — symbol already has an active tactical decision without a recorded outcome"
+        );
+        return Ok(());
+    }
     let ctx = crate::context_builder::build_tactical_context(pool, sym).await?;
     let h = hash_context(&ctx);
     if decision_exists_for_hash(pool, &h, 30).await? {

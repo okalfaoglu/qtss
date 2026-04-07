@@ -515,6 +515,41 @@ pub async fn decision_exists_for_hash(pool: &PgPool, prompt_hash: &str, ttl_minu
     Ok(exists)
 }
 
+/// When true, the tactical sweep should not call the LLM or enqueue another Telegram approval for this symbol.
+///
+/// Blocks while a tactical row is still “open” in DB terms:
+/// - `pending_approval` before parent `expires_at`
+/// - `approved` and executor-eligible (`valid_until`, child still `approved`)
+/// - `applied` (entry recorded) until an `ai_decision_outcomes` row exists (e.g. SL/TP close in `position_manager`)
+///
+/// Rejected / expired / error / `execution_failed` rows do not block. Hash-only dedupe ([`decision_exists_for_hash`]) is still applied afterward.
+pub async fn tactical_symbol_blocked_by_active_decision(pool: &PgPool, symbol: &str) -> AiResult<bool> {
+    let sym = symbol.trim().to_uppercase();
+    let blocked: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM ai_decisions d
+            INNER JOIN ai_tactical_decisions t ON t.decision_id = d.id
+            WHERE UPPER(TRIM(d.symbol)) = $1
+              AND d.layer = 'tactical'
+              AND t.status NOT IN ('rejected', 'expired', 'execution_failed')
+              AND d.status NOT IN ('rejected', 'expired', 'error')
+              AND NOT EXISTS (SELECT 1 FROM ai_decision_outcomes o WHERE o.decision_id = d.id)
+              AND (
+                    (d.status = 'pending_approval' AND (d.expires_at IS NULL OR d.expires_at > now()))
+                 OR (d.status = 'approved' AND t.status = 'approved' AND t.valid_until > now())
+                 OR (d.status = 'applied' AND t.status = 'applied')
+              )
+        )
+        "#,
+    )
+    .bind(&sym)
+    .fetch_one(pool)
+    .await?;
+    Ok(blocked)
+}
+
 /// Latest tactical AI decision for `symbol` within the last `hours` (dedup context).
 pub async fn fetch_last_ai_decision_recent(
     pool: &PgPool,

@@ -26,7 +26,8 @@ pub fn resolve_pattern_type_id(
     }
     let bd = bar_diff as f64;
 
-    // Pine parity: `if (t1p1 > t2p1) … else …` — `==` falls into the `else` branch.
+    // BUG-4 / Pine parity: `resolvePatternName` uses strict `>` (not `>=`). When `t1p1 == t2p1`,
+    // Pine takes the `else` branch; matching `>=` here would diverge pattern_type_id.
     let t1_left_higher = t1p1 > t2p1;
 
     let upper_angle = if t1_left_higher {
