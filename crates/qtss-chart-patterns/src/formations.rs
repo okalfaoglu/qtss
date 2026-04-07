@@ -49,6 +49,11 @@ pub struct FormationParams {
     /// İki tepe/dip fiyatının birbirine eşit sayılması için maksimum yüzde farkı.
     /// Örnek: 0.02 = %2.
     pub price_tolerance: f64,
+    /// Double bottom: ikinci dip fiyatının birinciye göre alt sınırı (oran × ilk dip).
+    /// - `None`: ek kısıt yok (yalnızca [`Self::price_tolerance`] ile iki dip yakınlığı).
+    /// - `Some(1.0)`: klasik W — ikinci dip **birinci dipten düşük olamaz** (hafif yukarı / eşit kabul).
+    /// - `Some(0.98)`: en fazla %2 “undercut” (stop avı) toleri.
+    pub double_bottom_second_low_min_fraction_of_first: Option<f64>,
     /// Flag formasyonlarında impulsive bacağın minimum bar sayısı.
     pub flag_min_pole_bars: usize,
     /// Flag formasyonlarında konsolidasyon alanının minimum bar sayısı.
@@ -61,10 +66,20 @@ impl Default for FormationParams {
     fn default() -> Self {
         Self {
             price_tolerance: 0.02,
+            double_bottom_second_low_min_fraction_of_first: None,
             flag_min_pole_bars: 3,
             flag_min_flag_bars: 3,
             flag_max_retrace: 0.618,
         }
+    }
+}
+
+impl FormationParams {
+    /// Classical double-bottom lows: second trough must not print below the first (`b2 >= b1`).
+    #[must_use]
+    pub fn with_strict_double_bottom_lows(mut self) -> Self {
+        self.double_bottom_second_low_min_fraction_of_first = Some(1.0);
+        self
     }
 }
 
@@ -157,9 +172,22 @@ pub fn detect_double_top(pivots: &[PivotTriple], params: &FormationParams) -> Op
     let height = (peak_avg - neckline).abs();
     let target = neckline - height;
 
-    // Kalite: fiyat yakınlığı + simetri
+    // Kalite: fiyat yakınlığı + simetri (tepe1→boyun ve boyun→tepe2 bar mesafeleri; tek skaler
+    // `symmetry_score` ile anlamsız kalıyordu — en düşük dip barını referans al).
     let price_q = 1.0 - (diff / params.price_tolerance).min(1.0);
-    let sym = symmetry_score(&[t2.0 - t1.0]);
+    let trough_bar = between_lows
+        .iter()
+        .filter(|(_, p, _)| (*p - neckline).abs() < 1e-9)
+        .map(|(b, _, _)| *b)
+        .min()
+        .unwrap_or_else(|| {
+            between_lows
+                .iter()
+                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(b, _, _)| *b)
+                .unwrap_or(t1.0)
+        });
+    let sym = symmetry_score(&[trough_bar - t1.0, t2.0 - trough_bar]);
     let quality = (price_q * 0.7 + sym * 0.3).clamp(0.0, 1.0);
 
     let mut fpivots = vec![t1];
@@ -181,6 +209,11 @@ pub fn detect_double_top(pivots: &[PivotTriple], params: &FormationParams) -> Op
 // ─── Double Bottom (ID 15) ─────────────────────────────────────────
 
 /// Double Bottom: İki benzer dip + aralarında bir tepe.
+///
+/// Klasik literatürde ikinci dip genelde birinciyle aynı bölgede veya **biraz yukarıda** (higher low);
+/// ikinci dipten birincinin anlamlı şekilde aşağı kırılması çoğu tanımda saf çift dip sayılmaz.
+/// Bunu zorunlu kılmak için [`FormationParams::double_bottom_second_low_min_fraction_of_first`]
+/// veya [`FormationParams::with_strict_double_bottom_lows`] kullanın.
 #[must_use]
 pub fn detect_double_bottom(
     pivots: &[PivotTriple],
@@ -218,6 +251,16 @@ pub fn detect_double_bottom(
         return None;
     }
 
+    if let Some(frac) = params.double_bottom_second_low_min_fraction_of_first {
+        if b1.1 <= 1e-15 || !frac.is_finite() || frac <= 0.0 {
+            return None;
+        }
+        let min_second = b1.1 * frac;
+        if b2.1 + 1e-12 < min_second {
+            return None;
+        }
+    }
+
     let neckline = between_highs
         .iter()
         .map(|(_, p, _)| *p)
@@ -227,7 +270,20 @@ pub fn detect_double_bottom(
     let target = neckline + height;
 
     let price_q = 1.0 - (diff / params.price_tolerance).min(1.0);
-    let quality = price_q;
+    let peak_bar = between_highs
+        .iter()
+        .filter(|(_, p, _)| (*p - neckline).abs() < 1e-9)
+        .map(|(b, _, _)| *b)
+        .max()
+        .unwrap_or_else(|| {
+            between_highs
+                .iter()
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(b, _, _)| *b)
+                .unwrap_or(b1.0)
+        });
+    let sym = symmetry_score(&[peak_bar - b1.0, b2.0 - peak_bar]);
+    let quality = (price_q * 0.7 + sym * 0.3).clamp(0.0, 1.0);
 
     let mut fpivots = vec![b1];
     fpivots.extend_from_slice(&between_highs);
@@ -866,6 +922,22 @@ mod tests {
         let m = result.unwrap();
         assert_eq!(m.pattern_type_id, 15);
         assert!(m.target_price.unwrap() > 60.0);
+    }
+
+    #[test]
+    fn double_bottom_rejected_when_second_trough_deeper_under_strict_rule() {
+        // Within 2% avg price tolerance, but second low is clearly below first — many textbooks exclude this.
+        let pivots: Vec<PivotTriple> = vec![
+            (0, 100.0, -1),
+            (5, 110.0, 1),
+            (10, 98.5, -1), // ~1.5% below first trough vs avg 99.25 → pct_diff OK
+        ];
+        assert!(detect_double_bottom(&pivots, &default_params()).is_some());
+        let strict = FormationParams::default().with_strict_double_bottom_lows();
+        assert!(
+            detect_double_bottom(&pivots, &strict).is_none(),
+            "second low below first should not pass classical W rule"
+        );
     }
 
     #[test]
