@@ -10,10 +10,12 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use qtss_notify::escape_telegram_html;
+use qtss_notify::{
+    escape_telegram_html, Notification, NotificationChannel, NotificationDispatcher,
+};
 use qtss_storage::{
     list_recent_bars, resolve_system_csv, resolve_worker_enabled_flag, resolve_worker_tick_secs,
-    NotifyOutboxRepository, PaperLedgerRepository,
+    PaperFillRow, PaperLedgerRepository,
 };
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
@@ -31,19 +33,18 @@ async fn status_notify_enabled(pool: &PgPool) -> bool {
     .await
 }
 
-async fn status_notify_channels(pool: &PgPool) -> Vec<String> {
-    resolve_system_csv(
+async fn status_notify_channels(pool: &PgPool) -> Vec<NotificationChannel> {
+    let raw = resolve_system_csv(
         pool,
         "worker",
         "position_status_notify_channels_csv",
         "QTSS_POSITION_STATUS_NOTIFY_CHANNELS",
         "telegram",
     )
-    .await
-    .into_iter()
-    .map(|s| s.trim().to_lowercase())
-    .filter(|s| !s.is_empty())
-    .collect()
+    .await;
+    raw.iter()
+        .filter_map(|s| NotificationChannel::parse(s.trim()))
+        .collect()
 }
 
 fn strength_bar(pnl_pct: f64) -> String {
@@ -74,52 +75,29 @@ fn build_open_position_html(
     entry_price: Decimal,
     mark_price: Decimal,
     pnl_pct: f64,
-    sl_price: Option<Decimal>,
-    tp_price: Option<Decimal>,
-    protection_price: Option<Decimal>,
 ) -> String {
     let arrow = if pnl_pct >= 0.0 { "▲" } else { "▼" };
     let pnl_sign = if pnl_pct >= 0.0 { "+" } else { "" };
     let side_upper = side.to_uppercase();
     let bar = strength_bar(pnl_pct);
 
-    let mut lines = vec![
-        "<b>📊 CANLI POZİSYON</b>".to_string(),
-        String::new(),
-        format!(
-            "<b>📈 {} · {}</b>",
-            escape_telegram_html(symbol),
-            escape_telegram_html(&side_upper)
-        ),
-        format!(
-            "<code>{}</code> ──────▶ <code>{}</code>",
-            entry_price, mark_price
-        ),
-        format!(
-            "{} <b>{}{:.2}%</b>",
-            arrow, pnl_sign, pnl_pct
-        ),
-        String::new(),
-        format!("<b>Güç</b> {}", escape_telegram_html(&bar)),
-    ];
-
-    if let Some(sl) = sl_price {
-        lines.push(String::new());
-        lines.push("<b>Stop Loss</b>".to_string());
-        lines.push(format!("<code>{}</code>", sl));
-    }
-    if let Some(tp) = tp_price {
-        lines.push(String::new());
-        lines.push("<b>Take Profit</b>".to_string());
-        lines.push(format!("<code>{}</code>", tp));
-    }
-    if let Some(prot) = protection_price {
-        lines.push(String::new());
-        lines.push("Koruma 🛡".to_string());
-        lines.push(format!("<code>{}</code>", prot));
-    }
-
-    lines.join("\n")
+    format!(
+        "📊 <b>CANLI POZİSYON</b>\n\
+         \n\
+         📈 <b>{} · {}</b>\n\
+         <code>{}</code> ──▶ <code>{}</code>\n\
+         {} <b>{}{:.2}%</b>\n\
+         \n\
+         <b>Güç</b> {}",
+        escape_telegram_html(symbol),
+        escape_telegram_html(&side_upper),
+        entry_price,
+        mark_price,
+        arrow,
+        pnl_sign,
+        pnl_pct,
+        escape_telegram_html(&bar),
+    )
 }
 
 fn build_close_result_html(
@@ -134,10 +112,10 @@ fn build_close_result_html(
     let side_upper = side.to_uppercase();
 
     format!(
-        "<b>✅ İŞLEM SONUCU</b>\n\
+        "✅ <b>İŞLEM SONUCU</b>\n\
          \n\
-         <b>📈 {} · {}</b>\n\
-         <code>{}</code> ──────▶ <code>{}</code>\n\
+         📈 <b>{} · {}</b>\n\
+         <code>{}</code> ──▶ <code>{}</code>\n\
          \n\
          {} <b>{}{:.2}%</b>",
         escape_telegram_html(symbol),
@@ -164,14 +142,16 @@ async fn get_mark(pool: &PgPool, symbol: &str) -> Option<Decimal> {
     bars.into_iter().next().map(|b| b.close)
 }
 
-fn aggregate_paper_positions(fills: &[qtss_storage::PaperFillRow]) -> Vec<OpenPosition> {
+fn aggregate_paper_positions(fills: &[PaperFillRow]) -> Vec<OpenPosition> {
     let mut positions: HashMap<String, (Decimal, Decimal, String)> = HashMap::new();
     let mut sorted = fills.to_vec();
     sorted.sort_by_key(|f| f.created_at);
 
     for f in &sorted {
         let sym = f.symbol.trim().to_uppercase();
-        let e = positions.entry(sym.clone()).or_insert((Decimal::ZERO, Decimal::ZERO, f.side.clone()));
+        let e = positions
+            .entry(sym.clone())
+            .or_insert((Decimal::ZERO, Decimal::ZERO, f.side.clone()));
         let side_lower = f.side.to_lowercase();
         match side_lower.as_str() {
             "buy" => {
@@ -199,7 +179,11 @@ fn aggregate_paper_positions(fills: &[qtss_storage::PaperFillRow]) -> Vec<OpenPo
         .into_iter()
         .filter(|(_, (qty, _, _))| *qty > Decimal::new(1, 8))
         .map(|(sym, (qty, cost, side))| {
-            let avg_entry = if qty > Decimal::ZERO { cost / qty } else { Decimal::ZERO };
+            let avg_entry = if qty > Decimal::ZERO {
+                cost / qty
+            } else {
+                Decimal::ZERO
+            };
             OpenPosition {
                 symbol: sym,
                 side,
@@ -208,6 +192,16 @@ fn aggregate_paper_positions(fills: &[qtss_storage::PaperFillRow]) -> Vec<OpenPo
             }
         })
         .collect()
+}
+
+async fn send_telegram_html(dispatcher: &NotificationDispatcher, channels: &[NotificationChannel], title: &str, html: &str) {
+    let n = Notification::new(title, html).with_telegram_html_message(html.to_string());
+    let receipts = dispatcher.send_all(channels, &n).await;
+    for r in &receipts {
+        if !r.ok {
+            warn!(channel = ?r.channel, detail = ?r.detail, "position_status_notify: send failed");
+        }
+    }
 }
 
 pub async fn position_status_notify_loop(pool: PgPool) {
@@ -222,7 +216,6 @@ pub async fn position_status_notify_loop(pool: PgPool) {
         return;
     }
     let repo = PaperLedgerRepository::new(pool.clone());
-    let outbox = NotifyOutboxRepository::new(pool.clone());
     let mut known_open: HashSet<String> = HashSet::new();
 
     info!("position_status_notify_loop started (hourly reports + close results)");
@@ -243,11 +236,12 @@ pub async fn position_status_notify_loop(pool: PgPool) {
             continue;
         }
 
+        let dispatcher = NotificationDispatcher::from_env();
+
         let cutoff = chrono::Utc::now()
             .checked_sub_signed(chrono::Duration::days(7))
             .unwrap_or_else(chrono::Utc::now);
-        let fills = match repo.list_fills_created_after(cutoff, 500).await
-        {
+        let fills = match repo.list_fills_created_after(cutoff, 500).await {
             Ok(f) => f,
             Err(e) => {
                 warn!(%e, "position_status_notify: fills query failed");
@@ -256,20 +250,20 @@ pub async fn position_status_notify_loop(pool: PgPool) {
         };
 
         let positions = aggregate_paper_positions(&fills);
-        let current_symbols: HashSet<String> = positions.iter().map(|p| p.symbol.clone()).collect();
+        let current_symbols: HashSet<String> =
+            positions.iter().map(|p| p.symbol.clone()).collect();
 
+        // Detect closed positions and send close-result messages.
         for closed_sym in known_open.difference(&current_symbols) {
             let last_fill = fills
                 .iter()
                 .rev()
                 .find(|f| f.symbol.eq_ignore_ascii_case(closed_sym));
             if let Some(fill) = last_fill {
-                let entry_fill = fills
-                    .iter()
-                    .find(|f| {
-                        f.symbol.eq_ignore_ascii_case(closed_sym)
-                            && f.side.eq_ignore_ascii_case("buy")
-                    });
+                let entry_fill = fills.iter().find(|f| {
+                    f.symbol.eq_ignore_ascii_case(closed_sym)
+                        && f.side.eq_ignore_ascii_case("buy")
+                });
                 let entry_px = entry_fill.map(|f| f.avg_price).unwrap_or(fill.avg_price);
                 let exit_px = fill.avg_price;
                 let pnl_pct = if entry_px > Decimal::ZERO {
@@ -279,32 +273,30 @@ pub async fn position_status_notify_loop(pool: PgPool) {
                 } else {
                     0.0
                 };
-                let side = entry_fill.map(|f| {
-                    if f.side.eq_ignore_ascii_case("buy") { "LONG" } else { "SHORT" }
-                }).unwrap_or("LONG");
-                let html = build_close_result_html(closed_sym, side, entry_px, exit_px, pnl_pct);
-                let title = format!("Trade closed — {} {}{:.2}%", closed_sym, if pnl_pct >= 0.0 { "+" } else { "" }, pnl_pct);
-                if let Err(e) = outbox
-                    .enqueue_with_meta(
-                        None,
-                        Some("position_close_result"),
-                        "info",
-                        Some("binance"),
-                        Some("futures"),
-                        Some(closed_sym),
-                        &title,
-                        &html,
-                        channels.clone(),
-                    )
-                    .await
-                {
-                    warn!(%e, symbol = %closed_sym, "position close result enqueue failed");
-                }
+                let side = entry_fill
+                    .map(|f| {
+                        if f.side.eq_ignore_ascii_case("buy") {
+                            "LONG"
+                        } else {
+                            "SHORT"
+                        }
+                    })
+                    .unwrap_or("LONG");
+                let html =
+                    build_close_result_html(closed_sym, side, entry_px, exit_px, pnl_pct);
+                let title = format!(
+                    "Trade closed — {} {}{:.2}%",
+                    closed_sym,
+                    if pnl_pct >= 0.0 { "+" } else { "" },
+                    pnl_pct
+                );
+                send_telegram_html(&dispatcher, &channels, &title, &html).await;
                 info!(symbol = %closed_sym, pnl_pct, "position close result sent");
             }
         }
         known_open = current_symbols;
 
+        // Send hourly status for each open position.
         for pos in &positions {
             let mark = match get_mark(&pool, &pos.symbol).await {
                 Some(m) => m,
@@ -316,44 +308,25 @@ pub async fn position_status_notify_loop(pool: PgPool) {
             let pnl_pct = if pos.avg_entry > Decimal::ZERO {
                 let raw = (mark - pos.avg_entry) / pos.avg_entry * Decimal::from(100);
                 let pct = raw.to_f64().unwrap_or(0.0);
-                if pos.side == "SHORT" { -pct } else { pct }
+                if pos.side == "SHORT" {
+                    -pct
+                } else {
+                    pct
+                }
             } else {
                 0.0
             };
 
-            let html = build_open_position_html(
-                &pos.symbol,
-                &pos.side,
-                pos.avg_entry,
-                mark,
-                pnl_pct,
-                None,
-                None,
-                None,
-            );
+            let html =
+                build_open_position_html(&pos.symbol, &pos.side, pos.avg_entry, mark, pnl_pct);
             let title = format!(
-                "Position status — {} {} {}{:.2}%",
+                "Position — {} {} {}{:.2}%",
                 pos.symbol,
                 pos.side,
                 if pnl_pct >= 0.0 { "+" } else { "" },
                 pnl_pct
             );
-            if let Err(e) = outbox
-                .enqueue_with_meta(
-                    None,
-                    Some("position_status_hourly"),
-                    "info",
-                    Some("binance"),
-                    Some("futures"),
-                    Some(&pos.symbol),
-                    &title,
-                    &html,
-                    channels.clone(),
-                )
-                .await
-            {
-                warn!(%e, symbol = %pos.symbol, "position status enqueue failed");
-            }
+            send_telegram_html(&dispatcher, &channels, &title, &html).await;
         }
         if !positions.is_empty() {
             info!(count = positions.len(), "position status reports sent");
