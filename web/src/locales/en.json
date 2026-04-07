@@ -23,6 +23,8 @@
     "colAction": "Action",
     "approve": "Approve",
     "reject": "Reject",
+    "approveOk": "Saved as approved. Opening a position is separate: qtss-worker must run ai_tactical_executor, the symbol must be enabled in engine_symbols, and dry/live flags (QTSS_AI_TACTICAL_EXECUTOR_DRY / _LIVE) must match what you expect.",
+    "rejectOk": "Decision rejected.",
     "portfolio": "Portfolio directive",
     "tacticalSection": "Tactical directive",
     "load": "Load",

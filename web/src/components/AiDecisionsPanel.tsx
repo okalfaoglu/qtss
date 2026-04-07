@@ -22,12 +22,14 @@ export function AiDecisionsPanel({ accessToken, canAdmin }: Props) {
   const [tacticalPreview, setTacticalPreview] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [info, setInfo] = useState("");
   const [layerFilter, setLayerFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
 
   const refresh = useCallback(async () => {
     if (!accessToken) return;
     setErr("");
+    setInfo("");
     setBusy(true);
     try {
       const list = await fetchAiDecisions(accessToken, {
@@ -63,10 +65,16 @@ export function AiDecisionsPanel({ accessToken, canAdmin }: Props) {
   const act = async (id: string, kind: "approve" | "reject") => {
     if (!accessToken || !canAdmin) return;
     setErr("");
+    setInfo("");
     setBusy(true);
     try {
-      if (kind === "approve") await postAiDecisionApprove(accessToken, id);
-      else await postAiDecisionReject(accessToken, id);
+      if (kind === "approve") {
+        await postAiDecisionApprove(accessToken, id);
+        setInfo(t("aiDecisions.approveOk"));
+      } else {
+        await postAiDecisionReject(accessToken, id);
+        setInfo(t("aiDecisions.rejectOk"));
+      }
       await refresh();
     } catch (e) {
       setErr(String(e));
@@ -83,6 +91,11 @@ export function AiDecisionsPanel({ accessToken, canAdmin }: Props) {
     <div className="card" style={{ marginTop: "1rem" }}>
       <p className="tv-drawer__section-head">{t("aiDecisions.title")}</p>
       {err ? <p className="tv-drawer__error">{err}</p> : null}
+      {info ? (
+        <p className="muted" style={{ color: "var(--success-fg, #81c784)", marginBottom: "0.5rem" }}>
+          {info}
+        </p>
+      ) : null}
       <div className="tv-settings__fields" style={{ marginBottom: "0.75rem" }}>
         <label>
           <span className="muted">{t("aiDecisions.layerFilter")}</span>
@@ -90,7 +103,7 @@ export function AiDecisionsPanel({ accessToken, canAdmin }: Props) {
             className="mono"
             value={layerFilter}
             onChange={(e) => setLayerFilter(e.target.value)}
-            placeholder="tactical | operational | strategic"
+            placeholder="tactical (veya tactical | operational)"
           />
         </label>
         <label>
@@ -99,7 +112,7 @@ export function AiDecisionsPanel({ accessToken, canAdmin }: Props) {
             className="mono"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            placeholder="pending_approval | approved | …"
+            placeholder="pending_approval · | ile birden çok durum"
           />
         </label>
         <button type="button" disabled={busy} onClick={() => void refresh()}>

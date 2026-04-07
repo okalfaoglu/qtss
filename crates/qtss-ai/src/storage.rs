@@ -586,7 +586,20 @@ pub struct AiPortfolioDirectiveRow {
     pub status: String,
 }
 
+/// Split dashboard filter fields on `|` so `tactical | operational` matches either layer.
+fn split_filter_tokens(raw: Option<&str>) -> Vec<String> {
+    let Some(s) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Vec::new();
+    };
+    s.split('|')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// Filtered list for dashboards (FAZ 7.1).
+/// `layer` / `status` may contain several values separated by `|` (e.g. `tactical | operational` → OR).
 pub async fn list_ai_decisions(
     pool: &PgPool,
     layer: Option<&str>,
@@ -595,103 +608,25 @@ pub async fn list_ai_decisions(
     limit: i64,
 ) -> AiResult<Vec<AiDecisionListRow>> {
     let lim = limit.clamp(1, 500);
-    let layer = layer.map(|s| s.trim()).filter(|s| !s.is_empty());
+    let layer_vec = split_filter_tokens(layer);
+    let status_vec = split_filter_tokens(status);
     let symbol_u = symbol.map(|s| s.trim().to_uppercase()).filter(|s| !s.is_empty());
-    let status_f = status.map(|s| s.trim()).filter(|s| !s.is_empty());
-    let rows = match (layer, symbol_u, status_f) {
-        (Some(l), Some(sym), Some(st)) => {
-            sqlx::query_as::<_, AiDecisionListRow>(
-                r#"SELECT id, created_at, layer, symbol, status, confidence, model_id
-                   FROM ai_decisions WHERE layer = $1 AND symbol = $2 AND status = $3
-                   ORDER BY created_at DESC LIMIT $4"#,
-            )
-            .bind(l)
-            .bind(sym)
-            .bind(st)
-            .bind(lim)
-            .fetch_all(pool)
-            .await?
-        }
-        (Some(l), Some(sym), None) => {
-            sqlx::query_as::<_, AiDecisionListRow>(
-                r#"SELECT id, created_at, layer, symbol, status, confidence, model_id
-                   FROM ai_decisions WHERE layer = $1 AND symbol = $2
-                   ORDER BY created_at DESC LIMIT $3"#,
-            )
-            .bind(l)
-            .bind(sym)
-            .bind(lim)
-            .fetch_all(pool)
-            .await?
-        }
-        (Some(l), None, Some(st)) => {
-            sqlx::query_as::<_, AiDecisionListRow>(
-                r#"SELECT id, created_at, layer, symbol, status, confidence, model_id
-                   FROM ai_decisions WHERE layer = $1 AND status = $2
-                   ORDER BY created_at DESC LIMIT $3"#,
-            )
-            .bind(l)
-            .bind(st)
-            .bind(lim)
-            .fetch_all(pool)
-            .await?
-        }
-        (Some(l), None, None) => {
-            sqlx::query_as::<_, AiDecisionListRow>(
-                r#"SELECT id, created_at, layer, symbol, status, confidence, model_id
-                   FROM ai_decisions WHERE layer = $1
-                   ORDER BY created_at DESC LIMIT $2"#,
-            )
-            .bind(l)
-            .bind(lim)
-            .fetch_all(pool)
-            .await?
-        }
-        (None, Some(sym), Some(st)) => {
-            sqlx::query_as::<_, AiDecisionListRow>(
-                r#"SELECT id, created_at, layer, symbol, status, confidence, model_id
-                   FROM ai_decisions WHERE symbol = $1 AND status = $2
-                   ORDER BY created_at DESC LIMIT $3"#,
-            )
-            .bind(sym)
-            .bind(st)
-            .bind(lim)
-            .fetch_all(pool)
-            .await?
-        }
-        (None, Some(sym), None) => {
-            sqlx::query_as::<_, AiDecisionListRow>(
-                r#"SELECT id, created_at, layer, symbol, status, confidence, model_id
-                   FROM ai_decisions WHERE symbol = $1
-                   ORDER BY created_at DESC LIMIT $2"#,
-            )
-            .bind(sym)
-            .bind(lim)
-            .fetch_all(pool)
-            .await?
-        }
-        (None, None, Some(st)) => {
-            sqlx::query_as::<_, AiDecisionListRow>(
-                r#"SELECT id, created_at, layer, symbol, status, confidence, model_id
-                   FROM ai_decisions WHERE status = $1
-                   ORDER BY created_at DESC LIMIT $2"#,
-            )
-            .bind(st)
-            .bind(lim)
-            .fetch_all(pool)
-            .await?
-        }
-        (None, None, None) => {
-            sqlx::query_as::<_, AiDecisionListRow>(
-                r#"SELECT id, created_at, layer, symbol, status, confidence, model_id
-                   FROM ai_decisions
-                   ORDER BY created_at DESC LIMIT $1"#,
-            )
-            .bind(lim)
-            .fetch_all(pool)
-            .await?
-        }
-    };
+
+    let rows = sqlx::query_as::<_, AiDecisionListRow>(
+        r#"SELECT id, created_at, layer, symbol, status, confidence, model_id
+           FROM ai_decisions
+           WHERE (cardinality($1::text[]) = 0 OR layer = ANY($1))
+             AND (cardinality($2::text[]) = 0 OR status = ANY($2))
+             AND ($3::text IS NULL OR UPPER(TRIM(COALESCE(symbol, ''))) = $3)
+           ORDER BY created_at DESC
+           LIMIT $4"#,
+    )
+    .bind(&layer_vec)
+    .bind(&status_vec)
+    .bind(symbol_u.as_ref())
+    .bind(lim)
+    .fetch_all(pool)
+    .await?;
     Ok(rows)
 }
 

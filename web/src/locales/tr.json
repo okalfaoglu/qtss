@@ -23,6 +23,8 @@
     "colAction": "İşlem",
     "approve": "Onayla",
     "reject": "Reddet",
+    "approveOk": "Onay kaydedildi (approved). Borsada pozisyon açmak ayrı bir adımdır: qtss-worker içinde ai_tactical_executor açık olmalı, sembol engine_symbols listesinde etkin olmalı ve dry/live (QTSS_AI_TACTICAL_EXECUTOR_DRY / _LIVE) beklediğiniz gibi ayarlı olmalı.",
+    "rejectOk": "Karar reddedildi (rejected).",
     "portfolio": "Portföy direktifi",
     "tacticalSection": "Taktik direktif",
     "load": "Yükle",
