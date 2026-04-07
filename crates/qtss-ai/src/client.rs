@@ -263,9 +263,9 @@ async fn resolve_system_prompt(pool: &PgPool, config_key: &str, default_fn: impl
 }
 
 fn tactical_system_prompt_default(cfg: &AiEngineConfig) -> String {
-    let locale = cfg.output_locale.as_deref().unwrap_or("en");
+    let locale = cfg.output_locale.as_deref().unwrap_or("tr");
     let reasoning_lang = if locale.to_lowercase().starts_with("tr") {
-        "`reasoning` isteğe bağlı; kullanırsan MUTLAKA son alan olsun, Türkçe, tek kısa cümle, en fazla 120 karakter — aksi halde çıktı token sınırında kesilir ve JSON geçersiz olur."
+        "`reasoning` isteğe bağlı; kullanırsan MUTLAKA son alan olsun, yalnızca Türkçe yaz, tek kısa cümle, en fazla 120 karakter — İngilizce gerekçe kabul edilmez; aksi halde çıktı token sınırında kesilir ve JSON geçersiz olur."
     } else {
         "Optional `reasoning` must be the LAST JSON key if present: one short phrase, max 120 characters in the requested locale — otherwise output may truncate mid-string and break JSON."
     };
@@ -295,7 +295,7 @@ Temperature: balanced — prefer action over inaction when there is any directio
 }
 
 fn operational_system_prompt_default(cfg: &AiEngineConfig) -> String {
-    let locale = cfg.output_locale.as_deref().unwrap_or("en");
+    let locale = cfg.output_locale.as_deref().unwrap_or("tr");
     format!(
         r#"You manage open positions (long AND short) for QTSS (operational layer). Reply JSON only, locale {locale}.
 Required: "action" one of: keep, tighten_stop, widen_stop, activate_trailing, deactivate_trailing, partial_close, full_close, add_to_position.
@@ -308,7 +308,7 @@ Never loosen stops without justification; prefer protecting capital."#
 }
 
 fn strategic_system_prompt_default(cfg: &AiEngineConfig) -> String {
-    let locale = cfg.output_locale.as_deref().unwrap_or("en");
+    let locale = cfg.output_locale.as_deref().unwrap_or("tr");
     format!(
         r#"You are the strategic portfolio advisor for QTSS. Reply JSON only, locale {locale}.
 Include when possible: "risk_budget_pct", "max_open_positions", "preferred_regime", "symbol_scores" (object symbol→weight 0-1), "macro_note".

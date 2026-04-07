@@ -54,7 +54,7 @@ impl AiEngineConfig {
             max_tokens_strategic: 4096,
             decision_ttl_secs: 1800,
             require_min_confidence: 0.60,
-            output_locale: None,
+            output_locale: Some("tr".into()),
         }
     }
 

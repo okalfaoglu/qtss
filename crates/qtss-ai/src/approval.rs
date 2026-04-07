@@ -119,7 +119,9 @@ pub fn auto_approve_eligible(confidence: f64, cfg: &AiEngineConfig) -> bool {
 const TELEGRAM_REASONING_MAX_CHARS: usize = 2800;
 const TELEGRAM_PHOTO_CAPTION_MAX: usize = 900;
 
-fn direction_emoji_and_label(direction: Option<&str>) -> (&'static str, &'static str) {
+/// Trading position side for UI: **Long** / **Short** / **Flat** (no directional trade).
+/// `neutral` and `no_trade` from the LLM mean flat — not "neutral" as a fourth category.
+fn direction_emoji_and_position_label(direction: Option<&str>) -> (&'static str, &'static str) {
     let d = direction
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -127,9 +129,17 @@ fn direction_emoji_and_label(direction: Option<&str>) -> (&'static str, &'static
     match d.as_deref() {
         Some("buy") | Some("long") | Some("strong_buy") => ("🟢", "Long"),
         Some("sell") | Some("short") | Some("strong_sell") => ("🔴", "Short"),
-        Some("neutral") => ("⚪", "Neutral"),
-        _ => ("⚪", "—"),
+        _ => ("⚪", "Flat"),
     }
+}
+
+#[must_use]
+fn notify_ui_turkish(cfg: &AiEngineConfig) -> bool {
+    cfg.output_locale
+        .as_deref()
+        .unwrap_or("tr")
+        .to_lowercase()
+        .starts_with("tr")
 }
 
 /// `Some(true)` long, `Some(false)` short, `None` if not directional.
@@ -145,7 +155,7 @@ fn side_long_from_direction(direction: Option<&str>) -> Option<bool> {
     }
 }
 
-fn format_confidence_bar(confidence: f64, threshold: f64) -> String {
+fn format_confidence_bar(confidence: f64, threshold: f64, turkish_ui: bool) -> String {
     const W: usize = 16;
     let conf = confidence.clamp(0.0, 1.0);
     let thr = threshold.clamp(0.0, 1.0);
@@ -157,11 +167,13 @@ fn format_confidence_bar(confidence: f64, threshold: f64) -> String {
         marker[thr_idx] = '▲';
     }
     let marker_line: String = marker.into_iter().collect();
+    let thr_word = if turkish_ui { "eşik" } else { "threshold" };
     format!(
-        "<code>{}</code>\n<code>{}</code>\n{}%  ·  threshold {}%",
+        "<code>{}</code>\n<code>{}</code>\n{}%  ·  {} {}%",
         bar,
         marker_line,
         (conf * 100.0).round() as i32,
+        thr_word,
         (thr * 100.0).round() as i32
     )
 }
@@ -297,7 +309,7 @@ fn build_plain_operator_body(
     snapshot: &AiDecisionNotifySnapshot,
 ) -> String {
     let sym = symbol.unwrap_or("(unknown)");
-    let dir = direction.unwrap_or("(unknown)");
+    let dir = direction_emoji_and_position_label(direction).1;
     let reason = reasoning.unwrap_or("(none)");
     let tf = snapshot
         .timeframe
@@ -366,12 +378,17 @@ fn build_plain_operator_body(
             }
         }
     }
+    let thr_word = if notify_ui_turkish(cfg) {
+        "eşik"
+    } else {
+        "threshold"
+    };
     format!(
         "decision_id: {decision_id}\n\
          layer: {}\n\
          symbol: {sym}\n\
          direction: {dir}\n\
-         confidence: {confidence:.4} (threshold {:.2}, auto_approve: {})\
+         confidence: {confidence:.4} ({thr_word} {:.2}, auto_approve: {})\
          {extra}\n\
          reasoning:\n{reason}",
         snapshot.layer,
@@ -389,10 +406,11 @@ fn build_telegram_html_body(
     reasoning: Option<&str>,
     snapshot: &AiDecisionNotifySnapshot,
 ) -> String {
-    let (emoji, dir_en) = direction_emoji_and_label(direction);
+    let turkish_ui = notify_ui_turkish(cfg);
+    let (emoji, dir_label) = direction_emoji_and_position_label(direction);
     let sym_display = symbol.unwrap_or("—");
     let sym_esc = escape_telegram_html(sym_display);
-    let bar_block = format_confidence_bar(confidence, cfg.auto_approve_threshold);
+    let bar_block = format_confidence_bar(confidence, cfg.auto_approve_threshold, turkish_ui);
     let threshold_ok = confidence + f64::EPSILON >= cfg.auto_approve_threshold;
     let gate_line = if !cfg.auto_approve_enabled {
         "⚙️ Otomatik onay: <b>kapalı</b>"
@@ -401,7 +419,11 @@ fn build_telegram_html_body(
     } else {
         "⚠️ Güven <b>eşiğin altında</b> — lütfen inceleyin."
     };
-    let reasoning_raw = reasoning.unwrap_or("(no reasoning text)");
+    let reasoning_raw = reasoning.unwrap_or(if turkish_ui {
+        "(gerekçe yok)"
+    } else {
+        "(no reasoning text)"
+    });
     let reasoning_cut = truncate_chars(reasoning_raw, TELEGRAM_REASONING_MAX_CHARS);
     let reasoning_esc = escape_telegram_html(&reasoning_cut);
 
@@ -447,7 +469,7 @@ fn build_telegram_html_body(
         if let Some(l) = lp_line {
             parts.push(l);
         }
-        parts.push(format!("<b>Yön:</b> {dir_en} {emoji}"));
+        parts.push(format!("<b>Yön:</b> {dir_label} {emoji}"));
         if let Some(lv) = levels {
             parts.push(lv);
         }
@@ -484,7 +506,7 @@ fn build_telegram_html_body(
              <b>Eylem:</b> <code>{act_esc}</code>\n\
              <b>Yeni SL %:</b> <code>{sl}</code>  ·  <b>Yeni TP %:</b> <code>{tp}</code>\n\
              <b>Trailing %:</b> <code>{trail}</code>  ·  <b>Kısmi kapat %:</b> <code>{part}</code>\n\
-             <b>Yön / not:</b> {dir_en} {emoji}"
+             <b>Yön / not:</b> {dir_label} {emoji}"
         )
     } else if snapshot.layer == "strategic" {
         let rb = snapshot
@@ -520,7 +542,7 @@ fn build_telegram_html_body(
     } else {
         format!(
             "<b>Sembol:</b> <code>{sym_esc}</code>\n\
-             <b>Yön / not:</b> {dir_en} {emoji}"
+             <b>Yön / not:</b> {dir_label} {emoji}"
         )
     };
 
@@ -619,9 +641,14 @@ pub async fn maybe_auto_approve(
         snapshot,
     );
     let n = if d.config().telegram.is_some() {
+        let (approve_lbl, reject_lbl) = if notify_ui_turkish(cfg) {
+            ("Onayla", "Reddet")
+        } else {
+            ("Approve", "Reject")
+        };
         let markup = json!({"inline_keyboard":[[
-            {"text": "Approve", "callback_data": format!("d:{}:a", decision_id)},
-            {"text": "Reject", "callback_data": format!("d:{}:r", decision_id)},
+            {"text": approve_lbl, "callback_data": format!("d:{}:a", decision_id)},
+            {"text": reject_lbl, "callback_data": format!("d:{}:r", decision_id)},
         ]]});
         let tg_html = build_telegram_html_body(
             decision_id,
@@ -708,7 +735,7 @@ mod tests {
         );
         assert!(!s.contains("Some("));
         assert!(s.contains("BTCUSDT"));
-        assert!(s.contains("sell"));
+        assert!(s.contains("Short"));
     }
 
     #[test]

@@ -28,7 +28,8 @@ VALUES (
         "max_tokens_tactical": 4096,
         "max_tokens_operational": 512,
         "max_tokens_strategic": 4096,
-        "decision_ttl_secs": 1800
+        "decision_ttl_secs": 1800,
+        "output_locale": "tr"
     }'::jsonb,
     'AI engine master config — auto-approve at 55%, persist at 50%'
 )
