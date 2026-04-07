@@ -1,4 +1,5 @@
 //! Leader `exchange_orders` fill satırları → `copy_trade_execution_jobs` + tüketici (`docs/QTSS_CURSOR_DEV_GUIDE.md` §9.1 madde 4).
+//! Follower dry `place` uses [`strategy_runner::wrap_shared_dry_gateway_for_persistence`] when auto-place is on (paper + same-table mirror as strategy runner).
 //!
 //! Tarama: `venue_response` içinde dolum ipucu olan son emirler (`list_recent_filled_orders_global_since`).
 //! Aynı lider emri için abonelik başına en fazla bir iş (`UNIQUE (subscription_id, leader_exchange_order_id)`).
@@ -20,7 +21,9 @@ use serde_json::json;
 use sqlx::PgPool;
 use tracing::{info, warn};
 
-use crate::strategy_runner::dry_gateway_from_pool;
+use crate::strategy_runner::{
+    dry_gateway_from_pool, wrap_shared_dry_gateway_for_persistence, DryPersistenceKeys,
+};
 
 fn queue_enabled() -> bool {
     std::env::var("QTSS_COPY_TRADE_QUEUE_ENABLED")
@@ -219,7 +222,15 @@ pub async fn copy_trade_queue_loop(pool: PgPool) {
     let subs_repo = CopySubscriptionRepository::new(pool.clone());
     let ord_repo = ExchangeOrderRepository::new(pool.clone());
     let gw: Option<Arc<dyn ExecutionGateway>> = if auto_place() {
-        Some(dry_gateway_from_pool(&pool).await as Arc<dyn ExecutionGateway>)
+        let dry = dry_gateway_from_pool(&pool).await;
+        Some(
+            wrap_shared_dry_gateway_for_persistence(
+                dry,
+                &pool,
+                DryPersistenceKeys::uniform("copy_trade_queue"),
+            )
+            .await,
+        )
     } else {
         None
     };

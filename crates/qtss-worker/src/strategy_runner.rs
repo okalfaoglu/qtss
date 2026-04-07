@@ -116,11 +116,40 @@ pub async fn dry_gateway_from_pool(pool: &PgPool) -> Arc<DryRunGateway> {
     ))
 }
 
-async fn gateway_for_strategy_async(name: &str, pool: &PgPool) -> Arc<dyn ExecutionGateway> {
-    let dry = dry_gateway_for_strategy(name, pool).await;
+/// Labels for paper-ledger `strategy_key` and for `DryOrdersMirrorGateway` `strategy_key` (venue JSON).
+pub struct DryPersistenceKeys {
+    pub paper_ledger_strategy_key: String,
+    pub exchange_orders_mirror_strategy_key: String,
+}
+
+impl DryPersistenceKeys {
+    #[must_use]
+    pub fn uniform(component: impl Into<String>) -> Self {
+        let s = component.into();
+        Self {
+            paper_ledger_strategy_key: s.clone(),
+            exchange_orders_mirror_strategy_key: s,
+        }
+    }
+
+    #[must_use]
+    pub fn strategy_runner(strategy_name: &str) -> Self {
+        Self {
+            paper_ledger_strategy_key: strategy_name.to_string(),
+            exchange_orders_mirror_strategy_key: format!("strategy_runner:{strategy_name}"),
+        }
+    }
+}
+
+/// Wraps a dry gateway with paper ledger and/or `exchange_orders` mirroring when `worker` config allows.
+pub async fn wrap_shared_dry_gateway_for_persistence(
+    dry: Arc<DryRunGateway>,
+    pool: &PgPool,
+    keys: DryPersistenceKeys,
+) -> Arc<dyn ExecutionGateway> {
     if let Some((org_id, user_id)) = qtss_strategy::paper_ledger_target_from_db(pool).await {
         info!(
-            strategy = name,
+            strategy = %keys.paper_ledger_strategy_key,
             %org_id,
             %user_id,
             "dry gateway + paper ledger persist (worker.paper_ledger_enabled)"
@@ -130,11 +159,11 @@ async fn gateway_for_strategy_async(name: &str, pool: &PgPool) -> Arc<dyn Execut
             pool.clone(),
             org_id,
             user_id,
-            name,
+            keys.paper_ledger_strategy_key,
         ))
     } else if let Some((org_id, user_id)) = qtss_strategy::paper_actor_uuids_from_db(pool).await {
         info!(
-            strategy = name,
+            strategy = %keys.exchange_orders_mirror_strategy_key,
             %org_id,
             %user_id,
             "dry gateway + exchange_orders mirror (paper_org_id/paper_user_id; paper_ledger off)"
@@ -144,11 +173,16 @@ async fn gateway_for_strategy_async(name: &str, pool: &PgPool) -> Arc<dyn Execut
             pool.clone(),
             org_id,
             user_id,
-            format!("strategy_runner:{name}"),
+            keys.exchange_orders_mirror_strategy_key,
         ))
     } else {
         dry
     }
+}
+
+async fn gateway_for_strategy_async(name: &str, pool: &PgPool) -> Arc<dyn ExecutionGateway> {
+    let dry = dry_gateway_for_strategy(name, pool).await;
+    wrap_shared_dry_gateway_for_persistence(dry, pool, DryPersistenceKeys::strategy_runner(name)).await
 }
 
 pub async fn spawn_if_enabled(pool: &PgPool) {

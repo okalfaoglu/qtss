@@ -1,7 +1,7 @@
 //! Aktif copy abonelikleri + Nansen perp yönü → isteğe bağlı paper emir (dev guide §3.4).
 //!
 //! - `CopyRule.max_latency_ms`: Nansen `data_snapshots` paketinin en eski satırına göre gecikme.
-//! - `QTSS_COPY_TRADE_FOLLOWER_AUTO_PLACE=1` → [`strategy_runner::dry_gateway_from_pool`] ile market emri (dry defter).
+//! - `QTSS_COPY_TRADE_FOLLOWER_AUTO_PLACE=1` → shared dry gateway + optional paper / `exchange_orders` mirror ([`strategy_runner::wrap_shared_dry_gateway_for_persistence`]).
 //! - `QTSS_BINANCE_USER_STREAM_ENABLED=1` iken tick üst sınırı 120s (`min(config, 120)`) — dolumlar WS ile DB’ye düştüğünde daha sık kontrol.
 
 use std::sync::Arc;
@@ -28,7 +28,9 @@ use tracing::{info, warn};
 
 use crate::data_sources::registry::REGISTERED_NANSEN_HTTP_KEYS_COPY_LATENCY;
 use crate::signal_scorer::score_nansen_perp_direction;
-use crate::strategy_runner::dry_gateway_from_pool;
+use crate::strategy_runner::{
+    dry_gateway_from_pool, wrap_shared_dry_gateway_for_persistence, DryPersistenceKeys,
+};
 
 const NANSEN_PERP_TRADES_KEY: &str = "nansen_perp_trades";
 
@@ -315,7 +317,15 @@ pub async fn copy_trade_follower_loop(pool: PgPool) {
     let tick = Duration::from_secs(tick_secs());
     let repo = CopySubscriptionRepository::new(pool.clone());
     let gw: Option<Arc<dyn ExecutionGateway>> = if auto_place() {
-        Some(dry_gateway_from_pool(&pool).await as Arc<dyn ExecutionGateway>)
+        let dry = dry_gateway_from_pool(&pool).await;
+        Some(
+            wrap_shared_dry_gateway_for_persistence(
+                dry,
+                &pool,
+                DryPersistenceKeys::uniform("copy_trade_follower"),
+            )
+            .await,
+        )
     } else {
         None
     };
