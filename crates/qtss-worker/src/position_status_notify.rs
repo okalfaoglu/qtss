@@ -131,6 +131,7 @@ fn build_close_result_html(
 struct OpenPosition {
     symbol: String,
     side: String,
+    #[allow(dead_code)]
     qty: Decimal,
     avg_entry: Decimal,
 }
