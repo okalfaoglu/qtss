@@ -22,7 +22,7 @@
 
 ### What runs migrations
 
-`qtss_storage::run_migrations` (API and worker startup) uses `sqlx::migrate!("../../migrations")`. SQLx records each applied version in **`_sqlx_migrations`** (checksum is **SHA-384** of the migration file bytes on disk).
+`qtss_storage::run_migrations` (API and worker startup) loads migrations at **runtime** from `./migrations` (relative to process cwd), or `QTSS_MIGRATIONS_DIR`, or `../../migrations` from the `qtss-storage` crate manifest (tests). SQLx records each applied version in **`_sqlx_migrations`** (checksum is **SHA-384** of the migration file bytes on disk).
 
 ### Reading API/worker error lines
 
