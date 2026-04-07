@@ -59,10 +59,14 @@ pub fn score_volume(
     }
 
     // 4) Volume spike — climactic volume (max 20 puan)
+    // Smooth ramp: `2×` kesitinde 0→~10 sıçraması yerine 1.5× → 0 puan, 3× → 20 puan (doğrusal, sürekli).
+    const VOL_SPIKE_LO: f64 = 1.5;
+    const VOL_SPIKE_HI: f64 = 3.0;
     if volume_avg > 0.0 {
         let ratio = volume_last / volume_avg;
-        if ratio > 2.0 {
-            let pts = (20.0 * (ratio - 1.0) / 2.0).min(20.0);
+        if ratio > VOL_SPIKE_LO {
+            let span = VOL_SPIKE_HI - VOL_SPIKE_LO;
+            let pts = (20.0 * (ratio - VOL_SPIKE_LO) / span).clamp(0.0, 20.0);
             score += pts;
             details.push(format!("Volume spike {ratio:.1}x avg (+{pts:.1})"));
         }
@@ -111,5 +115,30 @@ mod tests {
             strong.score > weak.score,
             "stronger overbought MFI should contribute more to top pillar"
         );
+    }
+
+    #[test]
+    fn volume_spike_no_cliff_near_2x() {
+        // Yalnızca hacim bileşeni: MFI 50 (dip bandı dışı), OBV/CVD kapalı.
+        let just_below = score_volume(50.0, 0.0, 0.0, 1990.0, 1000.0, true);
+        let just_above = score_volume(50.0, 0.0, 0.0, 2010.0, 1000.0, true);
+        assert!(
+            just_below.score > 0.0 && just_above.score > just_below.score,
+            "1.99x and 2.01x should both score with a small delta"
+        );
+        let step = just_above.score - just_below.score;
+        assert!(step < 1.5, "old design jumped ~10 pts across 2×; smooth ramp step={step}");
+    }
+
+    #[test]
+    fn volume_spike_1_5_zero_3_0_full() {
+        let at_lo = score_volume(50.0, 0.0, 0.0, 1500.0, 1000.0, true);
+        assert!(
+            !at_lo.details.iter().any(|d| d.starts_with("Volume spike")),
+            "1.5x should not add spike (threshold exclusive)"
+        );
+        assert!((at_lo.score - 0.0).abs() < 1e-9);
+        let at_hi = score_volume(50.0, 0.0, 0.0, 3000.0, 1000.0, true);
+        assert!((at_hi.score - 20.0).abs() < 1e-6);
     }
 }

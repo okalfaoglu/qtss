@@ -101,8 +101,15 @@ pub fn score_momentum(
     // 4) Divergence (max 30 puan)
     if is_bottom_search {
         let divs = detect_divergences(price_low_pivots, indicator_low_pivots, false);
-        let regular_count = divs.iter().filter(|d| d.div_type == DivergenceType::BullishRegular).count();
-        let hidden_count = divs.iter().filter(|d| d.div_type == DivergenceType::BullishHidden).count();
+        let mut regular_count = 0usize;
+        let mut hidden_count = 0usize;
+        for d in &divs {
+            match d.div_type {
+                DivergenceType::BullishRegular => regular_count += 1,
+                DivergenceType::BullishHidden => hidden_count += 1,
+                _ => {}
+            }
+        }
         if regular_count > 0 {
             let pts = (regular_count as f64 * 15.0).min(30.0);
             score += pts;
@@ -115,8 +122,15 @@ pub fn score_momentum(
         }
     } else {
         let divs = detect_divergences(price_high_pivots, indicator_high_pivots, true);
-        let regular_count = divs.iter().filter(|d| d.div_type == DivergenceType::BearishRegular).count();
-        let hidden_count = divs.iter().filter(|d| d.div_type == DivergenceType::BearishHidden).count();
+        let mut regular_count = 0usize;
+        let mut hidden_count = 0usize;
+        for d in &divs {
+            match d.div_type {
+                DivergenceType::BearishRegular => regular_count += 1,
+                DivergenceType::BearishHidden => hidden_count += 1,
+                _ => {}
+            }
+        }
         if regular_count > 0 {
             let pts = (regular_count as f64 * 15.0).min(30.0);
             score += pts;
