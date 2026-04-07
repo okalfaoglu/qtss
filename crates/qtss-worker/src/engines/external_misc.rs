@@ -11,5 +11,5 @@ fn include_misc(key: &str) -> bool {
 }
 
 pub async fn run(pool: PgPool) {
-    run_external_sources_engine(pool, "external_misc", include_misc).await;
+    run_external_sources_engine(pool, "external_misc", include_misc, false).await;
 }

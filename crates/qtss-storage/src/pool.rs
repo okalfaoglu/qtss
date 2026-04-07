@@ -74,7 +74,9 @@ pub async fn create_pool(database_url: &str, max_connections: u32) -> Result<PgP
 
 pub async fn run_migrations(pool: &PgPool) -> Result<(), StorageError> {
     let dir = resolve_migrations_dir()?;
-    let migrator = Migrator::new(&dir).await.map_err(StorageError::from)?;
+    let migrator = Migrator::new(dir.clone())
+        .await
+        .map_err(StorageError::from)?;
     migrator
         .run(pool)
         .await

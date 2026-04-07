@@ -9,5 +9,5 @@ fn include_hyperliquid(key: &str) -> bool {
 }
 
 pub async fn run(pool: PgPool) {
-    run_external_sources_engine(pool, "external_hyperliquid", include_hyperliquid).await;
+    run_external_sources_engine(pool, "external_hyperliquid", include_hyperliquid, false).await;
 }

@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 default-run = "qtss-api"
 
+[features]
+default = []
+plotters_ttf = ["qtss-ai/plotters_ttf"]
+
 [[bin]]
 name = "qtss-api"
 path = "src/main.rs"

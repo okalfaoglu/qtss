@@ -3,6 +3,7 @@
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
+use crate::catalog::is_binance_futures_tradable;
 use crate::data_snapshots::data_snapshot_age_secs;
 use crate::error::StorageError;
 
@@ -102,8 +103,13 @@ pub async fn ensure_binance_sources_for_active_symbols(pool: &PgPool) -> Result<
     let mut created = 0usize;
 
     for sym in &symbols {
-        if sym.segment != "futures" { continue; }
+        if sym.segment != "futures" {
+            continue;
+        }
         let pair = sym.symbol.to_uppercase(); // e.g. "ETHUSDT"
+        if !is_binance_futures_tradable(pool, &pair).await.unwrap_or(false) {
+            continue;
+        }
 
         let sources = [
             (

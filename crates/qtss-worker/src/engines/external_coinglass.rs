@@ -9,5 +9,5 @@ fn include_coinglass(key: &str) -> bool {
 }
 
 pub async fn run(pool: PgPool) {
-    run_external_sources_engine(pool, "external_coinglass", include_coinglass).await;
+    run_external_sources_engine(pool, "external_coinglass", include_coinglass, false).await;
 }
