@@ -362,6 +362,37 @@ impl ExchangeOrderRepository {
         Ok(rows)
     }
 
+    /// Son dolumlar — tek sembol (pozisyon türetimi için global limit yerine).
+    pub async fn list_recent_filled_orders_for_symbol(
+        &self,
+        symbol: &str,
+        limit: i64,
+    ) -> Result<Vec<ExchangeOrderRow>, StorageError> {
+        let lim = limit.clamp(1, 20_000);
+        let sym_u = symbol.trim().to_uppercase();
+        let rows = sqlx::query_as::<_, ExchangeOrderRow>(
+            r#"SELECT id, org_id, user_id, exchange, segment, symbol,
+                      client_order_id, status, intent, venue_order_id,
+                      venue_response, created_at, updated_at
+               FROM exchange_orders
+               WHERE UPPER(TRIM(symbol)) = $1
+               AND venue_response IS NOT NULL
+               AND (
+                   venue_response->>'status' IN ('FILLED', 'PARTIALLY_FILLED')
+                   OR (
+                       COALESCE(NULLIF(TRIM(venue_response->>'executedQty'), ''), '0')::numeric > 0
+                   )
+               )
+               ORDER BY created_at DESC
+               LIMIT $2"#,
+        )
+        .bind(&sym_u)
+        .bind(lim)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Son dolumlar — pozisyon / SL-TP izleme (tüm kullanıcılar, yeniden eskiye).
     pub async fn list_recent_filled_orders_global(
         &self,

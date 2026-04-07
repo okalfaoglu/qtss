@@ -13,7 +13,7 @@
 //!   Configurable via `QTSS_AI_TACTICAL_EXECUTOR_MAKER_BPS` / `TAKER_BPS`.
 //!   Simulated fills are written to `exchange_orders` (no Binance request) when
 //!   `QTSS_AI_TACTICAL_EXECUTOR_ORG_ID` / `QTSS_AI_TACTICAL_EXECUTOR_USER_ID` are set
-//!   or a prior order row supplies org/user for the symbol.
+//!   (preferred) or a prior filled order row for the same symbol supplies org/user.
 //! - **Live mode**: Exchange native commission applies; no local override needed.
 //!
 //! ## Config flags
@@ -32,7 +32,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use qtss_ai::storage::{
-    fetch_latest_approved_tactical, mark_applied, AiRecordTable, AiTacticalDecisionRow,
+    fetch_latest_approved_tactical, mark_applied, mark_tactical_execution_failed, AiRecordTable,
+    AiTacticalDecisionRow,
 };
 use qtss_binance::{
     venue_order_id_from_binance_order_response, BinanceClient, BinanceClientConfig,
@@ -52,7 +53,7 @@ use qtss_storage::{
 };
 use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
-use serde_json::json;
+use serde_json::{json, Value};
 use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -112,6 +113,82 @@ fn net_position_for_symbol(filled: &[ExchangeOrderRow], symbol: &str) -> (Decima
     } else {
         (Decimal::ZERO, Decimal::ZERO)
     }
+}
+
+fn executor_env_org_user() -> Option<(Uuid, Uuid)> {
+    let org = std::env::var("QTSS_AI_TACTICAL_EXECUTOR_ORG_ID")
+        .ok()
+        .and_then(|s| Uuid::parse_str(s.trim()).ok());
+    let user = std::env::var("QTSS_AI_TACTICAL_EXECUTOR_USER_ID")
+        .ok()
+        .and_then(|s| Uuid::parse_str(s.trim()).ok());
+    match (org, user) {
+        (Some(o), Some(u)) => Some((o, u)),
+        _ => None,
+    }
+}
+
+/// Binance USDT-M `positionRisk`: one-way (`BOTH`) uses signed `positionAmt`; hedge uses `LONG` / `SHORT` rows.
+fn net_position_from_binance_position_risk(resp: &Value, sym: &str) -> (Decimal, Decimal) {
+    let want = sym.trim().to_uppercase();
+    let Some(arr) = resp.as_array() else {
+        return (Decimal::ZERO, Decimal::ZERO);
+    };
+    let mut long_qty = Decimal::ZERO;
+    let mut short_qty = Decimal::ZERO;
+    for it in arr {
+        let row_sym = it
+            .get("symbol")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_uppercase();
+        if row_sym != want {
+            continue;
+        }
+        let amt = it
+            .get("positionAmt")
+            .and_then(|x| x.as_str())
+            .and_then(|s| Decimal::from_str(s).ok())
+            .unwrap_or(Decimal::ZERO);
+        let side = it
+            .get("positionSide")
+            .and_then(|x| x.as_str())
+            .unwrap_or("BOTH");
+        match side {
+            "LONG" => long_qty += amt.abs(),
+            "SHORT" => short_qty += amt.abs(),
+            _ => {
+                if amt > Decimal::ZERO {
+                    long_qty += amt;
+                } else if amt < Decimal::ZERO {
+                    short_qty += amt.abs();
+                }
+            }
+        }
+    }
+    (long_qty, short_qty)
+}
+
+async fn fetch_binance_futures_net_position(
+    acct_repo: &ExchangeAccountRepository,
+    user_id: Uuid,
+    sym: &str,
+) -> Result<(Decimal, Decimal), String> {
+    let creds = acct_repo
+        .binance_for_user(user_id, "futures")
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(c) = creds else {
+        return Err("no Binance futures credentials".into());
+    };
+    let cfg = BinanceClientConfig::mainnet_with_keys(c.api_key.clone(), c.api_secret.clone());
+    let client = BinanceClient::new(cfg).map_err(|e| e.to_string())?;
+    let v = client
+        .fapi_position_risk(Some(sym))
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(net_position_from_binance_position_risk(&v, sym))
 }
 
 // ---------------------------------------------------------------------------
@@ -345,7 +422,9 @@ async fn execute_live_binance(
                 info!(%sym, %leverage, "ai_tactical_executor: leverage set");
             }
             Err(e) => {
-                warn!(%e, %sym, %leverage, "ai_tactical_executor: leverage set failed — proceeding with current leverage");
+                warn!(%e, %sym, %leverage, "ai_tactical_executor: leverage set failed — aborting live entry");
+                let _ = mark_tactical_execution_failed(pool, td.id).await;
+                return;
             }
         }
     }
@@ -371,6 +450,9 @@ async fn execute_live_binance(
         }
         Err(e) => {
             warn!(%e, %sym, "ai_tactical_executor: live place failed");
+            if let Err(e2) = mark_tactical_execution_failed(pool, td.id).await {
+                warn!(%e2, tactical_id = %td.id, "ai_tactical_executor: mark_tactical_execution_failed");
+            }
         }
     }
 }
@@ -380,23 +462,12 @@ async fn execute_live_binance(
 // ---------------------------------------------------------------------------
 
 fn resolve_user_org(filled: &[ExchangeOrderRow], sym: &str) -> Option<(Uuid, Uuid)> {
-    filled
-        .iter()
-        .find(|r| r.symbol.eq_ignore_ascii_case(sym))
-        .map(|r| (r.org_id, r.user_id))
-        .or_else(|| {
-            // Fallback: try env for default account
-            let org = std::env::var("QTSS_AI_TACTICAL_EXECUTOR_ORG_ID")
-                .ok()
-                .and_then(|s| Uuid::parse_str(s.trim()).ok());
-            let user = std::env::var("QTSS_AI_TACTICAL_EXECUTOR_USER_ID")
-                .ok()
-                .and_then(|s| Uuid::parse_str(s.trim()).ok());
-            match (org, user) {
-                (Some(o), Some(u)) => Some((o, u)),
-                _ => None,
-            }
-        })
+    executor_env_org_user().or_else(|| {
+        filled
+            .iter()
+            .find(|r| r.symbol.eq_ignore_ascii_case(sym))
+            .map(|r| (r.org_id, r.user_id))
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -458,15 +529,6 @@ pub async fn ai_tactical_executor_loop(pool: PgPool) {
             continue;
         }
 
-        // Load filled orders for position detection.
-        let filled = match repo.list_recent_filled_orders_global(2000).await {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(%e, "ai_tactical_executor: filled orders query failed");
-                continue;
-            }
-        };
-
         let engine_symbols = match list_enabled_engine_symbols(&pool).await {
             Ok(s) => s,
             Err(e) => {
@@ -499,8 +561,36 @@ pub async fn ai_tactical_executor_loop(pool: PgPool) {
                 continue;
             }
 
-            // Check existing positions to avoid doubling.
-            let (long_qty, short_qty) = net_position_for_symbol(&filled, &sym);
+            let filled_sym = match repo.list_recent_filled_orders_for_symbol(&sym, 5000).await {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(%e, %sym, "ai_tactical_executor: symbol filled orders query failed");
+                    continue;
+                }
+            };
+
+            let account_pair = resolve_user_org(&filled_sym, &sym);
+
+            // Live USDT-M: use exchange position; otherwise derive from recent fills for this symbol.
+            let (long_qty, short_qty) = if live_on && segment == MarketSegment::Futures {
+                if let Some((_, uid)) = account_pair {
+                    match fetch_binance_futures_net_position(&acct_repo, uid, &sym).await {
+                        Ok(p) => p,
+                        Err(e) => {
+                            warn!(
+                                %e,
+                                %sym,
+                                "ai_tactical_executor: positionRisk failed — falling back to DB fills"
+                            );
+                            net_position_for_symbol(&filled_sym, &sym)
+                        }
+                    }
+                } else {
+                    net_position_for_symbol(&filled_sym, &sym)
+                }
+            } else {
+                net_position_for_symbol(&filled_sym, &sym)
+            };
             let min_q = Decimal::new(1, 8);
 
             if is_long_entry(direction) && long_qty > min_q {
@@ -537,7 +627,7 @@ pub async fn ai_tactical_executor_loop(pool: PgPool) {
 
             // Execute.
             if let Some(ref gw) = dry_gateway {
-                let org_user = resolve_user_org(&filled, &sym);
+                let org_user = account_pair;
                 let exchange_slug = es.exchange.trim();
                 let segment_db = match segment {
                     MarketSegment::Futures => "futures",
@@ -558,8 +648,8 @@ pub async fn ai_tactical_executor_loop(pool: PgPool) {
                 )
                 .await;
             } else if live_on {
-                let Some((org_id, user_id)) = resolve_user_org(&filled, &sym) else {
-                    warn!(%sym, "ai_tactical_executor: no org_id/user_id for live execution");
+                let Some((org_id, user_id)) = account_pair else {
+                    warn!(%sym, "ai_tactical_executor: no org_id/user_id for live execution (set QTSS_AI_TACTICAL_EXECUTOR_ORG_ID and QTSS_AI_TACTICAL_EXECUTOR_USER_ID or have a filled order for this symbol)");
                     continue;
                 };
                 execute_live_binance(

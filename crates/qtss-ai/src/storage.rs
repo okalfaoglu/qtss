@@ -460,6 +460,31 @@ pub async fn mark_applied(pool: &PgPool, table: AiRecordTable, child_id: Uuid) -
     Ok(())
 }
 
+/// After a failed live order placement, stop re-attempting the same approved tactical row each tick.
+/// Parent `ai_decisions` is set to `error` for operator visibility.
+pub async fn mark_tactical_execution_failed(pool: &PgPool, tactical_child_id: Uuid) -> AiResult<()> {
+    let decision_id: Uuid = sqlx::query_scalar(
+        "SELECT decision_id FROM ai_tactical_decisions WHERE id = $1",
+    )
+    .bind(tactical_child_id)
+    .fetch_one(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE ai_tactical_decisions SET status = 'execution_failed' WHERE id = $1",
+    )
+    .bind(tactical_child_id)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        r#"UPDATE ai_decisions SET status = 'error'
+           WHERE id = $1"#,
+    )
+    .bind(decision_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn expire_stale_decisions(pool: &PgPool) -> AiResult<u64> {
     let res = sqlx::query(
         r#"UPDATE ai_decisions
