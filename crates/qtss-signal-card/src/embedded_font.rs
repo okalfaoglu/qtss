@@ -13,8 +13,8 @@ pub fn ensure_dejavu_sans_registered() {
             FontStyle::Normal,
             include_bytes!("../assets/DejaVuSans.ttf"),
         )
-        .unwrap_or_else(|e| {
-            panic!("qtss-signal-card: embedded DejaVuSans.ttf failed to register: {e:?}");
+        .unwrap_or_else(|_e| {
+            panic!("qtss-signal-card: embedded DejaVuSans.ttf failed to register");
         });
     });
 }

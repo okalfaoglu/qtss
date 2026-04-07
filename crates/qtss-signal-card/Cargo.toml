@@ -13,10 +13,5 @@ plotters_ttf = []
 [dependencies]
 thiserror.workspace = true
 qtss-chart-patterns.workspace = true
-plotters = { version = "0.3.7", default-features = false, features = [
-    "bitmap_backend",
-    "bitmap_encoder",
-    "image",
-    "ttf",
-] }
+plotters = { version = "0.3.7", default-features = false, features = ["ab_glyph", "bitmap_backend", "bitmap_encoder", "image", "ttf"] }
 tempfile = "3"
