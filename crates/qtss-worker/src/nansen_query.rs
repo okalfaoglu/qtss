@@ -14,7 +14,7 @@ use tracing::{debug, warn};
 
 pub fn default_token_screener_body() -> serde_json::Value {
     json!({
-        "chains": ["ethereum", "solana", "base", "arbitrum", "optimism", "bnb", "polygon"],
+        "chains": ["ethereum", "solana", "base", "arbitrum", "bnb"],
         "timeframe": "24h",
         "filters": {
             "trader_type": "all",
