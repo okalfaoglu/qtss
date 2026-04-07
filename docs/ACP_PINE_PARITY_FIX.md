@@ -22,6 +22,27 @@
 
 ---
 
+## Güncel kod durumu (repo özeti)
+
+Aşağıdaki bölümlerdeki **“Mevcut Rust” kod blokları**, çoğunlukla bu rehberin yazıldığı **önceki** hatayı gösterir; güncel `main` ağacında birçok madde **zaten düzeltilmiştir**. Doğrulama için ilgili dosyaya bakın.
+
+| BUG | Konu | Durum | Nerede |
+|-----|------|--------|--------|
+| **1** | `!replaced` ile karşı pivotun engellenmesi | **Düzeltildi** | `zigzag.rs` `calculate_bar`: karşı pivot `if allow_opp {` — `replaced` değişkeni yok; `!replaced` koşulu yok. |
+| **2** | `force_double` zamanlaması (step 1 öncesi) | **Düzeltildi** | `zigzag.rs` satır ~210–222: `force_double`, step 1’den önce `pivots[1]` ile hesaplanıyor. |
+| **3** | `inspect` sparse `BTreeMap.range` | **Düzeltildi** | `scan.rs` `trend_line_inspect`: `for b in starting_bar..=ending_bar` dense döngü; gap’te `total` artıyor. |
+| **4** | `resolve` `>=` vs Pine `>` | **Düzeltildi** | `resolve.rs`: `t1_left_higher = t1p1 > t2p1` ve açıklayıcı yorum. |
+| **5** | `nextlevel` temp buffer | **Büyük ölçüde taşındı** | `zigzag.rs` `next_level_from_zigzag`: `temp_bullish` / `temp_bearish`, `dir.abs() == 2` dalları; boş üst seviye iken `dir.abs() == 1` temp’siz Pine davranışı testle korunuyor (`next_level_from_zigzag_pine_no_temp_while_next_level_was_empty`). |
+| **6** | `inspect_pick_best_three_point_line` | **Uyumlu** | Rehberde notlandığı gibi Pine ile aynı seçim ağacı. |
+| **7** | Sınırlı `nextlevel` döngüsü | **Düzeltildi** | `find.rs`: `max_zigzag_levels == 0` → `usize::MAX` (sınırsız üst seviye, pivot tabanına kadar). DB/UI varsayılanı `0` ile hizalı (`acpChartPatternsConfig`, migration). |
+| **8** | `pivot_candle` eşitlikte en yeni vs en eski | **Düzeltildi** | `zigzag.rs` `pivot_candle`: `>` / `<` ile **en eski** eşit uç; test `pivot_candle_equal_highs_keeps_oldest`. |
+| **9** | Canlı mum vs tarama `bar_index` kayması | **Düzeltildi** | `App.tsx`: tarama yanıtıyla birlikte `setLastChannelScanBars(scanWindow.slice())`; overlay `channelScanOverlayBars` yalnız bu snapshot’tan üretiliyor (canlı `bars` ile karıştırılmıyor). |
+| **10** | `depth: 55` | **Tanı kısmen güncel** | Limit genelde yeterli; asıl pivot kıtlığı zigzag mantığından kaynaklanıyordu (BUG-1/2/8). |
+
+**Kalan risk:** Pine göstergesinden dışa aktarılmış **golden** OHLC + pivot + pattern listesi olmadan “%100 birebir” iddiası doğrulanamaz. Aşağıdaki “TEST STRATEJİSİ” bölümü hâlâ geçerli bir hedef tanımıdır.
+
+---
+
 ## HATA LİSTESİ — Pine ile Uyumsuzluklar
 
 ### BUG-1: `calculate_bar` — `!replaced` koşulu (Rust'a özgü, Pine'da yok)
@@ -502,11 +523,13 @@ const multiOverlay = useMemo(() => {
 
 Pine'da `depth` = max pivot limiti (varsayılan 55, yeterli). `length` = pivot pencere boyutu (varsayılan 8). `length=8` ve yeterli mum varsa Pine ~100+ pivot üretir. Rust da üretmeli.
 
-**Gerçek sorun:** BUG-1 ve BUG-2 nedeniyle Rust daha az pivot üretiyor. Zigzag parametreleri Pine ile aynı ama pivot üretim mantığı farklı → daha az pivot → 6 alterne pivot bulunamıyor.
+**Gerçek sorun (tarihsel):** BUG-1, BUG-2 ve BUG-8 birlikte Rust’ta daha az pivot üretimine yol açıyordu. Bu üçlü kodda giderildi; hâlâ sapma görülüyorsa golden Pine export veya kalan `nextlevel` ince farklarını inceleyin.
 
 ---
 
-## DÜZELTME SIRASI
+## DÜZELTME SIRASI (tarihsel kontrol listesi)
+
+> Aşağıdaki tablo, rehberin ilk yazıldığı andaki **yapılacaklar** sırasıdır. Çoğu satır yukarıdaki “Güncel kod durumu” tablosuna göre **tamamlanmış** sayılır.
 
 | # | Öncelik | Dosya | Düzeltme | Test |
 |---|---------|-------|----------|------|
@@ -517,7 +540,7 @@ Pine'da `depth` = max pivot limiti (varsayılan 55, yeterli). `length` = pivot p
 | 5 | **YÜKSEK** | `resolve.rs` | BUG-4: `>=` → `>` (Pine parity) | Eşit sol uçlu pattern testi |
 | 6 | **YÜKSEK** | `scan.rs` | BUG-3: Dense iteration veya doğrulama | Gap'li bar dizisi ile score/total testi |
 | 7 | **YÜKSEK** | `find.rs` | BUG-7: `max_zigzag_levels=0` (sınırsız) varsayılan | Pine ile aynı formasyonu bulmayı doğrula |
-| 8 | **ORTA** | `App.tsx` | BUG-9: `scanBarsSnapshot` state | Live poll + scan yarışı senaryosu |
+| 8 | **ORTA** | `App.tsx` | BUG-9: tarama anı OHLC snapshot (`lastChannelScanBars`) | Live poll + scan yarışı senaryosu |
 
 ---
 
@@ -594,12 +617,10 @@ fn pine_parity_btcusdt_1h() {
 
 ---
 
-## ÖZET: Neden Formasyon Görünmüyor?
+## ÖZET: Neden formasyon görünmüyordu? (tarihsel)
 
-Ana neden **BUG-1 + BUG-2 + BUG-8 kombinasyonu**: Zigzag daha az pivot üretiyor → 6 alterne pivot bulunamıyor → tarama `InsufficientPivots` reject kodu ile sonuçlanıyor → grafikte formasyon yok.
-
-BUG-1'i düzeltmek tek başına %70 ihtimalle sorunu çözer. Geri kalan BUG'lar Pine ile tam eşitlik için gereklidir.
+Ana neden **BUG-1 + BUG-2 + BUG-8 kombinasyonuydu**: Zigzag daha az pivot üretiyordu → 6 alterne pivot bulunamıyordu → tarama `InsufficientPivots` ile düşüyordu → grafikte formasyon yoktu. Bu üçlü kodda düzeltildi. Hâlâ sorun varsa: **BUG-9** (snapshot) veya **golden Pine karşılaştırması** eksikliği veya çok nadir `nextlevel` farkları devreye girer.
 
 ---
 
-*Bu doküman `docs/` dizinine yerleştirilmemelidir — yalnızca Cursor'ın düzeltme referansıdır. Düzeltmeler tamamlandıktan sonra atılabilir.*
+*Bu dosya `docs/` altında kalır: Pine davranışı, risk analizi ve golden test hedefi için referanstır.*
