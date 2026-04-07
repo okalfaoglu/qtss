@@ -3,7 +3,7 @@
 //! CI (`postgres-migrations` job) sets `DATABASE_URL`. Locally, skip if unset.
 
 use qtss_ai::storage::{decision_exists_for_hash, insert_ai_decision};
-use qtss_storage::{create_pool, run_migrations};
+use qtss_storage::{create_pool, run_migrations, sync_sqlx_migration_checksums_from_disk};
 use serde_json::json;
 use sqlx::postgres::PgConnectOptions;
 use std::str::FromStr;
@@ -26,6 +26,9 @@ async fn decision_exists_for_hash_respects_created_at_ttl() {
     }
 
     let pool = create_pool(&url, 3).await.expect("create_pool");
+    sync_sqlx_migration_checksums_from_disk(&pool)
+        .await
+        .expect("sync_sqlx_migration_checksums_from_disk");
     run_migrations(&pool).await.expect("run_migrations");
 
     let prompt_hash = format!("it_prompt_hash_{}", Uuid::new_v4());

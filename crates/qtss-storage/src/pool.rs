@@ -15,7 +15,7 @@ use crate::error::StorageError;
 ///
 /// Production: run the worker/API with `WorkingDirectory` at the repo root (see
 /// `deploy/systemd/*.service.example`) so `./migrations` resolves to the live tree.
-fn resolve_migrations_dir() -> Result<PathBuf, StorageError> {
+pub(crate) fn resolve_migrations_dir() -> Result<PathBuf, StorageError> {
     if let Ok(raw) = std::env::var("QTSS_MIGRATIONS_DIR") {
         let trimmed = raw.trim();
         if !trimmed.is_empty() {

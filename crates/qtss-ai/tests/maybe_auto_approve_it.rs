@@ -6,7 +6,7 @@ use chrono::{Duration, Utc};
 use qtss_ai::approval::{maybe_auto_approve, AiDecisionNotifySnapshot};
 use qtss_ai::config::AiEngineConfig;
 use qtss_ai::storage::{insert_ai_decision, insert_tactical_decision};
-use qtss_storage::{create_pool, run_migrations};
+use qtss_storage::{create_pool, run_migrations, sync_sqlx_migration_checksums_from_disk};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -22,6 +22,9 @@ async fn maybe_auto_approve_marks_rows_approved_when_eligible() {
     };
 
     let pool = create_pool(&url, 3).await.expect("create_pool");
+    sync_sqlx_migration_checksums_from_disk(&pool)
+        .await
+        .expect("sync_sqlx_migration_checksums_from_disk");
     run_migrations(&pool).await.expect("run_migrations");
 
     let mut cfg = AiEngineConfig::default_disabled();
@@ -104,6 +107,9 @@ async fn maybe_auto_approve_leaves_pending_when_below_threshold() {
     };
 
     let pool = create_pool(&url, 3).await.expect("create_pool");
+    sync_sqlx_migration_checksums_from_disk(&pool)
+        .await
+        .expect("sync_sqlx_migration_checksums_from_disk");
     run_migrations(&pool).await.expect("run_migrations");
 
     let mut cfg = AiEngineConfig::default_disabled();

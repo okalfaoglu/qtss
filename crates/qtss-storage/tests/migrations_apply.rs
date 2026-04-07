@@ -2,7 +2,7 @@
 //!
 //! Requires `DATABASE_URL`. CI `postgres-migrations` job provides it.
 
-use qtss_storage::{create_pool, run_migrations};
+use qtss_storage::{create_pool, run_migrations, sync_sqlx_migration_checksums_from_disk};
 use sqlx::postgres::PgConnectOptions;
 use std::str::FromStr;
 
@@ -23,6 +23,9 @@ async fn migrations_apply_including_ai_tables() {
     }
 
     let pool = create_pool(url.trim(), 3).await.expect("create_pool");
+    sync_sqlx_migration_checksums_from_disk(&pool)
+        .await
+        .expect("sync_sqlx_migration_checksums_from_disk");
     run_migrations(&pool).await.expect("run_migrations");
 
     let ai_ok: bool =

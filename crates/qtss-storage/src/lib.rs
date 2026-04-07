@@ -24,6 +24,7 @@ pub mod onchain_signal_scores;
 pub mod paper;
 pub mod pnl;
 pub mod range_signal_execution;
+pub mod migration_checksum_sync;
 pub mod pool;
 pub mod range_engine;
 pub mod system_config;
@@ -113,6 +114,7 @@ pub use paper::{
 pub use pnl::{
     sum_today_daily_realized_pnl, PnlBucket, PnlRebuildStats, PnlRollupRepository, PnlRollupRow,
 };
+pub use migration_checksum_sync::sync_sqlx_migration_checksums_from_disk;
 pub use pool::{create_pool, run_migrations};
 pub use range_engine::{
     clear_refresh_requested, default_range_engine_json, fetch_range_engine_json, merge_json_deep,
