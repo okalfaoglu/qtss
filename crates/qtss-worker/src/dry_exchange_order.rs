@@ -32,12 +32,15 @@ pub fn env_ai_tactical_org_user() -> Option<(Uuid, Uuid)> {
     }
 }
 
-pub async fn resolve_dry_exchange_order_party(
-    pool: &PgPool,
+/// Book + hint + env-style inputs without hitting the database (for tests and [`resolve_dry_exchange_order_party`]).
+#[must_use]
+pub(crate) fn resolve_dry_exchange_order_party_sync(
     org_from_book: Option<Uuid>,
     user_from_book: Option<Uuid>,
     filled_hint: &[ExchangeOrderRow],
     symbol: &str,
+    ai_tactical_org_user: Option<(Uuid, Uuid)>,
+    paper_org_user: Option<(Uuid, Uuid)>,
 ) -> Option<(Uuid, Uuid)> {
     let sym = symbol.trim();
     if let (Some(o), Some(u)) = (org_from_book, user_from_book) {
@@ -50,8 +53,35 @@ pub async fn resolve_dry_exchange_order_party(
             return Some((r.org_id, u));
         }
     }
-    if let Some(p) = env_ai_tactical_org_user() {
+    if let Some(p) = ai_tactical_org_user {
         return Some(p);
+    }
+    if let Some(p) = paper_org_user {
+        return Some(p);
+    }
+    filled_hint
+        .iter()
+        .find(|r| r.symbol.trim().eq_ignore_ascii_case(sym))
+        .map(|r| (r.org_id, r.user_id))
+}
+
+pub async fn resolve_dry_exchange_order_party(
+    pool: &PgPool,
+    org_from_book: Option<Uuid>,
+    user_from_book: Option<Uuid>,
+    filled_hint: &[ExchangeOrderRow],
+    symbol: &str,
+) -> Option<(Uuid, Uuid)> {
+    let ai = env_ai_tactical_org_user();
+    if let Some(party) = resolve_dry_exchange_order_party_sync(
+        org_from_book,
+        user_from_book,
+        filled_hint,
+        symbol,
+        ai,
+        None,
+    ) {
+        return Some(party);
     }
     let org_s = resolve_system_string(
         pool,
@@ -69,16 +99,21 @@ pub async fn resolve_dry_exchange_order_party(
         "",
     )
     .await;
-    if let (Ok(o), Ok(u)) = (
+    let paper_org_user = match (
         Uuid::parse_str(org_s.trim()),
         Uuid::parse_str(user_s.trim()),
     ) {
-        return Some((o, u));
-    }
-    filled_hint
-        .iter()
-        .find(|r| r.symbol.trim().eq_ignore_ascii_case(sym))
-        .map(|r| (r.org_id, r.user_id))
+        (Ok(o), Ok(u)) => Some((o, u)),
+        _ => None,
+    };
+    resolve_dry_exchange_order_party_sync(
+        org_from_book,
+        user_from_book,
+        filled_hint,
+        symbol,
+        None,
+        paper_org_user,
+    )
 }
 
 #[must_use]
@@ -206,9 +241,28 @@ pub async fn persist_after_dry_place(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
     use qtss_execution::FillEvent;
     use rust_decimal::Decimal;
     use std::collections::HashMap;
+
+    fn hint_row(org_id: Uuid, user_id: Uuid, symbol: &str) -> ExchangeOrderRow {
+        ExchangeOrderRow {
+            id: Uuid::from_u128(0xa100),
+            org_id,
+            user_id,
+            exchange: "binance".into(),
+            segment: "futures".into(),
+            symbol: symbol.into(),
+            client_order_id: Uuid::from_u128(0xb100),
+            status: "filled".into(),
+            intent: json!({}),
+            venue_order_id: None,
+            venue_response: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
 
     fn sample_outcome() -> DryPlaceOutcome {
         let cid = Uuid::from_u128(1u128);
@@ -235,5 +289,106 @@ mod tests {
         assert_eq!(v["executedQty"], "0.001");
         assert_eq!(v["avgPrice"], "42000");
         assert_eq!(v["trace"], "x");
+    }
+
+    #[test]
+    fn resolve_sync_prefers_full_book_party() {
+        let book_o = Uuid::from_u128(0x101);
+        let book_u = Uuid::from_u128(0x102);
+        let hint_o = Uuid::from_u128(0x201);
+        let hint_u = Uuid::from_u128(0x202);
+        let hints = [hint_row(hint_o, hint_u, "BTCUSDT")];
+        let ai = Uuid::from_u128(0x301);
+        let au = Uuid::from_u128(0x302);
+        let out = resolve_dry_exchange_order_party_sync(
+            Some(book_o),
+            Some(book_u),
+            &hints,
+            "BTCUSDT",
+            Some((ai, au)),
+            Some((Uuid::from_u128(0x401), Uuid::from_u128(0x402))),
+        );
+        assert_eq!(out, Some((book_o, book_u)));
+    }
+
+    #[test]
+    fn resolve_sync_book_user_only_matches_hint_symbol() {
+        let org = Uuid::from_u128(0x501);
+        let user = Uuid::from_u128(0x502);
+        let hints = [hint_row(org, user, "btcusdt")];
+        let out = resolve_dry_exchange_order_party_sync(
+            None,
+            Some(user),
+            &hints,
+            "BTCUSDT",
+            None,
+            None,
+        );
+        assert_eq!(out, Some((org, user)));
+    }
+
+    #[test]
+    fn resolve_sync_uses_ai_when_book_and_hint_do_not_resolve() {
+        let ai_o = Uuid::from_u128(0x601);
+        let ai_u = Uuid::from_u128(0x602);
+        let hints: [ExchangeOrderRow; 0] = [];
+        let out = resolve_dry_exchange_order_party_sync(
+            None,
+            None,
+            &hints,
+            "ETHUSDT",
+            Some((ai_o, ai_u)),
+            None,
+        );
+        assert_eq!(out, Some((ai_o, ai_u)));
+    }
+
+    #[test]
+    fn resolve_sync_uses_paper_when_ai_absent() {
+        let p_o = Uuid::from_u128(0x701);
+        let p_u = Uuid::from_u128(0x702);
+        let hints: [ExchangeOrderRow; 0] = [];
+        let out = resolve_dry_exchange_order_party_sync(
+            None,
+            None,
+            &hints,
+            "SOLUSDT",
+            None,
+            Some((p_o, p_u)),
+        );
+        assert_eq!(out, Some((p_o, p_u)));
+    }
+
+    #[test]
+    fn resolve_sync_falls_back_to_any_hint_row_for_symbol() {
+        let org = Uuid::from_u128(0x801);
+        let user = Uuid::from_u128(0x802);
+        let hints = [hint_row(org, user, "  xrpusdt  ")];
+        let out = resolve_dry_exchange_order_party_sync(
+            None,
+            None,
+            &hints,
+            "XRPUSDT",
+            None,
+            None,
+        );
+        assert_eq!(out, Some((org, user)));
+    }
+
+    #[test]
+    fn resolve_sync_when_book_user_has_no_matching_row_uses_symbol_fallback() {
+        let org = Uuid::from_u128(0x901);
+        let row_user = Uuid::from_u128(0x902);
+        let other_user = Uuid::from_u128(0x903);
+        let hints = [hint_row(org, row_user, "ADAUSDT")];
+        let out = resolve_dry_exchange_order_party_sync(
+            None,
+            Some(other_user),
+            &hints,
+            "ADAUSDT",
+            None,
+            None,
+        );
+        assert_eq!(out, Some((org, row_user)));
     }
 }
