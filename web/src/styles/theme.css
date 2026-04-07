@@ -1495,6 +1495,184 @@ input[type="color"].tv-elliott-color-swatch:focus-visible {
   color: var(--fg);
 }
 
+/* Motor (engine) drawer — toolbar, collapsible sections, target & snapshot cards */
+.tv-engine-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+  margin-bottom: 0.35rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: color-mix(in srgb, var(--card) 90%, var(--muted));
+}
+
+.tv-engine-toolbar__scope {
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.tv-drawer-details {
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--card) 96%, transparent);
+}
+
+.tv-drawer-details__summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 650;
+  padding: 0.45rem 0.55rem;
+  list-style: none;
+}
+
+.tv-drawer-details__summary::-webkit-details-marker {
+  display: none;
+}
+
+.tv-drawer-details__body {
+  padding: 0 0.55rem 0.55rem;
+  border-top: 1px dashed color-mix(in srgb, var(--border) 65%, transparent);
+}
+
+.tv-drawer-details__body--pad {
+  padding-top: 0.45rem;
+}
+
+.tv-engine-pill {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 650;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+
+.tv-engine-pill--on {
+  background: color-mix(in srgb, #22c55e 20%, transparent);
+  color: var(--fg);
+  border: 1px solid color-mix(in srgb, #22c55e 42%, transparent);
+}
+
+.tv-engine-pill--off {
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.tv-engine-pill--warn {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+}
+
+.tv-engine-target-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));
+  gap: 0.45rem;
+}
+
+.tv-engine-target-card {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  padding: 0.45rem 0.5rem;
+  border-left: 3px solid var(--border);
+  background: var(--card);
+}
+
+.tv-engine-target-card--on {
+  border-left-color: color-mix(in srgb, #22c55e 72%, var(--border));
+}
+
+.tv-engine-target-card--off {
+  border-left-color: color-mix(in srgb, var(--muted) 50%, var(--border));
+  opacity: 0.93;
+}
+
+.tv-engine-target-card--focus {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.tv-engine-target-card__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+
+.tv-engine-target-card__symbol {
+  font-size: 0.88rem;
+  font-weight: 750;
+}
+
+.tv-engine-target-card__interval {
+  font-size: 0.72rem;
+  opacity: 0.88;
+}
+
+.tv-engine-target-card__venue {
+  font-size: 0.68rem;
+  margin-top: 0.25rem;
+}
+
+.tv-engine-target-card__badge {
+  font-size: 0.62rem;
+  font-weight: 650;
+  margin-top: 0.28rem;
+  color: var(--accent);
+}
+
+.tv-engine-target-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+  align-items: center;
+}
+
+.tv-engine-snap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  gap: 0.4rem;
+  max-height: 12rem;
+  overflow: auto;
+  padding-top: 0.12rem;
+}
+
+.tv-engine-snap-grid--compact {
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  max-height: 9rem;
+}
+
+.tv-engine-snap-card {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  padding: 0.4rem 0.45rem;
+  background: color-mix(in srgb, var(--card) 94%, transparent);
+}
+
+.tv-engine-snap-card--compact {
+  padding: 0.32rem 0.4rem;
+}
+
+.tv-engine-snap-card__kind {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--accent);
+  text-transform: none;
+}
+
+.tv-engine-snap-card__sym {
+  font-size: 0.72rem;
+  margin-top: 0.1rem;
+}
+
+.tv-engine-snap-card__time {
+  font-size: 0.62rem;
+  margin-top: 0.18rem;
+}
+
 /* engine_symbols rows: label on its own line, controls below (avoids cramped flex-wrap). */
 .tv-drawer-target-list {
   list-style: none;

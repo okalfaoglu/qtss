@@ -180,6 +180,7 @@ import {
   setElliottAnalysisTimeframeColumnEnabled,
 } from "./app/elliottAppHelpers";
 import { formatConfluenceExtras } from "./app/confluenceFormat";
+import { engineRowMatchesTarget } from "./lib/engineTargetMatch";
 import { TbmDashboardPanel } from "./components/TbmDashboardPanel";
 import { channelSixRejectMessage } from "./app/channelRejectMessage";
 import {
@@ -563,7 +564,6 @@ export default function App() {
   const [elliottRefreshBusy, setElliottRefreshBusy] = useState(false);
   const [engineSnapshots, setEngineSnapshots] = useState<EngineSnapshotJoinedApiRow[]>([]);
   const [dataSnapshots, setDataSnapshots] = useState<DataSnapshotApiRow[]>([]);
-  const [marketContext, setMarketContext] = useState<MarketContextLatestApiResponse | null>(null);
   const [contextTabSingle, setContextTabSingle] = useState<MarketContextLatestApiResponse | null>(null);
   const [contextTabSummaries, setContextTabSummaries] = useState<MarketContextSummaryItemApi[]>([]);
   const [contextTabConfluence, setContextTabConfluence] = useState<EngineSnapshotJoinedApiRow[]>([]);
@@ -1382,6 +1382,21 @@ export default function App() {
       });
   }, [engineSnapshots]);
 
+  const toolbarRegisteredEngineTarget = useMemo(() => {
+    const sym = barSymbol.trim();
+    if (!sym) return null;
+    return (
+      engineSymbols.find((s) =>
+        engineRowMatchesTarget(s, {
+          exchange: barExchange.trim(),
+          segment: barSegment.trim(),
+          symbol: sym,
+          interval: barInterval.trim(),
+        }),
+      ) ?? null
+    );
+  }, [engineSymbols, barExchange, barSegment, barSymbol, barInterval]);
+
   /** Süpürme okları: öncelik `trading_range` yükü; yoksa `signal_dashboard` (aynı turda yazılan süpürme alanları). */
   const sweepMarkersPayload = useMemo(
     () => dbTradingRangeSnapshot?.payload ?? dbSignalDashboardSnapshot?.payload ?? null,
@@ -1549,15 +1564,6 @@ export default function App() {
     if (!token) return;
     try {
       const symQ = barSymbol.trim().toUpperCase();
-      const mcPromise =
-        symQ.length > 0
-          ? fetchMarketContextLatest(token, {
-              symbol: symQ,
-              interval: barInterval.trim(),
-              exchange: barExchange.trim().toLowerCase(),
-              segment: (barSegment.trim() || "spot").toLowerCase(),
-            }).catch(() => null)
-          : Promise.resolve(null);
       const segLower = (barSegment.trim() || "spot").toLowerCase();
       const commDefPromise = fetchBinanceCommissionDefaults(token, {
         segment: segLower,
@@ -1565,7 +1571,7 @@ export default function App() {
       }).catch(() => null);
       const rangeCfgPromise = fetchRangeEngineConfig(token).catch(() => null);
       const ingestPromise = fetchEngineSymbolIngestion(token).catch(() => [] as EngineSymbolIngestionApiRow[]);
-      const [snaps, syms, sigs, pbal, pfills, liveFills, ds, mc, commDef, rangeCfg, ingest] = await Promise.all([
+      const [snaps, syms, sigs, pbal, pfills, liveFills, ds, commDef, rangeCfg, ingest] = await Promise.all([
         fetchEngineSnapshots(token),
         fetchEngineSymbols(token),
         fetchEngineRangeSignals(token, { limit: 80 }),
@@ -1573,7 +1579,6 @@ export default function App() {
         fetchPaperFills(token, 15).catch(() => []),
         fetchMyExchangeFills(token, { limit: 30 }).catch(() => []),
         fetchDataSnapshots(token).catch(() => []),
-        mcPromise,
         commDefPromise,
         rangeCfgPromise,
         ingestPromise,
@@ -1581,7 +1586,6 @@ export default function App() {
       setRangeEngineConfig(rangeCfg);
       setEngineSnapshots(snaps);
       setDataSnapshots(ds);
-      setMarketContext(mc);
       setEngineSymbols(syms);
       setEngineIngestionRows(ingest);
       setEngineRangeSignals(sigs);
@@ -1776,7 +1780,6 @@ export default function App() {
     if (!token) {
       setEngineSnapshots([]);
       setDataSnapshots([]);
-      setMarketContext(null);
       setContextTabSingle(null);
       setContextTabSummaries([]);
       setContextTabConfluence([]);
@@ -4002,30 +4005,81 @@ export default function App() {
 
               {drawerTab === "engine" ? (
                 <>
-                  {matchesSetting("motor", "engine", "snapshot", "sembol", "worker") ? (
-                    <div className="card">
+                  {matchesSetting(
+                    "motor",
+                    "engine",
+                    "snapshot",
+                    "sembol",
+                    "worker",
+                    "hedef",
+                    "targets",
+                    "ingestion",
+                    "paper",
+                    "dolum",
+                  ) ? (
+                    <div className="card tv-engine-drawer">
                       <p className="tv-drawer__section-head">{t("app.engineDrawer.sectionTitle")}</p>
-                      <p className="muted" style={{ fontSize: "0.78rem", marginBottom: "0.5rem" }}>
-                        {t("app.engineDrawer.intro")}
-                      </p>
-                      <ul className="muted" style={{ fontSize: "0.72rem", margin: "0 0 0.55rem 1rem", lineHeight: 1.45 }}>
-                        <li>{t("app.engineDrawer.liData")}</li>
-                        <li>{t("app.engineDrawer.liWorker")}</li>
-                        <li>{t("app.engineDrawer.liChartMapping")}</li>
-                        <li>{t("app.engineDrawer.liPaper")}</li>
-                        <li>{t("app.engineDrawer.liConfluence")}</li>
-                      </ul>
-                      {token ? (
-                        <div
-                          className="muted"
-                          style={{
-                            marginTop: "0.5rem",
-                            padding: "0.45rem 0.5rem",
-                            border: "1px solid color-mix(in srgb, var(--fg, #ccc) 18%, transparent)",
-                            borderRadius: 6,
-                            fontSize: "0.72rem",
+                      <div className="tv-drawer__hint-block">{t("app.engineDrawer.introShort")}</div>
+                      <div className="tv-engine-toolbar">
+                        <div>
+                          <div className="tv-engine-toolbar__scope mono">
+                            {barExchange.trim() || "—"}/{normalizeMarketSegment(barSegment)}/
+                            {barSymbol.trim().toUpperCase() || "—"}/{barInterval.trim() || "—"}
+                          </div>
+                          <div style={{ marginTop: "0.28rem" }}>
+                            {!barSymbol.trim() ? (
+                              <span className="tv-engine-pill tv-engine-pill--warn">
+                                {t("app.engineDrawer.pillNeedSymbol")}
+                              </span>
+                            ) : toolbarRegisteredEngineTarget ? (
+                              <span
+                                className={`tv-engine-pill ${toolbarRegisteredEngineTarget.enabled ? "tv-engine-pill--on" : "tv-engine-pill--off"}`}
+                              >
+                                {toolbarRegisteredEngineTarget.enabled
+                                  ? t("app.engineDrawer.pillRegisteredOn")
+                                  : t("app.engineDrawer.pillRegisteredPaused")}
+                              </span>
+                            ) : (
+                              <span className="tv-engine-pill tv-engine-pill--warn">
+                                {t("app.engineDrawer.pillNotRegistered")}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="theme-toggle tv-engine-toolbar__refresh"
+                          style={{ fontSize: "0.78rem", alignSelf: "flex-start" }}
+                          disabled={engineListRefreshing}
+                          onClick={async () => {
+                            setEngineListRefreshing(true);
+                            try {
+                              await refreshEnginePanel();
+                            } finally {
+                              setEngineListRefreshing(false);
+                            }
                           }}
                         >
+                          {engineListRefreshing
+                            ? t("app.engineDrawer.refreshBusy")
+                            : t("app.engineDrawer.refreshNow")}
+                        </button>
+                      </div>
+                      {enginePanelErr ? <p className="err" style={{ marginTop: "0.35rem" }}>{enginePanelErr}</p> : null}
+                      {token ? (
+                        <details className="tv-drawer-details">
+                          <summary className="tv-drawer-details__summary">{t("app.engineDrawer.detailsRangeConfig")}</summary>
+                          <div className="tv-drawer-details__body">
+                            <div
+                              className="muted"
+                              style={{
+                                marginTop: "0.5rem",
+                                padding: "0.45rem 0.5rem",
+                                border: "1px solid color-mix(in srgb, var(--fg, #ccc) 18%, transparent)",
+                                borderRadius: 6,
+                                fontSize: "0.72rem",
+                              }}
+                            >
                           <p className="tv-drawer__section-head" style={{ marginBottom: "0.35rem" }}>
                             {t("app.engineDrawer.rangeConfigHead")}
                           </p>
@@ -4173,147 +4227,163 @@ export default function App() {
                             <p style={{ lineHeight: 1.45 }}>{t("app.engineDrawer.rangeConfigReadOnly")}</p>
                           )}
                         </div>
+                          </div>
+                        </details>
                       ) : null}
-                      <button
-                        type="button"
-                        className="theme-toggle"
-                        style={{ marginTop: "0.35rem", fontSize: "0.78rem" }}
-                        disabled={engineListRefreshing}
-                        onClick={async () => {
-                          setEngineListRefreshing(true);
-                          try {
-                            await refreshEnginePanel();
-                          } finally {
-                            setEngineListRefreshing(false);
-                          }
-                        }}
-                      >
-                        {engineListRefreshing
-                          ? t("app.engineDrawer.refreshBusy")
-                          : t("app.engineDrawer.refreshNow")}
-                      </button>
-                      {enginePanelErr ? <p className="err">{enginePanelErr}</p> : null}
                       {token ? (
                         <>
-                          <p className="muted" style={{ marginTop: "0.45rem", fontSize: "0.8rem" }}>
-                            {t("app.engineDrawer.addTargetLead")}
-                            {rbacIsOps ? null : (
-                              <span>
-                                {" "}
-                                {t("app.engineDrawer.addTargetRbacFull")}
-                              </span>
-                            )}
-                          </p>
                           {rbacIsOps ? (
-                            <>
-                              <div className="tv-settings__fields" style={{ marginTop: "0.35rem" }}>
-                                <label>
-                                  <span className="muted">symbol</span>
-                                  <input
-                                    className="mono"
-                                    value={engineFormSymbol}
-                                    onChange={(e) => setEngineFormSymbol(e.target.value)}
-                                    placeholder="BTCUSDT"
-                                  />
-                                </label>
-                                <label>
-                                  <span className="muted">interval</span>
-                                  <input
-                                    className="mono"
-                                    value={engineFormInterval}
-                                    onChange={(e) => setEngineFormInterval(e.target.value)}
-                                    placeholder="4h"
-                                  />
-                                </label>
+                            <details className="tv-drawer-details" style={{ marginTop: "0.45rem" }}>
+                              <summary className="tv-drawer-details__summary">{t("app.engineDrawer.detailsAddTarget")}</summary>
+                              <div className="tv-drawer-details__body">
+                                <div className="tv-settings__fields" style={{ marginTop: "0.35rem" }}>
+                                  <label>
+                                    <span className="muted">{t("app.engineDrawer.fieldSymbol")}</span>
+                                    <input
+                                      className="mono"
+                                      value={engineFormSymbol}
+                                      onChange={(e) => setEngineFormSymbol(e.target.value)}
+                                      placeholder="BTCUSDT"
+                                    />
+                                  </label>
+                                  <label>
+                                    <span className="muted">{t("app.engineDrawer.fieldInterval")}</span>
+                                    <input
+                                      className="mono"
+                                      value={engineFormInterval}
+                                      onChange={(e) => setEngineFormInterval(e.target.value)}
+                                      placeholder="4h"
+                                    />
+                                  </label>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="theme-toggle"
+                                  style={{ marginTop: "0.4rem" }}
+                                  disabled={engineFormBusy}
+                                  onClick={async () => {
+                                    if (!token) return;
+                                    setEngineFormBusy(true);
+                                    try {
+                                      await postEngineSymbol(token, {
+                                        symbol: engineFormSymbol.trim(),
+                                        interval: engineFormInterval.trim(),
+                                        exchange: barExchange.trim() || undefined,
+                                        segment: barSegment.trim() || undefined,
+                                      });
+                                      await refreshEnginePanel();
+                                    } catch (e) {
+                                      setEnginePanelErr(String(e));
+                                    } finally {
+                                      setEngineFormBusy(false);
+                                    }
+                                  }}
+                                >
+                                  {engineFormBusy
+                                    ? t("app.engineDrawer.addTargetBusy")
+                                    : t("app.engineDrawer.addTargetSubmit")}
+                                </button>
                               </div>
-                              <button
-                                type="button"
-                                className="theme-toggle"
-                                style={{ marginTop: "0.4rem" }}
-                                disabled={engineFormBusy}
-                                onClick={async () => {
-                                  if (!token) return;
-                                  setEngineFormBusy(true);
-                                  try {
-                                    await postEngineSymbol(token, {
-                                      symbol: engineFormSymbol.trim(),
-                                      interval: engineFormInterval.trim(),
-                                      exchange: barExchange.trim() || undefined,
-                                      segment: barSegment.trim() || undefined,
-                                    });
-                                    await refreshEnginePanel();
-                                  } catch (e) {
-                                    setEnginePanelErr(String(e));
-                                  } finally {
-                                    setEngineFormBusy(false);
-                                  }
-                                }}
-                              >
-                                {engineFormBusy ? "Kayıt…" : "engine_symbols’a ekle"}
-                              </button>
-                            </>
-                          ) : null}
+                            </details>
+                          ) : (
+                            <p className="muted" style={{ fontSize: "0.76rem", marginTop: "0.45rem" }}>
+                              {t("app.engineDrawer.addTargetRbacFull")}
+                            </p>
+                          )}
                           <p className="tv-drawer__section-head" style={{ marginTop: "0.75rem" }}>
                             {t("app.engineDrawer.registeredTargets", { count: engineSymbols.length })}
                           </p>
-                          <ul className="tv-drawer-target-list muted mono">
-                            {engineSymbols.map((s) => (
-                              <li key={s.id} className="tv-drawer-target-list__item">
-                                <span className="tv-drawer-target-list__meta">
-                                  {s.enabled ? "●" : "○"} {s.exchange}/{s.segment} {s.symbol} {s.interval}
-                                  {s.label ? ` — ${s.label}` : ""}
-                                </span>
-                                {rbacIsOps ? (
-                                  <div className="tv-drawer-target-list__actions">
-                                    <select
-                                      className="mono"
-                                      value={(s.signal_direction_mode ?? "auto_segment").toLowerCase()}
-                                      title={t("app.engineDrawer.signalModeTitle")}
-                                      onChange={async (e) => {
-                                        if (!token) return;
-                                        try {
-                                          await patchEngineSymbol(token, s.id, {
-                                            signal_direction_mode: e.target.value,
-                                          });
-                                          await refreshEnginePanel();
-                                        } catch (err) {
-                                          setEnginePanelErr(String(err));
-                                        }
-                                      }}
+                          <div className="tv-engine-target-grid">
+                            {engineSymbols.map((s) => {
+                              const isToolbarMatch =
+                                !!toolbarRegisteredEngineTarget && toolbarRegisteredEngineTarget.id === s.id;
+                              return (
+                                <div
+                                  key={s.id}
+                                  className={`tv-engine-target-card ${s.enabled ? "tv-engine-target-card--on" : "tv-engine-target-card--off"}${isToolbarMatch ? " tv-engine-target-card--focus" : ""}`}
+                                >
+                                  <div className="tv-engine-target-card__top">
+                                    <div>
+                                      <div className="tv-engine-target-card__symbol mono">{s.symbol}</div>
+                                      <div className="tv-engine-target-card__interval mono">{s.interval}</div>
+                                    </div>
+                                    <span
+                                      className={`tv-engine-pill ${s.enabled ? "tv-engine-pill--on" : "tv-engine-pill--off"}`}
                                     >
-                                      <option value="auto_segment">{t("app.engineDrawer.optAutoSegment")}</option>
-                                      <option value="long_only">{t("app.engineDrawer.optLongOnly")}</option>
-                                      <option value="both">{t("app.engineDrawer.optBoth")}</option>
-                                      <option value="short_only">{t("app.engineDrawer.optShortOnly")}</option>
-                                    </select>
-                                    <button
-                                      type="button"
-                                      className="theme-toggle"
-                                      onClick={async () => {
-                                        if (!token) return;
-                                        try {
-                                          await patchEngineSymbol(token, s.id, { enabled: !s.enabled });
-                                          await refreshEnginePanel();
-                                        } catch (e) {
-                                          setEnginePanelErr(String(e));
-                                        }
-                                      }}
-                                    >
-                                      {s.enabled
-                                        ? t("app.engineDrawer.toggleDisable")
-                                        : t("app.engineDrawer.toggleEnable")}
-                                    </button>
+                                      {s.enabled ? t("app.engineDrawer.pillActive") : t("app.engineDrawer.pillPaused")}
+                                    </span>
                                   </div>
-                                ) : null}
-                              </li>
-                            ))}
-                          </ul>
-                          <p className="tv-drawer__section-head" style={{ marginTop: "0.75rem" }}>
-                            {t("app.engineDrawer.ingestionHead")}
+                                  <div className="tv-engine-target-card__venue muted">
+                                    {s.exchange}/{normalizeMarketSegment(s.segment)}
+                                    {s.label ? ` · ${s.label}` : ""}
+                                  </div>
+                                  {isToolbarMatch ? (
+                                    <div className="tv-engine-target-card__badge">{t("app.engineDrawer.cardChartMatch")}</div>
+                                  ) : null}
+                                  {rbacIsOps ? (
+                                    <div className="tv-engine-target-card__actions">
+                                      <select
+                                        className="mono"
+                                        value={(s.signal_direction_mode ?? "auto_segment").toLowerCase()}
+                                        title={t("app.engineDrawer.signalModeTitle")}
+                                        onChange={async (e) => {
+                                          if (!token) return;
+                                          try {
+                                            await patchEngineSymbol(token, s.id, {
+                                              signal_direction_mode: e.target.value,
+                                            });
+                                            await refreshEnginePanel();
+                                          } catch (err) {
+                                            setEnginePanelErr(String(err));
+                                          }
+                                        }}
+                                      >
+                                        <option value="auto_segment">{t("app.engineDrawer.optAutoSegment")}</option>
+                                        <option value="long_only">{t("app.engineDrawer.optLongOnly")}</option>
+                                        <option value="both">{t("app.engineDrawer.optBoth")}</option>
+                                        <option value="short_only">{t("app.engineDrawer.optShortOnly")}</option>
+                                      </select>
+                                      <button
+                                        type="button"
+                                        className="theme-toggle"
+                                        onClick={async () => {
+                                          if (!token) return;
+                                          try {
+                                            await patchEngineSymbol(token, s.id, { enabled: !s.enabled });
+                                            await refreshEnginePanel();
+                                          } catch (e) {
+                                            setEnginePanelErr(String(e));
+                                          }
+                                        }}
+                                      >
+                                        {s.enabled
+                                          ? t("app.engineDrawer.toggleDisable")
+                                          : t("app.engineDrawer.toggleEnable")}
+                                      </button>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <p className="muted" style={{ fontSize: "0.74rem", marginTop: "0.55rem", lineHeight: 1.45 }}>
+                            <button
+                              type="button"
+                              className="tv-link-btn"
+                              style={{ fontSize: "inherit" }}
+                              onClick={() => setDrawerTab("market_context")}
+                            >
+                              {t("app.engineDrawer.openDigestTab")}
+                            </button>
+                            {" — "}
+                            {t("app.engineDrawer.openDigestHint")}
                           </p>
-                          <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.4rem", lineHeight: 1.45 }}>
-                            {t("app.engineDrawer.ingestionIntro")}
-                          </p>
+                          <details className="tv-drawer-details" style={{ marginTop: "0.5rem" }}>
+                            <summary className="tv-drawer-details__summary">{t("app.engineDrawer.detailsIngestion")}</summary>
+                            <div className="tv-drawer-details__body">
+                              <p className="muted" style={{ fontSize: "0.7rem", marginBottom: "0.4rem", lineHeight: 1.45 }}>
+                                {t("app.engineDrawer.ingestionIntroShort")}
+                              </p>
                           {engineIngestionRows.length === 0 ? (
                             <p className="muted" style={{ fontSize: "0.72rem" }}>
                               {t("app.engineDrawer.ingestionEmpty")}
@@ -4381,6 +4451,8 @@ export default function App() {
                               </table>
                             </div>
                           )}
+                            </div>
+                          </details>
                           {matchesSetting(
                             "paper",
                             "dry",
@@ -4392,7 +4464,9 @@ export default function App() {
                             "birleşik",
                             "f5",
                           ) ? (
-                            <div className="card" style={{ marginTop: "0.65rem", padding: "0.55rem" }}>
+                            <details className="tv-drawer-details" style={{ marginTop: "0.45rem" }}>
+                              <summary className="tv-drawer-details__summary">{t("app.engineDrawer.detailsPaper")}</summary>
+                              <div className="tv-drawer-details__body tv-drawer-details__body--pad">
                               <p className="tv-drawer__section-head" style={{ marginBottom: "0.35rem" }}>
                                 {t("app.paperDrawer.rangePaperHead")}
                               </p>
@@ -4488,13 +4562,15 @@ export default function App() {
                                   ))
                                 )}
                               </div>
-                            </div>
+                              </div>
+                            </details>
                           ) : null}
                           {token && rbacIsOps ? (
-                            <div className="card">
-                              <p className="tv-drawer__section-head">Son canlı dolumlar</p>
+                            <details className="tv-drawer-details" style={{ marginTop: "0.45rem" }}>
+                              <summary className="tv-drawer-details__summary">{t("app.engineDrawer.detailsLiveFills")}</summary>
+                              <div className="tv-drawer-details__body tv-drawer-details__body--pad">
                               <p className="muted" style={{ fontSize: "0.68rem", marginTop: 0, marginBottom: "0.25rem" }}>
-                                API <code>/api/v1/fills</code> (exchange_fills)
+                                API <code>/api/v1/fills</code>
                               </p>
                               <div style={{ maxHeight: "7rem", overflow: "auto", fontSize: "0.65rem" }} className="mono muted">
                                 {exchangeFills.length === 0 ? (
@@ -4512,192 +4588,106 @@ export default function App() {
                                   ))
                                 )}
                               </div>
-                            </div>
+                              </div>
+                            </details>
                           ) : null}
-                          <p className="tv-drawer__section-head" style={{ marginTop: "0.75rem" }}>
-                            {t("app.engineDrawer.snapshotSummaryHead")}
-                          </p>
-                          <div
-                            style={{ maxHeight: "10rem", overflow: "auto", fontSize: "0.72rem" }}
-                            className="mono muted"
-                          >
-                            {engineSnapshots.length === 0 ? (
-                              <span className="err">{t("app.engineDrawer.snapshotEmpty")}</span>
-                            ) : (
-                              engineSnapshots.map((s) => (
-                                <div key={`${s.engine_symbol_id}-${s.engine_kind}`} style={{ marginBottom: "0.35rem" }}>
-                                  <strong>{s.engine_kind}</strong> {s.symbol} {s.interval}{" "}
-                                  {s.error ? <span className="err">{s.error}</span> : null}
-                                  <br />
-                                  {s.computed_at}
-                                </div>
-                              ))
-                            )}
-                          </div>
-                          <p className="tv-drawer__section-head" style={{ marginTop: "0.65rem" }}>
-                            {t("app.engineDrawer.confluenceSummaryHead")}
-                          </p>
-                          <div
-                            style={{ maxHeight: "6rem", overflow: "auto", fontSize: "0.72rem" }}
-                            className="mono muted"
-                          >
-                            {engineSnapshots.filter((s) => s.engine_kind === "confluence").length === 0 ? (
-                              <span>{t("app.engineDrawer.confluenceEmpty")}</span>
-                            ) : (
-                              engineSnapshots
-                                .filter((s) => s.engine_kind === "confluence")
-                                .map((s) => {
-                                  const p =
-                                    s.payload && typeof s.payload === "object"
-                                      ? (s.payload as Record<string, unknown>)
-                                      : null;
-                                  const comp =
-                                    typeof p?.composite_score === "number"
-                                      ? p.composite_score.toFixed(3)
-                                      : "—";
-                                  const reg = typeof p?.regime === "string" ? p.regime : "—";
-                                  const conf =
-                                    typeof p?.confidence_0_100 === "number" ? String(p.confidence_0_100) : "—";
-                                  const extras = p ? formatConfluenceExtras(p) : "";
-                                  return (
-                                    <div key={`cf-${s.engine_symbol_id}`} style={{ marginBottom: "0.3rem" }}>
-                                      {s.symbol} {s.interval} · regime {reg} · composite {comp} · conf {conf}
-                                      {extras}
-                                      <br />
-                                      {s.computed_at}
-                                      {s.error ? (
-                                        <>
-                                          <br />
-                                          <span className="err">{s.error}</span>
-                                        </>
-                                      ) : null}
-                                    </div>
-                                  );
-                                })
-                            )}
-                          </div>
-                          <p className="tv-drawer__section-head" style={{ marginTop: "0.55rem" }}>
-                            Birleşik <code>data_snapshots</code>
-                          </p>
-                          <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.25rem" }}>
-                            Nansen + harici çekimler tek satır/kaynak; confluence buradan okur (ör.{" "}
-                            <code>binance_taker_btcusdt</code>).
-                          </p>
-                          <div
-                            style={{ maxHeight: "7rem", overflow: "auto", fontSize: "0.7rem" }}
-                            className="mono muted"
-                          >
-                            {dataSnapshots.length === 0 ? (
-                              <span>
-                                Henüz satır yok — ilgili worker döngüleri (Nansen, Binance, harici fetch) ve{" "}
-                                <code>data_snapshots</code> şeması; tablo <code>0001_qtss_baseline</code> içinde tanımlı.
-                              </span>
-                            ) : (
-                              dataSnapshots.map((d) => (
-                                <div key={d.source_key} style={{ marginBottom: "0.28rem" }}>
-                                  <strong>{d.source_key}</strong>
-                                  {d.error ? <span className="err"> {d.error}</span> : null}
-                                  <br />
-                                  {d.computed_at}
-                                </div>
-                              ))
-                            )}
-                          </div>
-                          <p className="tv-drawer__section-head" style={{ marginTop: "0.55rem" }}>
-                            Piyasa bağlamı (üst çubuk)
-                          </p>
-                          <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.25rem" }}>
-                            <code>GET …/analysis/market-context/latest</code>:{" "}
-                            <HelpCrossLink topicId="engine-market-context-latest" onOpen={jumpToHelp} label="SSS" />
-                          </p>
-                          <div
-                            style={{ maxHeight: "9rem", overflow: "auto", fontSize: "0.7rem" }}
-                            className="mono muted"
-                          >
-                            {!barSymbol.trim() ? (
-                              <span>Üst çubukta sembol seçin.</span>
-                            ) : !marketContext ? (
-                              <span>Market context yüklenemedi (ağ veya oturum).</span>
-                            ) : !marketContextLatestHasEngineRow(marketContext) ? (
-                              <span>
-                                Bu exchange/segment/symbol/interval için <code>engine_symbols</code> satırı yok — Motor
-                                sekmesinden hedef ekleyin.
-                              </span>
-                            ) : (
-                              <>
-                                <div style={{ marginBottom: "0.35rem" }}>
-                                  <strong>
-                                    {marketContext.exchange}/{marketContext.segment} {marketContext.symbol}{" "}
-                                    {marketContext.interval}
-                                  </strong>
-                                </div>
-                                {(() => {
-                                  const dash = marketContext.technical.signal_dashboard;
-                                  const d =
-                                    dash && typeof dash === "object"
-                                      ? (dash as Record<string, unknown>)
-                                      : null;
-                                  const durum = typeof d?.durum === "string" ? d.durum : "—";
-                                  const piyasa =
-                                    typeof d?.piyasa_modu === "string" ? d.piyasa_modu : "—";
-                                  return (
-                                    <div style={{ marginBottom: "0.3rem" }}>
-                                      TA: durum <strong>{durum}</strong> · piyasa_modu <strong>{piyasa}</strong>
-                                    </div>
-                                  );
-                                })()}
-                                {(() => {
-                                  const cf = marketContext.confluence;
-                                  const p =
-                                    cf && typeof cf === "object" ? (cf as Record<string, unknown>) : null;
-                                  if (!p) {
+                          <details className="tv-drawer-details" style={{ marginTop: "0.45rem" }}>
+                            <summary className="tv-drawer-details__summary">{t("app.engineDrawer.detailsSnapshots")}</summary>
+                            <div className="tv-drawer-details__body">
+                              {engineSnapshots.length === 0 ? (
+                                <p className="err" style={{ fontSize: "0.76rem", margin: 0 }}>
+                                  {t("app.engineDrawer.snapshotEmpty")}
+                                </p>
+                              ) : (
+                                <div className="tv-engine-snap-grid">
+                                  {engineSnapshots.map((s) => {
+                                    const accent =
+                                      s.engine_kind === "trading_range"
+                                        ? "#3b82f6"
+                                        : s.engine_kind === "signal_dashboard"
+                                          ? "#a855f7"
+                                          : s.engine_kind === "confluence"
+                                            ? "#f59e0b"
+                                            : "var(--border)";
+                                    const p =
+                                      s.payload && typeof s.payload === "object"
+                                        ? (s.payload as Record<string, unknown>)
+                                        : null;
+                                    const cfExtras =
+                                      s.engine_kind === "confluence" && p
+                                        ? formatConfluenceExtras(p).replace(/^ · /, "")
+                                        : "";
+                                    const cfLine =
+                                      s.engine_kind === "confluence" && p ? (
+                                        <div className="tv-engine-snap-card__cf muted" style={{ fontSize: "0.68rem" }}>
+                                          {typeof p.regime === "string" ? p.regime : "—"} ·{" "}
+                                          {typeof p.composite_score === "number" ? p.composite_score.toFixed(3) : "—"} ·{" "}
+                                          {typeof p.confidence_0_100 === "number" ? String(p.confidence_0_100) : "—"}
+                                          {cfExtras ? <span> · {cfExtras}</span> : null}
+                                        </div>
+                                      ) : null;
                                     return (
-                                      <div style={{ marginBottom: "0.3rem" }}>
-                                        Confluence: <span className="muted">—</span>
+                                      <div
+                                        key={`${s.engine_symbol_id}-${s.engine_kind}`}
+                                        className="tv-engine-snap-card"
+                                        style={{ borderLeftColor: accent }}
+                                      >
+                                        <div className="tv-engine-snap-card__kind mono">{s.engine_kind}</div>
+                                        <div className="tv-engine-snap-card__sym mono">
+                                          {s.symbol} · {s.interval}
+                                        </div>
+                                        <div className="tv-engine-snap-card__time muted">
+                                          {s.computed_at.slice(0, 19).replace("T", " ")}
+                                        </div>
+                                        {cfLine}
+                                        {s.error ? (
+                                          <div className="err" style={{ fontSize: "0.68rem", marginTop: "0.2rem" }}>
+                                            {s.error}
+                                          </div>
+                                        ) : null}
                                       </div>
                                     );
-                                  }
-                                  const comp =
-                                    typeof p.composite_score === "number"
-                                      ? p.composite_score.toFixed(3)
-                                      : "—";
-                                  const reg = typeof p.regime === "string" ? p.regime : "—";
-                                  const conf =
-                                    typeof p.confidence_0_100 === "number"
-                                      ? String(p.confidence_0_100)
-                                      : "—";
-                                  const extras = formatConfluenceExtras(p);
-                                  return (
-                                    <div style={{ marginBottom: "0.3rem" }}>
-                                      Confluence: regime <strong>{reg}</strong> · composite <strong>{comp}</strong> ·
-                                      conf <strong>{conf}</strong>
-                                      {extras ? (
-                                        <>
-                                          <br />
-                                          <span style={{ opacity: 0.92 }}>{extras.replace(/^ · /, "")}</span>
-                                        </>
-                                      ) : null}
-                                    </div>
-                                  );
-                                })()}
-                                {(marketContext.context_data_snapshots ?? []).length === 0 ? (
-                                  <div className="muted">context data_snapshots: yok</div>
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          </details>
+                          <details className="tv-drawer-details" style={{ marginTop: "0.35rem" }}>
+                            <summary className="tv-drawer-details__summary">{t("app.engineDrawer.detailsDataSnapshots")}</summary>
+                            <div className="tv-drawer-details__body">
+                              <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.35rem", lineHeight: 1.45 }}>
+                                {t("app.engineDrawer.dataSnapshotsHint")}
+                              </p>
+                              <div className="tv-engine-snap-grid tv-engine-snap-grid--compact">
+                                {dataSnapshots.length === 0 ? (
+                                  <span className="muted" style={{ fontSize: "0.72rem" }}>
+                                    {t("app.engineDrawer.dataSnapshotsEmpty")}
+                                  </span>
                                 ) : (
-                                  (marketContext.context_data_snapshots ?? []).map((row) => (
-                                    <div key={row.source_key} style={{ marginBottom: "0.25rem" }}>
-                                      ctx <strong>{row.source_key}</strong>
-                                      {row.error ? <span className="err"> {row.error}</span> : null}
-                                      <br />
-                                      {row.computed_at}
+                                  dataSnapshots.map((d) => (
+                                    <div
+                                      key={d.source_key}
+                                      className="tv-engine-snap-card tv-engine-snap-card--compact"
+                                      style={{ borderLeftColor: "color-mix(in srgb, var(--muted) 55%, var(--border))" }}
+                                    >
+                                      <div className="tv-engine-snap-card__kind mono">{d.source_key}</div>
+                                      {d.error ? (
+                                        <div className="err" style={{ fontSize: "0.65rem" }}>
+                                          {d.error}
+                                        </div>
+                                      ) : null}
+                                      <div className="tv-engine-snap-card__time muted">
+                                        {d.computed_at.slice(0, 19).replace("T", " ")}
+                                      </div>
                                     </div>
                                   ))
                                 )}
-                              </>
-                            )}
-                          </div>
+                              </div>
+                            </div>
+                          </details>
                         </>
                       ) : (
-                        <p className="muted">Motor paneli için giriş yap.</p>
+                        <p className="muted">{t("app.engineDrawer.loginHint")}</p>
                       )}
                     </div>
                   ) : null}
