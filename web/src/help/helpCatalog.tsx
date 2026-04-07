@@ -15,9 +15,13 @@ function sb(parts: string[]): string {
 export const HELP_TOPICS: HelpTopic[] = [
   {
     id: "market-context-overview",
-    title: "Piyasa bağlamı — genel (F7 / PLAN Phase E)",
+    title: "Motor özeti / piyasa bağlamı — genel (F7 / PLAN Phase E)",
     searchBlob: sb([
       "piyasa",
+      "motor",
+      "özet",
+      "engine",
+      "digest",
       "bağlam",
       "baglam",
       "f7",
@@ -44,8 +48,9 @@ export const HELP_TOPICS: HelpTopic[] = [
     body: (
       <>
         <p className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.5 }}>
-          <strong>Bağlam</strong> sekmesi üst çubuktaki borsa / segment / sembol / zaman dilimini API çağrılarına bağlar. Worker tarafında
-          confluence, Nansen ve harici çekimler için repo kökündeki <code className="mono">.env.example</code> kullanılır.
+          Çekmece sekmesi <strong>Motor özeti</strong> (eski ad: Bağlam) üst çubuktaki borsa / segment / sembol / zaman dilimini API
+          çağrılarına bağlar. Worker tarafında confluence, Nansen ve harici çekimler için repo kökündeki{" "}
+          <code className="mono">.env.example</code> kullanılır.
         </p>
         <p className="muted" style={{ fontSize: "0.82rem", lineHeight: 1.5 }}>
           Uç örnekleri: <code className="mono">market-context/latest</code>, <code className="mono">market-context/summary</code>,{" "}

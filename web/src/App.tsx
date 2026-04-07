@@ -2535,9 +2535,10 @@ export default function App() {
                   role="tab"
                   aria-selected={drawerTab === "market_context"}
                   className={`tv-settings__tab ${drawerTab === "market_context" ? "is-active" : ""}`}
+                  title={t("drawer.marketContextTabTitle")}
                   onClick={() => setDrawerTab("market_context")}
                 >
-                  Bağlam
+                  {t("drawer.marketContextTab")}
                 </button>
                 <button
                   type="button"
@@ -4734,18 +4735,25 @@ export default function App() {
                       "on-chain",
                       "türev",
                       "funding",
+                      "motor",
+                      "engine",
+                      "digest",
+                      "teşhis",
+                      "diagnostic",
                     ) ? (
                     <div className="card">
-                      <p className="tv-drawer__section-head">Piyasa bağlamı (F7 / PLAN Phase E)</p>
-                      <p className="muted" style={{ fontSize: "0.76rem", marginBottom: "0.45rem" }}>
-                        Üst çubuk:{" "}
+                      <p className="tv-drawer__section-head">{t("drawer.marketContextHead")}</p>
+                      <div className="tv-drawer__hint-block">{t("drawer.marketContextIntro")}</div>
+                      <p className="muted" style={{ fontSize: "0.76rem", marginBottom: "0.35rem" }}>
+                        <strong>{t("drawer.marketContextSelection")}</strong>{" "}
                         <span className="mono">
                           {barExchange.trim() || "—"}/{normalizeMarketSegment(barSegment)}/
                           {barSymbol.trim().toUpperCase() || "—"}/{barInterval.trim() || "—"}
                         </span>
-                        . Uçlar ve worker kurulumu için{" "}
-                        <HelpCrossLink topicId="market-context-overview" onOpen={jumpToHelp} label="Yardım" /> · özet
-                        filtresi:{" "}
+                      </p>
+                      <p className="muted" style={{ fontSize: "0.72rem", marginBottom: "0.45rem" }}>
+                        {t("drawer.marketContextHelpLinks")}{" "}
+                        <HelpCrossLink topicId="market-context-overview" onOpen={jumpToHelp} label="Yardım" /> ·{" "}
                         <HelpCrossLink topicId="market-context-summary" onOpen={jumpToHelp} label="Özet" />
                       </p>
                       <button
@@ -4755,15 +4763,18 @@ export default function App() {
                         disabled={contextTabBusy}
                         onClick={() => void refreshMarketContextPanel()}
                       >
-                        {contextTabBusy ? "Yenileniyor…" : "Şimdi yenile"}
+                        {contextTabBusy
+                          ? t("drawer.marketContextRefreshing")
+                          : t("drawer.marketContextRefresh")}
                       </button>
                       {contextTabErr ? <p className="err">{contextTabErr}</p> : null}
 
                       <p className="tv-drawer__section-head" style={{ marginTop: "0.35rem" }}>
-                        Motor hedefleri (filtreli özet)
+                        {t("drawer.marketContextSectionEngines")}
                       </p>
                       <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.25rem" }}>
-                        <code>GET …/market-context/summary</code> süzümü:{" "}
+                        {t("drawer.marketContextSectionEnginesHint")}{" "}
+                        <code>GET …/market-context/summary</code> ·{" "}
                         <HelpCrossLink topicId="market-context-summary" onOpen={jumpToHelp} label="SSS" />
                       </p>
                       <div
@@ -4830,7 +4841,7 @@ export default function App() {
                       </div>
 
                       <p className="tv-drawer__section-head" style={{ marginTop: "0.5rem" }}>
-                        Tek hedef özeti
+                        {t("drawer.marketContextSectionSingle")}
                       </p>
                       <div
                         className="mono muted"
@@ -4935,7 +4946,10 @@ export default function App() {
                       </div>
 
                       <p className="tv-drawer__section-head" style={{ marginTop: "0.45rem" }}>
-                        On-chain skor (<code>onchain_signal_scores</code>)
+                        {t("drawer.marketContextSectionOnchain")}{" "}
+                        <span className="muted" style={{ fontWeight: 500, fontSize: "0.72rem" }}>
+                          (<code>onchain_signal_scores</code>)
+                        </span>
                       </p>
                       <div
                         className="mono muted"
@@ -5011,7 +5025,7 @@ export default function App() {
                         )}
                       </div>
 
-                      <p className="tv-drawer__section-head">Tüm confluence satırları (motor)</p>
+                      <p className="tv-drawer__section-head">{t("drawer.marketContextSectionConfluenceAll")}</p>
                       <div
                         className="mono muted"
                         style={{ maxHeight: "8rem", overflow: "auto", fontSize: "0.7rem", marginBottom: "0.55rem" }}
@@ -5047,11 +5061,15 @@ export default function App() {
                         )}
                       </div>
 
-                      <p className="tv-drawer__section-head">Harici HTTP kaynakları (`external-fetch/sources`)</p>
+                      <p className="tv-drawer__section-head">
+                        {t("drawer.marketContextSectionExternal")}{" "}
+                        <span className="muted" style={{ fontWeight: 500, fontSize: "0.72rem" }}>
+                          (<code>external-fetch/sources</code>)
+                        </span>
+                      </p>
                       <p className="muted" style={{ fontSize: "0.68rem", marginBottom: "0.3rem" }}>
-                        Worker <code>QTSS_EXTERNAL_FETCH</code> bu tanımları okur; son yanıtlar{" "}
-                        <code>data_snapshots</code> içinde. Yazma: ops rolü{" "}
-                        <code>POST /api/v1/analysis/external-fetch/sources</code>.
+                        {t("drawer.marketContextSectionExternalHint")} <code>QTSS_EXTERNAL_FETCH</code>.{" "}
+                        <code>POST …/external-fetch/sources</code> (ops).
                       </p>
                       <div
                         className="mono muted"
@@ -5079,7 +5097,7 @@ export default function App() {
                         )}
                       </div>
 
-                      <p className="tv-drawer__section-head">Birleşik data_snapshots (tam liste)</p>
+                      <p className="tv-drawer__section-head">{t("drawer.marketContextSectionSnapshots")}</p>
                       <div
                         className="mono muted"
                         style={{ maxHeight: "9rem", overflow: "auto", fontSize: "0.68rem" }}
@@ -5100,7 +5118,7 @@ export default function App() {
                     </div>
                     ) : null
                   ) : (
-                    <p className="muted">Piyasa bağlamı için giriş yap.</p>
+                    <p className="muted">{t("drawer.marketContextLogin")}</p>
                   )}
                 </>
               ) : null}

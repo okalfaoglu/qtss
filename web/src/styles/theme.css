@@ -1482,6 +1482,19 @@ input[type="color"].tv-elliott-color-swatch:focus-visible {
   letter-spacing: 0.02em;
 }
 
+/* Drawer callout: explain a dense diagnostics tab in plain language */
+.tv-drawer__hint-block {
+  margin: 0 0 0.75rem 0;
+  padding: 0.6rem 0.7rem;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-left: 3px solid color-mix(in srgb, var(--accent) 70%, var(--border));
+  background: color-mix(in srgb, var(--muted) 12%, var(--card));
+  color: var(--fg);
+}
+
 /* engine_symbols rows: label on its own line, controls below (avoids cramped flex-wrap). */
 .tv-drawer-target-list {
   list-style: none;
