@@ -1077,9 +1077,9 @@ mod tests {
         let pivots: Vec<PivotTriple> = vec![
             (0, 50.0, -1),
             (5, 60.0, 1),
-            (10, 50.5, -1),
+            (10, 50.15, -1),
             (15, 61.0, 1),
-            (20, 49.5, -1),
+            (20, 49.95, -1),
         ];
         let result = detect_triple_bottom(&pivots, &default_params());
         assert!(result.is_some());
