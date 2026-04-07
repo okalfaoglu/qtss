@@ -11,7 +11,7 @@ use crate::circuit_breaker::CircuitBreaker;
 use crate::config::AiEngineConfig;
 use crate::error::AiResult;
 use crate::parser::{parse_operational_decision, parse_portfolio_decision, parse_tactical_decision};
-use crate::providers::{AiCompletionProvider, AiRequest, AiResponse, AiUsage, LayerKind};
+use crate::providers::{AiCompletionProvider, AiRequest, AiResponse, LayerKind};
 use crate::providers;
 use crate::safety::{SafetyConfig, validate_ai_decision_safety, validate_operational_decision_safety, validate_strategic_decision_safety};
 use crate::storage::{

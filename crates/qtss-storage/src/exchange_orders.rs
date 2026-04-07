@@ -73,6 +73,44 @@ impl ExchangeOrderRepository {
         Ok(row)
     }
 
+    /// Dry-run bridge: same payload shape as [`Self::insert_submitted`], but `status = 'filled'`
+    /// and no `venue_order_id` (nothing was sent to the exchange).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_dry_simulated_filled(
+        &self,
+        org_id: Uuid,
+        user_id: Uuid,
+        exchange: &str,
+        segment: &str,
+        symbol: &str,
+        client_order_id: Uuid,
+        intent: &OrderIntent,
+        venue_response: serde_json::Value,
+    ) -> Result<ExchangeOrderRow, StorageError> {
+        let intent_v = serde_json::to_value(intent)
+            .map_err(|e| StorageError::Other(format!("intent json: {e}")))?;
+        let row = sqlx::query_as::<_, ExchangeOrderRow>(
+            r#"INSERT INTO exchange_orders (
+                   org_id, user_id, exchange, segment, symbol,
+                   client_order_id, status, intent, venue_order_id, venue_response
+               ) VALUES ($1, $2, $3, $4, $5, $6, 'filled', $7, NULL, $8)
+               RETURNING id, org_id, user_id, exchange, segment, symbol,
+                         client_order_id, status, intent, venue_order_id,
+                         venue_response, created_at, updated_at"#,
+        )
+        .bind(org_id)
+        .bind(user_id)
+        .bind(exchange)
+        .bind(segment)
+        .bind(symbol)
+        .bind(client_order_id)
+        .bind(intent_v)
+        .bind(venue_response)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
     pub async fn mark_canceled(
         &self,
         user_id: Uuid,

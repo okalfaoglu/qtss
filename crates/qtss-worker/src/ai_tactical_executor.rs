@@ -244,7 +244,7 @@ async fn execute_dry(
             "note": "Simulated fill; no HTTP request sent to the exchange.",
         });
         match repo
-            .insert_submitted(
+            .insert_dry_simulated_filled(
                 org_id,
                 user_id,
                 exchange_slug,
@@ -252,8 +252,7 @@ async fn execute_dry(
                 sym,
                 cid,
                 intent,
-                None,
-                Some(venue_response),
+                venue_response,
             )
             .await
         {
