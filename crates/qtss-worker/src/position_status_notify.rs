@@ -10,9 +10,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use qtss_notify::{
-    escape_telegram_html, Notification, NotificationChannel, NotificationDispatcher,
-};
+use qtss_notify::escape_telegram_html;
 use qtss_storage::{
     list_recent_bars, resolve_system_csv, resolve_worker_enabled_flag, resolve_worker_tick_secs,
     NotifyOutboxRepository, PaperLedgerRepository,
@@ -245,11 +243,10 @@ pub async fn position_status_notify_loop(pool: PgPool) {
             continue;
         }
 
-        let fills = match repo.list_fills_created_after(
-            chrono::Utc::now() - chrono::Duration::days(7),
-            500,
-        )
-        .await
+        let cutoff = chrono::Utc::now()
+            .checked_sub_signed(chrono::Duration::days(7))
+            .unwrap_or_else(chrono::Utc::now);
+        let fills = match repo.list_fills_created_after(cutoff, 500).await
         {
             Ok(f) => f,
             Err(e) => {
