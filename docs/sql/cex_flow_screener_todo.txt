@@ -6,6 +6,7 @@ CEX flow screener — operator checklist (after SQL + deploy)
 [ ] Upstream: `data_snapshots.source_key = 'nansen_netflows'` has fresh `response_json` (Nansen loop + API key).
 [ ] Worker logs: lines containing `cex_flow_screener: accumulation report` / `distribution report`.
 [ ] DB: `SELECT source_key, computed_at FROM data_snapshots WHERE source_key LIKE 'cex_flow_%' ORDER BY 1;`
+[ ] JSON shape: `docs/sql/cex_flow_screener_debug.sql` (fixes wrong queries: use `response_json`, not a missing column; avoid `jsonb_object_keys` on arrays).
 [ ] Optional Telegram: `notify_outbox_enabled` true, `qtss-notify` configured; rows in `notify_outbox` with `event_key` prefix `cex_flow_`.
 
 Tuning: `cex_flow_screener_tick_secs`, `cex_flow_screener_top_n`, per-job `*_screener_enabled` / `*_notify_enabled` in `system_config` (module `worker`).

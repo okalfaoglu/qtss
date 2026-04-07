@@ -96,6 +96,7 @@ fn row_flow_triple(row: &Value) -> (f64, f64, f64) {
     let inflow = pick_f64(
         row,
         &[
+            "inflow_24h_usd",
             "inflow_usd",
             "inflowUsd",
             "inflow",
@@ -108,6 +109,7 @@ fn row_flow_triple(row: &Value) -> (f64, f64, f64) {
     let outflow = pick_f64(
         row,
         &[
+            "outflow_24h_usd",
             "outflow_usd",
             "outflowUsd",
             "outflow",
@@ -117,9 +119,13 @@ fn row_flow_triple(row: &Value) -> (f64, f64, f64) {
             "fromExchangeUsd",
         ],
     );
+    // Nansen smart-money netflow rows often expose `net_flow_24h_usd` (not `net_flow`).
     let net = pick_f64(
         row,
         &[
+            "net_flow_24h_usd",
+            "net_flow_24h",
+            "netFlow24hUsd",
             "net_flow",
             "netFlow",
             "netFlowUsd",
@@ -129,6 +135,9 @@ fn row_flow_triple(row: &Value) -> (f64, f64, f64) {
             "net_usd",
             "netflow_usd",
             "net",
+            "net_flow_7d_usd",
+            "net_flow_1h_usd",
+            "net_flow_30d_usd",
         ],
     );
 
@@ -856,5 +865,24 @@ mod tests {
         });
         let (rows, _notes) = parse_rows(&v);
         assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn parse_nansen_token_symbol_and_net_flow_24h() {
+        let v = json!({
+            "data": [{
+                "token_symbol": "PEPE",
+                "market_cap_usd": 8_000_000.0,
+                "net_flow_24h_usd": -500_000.0,
+                "chain": "ethereum"
+            }]
+        });
+        let (rows, notes) = parse_rows(&v);
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].symbol, "PEPE");
+        assert_eq!(rows[0].net_flow_usd, -500_000.0);
+        assert_eq!(rows[0].inflow_usd, 500_000.0);
+        assert_eq!(rows[0].outflow_usd, 0.0);
     }
 }
