@@ -5,12 +5,12 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use qtss_binance::backfill_binance_public_klines;
 use qtss_storage::{
-    count_market_bars_series, list_enabled_engine_symbols, list_recent_bar_open_times_desc,
-    resolve_system_u64, resolve_worker_tick_secs, upsert_engine_symbol_ingestion_state,
-    EngineSymbolRow,
+    count_market_bars_series, is_binance_futures_tradable, list_enabled_engine_symbols,
+    list_recent_bar_open_times_desc, resolve_system_u64, resolve_worker_tick_secs,
+    upsert_engine_symbol_ingestion_state, EngineSymbolRow,
 };
 use sqlx::PgPool;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 fn binance_kline_interval_seconds(iv: &str) -> Option<i64> {
     match iv.trim() {
@@ -94,6 +94,31 @@ async fn run_one_target(
         )
         .await;
         return;
+    }
+
+    if segment_db(seg) == "futures" {
+        let tradable = is_binance_futures_tradable(pool, sym).await.unwrap_or(false);
+        if !tradable {
+            debug!(
+                engine_symbol_id = %row.id,
+                symbol = %sym,
+                "engine_ingest: skip backfill — symbol not Binance USDT-M tradable (catalog)"
+            );
+            let _ = upsert_engine_symbol_ingestion_state(
+                pool,
+                row.id,
+                0,
+                None,
+                None,
+                0,
+                None,
+                None,
+                now,
+                Some("not_binance_usdt_m_tradable"),
+            )
+            .await;
+            return;
+        }
     }
 
     let (count, min_ot, max_ot) = match count_market_bars_series(pool, ex, segment_db(seg), sym, iv).await {
