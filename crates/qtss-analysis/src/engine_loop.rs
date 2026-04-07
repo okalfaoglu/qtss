@@ -221,6 +221,58 @@ fn trading_range_params_from_doc_and_env(doc: &JsonValue) -> TradingRangeParams 
                 })
                 .unwrap_or(true)
         });
+    let rsi_period = tr
+        .and_then(|o| o.get("rsi_period"))
+        .and_then(|x| x.as_u64())
+        .map(|u| u as usize)
+        .or_else(|| std::env::var("QTSS_TR_RSI_PERIOD").ok().and_then(|s| s.parse().ok()))
+        .unwrap_or(14);
+    let rsi_oversold = tr
+        .and_then(|o| o.get("rsi_oversold"))
+        .and_then(|x| x.as_f64())
+        .or_else(|| {
+            std::env::var("QTSS_TR_RSI_OVERSOLD")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(30.0);
+    let rsi_overbought = tr
+        .and_then(|o| o.get("rsi_overbought"))
+        .and_then(|x| x.as_f64())
+        .or_else(|| {
+            std::env::var("QTSS_TR_RSI_OVERBOUGHT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(70.0);
+    let volume_avg_lookback = tr
+        .and_then(|o| o.get("volume_avg_lookback"))
+        .and_then(|x| x.as_u64())
+        .map(|u| u as usize)
+        .or_else(|| {
+            std::env::var("QTSS_TR_VOLUME_AVG_LOOKBACK")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(20);
+    let volume_spike_ratio_full = tr
+        .and_then(|o| o.get("volume_spike_ratio_full"))
+        .and_then(|x| x.as_f64())
+        .or_else(|| {
+            std::env::var("QTSS_TR_VOLUME_SPIKE_RATIO_FULL")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(1.5);
+    let volume_spike_ratio_partial = tr
+        .and_then(|o| o.get("volume_spike_ratio_partial"))
+        .and_then(|x| x.as_f64())
+        .or_else(|| {
+            std::env::var("QTSS_TR_VOLUME_SPIKE_RATIO_PARTIAL")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(1.15);
     TradingRangeParams {
         lookback,
         atr_period,
@@ -238,6 +290,12 @@ fn trading_range_params_from_doc_and_env(doc: &JsonValue) -> TradingRangeParams 
         zone_edge_fraction,
         enable_range_zone_filter,
         require_edge_reclaim_for_setup,
+        rsi_period,
+        rsi_oversold,
+        rsi_overbought,
+        volume_avg_lookback,
+        volume_spike_ratio_full,
+        volume_spike_ratio_partial,
     }
 }
 

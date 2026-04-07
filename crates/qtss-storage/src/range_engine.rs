@@ -16,7 +16,13 @@ pub fn default_range_engine_json() -> Value {
             "lookback": null,
             "atr_period": null,
             "atr_sma_period": null,
-            "require_range_regime": null
+            "require_range_regime": null,
+            "rsi_period": null,
+            "rsi_oversold": null,
+            "rsi_overbought": null,
+            "volume_avg_lookback": null,
+            "volume_spike_ratio_full": null,
+            "volume_spike_ratio_partial": null
         },
         "execution_gates": {
             "allow_long_open": true,

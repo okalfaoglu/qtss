@@ -952,6 +952,12 @@ export type RangeEngineConfigApi = {
     atr_period?: number | null;
     atr_sma_period?: number | null;
     require_range_regime?: boolean | null;
+    rsi_period?: number | null;
+    rsi_oversold?: number | null;
+    rsi_overbought?: number | null;
+    volume_avg_lookback?: number | null;
+    volume_spike_ratio_full?: number | null;
+    volume_spike_ratio_partial?: number | null;
   };
   execution_gates?: {
     allow_long_open?: boolean;

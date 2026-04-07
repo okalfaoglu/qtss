@@ -52,6 +52,24 @@ pub struct TradingRangeParams {
     /// Kenar bölgede yön seçilirken likidite süpürme + reclaim (`fake_breakout_*` veya `*_sweep_latent`) zorunlu.
     #[serde(default = "default_require_edge_reclaim_for_setup")]
     pub require_edge_reclaim_for_setup: bool,
+    /// Wilder RSI periyodu (skor bileşeni).
+    #[serde(default = "default_rsi_period")]
+    pub rsi_period: usize,
+    /// RSI bu eşiğin altındayken long tarafı “aşırı satım” skoru alır.
+    #[serde(default = "default_rsi_oversold")]
+    pub rsi_oversold: f64,
+    /// RSI bu eşiğin üstündeyken short tarafı “aşırı alım” skoru alır.
+    #[serde(default = "default_rsi_overbought")]
+    pub rsi_overbought: f64,
+    /// Son mum hacmini kıyaslamak için önceki mumların ortalama hacmi (pencere uzunluğu).
+    #[serde(default = "default_volume_avg_lookback")]
+    pub volume_avg_lookback: usize,
+    /// `last_volume / avg_prior_volume` ≥ bu değer → tam hacim skoru (15).
+    #[serde(default = "default_volume_spike_ratio_full")]
+    pub volume_spike_ratio_full: f64,
+    /// ≥ bu değer (ve < full) → kısmi hacim skoru (8).
+    #[serde(default = "default_volume_spike_ratio_partial")]
+    pub volume_spike_ratio_partial: f64,
 }
 
 fn default_lookback() -> usize {
@@ -99,6 +117,24 @@ fn default_enable_range_zone_filter() -> bool {
 fn default_require_edge_reclaim_for_setup() -> bool {
     true
 }
+fn default_rsi_period() -> usize {
+    14
+}
+fn default_rsi_oversold() -> f64 {
+    30.0
+}
+fn default_rsi_overbought() -> f64 {
+    70.0
+}
+fn default_volume_avg_lookback() -> usize {
+    20
+}
+fn default_volume_spike_ratio_full() -> f64 {
+    1.5
+}
+fn default_volume_spike_ratio_partial() -> f64 {
+    1.15
+}
 
 impl Default for TradingRangeParams {
     fn default() -> Self {
@@ -119,6 +155,12 @@ impl Default for TradingRangeParams {
             zone_edge_fraction: default_zone_edge_fraction(),
             enable_range_zone_filter: default_enable_range_zone_filter(),
             require_edge_reclaim_for_setup: default_require_edge_reclaim_for_setup(),
+            rsi_period: default_rsi_period(),
+            rsi_oversold: default_rsi_oversold(),
+            rsi_overbought: default_rsi_overbought(),
+            volume_avg_lookback: default_volume_avg_lookback(),
+            volume_spike_ratio_full: default_volume_spike_ratio_full(),
+            volume_spike_ratio_partial: default_volume_spike_ratio_partial(),
         }
     }
 }
@@ -189,7 +231,7 @@ pub struct TradingRangeResult {
     pub score_volume_short: i32,
     pub score_breakout_long: i32,
     pub score_breakout_short: i32,
-    /// Hacim metrikleri şu an yok (OhlcBar volume içermez); geleceğe dönük bayrak.
+    /// `true` ise son mumda veya kıyas penceresinde yeterli `OhlcBar.volume` yok (hacim skoru 0).
     pub volume_unavailable: bool,
     /// Son mum kapanışının range içindeki bölgesi: `upper` | `mid` | `lower`.
     pub range_zone: String,
@@ -271,6 +313,59 @@ fn wilder_rsi(closes: &[f64], period: usize) -> Vec<f64> {
         out[i] = 100.0 - (100.0 / (1.0 + rs));
     }
     out
+}
+
+/// Hacim skoru (0–15 / yön): son mum hacmi, önceki penceredeki ortalamaya göre; yalnız ilgili kenar bölgesindeyken uygulanır.
+fn volume_scores_by_zone(
+    bars: &[OhlcBar],
+    last_idx: usize,
+    params: &TradingRangeParams,
+    long_in_zone: bool,
+    short_in_zone: bool,
+) -> (i32, i32, bool) {
+    let lb = params
+        .volume_avg_lookback
+        .max(3)
+        .min(last_idx.max(1));
+    if last_idx == 0 {
+        return (0, 0, true);
+    }
+    let last = &bars[last_idx];
+    let Some(last_v) = last.volume.filter(|v| v.is_finite() && *v >= 0.0) else {
+        return (0, 0, true);
+    };
+    let start = last_idx.saturating_sub(lb);
+    let mut sum = 0.0_f64;
+    let mut cnt = 0usize;
+    for b in &bars[start..last_idx] {
+        if let Some(v) = b.volume {
+            if v.is_finite() && v >= 0.0 {
+                sum += v;
+                cnt += 1;
+            }
+        }
+    }
+    let min_needed = (lb * 7 / 10).max(3).min(lb);
+    if cnt < min_needed {
+        return (0, 0, true);
+    }
+    let avg = sum / cnt as f64;
+    if avg <= 1e-18 {
+        return (0, 0, false);
+    }
+    let ratio = last_v / avg;
+    let r_hi = params.volume_spike_ratio_full.max(1.000_001);
+    let r_lo = params.volume_spike_ratio_partial.clamp(1.0, r_hi);
+    let pts = if ratio >= r_hi {
+        15
+    } else if ratio >= r_lo {
+        8
+    } else {
+        0
+    };
+    let v_long = if long_in_zone { pts } else { 0 };
+    let v_short = if short_in_zone { pts } else { 0 };
+    (v_long, v_short, false)
 }
 
 fn is_pivot_low(bars: &[OhlcBar], i: usize, w: usize) -> bool {
@@ -531,13 +626,6 @@ pub fn analyze_trading_range(bars: &[OhlcBar], params: &TradingRangeParams) -> T
     let fake_breakout_long = last.low < rl - fb_wick_px && last.close >= rl;
     let fake_breakout_short = last.high > rh + fb_wick_px && last.close <= rh;
 
-    // RSI extreme (14) — skor bileşeni için TR içinde hesaplanır.
-    let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
-    let rsi_s = wilder_rsi(&closes, 14);
-    let rsi_last = rsi_s.last().copied().unwrap_or(f64::NAN);
-    let rsi_long_extreme = rsi_last.is_finite() && rsi_last < 30.0;
-    let rsi_short_extreme = rsi_last.is_finite() && rsi_last > 70.0;
-
     // Hard kurallar: temas + close breakout + width filtresi (ATR yoksa width filtreleri es geçilir).
     let touches_ok = support_touches >= params.min_support_touches.max(1)
         && resistance_touches >= params.min_resistance_touches.max(1);
@@ -576,6 +664,20 @@ pub fn analyze_trading_range(bars: &[OhlcBar], params: &TradingRangeParams) -> T
     let long_in_zone = (last.low - rl).abs() <= tol_px || (last.close - rl).abs() <= tol_px;
     let short_in_zone = (last.high - rh).abs() <= tol_px || (last.close - rh).abs() <= tol_px;
 
+    // RSI (Wilder) — skor bileşeni; periyot ve bantlar `TradingRangeParams` üzerinden.
+    let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
+    let rsi_p = params.rsi_period.max(2).min(200);
+    let mut rsi_low = params.rsi_oversold;
+    let mut rsi_high = params.rsi_overbought;
+    if !(rsi_low.is_finite() && rsi_high.is_finite()) || rsi_low >= rsi_high {
+        rsi_low = default_rsi_oversold();
+        rsi_high = default_rsi_overbought();
+    }
+    let rsi_s = wilder_rsi(&closes, rsi_p);
+    let rsi_last = rsi_s.last().copied().unwrap_or(f64::NAN);
+    let rsi_long_extreme = rsi_last.is_finite() && rsi_last < rsi_low;
+    let rsi_short_extreme = rsi_last.is_finite() && rsi_last > rsi_high;
+
     // Rejection score (0–20): zone + wick rejection + (bonus) fake breakout
     let mut rej_long = 0;
     let mut rej_short = 0;
@@ -604,10 +706,8 @@ pub fn analyze_trading_range(bars: &[OhlcBar], params: &TradingRangeParams) -> T
     let score_oscillator_long = (if rsi_long_extreme { 15 } else { 0 }).clamp(0, 15);
     let score_oscillator_short = (if rsi_short_extreme { 15 } else { 0 }).clamp(0, 15);
 
-    // Volume score (0–15): şu an veri yok → 0.
-    let score_volume_long = 0;
-    let score_volume_short = 0;
-    let volume_unavailable = true;
+    let (score_volume_long, score_volume_short, volume_unavailable) =
+        volume_scores_by_zone(bars, last_idx, params, long_in_zone, short_in_zone);
 
     // Breakout behavior (0–20): fake breakout en güçlü; aksi halde wick rejection orta.
     let score_breakout_long = if fake_breakout_long {
@@ -736,6 +836,40 @@ mod tests {
         assert_eq!(classify_range_zone(103.0, 104.0, 100.0, 0.25), "upper");
         assert_eq!(classify_range_zone(100.5, 104.0, 100.0, 0.25), "lower");
         assert_eq!(classify_range_zone(102.0, 104.0, 100.0, 0.25), "mid");
+    }
+
+    #[test]
+    #[test]
+    fn volume_spike_at_support_zones_long_only() {
+        let mut v: Vec<OhlcBar> = Vec::new();
+        for i in 0..25i64 {
+            v.push(OhlcBar {
+                open: 100.0,
+                high: 101.0,
+                low: 99.0,
+                close: 100.0,
+                bar_index: i,
+                volume: Some(1000.0),
+            });
+        }
+        let last = v.len() - 1;
+        v[last] = OhlcBar {
+            open: 100.0,
+            high: 100.5,
+            low: 98.5,
+            close: 99.0,
+            bar_index: last as i64,
+            volume: Some(3000.0),
+        };
+        let p = TradingRangeParams {
+            volume_avg_lookback: 20,
+            ..TradingRangeParams::default()
+        };
+        let (lo, sh, unavail) =
+            volume_scores_by_zone(&v, last, &p, true, false);
+        assert!(!unavail);
+        assert_eq!(lo, 15);
+        assert_eq!(sh, 0);
     }
 
     #[test]

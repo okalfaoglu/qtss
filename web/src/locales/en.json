@@ -386,6 +386,12 @@
       "trAtrPeriod": "atr_period",
       "trAtrSmaPeriod": "atr_sma_period",
       "trRequireRangeRegime": "require_range_regime",
+      "trRsiPeriod": "rsi_period",
+      "trRsiOversold": "rsi_oversold",
+      "trRsiOverbought": "rsi_overbought",
+      "trVolumeAvgLookback": "volume_avg_lookback",
+      "trVolumeSpikeFull": "volume_spike_ratio_full",
+      "trVolumeSpikePartial": "volume_spike_ratio_partial",
       "saveTrParams": "Save parameters",
       "saveTrParamsBusy": "Saving…",
       "rangeConfigReadOnly": "Trader or admin (ops) role is required to change gates and worker refresh."

@@ -2296,6 +2296,7 @@ dependencies = [
  "qtss-indicators",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
