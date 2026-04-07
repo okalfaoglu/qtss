@@ -47,7 +47,7 @@ pub struct FormationMatch {
 #[derive(Debug, Clone)]
 pub struct FormationParams {
     /// İki tepe/dip fiyatının birbirine eşit sayılması için maksimum yüzde farkı.
-    /// Örnek: 0.02 = %2.
+    /// Örnek: 0.012 ≈ %1.2.
     pub price_tolerance: f64,
     /// Double bottom: ikinci dip fiyatının birinciye göre alt sınırı (oran × ilk dip).
     /// - `None`: ek kısıt yok (yalnızca [`Self::price_tolerance`] ile iki dip yakınlığı).
@@ -70,7 +70,7 @@ pub struct FormationParams {
 impl Default for FormationParams {
     fn default() -> Self {
         Self {
-            price_tolerance: 0.02,
+            price_tolerance: 0.012,
             double_bottom_second_low_min_fraction_of_first: None,
             double_top_second_peak_max_fraction_of_first: None,
             flag_min_pole_bars: 3,
@@ -964,7 +964,7 @@ mod tests {
         let pivots: Vec<PivotTriple> = vec![
             (0, 100.0, 1),
             (5, 90.0, -1),
-            (10, 110.0, 1), // 10% difference > 2% tolerance
+            (10, 110.0, 1), // 10% difference > default tolerance
         ];
         assert!(detect_double_top(&pivots, &default_params()).is_none());
     }
@@ -974,7 +974,7 @@ mod tests {
         let pivots: Vec<PivotTriple> = vec![
             (0, 100.0, 1),
             (5, 92.0, -1),
-            (10, 100.5, 1), // within 2% tolerance vs first peak
+            (10, 100.5, 1), // within default tolerance vs first peak
         ];
         assert!(detect_double_top(&pivots, &default_params()).is_some());
         let strict = FormationParams::default().with_strict_double_top_peaks();
@@ -997,11 +997,11 @@ mod tests {
 
     #[test]
     fn double_bottom_rejected_when_second_trough_deeper_under_strict_rule() {
-        // Within 2% avg price tolerance, but second low is clearly below first — many textbooks exclude this.
+        // Within default price tolerance, but second low is clearly below first — many textbooks exclude this.
         let pivots: Vec<PivotTriple> = vec![
             (0, 100.0, -1),
             (5, 110.0, 1),
-            (10, 98.5, -1), // ~1.5% below first trough vs avg 99.25 → pct_diff OK
+            (10, 99.0, -1), // ~1% below first vs avg 99.5 → pct_diff under tightened tolerance
         ];
         assert!(detect_double_bottom(&pivots, &default_params()).is_some());
         let strict = FormationParams::default().with_strict_double_bottom_lows();
