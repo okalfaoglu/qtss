@@ -121,6 +121,7 @@ import {
 import {
   ACP_CHART_PATTERNS_CONFIG_KEY,
   acpConfigToChannelSixOptions,
+  acpEnabledPatternIds,
   DEFAULT_ACP_CONFIG,
   normalizeAcpChartPatternsConfig,
   type AcpChartPatternsConfig,

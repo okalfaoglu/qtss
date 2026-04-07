@@ -239,6 +239,16 @@ function sortMarkersByTime(markers: SeriesMarker<UTCTimestamp>[]): SeriesMarker<
   return [...markers].sort((a, b) => (a.time as number) - (b.time as number));
 }
 
+/** When set (ACP desen menüsü), `pattern_type_id` menüde kapalı olan çizimleri gösterme. */
+function acpPatternTypeAllowed(
+  patternTypeId: number | undefined,
+  allowedPatternIdSet: ReadonlySet<number> | undefined,
+): boolean {
+  if (allowedPatternIdSet === undefined) return true;
+  if (patternTypeId === undefined) return true;
+  return allowedPatternIdSet.has(patternTypeId);
+}
+
 function acpLayerFingerprint(layer: {
   upper: { time: UTCTimestamp; value: number }[];
   lower: { time: UTCTimestamp; value: number }[];
@@ -252,6 +262,7 @@ function acpLayerFingerprint(layer: {
 /**
  * `pattern_matches` veya tek `pattern_drawing_batch` → birleşik çizim (ACP görünüm bayraklarına göre süzülür).
  * `barsChrono`, tarama isteğindeki mumlarla **aynı sıra ve uzunluk** olmalı: genelde `sorted.slice(-res.bar_count)`.
+ * `allowedPatternIdSet`: menüde işaretli desen kimlikleri; yeni tarama olmadan checkbox değişince grafik senkronu için (`acpEnabledPatternIds` → `Set`).
  */
 export function buildMultiPatternOverlayFromScan(
   res: ChannelSixResponse | null,
@@ -259,6 +270,7 @@ export function buildMultiPatternOverlayFromScan(
   display: AcpDisplay,
   /** Same as `patternDrawingBatchToOverlay` — full chart OHLC for `open_time` alignment with LWC candles. */
   chartBarsChrono?: ChartOhlcRow[] | null,
+  allowedPatternIdSet?: ReadonlySet<number>,
 ): MultiPatternChartOverlay | null {
   if (!res?.matched || !barsChrono.length) return null;
 

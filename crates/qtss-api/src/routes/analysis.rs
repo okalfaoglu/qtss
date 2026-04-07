@@ -1909,7 +1909,16 @@ async fn channel_six_scan(
             .map(|p| (p.point.index, p.point.price, p.dir))
             .collect();
         let bars_vec: Vec<OhlcBar> = map.values().copied().collect();
-        let fms = scan_formations(&pivot_triples, &bars_vec, &FormationParams::default());
+        let fms_all = scan_formations(&pivot_triples, &bars_vec, &FormationParams::default());
+        let fms: Vec<_> = if body.allowed_pattern_ids.is_empty() {
+            fms_all
+        } else {
+            let allowed = body.allowed_pattern_ids.as_slice();
+            fms_all
+                .into_iter()
+                .filter(|m| allowed.contains(&m.pattern_type_id))
+                .collect()
+        };
         let batches: Vec<PatternDrawingBatch> = fms
             .iter()
             .map(|fm| {
