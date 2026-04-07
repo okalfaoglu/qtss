@@ -132,6 +132,20 @@ async fn gateway_for_strategy_async(name: &str, pool: &PgPool) -> Arc<dyn Execut
             user_id,
             name,
         ))
+    } else if let Some((org_id, user_id)) = qtss_strategy::paper_actor_uuids_from_db(pool).await {
+        info!(
+            strategy = name,
+            %org_id,
+            %user_id,
+            "dry gateway + exchange_orders mirror (paper_org_id/paper_user_id; paper_ledger off)"
+        );
+        Arc::new(qtss_strategy::DryOrdersMirrorGateway::new(
+            dry,
+            pool.clone(),
+            org_id,
+            user_id,
+            format!("strategy_runner:{name}"),
+        ))
     } else {
         dry
     }

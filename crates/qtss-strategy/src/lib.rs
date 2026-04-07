@@ -6,9 +6,11 @@ pub mod arb_funding;
 pub mod conflict_policy;
 pub mod context;
 pub mod copy_trade;
+mod dry_orders_mirror_gateway;
 mod paper_recording_dry_gateway;
 pub mod risk;
 pub mod signal_filter;
 pub mod whale_momentum;
 
+pub use dry_orders_mirror_gateway::{paper_actor_uuids_from_db, DryOrdersMirrorGateway};
 pub use paper_recording_dry_gateway::{paper_ledger_target_from_db, PaperRecordingDryGateway};
