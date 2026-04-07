@@ -272,11 +272,55 @@ fn try_tactical_approval_png(
         reference_price: ref_px,
         stop_loss: sl_px,
         take_profit: tp_px,
+        flat_no_trade: false,
     };
     match try_render_ai_approval_card_png(&input) {
         Ok(bytes) => Some(bytes),
         Err(e) => {
             tracing::warn!(error = %e, "AI approval card PNG render failed");
+            None
+        }
+    }
+}
+
+/// Tactical layer, **no** long/short (`neutral` / `no_trade`): still send a FLAT card if we have a price.
+fn try_tactical_flat_approval_png(
+    symbol: &str,
+    direction: Option<&str>,
+    confidence: f64,
+    snapshot: &AiDecisionNotifySnapshot,
+) -> Option<Vec<u8>> {
+    if snapshot.layer != "tactical" {
+        return None;
+    }
+    if side_long_from_direction(direction).is_some() {
+        return None;
+    }
+    let ref_px = snapshot.entry_hint.or(snapshot.last_price)?;
+    if !ref_px.is_finite() || ref_px.abs() < 1e-12 {
+        return None;
+    }
+    let last = snapshot.last_price.unwrap_or(ref_px);
+    let tf = snapshot
+        .timeframe
+        .clone()
+        .unwrap_or_else(|| "—".into());
+    let input = AiApprovalCardInput {
+        symbol: symbol.trim().to_uppercase(),
+        timeframe: tf,
+        last_close: last,
+        approx_change_pct: snapshot.approx_price_change_pct,
+        side_long: true,
+        confidence_0_1: confidence.clamp(0.0, 1.0),
+        reference_price: ref_px,
+        stop_loss: ref_px,
+        take_profit: ref_px,
+        flat_no_trade: true,
+    };
+    match try_render_ai_approval_card_png(&input) {
+        Ok(bytes) => Some(bytes),
+        Err(e) => {
+            tracing::warn!(error = %e, "AI flat approval card PNG render failed");
             None
         }
     }
@@ -664,6 +708,7 @@ pub async fn maybe_auto_approve(
             .with_telegram_reply_markup(markup);
         if let Some(sym) = symbol {
             let png = try_tactical_approval_png(sym, direction, confidence, snapshot)
+                .or_else(|| try_tactical_flat_approval_png(sym, direction, confidence, snapshot))
                 .or_else(|| try_operational_approval_png(sym, confidence, snapshot));
             if let Some(bytes) = png {
                 let cap = photo_caption_plain(Some(sym), snapshot);
@@ -767,5 +812,16 @@ mod tests {
             ..Default::default()
         };
         assert!(try_tactical_approval_png("BTC", Some("buy"), 0.7, &snap_missing_tp).is_none());
+    }
+
+    #[test]
+    fn tactical_flat_png_none_without_price() {
+        let snap = AiDecisionNotifySnapshot {
+            layer: "tactical".into(),
+            last_price: None,
+            entry_hint: None,
+            ..Default::default()
+        };
+        assert!(try_tactical_flat_approval_png("BTC", Some("neutral"), 0.5, &snap).is_none());
     }
 }

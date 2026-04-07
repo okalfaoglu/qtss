@@ -14,12 +14,15 @@ pub struct AiApprovalCardInput {
     pub last_close: f64,
     pub approx_change_pct: Option<f64>,
     /// When true, LONG-style coloring and SL/TP geometry; when false, SHORT.
+    /// Ignored when [`Self::flat_no_trade`] is true.
     pub side_long: bool,
     pub confidence_0_1: f64,
     /// Entry / reference used for Giriş row and R:R percentages (often `last_close` or hint).
     pub reference_price: f64,
     pub stop_loss: f64,
     pub take_profit: f64,
+    /// No directional trade (`neutral` / `no_trade`): card shows FLAT and em-dash SL/TP rows.
+    pub flat_no_trade: bool,
 }
 
 #[must_use]
@@ -71,7 +74,13 @@ fn render_ai_approval_inner(
             "reference_price not finite".into(),
         ));
     }
-    let durum = if input.side_long { "LONG" } else { "SHORT" };
+    let durum = if input.flat_no_trade {
+        "FLAT"
+    } else if input.side_long {
+        "LONG"
+    } else {
+        "SHORT"
+    };
     let strength = (input.confidence_0_1 * 10.0).round().clamp(1.0, 10.0) as u8;
     let strength_word = strength_label_tr(strength).to_string();
     let chg = input.approx_change_pct.unwrap_or(0.0);
@@ -83,18 +92,27 @@ fn render_ai_approval_inner(
         chg
     );
     let entry_line = format_compact_price(ref_px);
-    let sl_pct_label = (input.stop_loss - ref_px) / ref_px * 100.0;
-    let tp_pct_label = (input.take_profit - ref_px) / ref_px * 100.0;
-    let stop_line = format!(
-        "{} ({:+.2}%)",
-        format_compact_price(input.stop_loss),
-        sl_pct_label
-    );
-    let tp_line = format!(
-        "{} ({:+.2}%)",
-        format_compact_price(input.take_profit),
-        tp_pct_label
-    );
+    let (stop_line, tp_line) = if input.flat_no_trade {
+        (
+            "— (yönlü işlem yok)".to_string(),
+            "— (yönlü işlem yok)".to_string(),
+        )
+    } else {
+        let sl_pct_label = (input.stop_loss - ref_px) / ref_px * 100.0;
+        let tp_pct_label = (input.take_profit - ref_px) / ref_px * 100.0;
+        (
+            format!(
+                "{} ({:+.2}%)",
+                format_compact_price(input.stop_loss),
+                sl_pct_label
+            ),
+            format!(
+                "{} ({:+.2}%)",
+                format_compact_price(input.take_profit),
+                tp_pct_label
+            ),
+        )
+    };
     let header_left = format!("{} ({})", input.symbol.trim().to_uppercase(), input.timeframe);
     let sub = format!(
         "AI güven {:.0}% · {}",
