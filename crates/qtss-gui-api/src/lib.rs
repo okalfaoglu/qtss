@@ -21,6 +21,7 @@
 
 pub mod chart;
 pub mod dashboard;
+pub mod regime;
 pub mod scenarios;
 
 pub use dashboard::{
@@ -29,4 +30,5 @@ pub use dashboard::{
 pub use chart::{
     build_renko, CandleBar, ChartWorkspace, DetectionOverlay, OpenOrderOverlay, RenkoBrick,
 };
+pub use regime::{RegimeHud, RegimePoint, RegimeView};
 pub use scenarios::{build_volatility_tree, ScenarioNode, ScenarioTree, TargetBand};

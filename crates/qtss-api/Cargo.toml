@@ -28,6 +28,7 @@ qtss-ai.workspace = true
 qtss-portfolio.workspace = true
 qtss-risk.workspace = true
 qtss-gui-api.workspace = true
+qtss-regime.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true

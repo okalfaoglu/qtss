@@ -2171,6 +2171,7 @@ dependencies = [
  "qtss-notify",
  "qtss-portfolio",
  "qtss-reconcile",
+ "qtss-regime",
  "qtss-reporting",
  "qtss-risk",
  "qtss-storage",
