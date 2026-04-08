@@ -1,0 +1,20 @@
+[package]
+name = "qtss-eventbus"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+sqlx.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+futures-util.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "rt-multi-thread", "macros"] }

@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/qtss-common",
     "crates/qtss-config",
+    "crates/qtss-eventbus",
     "crates/qtss-notify",
     "crates/qtss-domain",
     "crates/qtss-storage",
@@ -52,6 +53,7 @@ strum = { version = "0.26", features = ["derive"] }
 # Yerel workspace üyeleri — member crate’lerde `*.workspace = true` ile kullanılır.
 qtss-common = { path = "crates/qtss-common" }
 qtss-config = { path = "crates/qtss-config" }
+qtss-eventbus = { path = "crates/qtss-eventbus" }
 qtss-notify = { path = "crates/qtss-notify" }
 qtss-domain = { path = "crates/qtss-domain" }
 qtss-storage = { path = "crates/qtss-storage" }

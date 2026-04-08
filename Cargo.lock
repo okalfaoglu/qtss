@@ -2182,6 +2182,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "qtss-eventbus"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "qtss-execution"
 version = "0.1.0"
 dependencies = [
