@@ -112,6 +112,46 @@ pub struct OrderRequest {
 /// term ("run mode") without breaking existing imports of `ExecutionMode`.
 pub type RunMode = ExecutionMode;
 
+/// Output of `qtss-risk`. Wraps the original intent with the resolved
+/// position size, the checks that voted to approve it, and an audit
+/// trail of any size adjustments. Execution adapters consume this —
+/// never the raw `TradeIntent` — so risk approval is structurally
+/// unbypassable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApprovedIntent {
+    pub id: Uuid,
+    pub approved_at: DateTime<Utc>,
+    pub intent: TradeIntent,
+    /// Concrete position size in base-asset units, after sizing rules.
+    pub quantity: Decimal,
+    /// The notional value (quantity * entry_price) in quote currency.
+    /// Convenience field — kept on the envelope so downstream consumers
+    /// don't have to recompute it.
+    pub notional: Decimal,
+    /// Names of every check that approved this intent (for audit and
+    /// post-mortem; rejections never reach this struct).
+    pub checks_passed: Vec<String>,
+    /// Set when the sizing layer reduced the requested size to satisfy
+    /// a cap (max risk per trade, max leverage, …). Empty when the size
+    /// was honoured as-is.
+    pub adjustments: Vec<String>,
+}
+
+/// Reasons risk can refuse to approve an intent. Strategies and the
+/// audit log treat rejections as first-class outcomes — never silent
+/// failures.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "detail")]
+pub enum RiskRejection {
+    KillSwitchActive(String),
+    MaxOpenPositionsReached { current: u32, cap: u32 },
+    MaxLeverageExceeded { requested: String, cap: String },
+    MaxDailyLossReached { dd_pct: String, cap_pct: String },
+    DrawdownExceeded { dd_pct: String, cap_pct: String },
+    StopDistanceTooSmall,
+    InvalidIntent(String),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
