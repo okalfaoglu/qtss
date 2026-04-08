@@ -9,44 +9,37 @@
 //! before placing the order. Slippage is configured at construction time
 //! and pulled from `qtss_config` (CLAUDE.md rule #2 — no hardcoded magic).
 
-use crate::adapter::{ExecutionAdapter, Fill, OrderAck, OrderStatus};
+use crate::adapter::{ExecutionAdapter, Fill, OrderAck, OrderHandle, OrderStatus};
 use crate::error::{ExecutionError, ExecutionResult};
 use async_trait::async_trait;
 use chrono::Utc;
 use qtss_domain::v2::intent::{OrderRequest, OrderType, Side};
+use qtss_fees::{FeeModel, Liquidity, TradeContext};
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct SimConfig {
-    /// Slippage as a fraction of price (e.g. 0.0005 = 5 bps).
+    /// Slippage as a fraction of price (e.g. 0.0005 = 5 bps). Pulled
+    /// from `qtss_config` by the caller — never hardcoded here
+    /// (CLAUDE.md rule #2).
     pub slippage_pct: Decimal,
-    /// Taker fee as a fraction of notional.
-    pub taker_fee_pct: Decimal,
-}
-
-impl SimConfig {
-    pub fn defaults() -> Self {
-        Self {
-            slippage_pct: dec!(0.0005),
-            taker_fee_pct: dec!(0.0007),
-        }
-    }
 }
 
 pub struct SimAdapter {
     config: SimConfig,
+    fees: Arc<dyn FeeModel>,
     reference_price: Mutex<Option<Decimal>>,
     orders: Mutex<HashMap<Uuid, OrderAck>>,
 }
 
 impl SimAdapter {
-    pub fn new(config: SimConfig) -> Self {
+    pub fn new(config: SimConfig, fees: Arc<dyn FeeModel>) -> Self {
         Self {
             config,
+            fees,
             reference_price: Mutex::new(None),
             orders: Mutex::new(HashMap::new()),
         }
@@ -106,8 +99,23 @@ impl ExecutionAdapter for SimAdapter {
 
     async fn place(&self, req: OrderRequest) -> ExecutionResult<OrderAck> {
         let price = self.fill_price(&req)?;
-        let notional = price * req.quantity;
-        let fee = notional * self.config.taker_fee_pct;
+        // Sim assumes taker liquidity (worst case for paper PnL).
+        // A future enhancement can pick maker for resting limits.
+        let liquidity = match req.order_type {
+            OrderType::Limit if req.post_only => Liquidity::Maker,
+            _ => Liquidity::Taker,
+        };
+        let quote = self
+            .fees
+            .quote(&TradeContext {
+                venue: req.instrument.venue.as_key(),
+                symbol: &req.instrument.symbol,
+                price,
+                quantity: req.quantity,
+                liquidity,
+            })
+            .map_err(|e| ExecutionError::Adapter(format!("fee model: {e}")))?;
+        let fee = quote.total;
         let now = Utc::now();
         let ack = OrderAck {
             client_order_id: req.client_order_id,
@@ -130,11 +138,11 @@ impl ExecutionAdapter for SimAdapter {
         Ok(ack)
     }
 
-    async fn cancel(&self, client_order_id: Uuid) -> ExecutionResult<()> {
+    async fn cancel(&self, handle: &OrderHandle) -> ExecutionResult<()> {
         let mut orders = self.orders.lock().unwrap();
         let ack = orders
-            .get_mut(&client_order_id)
-            .ok_or(ExecutionError::OrderNotFound(client_order_id))?;
+            .get_mut(&handle.client_order_id)
+            .ok_or(ExecutionError::OrderNotFound(handle.client_order_id))?;
         if matches!(ack.status, OrderStatus::Filled) {
             return Err(ExecutionError::Adapter("already filled".into()));
         }
@@ -142,12 +150,12 @@ impl ExecutionAdapter for SimAdapter {
         Ok(())
     }
 
-    async fn status(&self, client_order_id: Uuid) -> ExecutionResult<OrderAck> {
+    async fn status(&self, handle: &OrderHandle) -> ExecutionResult<OrderAck> {
         self.orders
             .lock()
             .unwrap()
-            .get(&client_order_id)
+            .get(&handle.client_order_id)
             .cloned()
-            .ok_or(ExecutionError::OrderNotFound(client_order_id))
+            .ok_or(ExecutionError::OrderNotFound(handle.client_order_id))
     }
 }

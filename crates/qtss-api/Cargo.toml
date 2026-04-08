@@ -25,6 +25,9 @@ qtss-reporting.workspace = true
 qtss-chart-patterns.workspace = true
 qtss-notify.workspace = true
 qtss-ai.workspace = true
+qtss-portfolio.workspace = true
+qtss-risk.workspace = true
+qtss-gui-api.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -37,6 +40,7 @@ serde_json.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 rust_decimal = { version = "1.36", features = ["serde"] }
+rust_decimal_macros.workspace = true
 anyhow.workspace = true
 ipnet.workspace = true
 jsonwebtoken = "9"

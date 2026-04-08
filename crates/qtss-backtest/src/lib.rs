@@ -5,6 +5,11 @@
 //! - `WalkForward`: pencere kaydırarak robustness
 //! - `optimize::grid_search`: parametre ızgarası + walk-forward skoru
 
+pub mod v2;
+pub use v2::{
+    BacktestRunner, BacktestSummary, BacktestV2Config, BarStream, SignalSource,
+};
+
 pub mod engine;
 pub mod metrics;
 pub mod optimize;

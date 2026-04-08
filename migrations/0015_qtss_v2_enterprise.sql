@@ -1,11 +1,11 @@
 -- 0015_qtss_v2_enterprise.sql
 --
 -- Faz 0.4 — Enterprise foundation tables for QTSS v2:
---   * audit_log         : append-only, hash-chained event log
+--   * qtss_audit_log         : append-only, hash-chained event log
 --   * secrets_vault     : encrypted secret storage (envelope encryption)
---   * users / roles /
---     user_roles /
---     sessions          : minimal RBAC + session model
+--   * qtss_users / qtss_roles /
+--     qtss_user_roles /
+--     qtss_sessions          : minimal RBAC + session model
 --
 -- Hash chain rationale: each row carries prev_hash + row_hash = sha256(prev_hash || canonical_payload).
 -- A verifier walks the chain in insertion order; any tampering breaks the link. The trigger
@@ -15,9 +15,9 @@
 BEGIN;
 
 -- ---------------------------------------------------------------------------
--- audit_log
+-- qtss_audit_log
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS audit_log (
+CREATE TABLE IF NOT EXISTS qtss_audit_log (
     id              BIGSERIAL PRIMARY KEY,
     at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     actor           TEXT         NOT NULL,           -- user id, service name, or "system"
@@ -30,28 +30,28 @@ CREATE TABLE IF NOT EXISTS audit_log (
     CONSTRAINT audit_log_row_hash_unique UNIQUE (row_hash)
 );
 
-CREATE INDEX IF NOT EXISTS audit_log_at_idx        ON audit_log (at);
-CREATE INDEX IF NOT EXISTS audit_log_actor_idx     ON audit_log (actor);
-CREATE INDEX IF NOT EXISTS audit_log_action_idx    ON audit_log (action);
-CREATE INDEX IF NOT EXISTS audit_log_subject_idx   ON audit_log (subject);
-CREATE INDEX IF NOT EXISTS audit_log_corr_idx      ON audit_log (correlation_id);
+CREATE INDEX IF NOT EXISTS audit_log_at_idx        ON qtss_audit_log (at);
+CREATE INDEX IF NOT EXISTS audit_log_actor_idx     ON qtss_audit_log (actor);
+CREATE INDEX IF NOT EXISTS audit_log_action_idx    ON qtss_audit_log (action);
+CREATE INDEX IF NOT EXISTS audit_log_subject_idx   ON qtss_audit_log (subject);
+CREATE INDEX IF NOT EXISTS audit_log_corr_idx      ON qtss_audit_log (correlation_id);
 
 -- Append-only enforcement: block UPDATE and DELETE at the DB level so even
 -- a compromised app role cannot rewrite history without superuser.
 CREATE OR REPLACE FUNCTION audit_log_block_mutation() RETURNS trigger AS $$
 BEGIN
-    RAISE EXCEPTION 'audit_log is append-only (% blocked)', TG_OP;
+    RAISE EXCEPTION 'qtss_audit_log is append-only (% blocked)', TG_OP;
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS audit_log_no_update ON audit_log;
+DROP TRIGGER IF EXISTS audit_log_no_update ON qtss_audit_log;
 CREATE TRIGGER audit_log_no_update
-    BEFORE UPDATE ON audit_log
+    BEFORE UPDATE ON qtss_audit_log
     FOR EACH ROW EXECUTE FUNCTION audit_log_block_mutation();
 
-DROP TRIGGER IF EXISTS audit_log_no_delete ON audit_log;
+DROP TRIGGER IF EXISTS audit_log_no_delete ON qtss_audit_log;
 CREATE TRIGGER audit_log_no_delete
-    BEFORE DELETE ON audit_log
+    BEFORE DELETE ON qtss_audit_log
     FOR EACH ROW EXECUTE FUNCTION audit_log_block_mutation();
 
 -- ---------------------------------------------------------------------------
@@ -77,15 +77,15 @@ CREATE TABLE IF NOT EXISTS secrets_vault (
 CREATE INDEX IF NOT EXISTS secrets_vault_kek_version_idx ON secrets_vault (kek_version);
 
 -- ---------------------------------------------------------------------------
--- RBAC: roles, users, user_roles, sessions
+-- RBAC: qtss_roles, qtss_users, qtss_user_roles, qtss_sessions
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS roles (
+CREATE TABLE IF NOT EXISTS qtss_roles (
     id          SERIAL PRIMARY KEY,
     name        TEXT NOT NULL UNIQUE,        -- e.g. "admin", "trader", "viewer"
     description TEXT NULL
 );
 
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS qtss_users (
     id            BIGSERIAL PRIMARY KEY,
     username      TEXT        NOT NULL UNIQUE,
     email         TEXT        NULL UNIQUE,
@@ -95,15 +95,15 @@ CREATE TABLE IF NOT EXISTS users (
     last_login_at TIMESTAMPTZ NULL
 );
 
-CREATE TABLE IF NOT EXISTS user_roles (
-    user_id  BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    role_id  INT    NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS qtss_user_roles (
+    user_id  BIGINT NOT NULL REFERENCES qtss_users(id) ON DELETE CASCADE,
+    role_id  INT    NOT NULL REFERENCES qtss_roles(id) ON DELETE CASCADE,
     PRIMARY KEY (user_id, role_id)
 );
 
-CREATE TABLE IF NOT EXISTS sessions (
+CREATE TABLE IF NOT EXISTS qtss_sessions (
     id          UUID        PRIMARY KEY,
-    user_id     BIGINT      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id     BIGINT      NOT NULL REFERENCES qtss_users(id) ON DELETE CASCADE,
     issued_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at  TIMESTAMPTZ NOT NULL,
     revoked_at  TIMESTAMPTZ NULL,
@@ -111,13 +111,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     ip_addr     INET        NULL
 );
 
-CREATE INDEX IF NOT EXISTS sessions_user_idx     ON sessions (user_id);
-CREATE INDEX IF NOT EXISTS sessions_expires_idx  ON sessions (expires_at);
+CREATE INDEX IF NOT EXISTS sessions_user_idx     ON qtss_sessions (user_id);
+CREATE INDEX IF NOT EXISTS sessions_expires_idx  ON qtss_sessions (expires_at);
 
--- Seed canonical roles. Permissions live in qtss-auth (code) keyed by role name,
+-- Seed canonical qtss_roles. Permissions live in qtss-auth (code) keyed by role name,
 -- not in DB rows — keeps role->permission edits a code review instead of an
 -- ad-hoc UPDATE.
-INSERT INTO roles (name, description) VALUES
+INSERT INTO qtss_roles (name, description) VALUES
     ('admin',  'Full access including config edits and user management'),
     ('trader', 'Can place/approve intents and view all data'),
     ('viewer', 'Read-only access to dashboards and reports')

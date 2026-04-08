@@ -66,8 +66,8 @@ impl PgAuthStore {
 
     async fn load_roles(&self, user_id: i64) -> AuthResult<Vec<RoleName>> {
         let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT r.name FROM roles r
-             JOIN user_roles ur ON ur.role_id = r.id
+            "SELECT r.name FROM qtss_roles r
+             JOIN qtss_user_roles ur ON ur.role_id = r.id
              WHERE ur.user_id = $1",
         )
         .bind(user_id)
@@ -89,7 +89,7 @@ impl AuthStore for PgAuthStore {
         let hash = hash_password(password)?;
         let mut tx = self.pool.begin().await?;
         let user_row: (i64,) = sqlx::query_as(
-            "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3)
+            "INSERT INTO qtss_users (username, email, password_hash) VALUES ($1, $2, $3)
              RETURNING id",
         )
         .bind(username)
@@ -99,8 +99,8 @@ impl AuthStore for PgAuthStore {
         .await?;
         for role in roles {
             sqlx::query(
-                "INSERT INTO user_roles (user_id, role_id)
-                 SELECT $1, id FROM roles WHERE name = $2",
+                "INSERT INTO qtss_user_roles (user_id, role_id)
+                 SELECT $1, id FROM qtss_roles WHERE name = $2",
             )
             .bind(user_row.0)
             .bind(role.as_str())
@@ -124,7 +124,7 @@ impl AuthStore for PgAuthStore {
         ttl: Duration,
     ) -> AuthResult<(UserRecord, Session)> {
         let row: Option<(i64, String, Option<String>, bool, String)> = sqlx::query_as(
-            "SELECT id, username, email, is_active, password_hash FROM users WHERE username = $1",
+            "SELECT id, username, email, is_active, password_hash FROM qtss_users WHERE username = $1",
         )
         .bind(username)
         .fetch_optional(&self.pool)
@@ -150,7 +150,7 @@ impl AuthStore for PgAuthStore {
         let now = Utc::now();
         let expires_at = now + ttl;
         sqlx::query(
-            "INSERT INTO sessions (id, user_id, issued_at, expires_at) VALUES ($1, $2, $3, $4)",
+            "INSERT INTO qtss_sessions (id, user_id, issued_at, expires_at) VALUES ($1, $2, $3, $4)",
         )
         .bind(token.0)
         .bind(user.id)
@@ -159,7 +159,7 @@ impl AuthStore for PgAuthStore {
         .execute(&self.pool)
         .await?;
 
-        sqlx::query("UPDATE users SET last_login_at = $1 WHERE id = $2")
+        sqlx::query("UPDATE qtss_users SET last_login_at = $1 WHERE id = $2")
             .bind(now)
             .bind(user.id)
             .execute(&self.pool)
@@ -177,7 +177,7 @@ impl AuthStore for PgAuthStore {
 
     async fn validate_session(&self, token: SessionToken) -> AuthResult<UserRecord> {
         let row: Option<(i64, DateTime<Utc>, Option<DateTime<Utc>>)> = sqlx::query_as(
-            "SELECT user_id, expires_at, revoked_at FROM sessions WHERE id = $1",
+            "SELECT user_id, expires_at, revoked_at FROM qtss_sessions WHERE id = $1",
         )
         .bind(token.0)
         .fetch_optional(&self.pool)
@@ -190,7 +190,7 @@ impl AuthStore for PgAuthStore {
         }
 
         let urow: Option<(i64, String, Option<String>, bool)> = sqlx::query_as(
-            "SELECT id, username, email, is_active FROM users WHERE id = $1",
+            "SELECT id, username, email, is_active FROM qtss_users WHERE id = $1",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -210,7 +210,7 @@ impl AuthStore for PgAuthStore {
     }
 
     async fn revoke_session(&self, token: SessionToken) -> AuthResult<()> {
-        sqlx::query("UPDATE sessions SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL")
+        sqlx::query("UPDATE qtss_sessions SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL")
             .bind(token.0)
             .execute(&self.pool)
             .await?;

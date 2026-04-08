@@ -2,6 +2,7 @@ use crate::adapter::OrderStatus;
 use crate::builder::split_intent;
 use crate::router::ExecutionRouter;
 use crate::sim::{SimAdapter, SimConfig};
+use qtss_fees::{FeeBook, FeeModel, FeeSchedule};
 use chrono::Utc;
 use qtss_domain::execution::ExecutionMode;
 use qtss_domain::v2::detection::{Target, TargetMethod};
@@ -14,6 +15,23 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::sync::Arc;
 use uuid::Uuid;
+
+fn sim_cfg() -> SimConfig {
+    SimConfig { slippage_pct: dec!(0.0005) }
+}
+
+fn fees() -> Arc<dyn FeeModel> {
+    let mut book = FeeBook::new();
+    book.register_venue_default(
+        "binance",
+        FeeSchedule::new(dec!(0.0002), dec!(0.0007)).unwrap(),
+    );
+    Arc::new(book)
+}
+
+fn new_sim() -> SimAdapter {
+    SimAdapter::new(sim_cfg(), fees())
+}
 
 fn instrument() -> Instrument {
     Instrument {
@@ -145,7 +163,7 @@ fn builder_equal_split_when_all_weights_zero() {
 #[tokio::test]
 async fn sim_fills_market_at_reference_with_slippage() {
     use crate::adapter::ExecutionAdapter;
-    let sim = SimAdapter::new(SimConfig::defaults());
+    let sim = new_sim();
     sim.set_reference_price(dec!(100));
     let intent = intent(Side::Long, None, vec![]);
     let approved = approved(intent, dec!(1));
@@ -161,7 +179,7 @@ async fn sim_fills_market_at_reference_with_slippage() {
 #[tokio::test]
 async fn sim_fills_limit_at_stated_price() {
     use crate::adapter::ExecutionAdapter;
-    let sim = SimAdapter::new(SimConfig::defaults());
+    let sim = new_sim();
     let intent = intent(Side::Long, Some(dec!(99.5)), vec![]);
     let approved = approved(intent, dec!(1));
     let bracket = split_intent(&approved).unwrap();
@@ -172,20 +190,26 @@ async fn sim_fills_limit_at_stated_price() {
 #[tokio::test]
 async fn sim_status_returns_known_order() {
     use crate::adapter::ExecutionAdapter;
-    let sim = SimAdapter::new(SimConfig::defaults());
+    let sim = new_sim();
     let intent = intent(Side::Long, Some(dec!(99.5)), vec![]);
     let approved = approved(intent, dec!(1));
     let bracket = split_intent(&approved).unwrap();
     let ack = sim.place(bracket.entry).await.unwrap();
-    let again = sim.status(ack.client_order_id).await.unwrap();
+    let again = sim
+        .status(&crate::adapter::OrderHandle::new("BTCUSDT", ack.client_order_id))
+        .await
+        .unwrap();
     assert_eq!(again.client_order_id, ack.client_order_id);
 }
 
 #[tokio::test]
 async fn sim_status_unknown_order_errors() {
     use crate::adapter::ExecutionAdapter;
-    let sim = SimAdapter::new(SimConfig::defaults());
-    assert!(sim.status(Uuid::new_v4()).await.is_err());
+    let sim = new_sim();
+    assert!(sim
+        .status(&crate::adapter::OrderHandle::new("BTCUSDT", Uuid::new_v4()))
+        .await
+        .is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +218,7 @@ async fn sim_status_unknown_order_errors() {
 
 #[tokio::test]
 async fn router_places_full_bracket_via_dry_adapter() {
-    let sim = Arc::new(SimAdapter::new(SimConfig::defaults()));
+    let sim = Arc::new(new_sim());
     sim.set_reference_price(dec!(100));
     let mut router = ExecutionRouter::new();
     router.register(ExecutionMode::Dry, sim.clone());
@@ -224,7 +248,7 @@ async fn router_adapter_count_tracks_registrations() {
     assert_eq!(router.adapter_count(), 0);
     router.register(
         ExecutionMode::Dry,
-        Arc::new(SimAdapter::new(SimConfig::defaults())),
+        Arc::new(new_sim()),
     );
     assert_eq!(router.adapter_count(), 1);
 }

@@ -4,6 +4,11 @@
 //! `docs/QTSS_MASTER_DEV_GUIDE.md` (FAZ 2–3).
 
 pub mod approval;
+pub mod strategy_provider;
+
+pub use strategy_provider::{
+    AiStrategyProvider, AiStrategyProviderConfig, AiStrategyVerdict, LlmAdvisor,
+};
 
 pub use approval::AiDecisionNotifySnapshot;
 pub mod circuit_breaker;

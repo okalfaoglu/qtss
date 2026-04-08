@@ -15,3 +15,13 @@ tracing.workspace = true
 rust_decimal = { version = "1.36", features = ["serde"] }
 uuid.workspace = true
 rust_decimal_macros.workspace = true
+qtss-runtime.workspace = true
+qtss-strategy.workspace = true
+qtss-portfolio.workspace = true
+qtss-execution-v2.workspace = true
+qtss-fees.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

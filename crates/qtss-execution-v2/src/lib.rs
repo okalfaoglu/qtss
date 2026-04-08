@@ -29,7 +29,7 @@ mod sim;
 #[cfg(test)]
 mod tests;
 
-pub use adapter::{ExecutionAdapter, Fill, OrderAck, OrderStatus};
+pub use adapter::{ExecutionAdapter, Fill, OrderAck, OrderHandle, OrderStatus};
 pub use builder::{split_intent, OrderBracket};
 pub use error::{ExecutionError, ExecutionResult};
 pub use router::{ExecutionRouter, RoutedAcks};

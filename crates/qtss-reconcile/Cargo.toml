@@ -8,6 +8,14 @@ license.workspace = true
 qtss-binance.workspace = true
 qtss-execution.workspace = true
 qtss-storage.workspace = true
+qtss-domain.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+chrono.workspace = true
+rust_decimal = { version = "1.36", features = ["serde"] }
+
+[dev-dependencies]
+rust_decimal_macros.workspace = true

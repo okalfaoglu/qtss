@@ -42,10 +42,26 @@ pub struct OrderAck {
     pub fills: Vec<Fill>,
 }
 
+/// Identifies an outstanding order across crates. Most venues
+/// require both the symbol *and* the client/venue id to look an
+/// order up — this struct keeps that pair as one value so adapter
+/// signatures stay symmetric.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct OrderHandle {
+    pub symbol: String,
+    pub client_order_id: Uuid,
+}
+
+impl OrderHandle {
+    pub fn new(symbol: impl Into<String>, client_order_id: Uuid) -> Self {
+        Self { symbol: symbol.into(), client_order_id }
+    }
+}
+
 #[async_trait]
 pub trait ExecutionAdapter: Send + Sync {
     fn name(&self) -> &'static str;
     async fn place(&self, req: OrderRequest) -> ExecutionResult<OrderAck>;
-    async fn cancel(&self, client_order_id: Uuid) -> ExecutionResult<()>;
-    async fn status(&self, client_order_id: Uuid) -> ExecutionResult<OrderAck>;
+    async fn cancel(&self, handle: &OrderHandle) -> ExecutionResult<()>;
+    async fn status(&self, handle: &OrderHandle) -> ExecutionResult<OrderAck>;
 }

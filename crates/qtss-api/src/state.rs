@@ -8,6 +8,7 @@ use sqlx::PgPool;
 use std::sync::Arc;
 
 use crate::oauth::jwt::JwtIssuer;
+use crate::routes::V2DashboardHandle;
 
 pub struct AppState {
     pub pool: PgPool,
@@ -27,6 +28,7 @@ pub struct AppState {
     pub system_config: SystemConfigRepository,
     pub jwt: Option<JwtIssuer>,
     pub refresh_ttl_secs: i64,
+    pub v2_dashboard: Arc<V2DashboardHandle>,
 }
 
 impl AppState {
@@ -119,6 +121,31 @@ impl AppState {
         let notify_outbox = NotifyOutboxRepository::new(pool.clone());
         let user_permissions = UserPermissionRepository::new(pool.clone());
         let users = UserRepository::new(pool.clone());
+        // v2 dashboard handle — capacity and starting equity come from
+        // system_config (CLAUDE.md rule #2: nothing hardcoded). The
+        // engine itself is in-memory; persistence lives elsewhere.
+        let v2_capacity: usize = qtss_storage::resolve_system_string(
+            &pool,
+            "api",
+            "v2_dashboard_equity_capacity",
+            "QTSS_V2_DASH_EQUITY_CAPACITY",
+            "240",
+        )
+        .await
+        .parse()
+        .unwrap_or(240);
+        let v2_starting_equity: rust_decimal::Decimal = qtss_storage::resolve_system_string(
+            &pool,
+            "api",
+            "v2_dashboard_starting_equity",
+            "QTSS_V2_DASH_STARTING_EQUITY",
+            "10000",
+        )
+        .await
+        .parse()
+        .unwrap_or_else(|_| rust_decimal::Decimal::from(10_000_u32));
+        let v2_dashboard = V2DashboardHandle::new(v2_starting_equity, v2_capacity);
+
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .user_agent(concat!("qtss-api/", env!("CARGO_PKG_VERSION")))
@@ -142,6 +169,7 @@ impl AppState {
             system_config,
             jwt: Some(jwt),
             refresh_ttl_secs: refresh_ttl,
+            v2_dashboard,
         })
     }
 }

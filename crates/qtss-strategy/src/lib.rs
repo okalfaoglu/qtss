@@ -2,6 +2,13 @@
 //!
 //! Worker dry runner: `strategy_runner::spawn_if_enabled` — `docs/QTSS_CURSOR_DEV_GUIDE.md` §4 ADIM 7.
 
+pub mod v2;
+
+pub use v2::{
+    ConfidenceThresholdStrategy, ConfidenceThresholdStrategyConfig, StrategyContext,
+    StrategyError, StrategyProvider, StrategyResult,
+};
+
 pub mod arb_funding;
 pub mod conflict_policy;
 pub mod context;

@@ -674,6 +674,17 @@ async fn maybe_enqueue(
     }
     let body = format_telegram_html(title, payload);
     let repo = NotifyOutboxRepository::new(pool.clone());
+    match repo
+        .should_skip_duplicate_global_body(event_key, &body)
+        .await
+    {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(e) => {
+            warn!(%e, %event_key, "cex_flow_screener: duplicate_body check");
+            return;
+        }
+    }
     let ch = channel_list_csv(channels);
     if let Err(e) = repo
         .enqueue_with_meta(
@@ -786,7 +797,10 @@ pub async fn cex_flow_screener_loop(pool: PgPool) {
         )
         .await;
 
-        let lookback = (tick as i64).saturating_sub(30).max(60);
+        // Debounce window must not be shorter than `tick`, or each loop iteration enqueues again
+        // while the previous row has aged out of the lookback (especially when only net_flow exists
+        // and the rendered table is unchanged for hours).
+        let lookback = (tick as i64).saturating_add(120).max(60);
 
         if acc_on {
             let payload = build_ranked_payload(

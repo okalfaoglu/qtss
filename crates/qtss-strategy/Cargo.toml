@@ -19,3 +19,7 @@ qtss-common.workspace = true
 qtss-domain.workspace = true
 qtss-storage.workspace = true
 qtss-execution.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+rust_decimal_macros.workspace = true

@@ -42,7 +42,7 @@ impl AuditSink for PgAuditSink {
         let mut tx = self.pool.begin().await?;
 
         let prev_hash: Option<Vec<u8>> = sqlx::query_scalar(
-            "SELECT row_hash FROM audit_log ORDER BY id DESC LIMIT 1 FOR UPDATE",
+            "SELECT row_hash FROM qtss_audit_log ORDER BY id DESC LIMIT 1 FOR UPDATE",
         )
         .fetch_optional(&mut *tx)
         .await?;
@@ -51,7 +51,7 @@ impl AuditSink for PgAuditSink {
         let row_hash = hash_row(prev_hash.as_deref(), &canonical);
 
         let row: (i64, chrono::DateTime<Utc>) = sqlx::query_as(
-            "INSERT INTO audit_log
+            "INSERT INTO qtss_audit_log
                 (actor, action, subject, payload, correlation_id, prev_hash, row_hash)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
              RETURNING id, at",
@@ -94,7 +94,7 @@ impl AuditSink for PgAuditSink {
             Vec<u8>,
         )> = sqlx::query_as(
             "SELECT id, at, actor, action, subject, payload, correlation_id, prev_hash, row_hash
-             FROM audit_log ORDER BY id ASC",
+             FROM qtss_audit_log ORDER BY id ASC",
         )
         .fetch_all(&self.pool)
         .await?;

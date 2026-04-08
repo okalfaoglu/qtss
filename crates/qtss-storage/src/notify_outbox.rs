@@ -116,6 +116,34 @@ impl NotifyOutboxRepository {
         Ok(row.0)
     }
 
+    /// When the latest global row for `event_key` matches `body` and is already queued or sent,
+    /// skip enqueueing another identical Telegram/HTML payload (worker tick can run while upstream
+    /// snapshot is unchanged).
+    pub async fn should_skip_duplicate_global_body(
+        &self,
+        event_key: &str,
+        body: &str,
+    ) -> Result<bool, StorageError> {
+        let row: Option<(String, String)> = sqlx::query_as(
+            r#"SELECT body, status FROM notify_outbox
+               WHERE org_id IS NULL AND event_key = $1
+               ORDER BY created_at DESC
+               LIMIT 1"#,
+        )
+        .bind(event_key)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(matches!(
+            row,
+            Some((ref b, ref status))
+                if b == body
+                    && matches!(
+                        status.as_str(),
+                        "pending" | "sending" | "sent"
+                    )
+        ))
+    }
+
     pub async fn list_recent_for_org(
         &self,
         org_id: Uuid,

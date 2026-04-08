@@ -413,7 +413,16 @@ fn literature_reversal_filters_pass(
 }
 
 /// Bull flag: konsolidasyondaki tepe pivotları zayıflamalı (ardışık yükselen tepe yok).
-fn flag_bull_highs_non_rising(flag_pivots: &[PivotTriple], ref_price: f64, price_tol: f64) -> bool {
+// Tolerance is a fraction of the *pole height*, not the absolute price
+// level: a 1-point rise on a 50-point pole is structurally meaningful,
+// while a 1-point rise on a $50_000 BTC price is noise. Scaling by
+// ref_price washed that out and made the slope check effectively
+// inactive on real instruments. price_tol stays the same knob.
+fn flag_bull_highs_non_rising(
+    flag_pivots: &[PivotTriple],
+    pole_height: f64,
+    price_tol: f64,
+) -> bool {
     let peaks: Vec<f64> = flag_pivots
         .iter()
         .filter(|(_, _, d)| *d > 0)
@@ -422,7 +431,7 @@ fn flag_bull_highs_non_rising(flag_pivots: &[PivotTriple], ref_price: f64, price
     if peaks.len() < 2 {
         return true;
     }
-    let tol = ref_price.abs().max(1.0) * price_tol;
+    let tol = pole_height.abs() * price_tol;
     for w in peaks.windows(2) {
         if w[1] > w[0] + tol {
             return false;
@@ -432,7 +441,11 @@ fn flag_bull_highs_non_rising(flag_pivots: &[PivotTriple], ref_price: f64, price
 }
 
 /// Bear flag: konsolidasyondaki dip pivotları genelde yükselir (ardışık daha düşük dip yok).
-fn flag_bear_lows_non_falling(flag_pivots: &[PivotTriple], ref_price: f64, price_tol: f64) -> bool {
+fn flag_bear_lows_non_falling(
+    flag_pivots: &[PivotTriple],
+    pole_height: f64,
+    price_tol: f64,
+) -> bool {
     let troughs: Vec<f64> = flag_pivots
         .iter()
         .filter(|(_, _, d)| *d < 0)
@@ -441,7 +454,7 @@ fn flag_bear_lows_non_falling(flag_pivots: &[PivotTriple], ref_price: f64, price
     if troughs.len() < 2 {
         return true;
     }
-    let tol = ref_price.abs().max(1.0) * price_tol;
+    let tol = pole_height.abs() * price_tol;
     for w in troughs.windows(2) {
         if w[1] < w[0] - tol {
             return false;
@@ -1251,7 +1264,7 @@ pub fn detect_bullish_flag(
     }
 
     if params.flag_require_countertrend_pivot_slope
-        && !flag_bull_highs_non_rising(&flag_pivots, pole_top.1, params.price_tolerance)
+        && !flag_bull_highs_non_rising(&flag_pivots, pole_height, params.price_tolerance)
     {
         return None;
     }
@@ -1342,7 +1355,7 @@ pub fn detect_bearish_flag(
     }
 
     if params.flag_require_countertrend_pivot_slope
-        && !flag_bear_lows_non_falling(&flag_pivots, pole_bottom.1, params.price_tolerance)
+        && !flag_bear_lows_non_falling(&flag_pivots, pole_height, params.price_tolerance)
     {
         return None;
     }
