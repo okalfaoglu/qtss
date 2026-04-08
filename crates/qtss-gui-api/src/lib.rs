@@ -20,6 +20,7 @@
 //!   field on `Position`, only what the cards render.
 
 pub mod ai_decisions;
+pub mod audit;
 pub mod blotter;
 pub mod chart;
 pub mod config_editor;
@@ -39,6 +40,7 @@ pub use chart::{
 pub use ai_decisions::{
     payload_preview, AiDecisionEntry, AiDecisionStatus, AiDecisionsView, PAYLOAD_PREVIEW_MAX_LEN,
 };
+pub use audit::{details_preview, extract_kind, AuditEntry, AuditView};
 pub use blotter::{merge_blotter, BlotterEntry, BlotterFeed};
 pub use config_editor::{group_config_entries, ConfigEditorView, ConfigEntry, ConfigGroup};
 pub use montecarlo::{build_montecarlo_fan, FanBand, MonteCarloFan};
