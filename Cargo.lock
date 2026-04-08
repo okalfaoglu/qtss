@@ -2399,6 +2399,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "qtss-scheduler"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "qtss-secrets"
 version = "0.1.0"
 dependencies = [
