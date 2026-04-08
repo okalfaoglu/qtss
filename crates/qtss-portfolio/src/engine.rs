@@ -9,7 +9,7 @@
 //! snapshot when they need it.
 
 use crate::position::Position;
-use chrono::{DateTime, Datelike, Utc};
+use chrono::{DateTime, Utc};
 use qtss_domain::v2::intent::Side;
 use qtss_risk::AccountState;
 use rust_decimal::Decimal;
