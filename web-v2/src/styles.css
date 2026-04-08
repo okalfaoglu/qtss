@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Dark theme is the default; the design is built around the v2 panels
+ * being read against a dark background. Light mode lands when the
+ * settings panel ships in a later step. */
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
