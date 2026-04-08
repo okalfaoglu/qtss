@@ -19,6 +19,7 @@ pub mod execution;
 pub mod orders;
 pub mod symbol;
 pub mod tenancy;
+pub mod v2;
 
 pub use bar::{TimestampBar, TimestampBarFeed};
 pub use commission::{
