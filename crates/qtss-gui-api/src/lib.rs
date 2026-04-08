@@ -26,6 +26,7 @@ pub mod montecarlo;
 pub mod regime;
 pub mod risk;
 pub mod scenarios;
+pub mod strategy_manager;
 
 pub use dashboard::{
     DashboardSnapshot, EquityPoint, OpenPositionView, PortfolioCard, RiskCard,
@@ -38,3 +39,6 @@ pub use montecarlo::{build_montecarlo_fan, FanBand, MonteCarloFan};
 pub use regime::{RegimeHud, RegimePoint, RegimeView};
 pub use risk::{build_risk_hud, RiskGauge, RiskHud};
 pub use scenarios::{build_volatility_tree, ScenarioNode, ScenarioTree, TargetBand};
+pub use strategy_manager::{
+    StrategyCard, StrategyManagerView, StrategyParam, StrategyStatus,
+};

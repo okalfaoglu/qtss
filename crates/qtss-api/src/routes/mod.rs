@@ -33,6 +33,7 @@ mod v2_montecarlo;
 mod v2_regime;
 mod v2_risk;
 mod v2_scenarios;
+mod v2_strategies;
 
 pub use v2_blotter::v2_blotter_router;
 pub use v2_chart::v2_chart_router;
@@ -41,6 +42,7 @@ pub use v2_montecarlo::v2_montecarlo_router;
 pub use v2_regime::v2_regime_router;
 pub use v2_risk::v2_risk_router;
 pub use v2_scenarios::v2_scenarios_router;
+pub use v2_strategies::{default_seed_card, v2_strategies_router, V2StrategyRegistry};
 
 use axum::middleware::from_fn;
 use axum::middleware::from_fn_with_state;
@@ -88,6 +90,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_montecarlo_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_risk_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_blotter_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_strategies_router().layer(from_fn(require_dashboard_roles)))
         .merge(dashboard_admin_router().layer(from_fn(require_admin)))
         .merge(kill_switch_admin::kill_switch_admin_router().layer(from_fn(require_admin)))
         .merge(catalog_sync_router().layer(from_fn(require_ops_roles)))

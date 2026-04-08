@@ -8,7 +8,7 @@ use sqlx::PgPool;
 use std::sync::Arc;
 
 use crate::oauth::jwt::JwtIssuer;
-use crate::routes::V2DashboardHandle;
+use crate::routes::{default_seed_card, V2DashboardHandle, V2StrategyRegistry};
 
 pub struct AppState {
     pub pool: PgPool,
@@ -29,6 +29,7 @@ pub struct AppState {
     pub jwt: Option<JwtIssuer>,
     pub refresh_ttl_secs: i64,
     pub v2_dashboard: Arc<V2DashboardHandle>,
+    pub v2_strategies: Arc<V2StrategyRegistry>,
 }
 
 impl AppState {
@@ -145,6 +146,7 @@ impl AppState {
         .parse()
         .unwrap_or_else(|_| rust_decimal::Decimal::from(10_000_u32));
         let v2_dashboard = V2DashboardHandle::new(v2_starting_equity, v2_capacity);
+        let v2_strategies = V2StrategyRegistry::new(vec![default_seed_card()]);
 
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
@@ -170,6 +172,7 @@ impl AppState {
             jwt: Some(jwt),
             refresh_ttl_secs: refresh_ttl,
             v2_dashboard,
+            v2_strategies,
         })
     }
 }
