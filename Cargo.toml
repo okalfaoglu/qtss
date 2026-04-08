@@ -11,6 +11,7 @@ members = [
     "crates/qtss-pivots",
     "crates/qtss-regime",
     "crates/qtss-elliott",
+    "crates/qtss-harmonic",
     "crates/qtss-notify",
     "crates/qtss-domain",
     "crates/qtss-storage",
@@ -68,6 +69,7 @@ qtss-scheduler = { path = "crates/qtss-scheduler" }
 qtss-pivots = { path = "crates/qtss-pivots" }
 qtss-regime = { path = "crates/qtss-regime" }
 qtss-elliott = { path = "crates/qtss-elliott" }
+qtss-harmonic = { path = "crates/qtss-harmonic" }
 qtss-notify = { path = "crates/qtss-notify" }
 qtss-domain = { path = "crates/qtss-domain" }
 qtss-storage = { path = "crates/qtss-storage" }
