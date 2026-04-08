@@ -8,6 +8,7 @@ members = [
     "crates/qtss-secrets",
     "crates/qtss-auth",
     "crates/qtss-scheduler",
+    "crates/qtss-pivots",
     "crates/qtss-notify",
     "crates/qtss-domain",
     "crates/qtss-storage",
@@ -62,6 +63,7 @@ qtss-audit = { path = "crates/qtss-audit" }
 qtss-secrets = { path = "crates/qtss-secrets" }
 qtss-auth = { path = "crates/qtss-auth" }
 qtss-scheduler = { path = "crates/qtss-scheduler" }
+qtss-pivots = { path = "crates/qtss-pivots" }
 qtss-notify = { path = "crates/qtss-notify" }
 qtss-domain = { path = "crates/qtss-domain" }
 qtss-storage = { path = "crates/qtss-storage" }
