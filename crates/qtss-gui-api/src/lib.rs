@@ -19,6 +19,7 @@
 //!   than engine types — e.g. the dashboard does not need every
 //!   field on `Position`, only what the cards render.
 
+pub mod ai_decisions;
 pub mod blotter;
 pub mod chart;
 pub mod config_editor;
@@ -34,6 +35,9 @@ pub use dashboard::{
 };
 pub use chart::{
     build_renko, CandleBar, ChartWorkspace, DetectionOverlay, OpenOrderOverlay, RenkoBrick,
+};
+pub use ai_decisions::{
+    payload_preview, AiDecisionEntry, AiDecisionStatus, AiDecisionsView, PAYLOAD_PREVIEW_MAX_LEN,
 };
 pub use blotter::{merge_blotter, BlotterEntry, BlotterFeed};
 pub use config_editor::{group_config_entries, ConfigEditorView, ConfigEntry, ConfigGroup};

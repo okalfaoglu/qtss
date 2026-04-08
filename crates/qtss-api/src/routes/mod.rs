@@ -26,6 +26,7 @@ mod session;
 mod system_config_admin;
 mod telegram_setup_analysis;
 mod user_permissions_admin;
+mod v2_ai_decisions;
 mod v2_blotter;
 mod v2_chart;
 mod v2_config;
@@ -36,6 +37,7 @@ mod v2_risk;
 mod v2_scenarios;
 mod v2_strategies;
 
+pub use v2_ai_decisions::v2_ai_decisions_router;
 pub use v2_blotter::v2_blotter_router;
 pub use v2_chart::v2_chart_router;
 pub use v2_config::v2_config_router;
@@ -94,6 +96,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_blotter_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_strategies_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_config_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_ai_decisions_router().layer(from_fn(require_dashboard_roles)))
         .merge(dashboard_admin_router().layer(from_fn(require_admin)))
         .merge(kill_switch_admin::kill_switch_admin_router().layer(from_fn(require_admin)))
         .merge(catalog_sync_router().layer(from_fn(require_ops_roles)))
