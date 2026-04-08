@@ -30,6 +30,7 @@ pub mod regime;
 pub mod risk;
 pub mod scenarios;
 pub mod strategy_manager;
+pub mod users;
 
 pub use dashboard::{
     DashboardSnapshot, EquityPoint, OpenPositionView, PortfolioCard, RiskCard,
@@ -50,3 +51,4 @@ pub use scenarios::{build_volatility_tree, ScenarioNode, ScenarioTree, TargetBan
 pub use strategy_manager::{
     StrategyCard, StrategyManagerView, StrategyParam, StrategyStatus,
 };
+pub use users::{UserCard, UsersView};

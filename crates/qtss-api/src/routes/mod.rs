@@ -37,6 +37,7 @@ mod v2_regime;
 mod v2_risk;
 mod v2_scenarios;
 mod v2_strategies;
+mod v2_users;
 
 pub use v2_ai_decisions::v2_ai_decisions_router;
 pub use v2_audit::v2_audit_router;
@@ -49,6 +50,7 @@ pub use v2_regime::v2_regime_router;
 pub use v2_risk::v2_risk_router;
 pub use v2_scenarios::v2_scenarios_router;
 pub use v2_strategies::{default_seed_card, v2_strategies_router, V2StrategyRegistry};
+pub use v2_users::v2_users_router;
 
 use axum::middleware::from_fn;
 use axum::middleware::from_fn_with_state;
@@ -100,6 +102,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_config_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_ai_decisions_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_audit_router().layer(from_fn(require_audit_read)))
+        .merge(v2_users_router().layer(from_fn(require_admin)))
         .merge(dashboard_admin_router().layer(from_fn(require_admin)))
         .merge(kill_switch_admin::kill_switch_admin_router().layer(from_fn(require_admin)))
         .merge(catalog_sync_router().layer(from_fn(require_ops_roles)))
