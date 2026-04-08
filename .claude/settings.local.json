@@ -20,7 +20,15 @@
       "Read(///wsl.localhost/Ubuntu//**)",
       "WebFetch(domain:docs.nansen.ai)",
       "WebFetch(domain:app.nansen.ai)",
-      "Bash(git -C / rev-parse --show-toplevel)"
+      "Bash(git -C / rev-parse --show-toplevel)",
+      "Read(//mnt/c/Users/oguzk/.claude/**)",
+      "Read(//mnt/wsl.localhost/Ubuntu/app/**)",
+      "Bash(xargs ls:*)",
+      "Bash(python3 -c \"import re,sys; t=open\\(r'/mnt/c/Users/oguzk/Downloads/qtss_v2_architecture.html',encoding='utf-8'\\).read\\(\\); t=re.sub\\(r'<script[^>]*>.*?</script>','',t,flags=re.S\\); t=re.sub\\(r'<style[^>]*>.*?</style>','',t,flags=re.S\\); t=re.sub\\(r'<[^>]+>',' ',t\\); t=re.sub\\(r'\\\\s+',' ',t\\); print\\(t[:8000]\\)\")",
+      "Bash(wsl python3:*)",
+      "Read(//mnt/c/wsl.localhost/Ubuntu/app/qtss/**)",
+      "Read(//wsl.localhost/Ubuntu/app/qtss/**)",
+      "Bash(wsl ls:*)"
     ]
   }
 }
