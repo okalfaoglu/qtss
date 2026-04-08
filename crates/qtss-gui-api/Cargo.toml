@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 serde.workspace = true
+serde_json.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 rust_decimal = { version = "1.36", features = ["serde"] }
@@ -14,5 +15,4 @@ qtss-portfolio.workspace = true
 qtss-risk.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 rust_decimal_macros.workspace = true

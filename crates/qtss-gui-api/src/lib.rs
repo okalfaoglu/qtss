@@ -21,6 +21,7 @@
 
 pub mod blotter;
 pub mod chart;
+pub mod config_editor;
 pub mod dashboard;
 pub mod montecarlo;
 pub mod regime;
@@ -35,6 +36,7 @@ pub use chart::{
     build_renko, CandleBar, ChartWorkspace, DetectionOverlay, OpenOrderOverlay, RenkoBrick,
 };
 pub use blotter::{merge_blotter, BlotterEntry, BlotterFeed};
+pub use config_editor::{group_config_entries, ConfigEditorView, ConfigEntry, ConfigGroup};
 pub use montecarlo::{build_montecarlo_fan, FanBand, MonteCarloFan};
 pub use regime::{RegimeHud, RegimePoint, RegimeView};
 pub use risk::{build_risk_hud, RiskGauge, RiskHud};
