@@ -14,6 +14,7 @@ members = [
     "crates/qtss-harmonic",
     "crates/qtss-classical",
     "crates/qtss-wyckoff",
+    "crates/qtss-validator",
     "crates/qtss-notify",
     "crates/qtss-domain",
     "crates/qtss-storage",
@@ -74,6 +75,7 @@ qtss-elliott = { path = "crates/qtss-elliott" }
 qtss-harmonic = { path = "crates/qtss-harmonic" }
 qtss-classical = { path = "crates/qtss-classical" }
 qtss-wyckoff = { path = "crates/qtss-wyckoff" }
+qtss-validator = { path = "crates/qtss-validator" }
 qtss-notify = { path = "crates/qtss-notify" }
 qtss-domain = { path = "crates/qtss-domain" }
 qtss-storage = { path = "crates/qtss-storage" }

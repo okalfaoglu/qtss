@@ -92,6 +92,29 @@ pub struct Detection {
     pub raw_meta: serde_json::Value,
 }
 
+/// Output of `qtss-validator`. Wraps a `Detection` with the validator's
+/// channel breakdown and the final blended confidence in `0..1`. Strategies
+/// consume this — never the raw `Detection` — so confidence is the only
+/// number a strategy needs to gate on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ValidatedDetection {
+    pub detection: Detection,
+    /// Per-channel scores produced by each confirmation channel that had
+    /// an opinion. Channels that returned `None` are simply absent.
+    pub channel_scores: Vec<ChannelScore>,
+    /// Final blended confidence in `0..1`. Already includes the
+    /// detector's `structural_score`.
+    pub confidence: f32,
+    pub validated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChannelScore {
+    pub channel: String,
+    pub score: f32,
+    pub weight: f32,
+}
+
 impl Detection {
     /// Helper used by detector implementations.
     pub fn new(
