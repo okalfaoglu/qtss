@@ -23,7 +23,7 @@ cd "$ROOT"
 
 SUDO="${SUDO:-sudo}"
 REMOTE="${GIT_REMOTE:-origin}"
-UNITS="${QTSS_SYSTEMD_UNITS:-qtss-api qtss-worker qtss-web}"
+UNITS="${QTSS_SYSTEMD_UNITS:-qtss-api qtss-worker qtss-web qtss-web-v2}"
 # unset → api+worker; CARGO_PACKAGES="" → entire workspace; else use verbatim
 if [[ -z "${CARGO_PACKAGES+x}" ]]; then
   CARGO_PKGS="-p qtss-api -p qtss-worker"
@@ -74,17 +74,23 @@ else
   log "==> cargo: skipped (SKIP_RUST=1)"
 fi
 
-if [[ "${SKIP_WEB:-0}" != "1" ]]; then
-  if [[ ! -d web ]]; then
-    log "==> web/: directory missing, skip"
-  else
-    log "==> web: npm build"
-    if [[ -f web/package-lock.json ]]; then
-      (cd web && npm ci && npm run build)
-    else
-      (cd web && npm install && npm run build)
-    fi
+build_web_dir() {
+  local dir="$1"
+  if [[ ! -d "$dir" ]]; then
+    log "==> ${dir}/: directory missing, skip"
+    return
   fi
+  log "==> ${dir}: npm build"
+  if [[ -f "${dir}/package-lock.json" ]]; then
+    (cd "$dir" && npm ci && npm run build)
+  else
+    (cd "$dir" && npm install && npm run build)
+  fi
+}
+
+if [[ "${SKIP_WEB:-0}" != "1" ]]; then
+  build_web_dir web
+  build_web_dir web-v2
 else
   log "==> web: skipped (SKIP_WEB=1)"
 fi

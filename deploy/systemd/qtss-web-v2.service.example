@@ -1,0 +1,20 @@
+[Unit]
+Description=QTSS web v2 UI (Vite preview — Faz 8.0+ frontend, runs alongside qtss-web v1)
+After=network-online.target
+Wants=network-online.target
+# Optional ordering when API runs as systemd too:
+# After=qtss-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=/app/qtss/web-v2
+Environment=NODE_ENV=production
+# Same shared DB as v1 — system_config drives both v1 and v2 frontends.
+Environment=DATABASE_URL=postgres://qtss:CHANGEME@127.0.0.1:5432/qtss
+# Optional: VITE_API_BASE / QTSS_API_PROXY_TARGET if proxying through reverse proxy.
+ExecStart=/usr/bin/npm run preview:bind
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

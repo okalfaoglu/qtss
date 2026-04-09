@@ -10,6 +10,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
+    "preview:bind": "vite preview --host 0.0.0.0 --port 4174",
     "typecheck": "tsc -b --noEmit"
   },
   "dependencies": {

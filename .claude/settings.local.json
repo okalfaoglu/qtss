@@ -176,7 +176,9 @@
       "Bash(mount)",
       "Read(///wsl.localhost/Ubuntu/app/qtss/crates/qtss-elliott/**)",
       "Bash(git -C /app/qtss rev-parse --show-toplevel)",
-      "Read(///wsl.localhost/Ubuntu/app/qtss/web/src/locales/**)"
+      "Read(///wsl.localhost/Ubuntu/app/qtss/web/src/locales/**)",
+      "Bash(find /app/qtss/crates -name \"Cargo.toml\" -exec grep -l \"\\\\[\\\\[bin\\\\]\\\\]\" {} \\\\;)",
+      "Bash(find crates:*)"
     ]
   }
 }
