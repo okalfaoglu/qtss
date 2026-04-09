@@ -18,6 +18,9 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   if (token) {
     headers.set("authorization", `Bearer ${token}`);
   }
+  if (init.body && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
   if (res.status === 401) {
     // Token expired or revoked — clear it so the router bounces to /login.
