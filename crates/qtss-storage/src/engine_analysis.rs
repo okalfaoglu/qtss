@@ -397,6 +397,16 @@ pub async fn update_engine_symbol_patch(
     Ok(res.rows_affected())
 }
 
+/// Manuel kayıt yönetimi: bir engine_symbols satırını sil. CASCADE FK'ler
+/// ingestion_state, analysis_snapshots vb. bağımlıları temizler.
+pub async fn delete_engine_symbol(pool: &PgPool, id: Uuid) -> Result<u64, StorageError> {
+    let res = sqlx::query(r#"DELETE FROM engine_symbols WHERE id = $1"#)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
+}
+
 pub async fn list_analysis_snapshots_with_symbols(
     pool: &PgPool,
 ) -> Result<Vec<AnalysisSnapshotJoinedRow>, StorageError> {

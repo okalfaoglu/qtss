@@ -609,6 +609,37 @@ async fn process_symbol(
     };
     let tree = pivot_engine.snapshot();
 
+    // Live-revision pre-pass: invalidate any open `forming` row whose
+    // invalidation_price has been breached by the most recent close.
+    // This catches the case where the detector simply *stops* emitting
+    // a wave (because it broke) — without this sweep the old forming
+    // overlay would linger until something else supersedes it. See
+    // post-Faz 8.0 backlog item #2.
+    if let Some(last_bar) = bars.last() {
+        let last_close = last_bar.close;
+        match repo
+            .list_forming_for_symbol(&sym.exchange, &sym.symbol, &sym.interval)
+            .await
+        {
+            Ok(open_rows) => {
+                for (id, family, subkind, invalidation_price) in open_rows {
+                    if let Some(dir) = infer_direction(&family, &subkind) {
+                        let breached = match dir {
+                            Direction::Long => last_close < invalidation_price,
+                            Direction::Short => last_close > invalidation_price,
+                        };
+                        if breached {
+                            if let Err(e) = repo.update_state(id, "invalidated").await {
+                                warn!(%id, %e, "price-breach invalidate failed");
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => warn!(symbol = %sym.symbol, %e, "list_forming_for_symbol failed"),
+        }
+    }
+
     for runner in runners {
         // Each runner can now emit 0..N detections per pass — Elliott
         // is the first family that takes advantage of this (impulse,
@@ -741,8 +772,27 @@ async fn process_symbol(
             raw_meta,
             mode,
         };
+        let inserted_id = new_row.id;
         repo.insert(new_row).await?;
         stats.inserted += 1;
+
+        // Live revision: retire any older `forming` row for the same
+        // (symbol, tf, family, subkind). Each new bar tick produces a
+        // fresh detection that should *replace* the previous overlay,
+        // not stack on top of it. See post-Faz 8.0 backlog item #2.
+        if let Err(e) = repo
+            .supersede_previous_forming(
+                &sym.exchange,
+                &sym.symbol,
+                &sym.interval,
+                family,
+                subkind,
+                inserted_id,
+            )
+            .await
+        {
+            warn!(symbol = %sym.symbol, family, subkind, %e, "supersede_previous_forming failed");
+        }
         }
     }
 
@@ -859,6 +909,48 @@ fn parse_asset_class(exchange: &str, segment: &str) -> AssetClass {
         ("nyse", _) => AssetClass::EquityNyse,
         _ => AssetClass::CryptoSpot,
     }
+}
+
+/// Direction inferred from a detection's `family + subkind` so the
+/// price-breach sweep knows which side of `invalidation_price` is the
+/// "fail" side. Each family encodes direction differently — the table
+/// below is the single source of truth (CLAUDE.md #1: lookup over
+/// scattered if/else).
+#[derive(Debug, Clone, Copy)]
+enum Direction {
+    Long,
+    Short,
+}
+
+fn infer_direction(_family: &str, subkind: &str) -> Option<Direction> {
+    let s = subkind.to_ascii_lowercase();
+    // Long-biased markers across all families.
+    const LONG_MARKERS: &[&str] = &[
+        "bull", "long", "bottom", "spring", "accumulation",
+        "ascending", "inverse_head", "cup_handle",
+    ];
+    // Short-biased markers.
+    const SHORT_MARKERS: &[&str] = &[
+        "bear", "short", "top", "upthrust", "distribution",
+        "descending", "head_shoulders", "head_and_shoulders",
+    ];
+    // SHORT must be checked first because "head_shoulders" is short
+    // while "inverse_head_shoulders" (long) also contains "head_shoulders".
+    // The inverse case is caught by LONG_MARKERS via "inverse_head".
+    if s.contains("inverse_head") || s.contains("inv_head") {
+        return Some(Direction::Long);
+    }
+    for m in SHORT_MARKERS {
+        if s.contains(m) {
+            return Some(Direction::Short);
+        }
+    }
+    for m in LONG_MARKERS {
+        if s.contains(m) {
+            return Some(Direction::Long);
+        }
+    }
+    None
 }
 
 fn split_pattern_kind(kind: &PatternKind) -> (&'static str, &str) {

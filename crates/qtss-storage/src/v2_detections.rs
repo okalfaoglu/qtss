@@ -162,6 +162,13 @@ impl V2DetectionRepository {
 
     /// Chart overlay read path: latest N detections for one
     /// (exchange, symbol, timeframe).
+    ///
+    /// DISTINCT ON (family, subkind) collapses the Forming → Confirmed
+    /// lifecycle of the same wave into a *single* row (the most recent
+    /// state). Without it the chart renders both overlays and the user
+    /// cannot tell which forecast is live — see post-Faz 8.0 backlog
+    /// item #2. Invalidated rows are filtered out so stale forecasts
+    /// don't linger on the chart.
     pub async fn list_for_chart(
         &self,
         exchange: &str,
@@ -170,16 +177,21 @@ impl V2DetectionRepository {
         limit: i64,
     ) -> Result<Vec<DetectionRow>, StorageError> {
         let rows = sqlx::query_as::<_, DetectionRow>(
-            r#"SELECT id, detected_at, exchange, symbol, timeframe,
-                      family, subkind, state, structural_score, confidence,
-                      invalidation_price, anchors, regime, channel_scores,
-                      raw_meta, validated_at, mode, created_at, updated_at
-                 FROM qtss_v2_detections
-                WHERE exchange = $1
-                  AND symbol   = $2
-                  AND timeframe = $3
-                ORDER BY detected_at DESC
-                LIMIT $4"#,
+            r#"SELECT * FROM (
+                  SELECT DISTINCT ON (family, subkind)
+                         id, detected_at, exchange, symbol, timeframe,
+                         family, subkind, state, structural_score, confidence,
+                         invalidation_price, anchors, regime, channel_scores,
+                         raw_meta, validated_at, mode, created_at, updated_at
+                    FROM qtss_v2_detections
+                   WHERE exchange = $1
+                     AND symbol   = $2
+                     AND timeframe = $3
+                     AND state <> 'invalidated'
+                   ORDER BY family, subkind, detected_at DESC
+               ) latest
+               ORDER BY detected_at DESC
+               LIMIT $4"#,
         )
         .bind(exchange)
         .bind(symbol)
@@ -293,6 +305,71 @@ impl V2DetectionRepository {
                    AND detected_at < now() - make_interval(secs => $1)"#,
         )
         .bind(older_than_secs as f64)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
+    /// Price-breach sweep — minimal projection of `(id, family,
+    /// subkind, invalidation_price)` for every `forming` row of one
+    /// (exchange, symbol, timeframe). The orchestrator iterates this in
+    /// Rust to classify direction and compare against the latest close,
+    /// then calls [`Self::update_state`] for each breached row. Kept as
+    /// a thin SELECT (no JOINs) so the per-symbol pre-pass is cheap.
+    pub async fn list_forming_for_symbol(
+        &self,
+        exchange: &str,
+        symbol: &str,
+        timeframe: &str,
+    ) -> Result<Vec<(Uuid, String, String, Decimal)>, StorageError> {
+        let rows = sqlx::query_as::<_, (Uuid, String, String, Decimal)>(
+            r#"SELECT id, family, subkind, invalidation_price
+                 FROM qtss_v2_detections
+                WHERE exchange = $1
+                  AND symbol   = $2
+                  AND timeframe = $3
+                  AND state    = 'forming'"#,
+        )
+        .bind(exchange)
+        .bind(symbol)
+        .bind(timeframe)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Live revision: when a fresh detection lands for the same
+    /// (exchange, symbol, timeframe, family, subkind), retire all the
+    /// older `forming` rows for that key by flipping them to
+    /// `invalidated`. Without this the chart sees stacked overlays of
+    /// the *same* wave at different lifecycle moments — see post-Faz
+    /// 8.0 backlog item #2.
+    pub async fn supersede_previous_forming(
+        &self,
+        exchange: &str,
+        symbol: &str,
+        timeframe: &str,
+        family: &str,
+        subkind: &str,
+        keep_id: Uuid,
+    ) -> Result<u64, StorageError> {
+        let res = sqlx::query(
+            r#"UPDATE qtss_v2_detections
+                   SET state = 'invalidated'
+                 WHERE exchange = $1
+                   AND symbol   = $2
+                   AND timeframe = $3
+                   AND family   = $4
+                   AND subkind  = $5
+                   AND state    = 'forming'
+                   AND id       <> $6"#,
+        )
+        .bind(exchange)
+        .bind(symbol)
+        .bind(timeframe)
+        .bind(family)
+        .bind(subkind)
+        .bind(keep_id)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected())

@@ -18,6 +18,7 @@ import { Config } from "./pages/Config";
 import { AiDecisions } from "./pages/AiDecisions";
 import { Audit } from "./pages/Audit";
 import { Users } from "./pages/Users";
+import { EngineSymbols } from "./pages/EngineSymbols";
 
 // Guard: bounce to /login when there is no token in storage. We deliberately
 // keep this check synchronous (localStorage) so the first paint never flashes
@@ -55,6 +56,7 @@ export const router = createBrowserRouter([
       { path: "ai-decisions", element: <AiDecisions /> },
       { path: "audit", element: <Audit /> },
       { path: "users", element: <Users /> },
+      { path: "engine-symbols", element: <EngineSymbols /> },
     ],
   },
   { path: "/", element: <Navigate to="/v2/dashboard" replace /> },

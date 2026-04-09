@@ -240,12 +240,16 @@ async fn handle_event(
 pub async fn v2_setup_telegram_loop(pool: PgPool) {
     info!("v2_setup_telegram_loop: draining qtss_v2_setup_events → Telegram");
     loop {
+        // Default true: Setup Engine'in tek anlamı Telegram dağıtımı,
+        // false default'u Faz 8.0 sonrası prod'da outbox dolmasına neden
+        // oldu (3 pending event, 2026-04-10). Operator yine de
+        // system_config'ten kapatabilir; default opt-out tek tıklık.
         let enabled = resolve_worker_enabled_flag(
             &pool,
             "setup.notify.telegram",
             "enabled",
             "QTSS_SETUP_NOTIFY_TG_ENABLED",
-            false,
+            true,
         )
         .await;
         if !enabled {

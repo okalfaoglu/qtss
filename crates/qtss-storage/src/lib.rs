@@ -80,7 +80,7 @@ pub use data_snapshots::{
     DataSnapshotRow,
 };
 pub use engine_analysis::{
-    count_engine_symbols_by_lifecycle, fetch_analysis_snapshot_payload,
+    count_engine_symbols_by_lifecycle, delete_engine_symbol, fetch_analysis_snapshot_payload,
     fetch_engine_symbol_by_id, fetch_engine_symbol_by_series, fetch_sibling_tbm_snapshots,
     has_analysis_snapshots, has_applied_tactical_for_symbol, insert_engine_symbol,
     insert_range_signal_event, lifecycle_state_summary, list_analysis_snapshots_with_symbols,
