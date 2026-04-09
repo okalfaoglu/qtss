@@ -124,6 +124,42 @@ export interface MonteCarloFan {
   bands: FanBand[];
 }
 
+export type RegimeKind =
+  | "trending_up"
+  | "trending_down"
+  | "ranging"
+  | "squeeze"
+  | "volatile"
+  | "uncertain";
+
+export type TrendStrength = "none" | "weak" | "moderate" | "strong" | "very_strong";
+
+export interface RegimeView {
+  at: string;
+  kind: RegimeKind;
+  trend_strength: TrendStrength;
+  adx: string;
+  bb_width: string;
+  atr_pct: string;
+  choppiness: string;
+  confidence: number;
+}
+
+export interface RegimePoint {
+  at: string;
+  kind: RegimeKind;
+  confidence: number;
+}
+
+export interface RegimeHud {
+  generated_at: string;
+  venue: string;
+  symbol: string;
+  timeframe: string;
+  current: RegimeView | null;
+  history: RegimePoint[];
+}
+
 export interface DashboardSnapshot {
   portfolio: PortfolioCard;
   risk: RiskCard;
