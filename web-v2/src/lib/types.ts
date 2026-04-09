@@ -108,6 +108,22 @@ export interface StrategyManagerView {
   strategies: StrategyCard[];
 }
 
+export interface FanBand {
+  percentile: number;
+  values: string[];
+}
+
+export interface MonteCarloFan {
+  generated_at: string;
+  venue: string;
+  symbol: string;
+  timeframe: string;
+  horizon_bars: number;
+  paths_simulated: number;
+  anchor_price: string;
+  bands: FanBand[];
+}
+
 export interface DashboardSnapshot {
   portfolio: PortfolioCard;
   risk: RiskCard;
