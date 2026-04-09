@@ -231,6 +231,27 @@ export interface ScenarioTree {
   root: ScenarioNode;
 }
 
+export interface ConfigEntry {
+  module: string;
+  config_key: string;
+  value: unknown;
+  schema_version: number;
+  description: string | null;
+  is_secret: boolean;
+  masked: boolean;
+  updated_at: string;
+}
+
+export interface ConfigGroup {
+  module: string;
+  entries: ConfigEntry[];
+}
+
+export interface ConfigEditorView {
+  generated_at: string;
+  groups: ConfigGroup[];
+}
+
 export interface DashboardSnapshot {
   portfolio: PortfolioCard;
   risk: RiskCard;
