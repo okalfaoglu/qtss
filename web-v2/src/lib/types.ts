@@ -160,6 +160,53 @@ export interface RegimeHud {
   history: RegimePoint[];
 }
 
+export interface CandleBar {
+  open_time: string;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+}
+
+export interface RenkoBrick {
+  at: string;
+  open: string;
+  close: string;
+  direction: number;
+}
+
+export interface DetectionOverlay {
+  id: string;
+  kind: string;
+  label: string;
+  anchor_time: string;
+  anchor_price: string;
+  confidence: string;
+}
+
+export interface OpenOrderOverlay {
+  id: string;
+  side: string;
+  kind: string;
+  price: string | null;
+  stop_price: string | null;
+  quantity: string;
+  status: string;
+}
+
+export interface ChartWorkspace {
+  generated_at: string;
+  venue: string;
+  symbol: string;
+  timeframe: string;
+  candles: CandleBar[];
+  renko: RenkoBrick[];
+  detections: DetectionOverlay[];
+  positions: OpenPositionView[];
+  open_orders: OpenOrderOverlay[];
+}
+
 export interface DashboardSnapshot {
   portfolio: PortfolioCard;
   risk: RiskCard;
