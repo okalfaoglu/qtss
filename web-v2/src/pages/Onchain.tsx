@@ -54,7 +54,6 @@ function CategoryBar({ label, value }: { label: string; value: number | null }) 
     );
   }
   const v = Math.max(-1, Math.min(1, value));
-  const pct = ((v + 1) * 50).toFixed(0);
   return (
     <div className="space-y-1">
       <div className="flex items-baseline justify-between text-[11px]">
