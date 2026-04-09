@@ -252,6 +252,24 @@ export interface ConfigEditorView {
   groups: ConfigGroup[];
 }
 
+export type AiDecisionStatus = "pending" | "approved" | "rejected" | "other";
+
+export interface AiDecisionEntry {
+  id: string;
+  kind: string;
+  status: AiDecisionStatus;
+  model_hint: string | null;
+  payload_preview: string;
+  admin_note: string | null;
+  created_at: string;
+  decided_at: string | null;
+}
+
+export interface AiDecisionsView {
+  generated_at: string;
+  entries: AiDecisionEntry[];
+}
+
 export interface DashboardSnapshot {
   portfolio: PortfolioCard;
   risk: RiskCard;
