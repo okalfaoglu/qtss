@@ -319,6 +319,51 @@ export interface UsersView {
   users: UserCard[];
 }
 
+// Faz 8.0 — Setup Engine feed (mirrors crates/qtss-api/src/routes/v2_setups.rs).
+export interface SetupEntry {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  venue_class: string;
+  exchange: string;
+  symbol: string;
+  timeframe: string;
+  profile: string;
+  alt_type: string | null;
+  state: string;
+  direction: string;
+  entry_price: number | null;
+  entry_sl: number | null;
+  koruma: number | null;
+  target_ref: number | null;
+  risk_pct: number | null;
+  close_reason: string | null;
+  close_price: number | null;
+  closed_at: string | null;
+  confluence_id: string | null;
+  raw_meta: unknown;
+}
+
+export interface SetupFeed {
+  generated_at: string;
+  entries: SetupEntry[];
+}
+
+export interface SetupEventEntry {
+  id: string;
+  created_at: string;
+  event_type: string;
+  payload: unknown;
+  delivery_state: string;
+  delivered_at: string | null;
+  retries: number;
+}
+
+export interface SetupEventsResponse {
+  setup_id: string;
+  events: SetupEventEntry[];
+}
+
 export interface DashboardSnapshot {
   portfolio: PortfolioCard;
   risk: RiskCard;

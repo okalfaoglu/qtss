@@ -6,7 +6,7 @@ import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { Risk } from "./pages/Risk";
 import { Blotter } from "./pages/Blotter";
-import { Strategies } from "./pages/Strategies";
+import { Setups } from "./pages/Setups";
 import { MonteCarlo } from "./pages/MonteCarlo";
 import { Regime } from "./pages/Regime";
 import { Chart } from "./pages/Chart";
@@ -43,7 +43,7 @@ export const router = createBrowserRouter([
       { path: "dashboard", element: <Dashboard /> },
       { path: "risk", element: <Risk /> },
       { path: "blotter", element: <Blotter /> },
-      { path: "strategies", element: <Strategies /> },
+      { path: "setups", element: <Setups /> },
       { path: "montecarlo", element: <MonteCarlo /> },
       { path: "regime", element: <Regime /> },
       { path: "chart", element: <Chart /> },
