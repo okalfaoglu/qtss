@@ -6,6 +6,7 @@ import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { Risk } from "./pages/Risk";
 import { Blotter } from "./pages/Blotter";
+import { Strategies } from "./pages/Strategies";
 
 // Guard: bounce to /login when there is no token in storage. We deliberately
 // keep this check synchronous (localStorage) so the first paint never flashes
@@ -31,6 +32,7 @@ export const router = createBrowserRouter([
       { path: "dashboard", element: <Dashboard /> },
       { path: "risk", element: <Risk /> },
       { path: "blotter", element: <Blotter /> },
+      { path: "strategies", element: <Strategies /> },
     ],
   },
   { path: "/", element: <Navigate to="/v2/dashboard" replace /> },

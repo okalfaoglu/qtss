@@ -83,6 +83,31 @@ export interface BlotterFeed {
   entries: BlotterEntry[];
 }
 
+export type StrategyStatus = "active" | "paused" | "disabled";
+
+export type StrategyParam =
+  | { kind: "number"; key: string; value: number }
+  | { kind: "integer"; key: string; value: number }
+  | { kind: "bool"; key: string; value: boolean }
+  | { kind: "text"; key: string; value: string };
+
+export interface StrategyCard {
+  id: string;
+  label: string;
+  evaluator: string;
+  status: StrategyStatus;
+  params: StrategyParam[];
+  signals_seen: number;
+  intents_emitted: number;
+  last_signal_at: string | null;
+  last_intent_at: string | null;
+}
+
+export interface StrategyManagerView {
+  generated_at: string;
+  strategies: StrategyCard[];
+}
+
 export interface DashboardSnapshot {
   portfolio: PortfolioCard;
   risk: RiskCard;
