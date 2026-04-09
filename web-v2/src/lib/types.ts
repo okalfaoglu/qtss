@@ -50,6 +50,39 @@ export interface RiskHud {
   gauges: RiskGauge[];
 }
 
+export type BlotterEntry =
+  | {
+      kind: "order";
+      at: string;
+      venue: string;
+      segment: string;
+      symbol: string;
+      side: string;
+      order_type: string;
+      quantity: string | null;
+      price: string | null;
+      status: string;
+      venue_order_id: number | null;
+    }
+  | {
+      kind: "fill";
+      at: string;
+      venue: string;
+      segment: string;
+      symbol: string;
+      venue_order_id: number;
+      venue_trade_id: number | null;
+      price: string | null;
+      quantity: string | null;
+      fee: string | null;
+      fee_asset: string | null;
+    };
+
+export interface BlotterFeed {
+  generated_at: string;
+  entries: BlotterEntry[];
+}
+
 export interface DashboardSnapshot {
   portfolio: PortfolioCard;
   risk: RiskCard;

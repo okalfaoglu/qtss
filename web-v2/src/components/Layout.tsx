@@ -19,7 +19,7 @@ const NAV_ENTRIES: NavEntry[] = [
   { label: "Scenarios", to: "/v2/scenarios", enabled: false },
   { label: "Monte Carlo", to: "/v2/montecarlo", enabled: false },
   { label: "Risk", to: "/v2/risk", enabled: true },
-  { label: "Blotter", to: "/v2/blotter", enabled: false },
+  { label: "Blotter", to: "/v2/blotter", enabled: true },
   { label: "Strategies", to: "/v2/strategies", enabled: false },
   { label: "Config", to: "/v2/config", enabled: false },
   { label: "AI Decisions", to: "/v2/ai-decisions", enabled: false },
