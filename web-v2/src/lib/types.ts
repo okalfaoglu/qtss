@@ -270,6 +270,25 @@ export interface AiDecisionsView {
   entries: AiDecisionEntry[];
 }
 
+export interface AuditEntry {
+  id: string;
+  at: string;
+  request_id: string | null;
+  user_id: string | null;
+  org_id: string | null;
+  method: string;
+  path: string;
+  status_code: number;
+  roles: string[];
+  kind: string | null;
+  details_preview: string | null;
+}
+
+export interface AuditView {
+  generated_at: string;
+  entries: AuditEntry[];
+}
+
 export interface DashboardSnapshot {
   portfolio: PortfolioCard;
   risk: RiskCard;

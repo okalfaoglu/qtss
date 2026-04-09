@@ -13,6 +13,7 @@ import { Chart } from "./pages/Chart";
 import { Scenarios } from "./pages/Scenarios";
 import { Config } from "./pages/Config";
 import { AiDecisions } from "./pages/AiDecisions";
+import { Audit } from "./pages/Audit";
 
 // Guard: bounce to /login when there is no token in storage. We deliberately
 // keep this check synchronous (localStorage) so the first paint never flashes
@@ -45,6 +46,7 @@ export const router = createBrowserRouter([
       { path: "scenarios", element: <Scenarios /> },
       { path: "config", element: <Config /> },
       { path: "ai-decisions", element: <AiDecisions /> },
+      { path: "audit", element: <Audit /> },
     ],
   },
   { path: "/", element: <Navigate to="/v2/dashboard" replace /> },
