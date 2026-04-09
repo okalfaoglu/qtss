@@ -117,6 +117,39 @@ pub async fn list_recent_bars(
     Ok(rows)
 }
 
+/// Like `list_recent_bars` but returns bars with `open_time < before`.
+/// Used by the chart pan-left flow: the frontend passes the oldest
+/// timestamp it currently has and asks for the next page going back.
+pub async fn list_recent_bars_before(
+    pool: &PgPool,
+    exchange: &str,
+    segment: &str,
+    symbol: &str,
+    interval: &str,
+    before: DateTime<Utc>,
+    limit: i64,
+) -> Result<Vec<MarketBarRow>, StorageError> {
+    let rows = sqlx::query_as::<_, MarketBarRow>(
+        r#"SELECT id, exchange, segment, symbol, interval, open_time,
+                  open, high, low, close, volume, quote_volume, trade_count,
+                  instrument_id, bar_interval_id, created_at, updated_at
+           FROM market_bars
+           WHERE exchange = $1 AND segment = $2 AND symbol = $3 AND interval = $4
+             AND open_time < $5
+           ORDER BY open_time DESC
+           LIMIT $6"#,
+    )
+    .bind(exchange)
+    .bind(segment)
+    .bind(symbol)
+    .bind(interval)
+    .bind(before)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn list_bars_in_range(
     pool: &PgPool,
     exchange: &str,

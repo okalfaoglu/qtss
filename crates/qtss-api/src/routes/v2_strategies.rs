@@ -12,10 +12,11 @@
 
 use std::sync::Arc;
 
-use axum::extract::State;
-use axum::routing::get;
+use axum::extract::{Path, State};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use tokio::sync::RwLock;
 
 use qtss_gui_api::{
@@ -117,9 +118,30 @@ pub fn v2_strategies_router() -> Router<SharedState> {
     Router::new().route("/v2/strategies", get(get_strategies))
 }
 
+pub fn v2_strategies_admin_router() -> Router<SharedState> {
+    Router::new().route("/v2/strategies/{id}/status", post(set_strategy_status))
+}
+
 async fn get_strategies(
     State(st): State<SharedState>,
 ) -> Result<Json<StrategyManagerView>, ApiError> {
+    Ok(Json(st.v2_strategies.snapshot().await))
+}
+
+#[derive(Deserialize)]
+pub struct StrategyStatusBody {
+    pub status: StrategyStatus,
+}
+
+async fn set_strategy_status(
+    State(st): State<SharedState>,
+    Path(id): Path<String>,
+    Json(body): Json<StrategyStatusBody>,
+) -> Result<Json<StrategyManagerView>, ApiError> {
+    let updated = st.v2_strategies.set_status(&id, body.status).await;
+    if !updated {
+        return Err(ApiError::not_found(format!("strategy {id} not found")));
+    }
     Ok(Json(st.v2_strategies.snapshot().await))
 }
 

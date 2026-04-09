@@ -90,6 +90,20 @@ pub struct Detection {
     pub detected_at: DateTime<Utc>,
     /// Detector-specific extras (Fib ratios used, swing IDs, etc.).
     pub raw_meta: serde_json::Value,
+    /// Forward-looking anchors the detector projects after the realized
+    /// formation. For an Elliott impulse-in-progress this is the
+    /// projected wave 4/5 path; for a completed structure it's the
+    /// expected corrective leg. Empty when the detector has no
+    /// projection (default-on-deserialize keeps existing JSON valid).
+    #[serde(default)]
+    pub projected_anchors: Vec<PivotRef>,
+    /// Sub-wave decomposition: one inner vec per realized wave segment,
+    /// holding the lower-degree pivots that fall *inside* that wave.
+    /// Always either empty (decomposition not available) or has length
+    /// `realized.len() - 1` so the chart can pair each sub-list with the
+    /// matching higher-degree segment.
+    #[serde(default)]
+    pub sub_wave_anchors: Vec<Vec<PivotRef>>,
 }
 
 /// Output of `qtss-validator`. Wraps a `Detection` with the validator's
@@ -139,7 +153,24 @@ impl Detection {
             regime_at_detection: regime,
             detected_at: Utc::now(),
             raw_meta: serde_json::Value::Null,
+            projected_anchors: Vec::new(),
+            sub_wave_anchors: Vec::new(),
         }
+    }
+
+    /// Builder-style helper for detectors that compute a forward
+    /// projection. Returns `self` so callers can chain `Detection::new(..)
+    /// .with_projection(..)`.
+    pub fn with_projection(mut self, projected: Vec<PivotRef>) -> Self {
+        self.projected_anchors = projected;
+        self
+    }
+
+    /// Builder-style helper for detectors that emit a sub-wave
+    /// decomposition (one inner vec per realized segment).
+    pub fn with_sub_waves(mut self, sub: Vec<Vec<PivotRef>>) -> Self {
+        self.sub_wave_anchors = sub;
+        self
     }
 }
 

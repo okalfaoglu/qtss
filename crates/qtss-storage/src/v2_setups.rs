@@ -1,0 +1,236 @@
+//! Faz 8.0 — `qtss_v2_setups` repo.
+//!
+//! One row per setup lifecycle instance. The Setup Engine inserts
+//! with state='armed', updates `koruma`/state as the setup runs, and
+//! stamps `close_reason`/`close_price`/`closed_at` on transition to
+//! `closed`.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+use sqlx::PgPool;
+use uuid::Uuid;
+
+use crate::error::StorageError;
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct V2SetupRow {
+    pub id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub venue_class: String,
+    pub exchange: String,
+    pub symbol: String,
+    pub timeframe: String,
+    pub profile: String,
+    pub alt_type: Option<String>,
+    pub state: String,
+    pub direction: String,
+    pub confluence_id: Option<Uuid>,
+    pub entry_price: Option<f32>,
+    pub entry_sl: Option<f32>,
+    pub koruma: Option<f32>,
+    pub target_ref: Option<f32>,
+    pub risk_pct: Option<f32>,
+    pub close_reason: Option<String>,
+    pub close_price: Option<f32>,
+    pub closed_at: Option<DateTime<Utc>>,
+    pub raw_meta: JsonValue,
+}
+
+#[derive(Debug, Clone)]
+pub struct V2SetupInsert {
+    pub venue_class: String,
+    pub exchange: String,
+    pub symbol: String,
+    pub timeframe: String,
+    pub profile: String,
+    pub alt_type: Option<String>,
+    pub state: String,
+    pub direction: String,
+    pub confluence_id: Option<Uuid>,
+    pub entry_price: Option<f32>,
+    pub entry_sl: Option<f32>,
+    pub koruma: Option<f32>,
+    pub target_ref: Option<f32>,
+    pub risk_pct: Option<f32>,
+    pub raw_meta: JsonValue,
+}
+
+pub async fn insert_v2_setup(
+    pool: &PgPool,
+    row: &V2SetupInsert,
+) -> Result<Uuid, StorageError> {
+    let id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO qtss_v2_setups (
+            venue_class, exchange, symbol, timeframe, profile, alt_type,
+            state, direction, confluence_id,
+            entry_price, entry_sl, koruma, target_ref, risk_pct, raw_meta
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        RETURNING id
+        "#,
+    )
+    .bind(&row.venue_class)
+    .bind(&row.exchange)
+    .bind(&row.symbol)
+    .bind(&row.timeframe)
+    .bind(&row.profile)
+    .bind(row.alt_type.as_deref())
+    .bind(&row.state)
+    .bind(&row.direction)
+    .bind(row.confluence_id)
+    .bind(row.entry_price)
+    .bind(row.entry_sl)
+    .bind(row.koruma)
+    .bind(row.target_ref)
+    .bind(row.risk_pct)
+    .bind(&row.raw_meta)
+    .fetch_one(pool)
+    .await?;
+    Ok(id)
+}
+
+/// Move a setup forward. `close_reason`/`close_price` are only set
+/// on transition to `closed`; leave them `None` for ratchet-only
+/// updates.
+pub async fn update_v2_setup_state(
+    pool: &PgPool,
+    id: Uuid,
+    new_state: &str,
+    koruma: Option<f32>,
+    close_reason: Option<&str>,
+    close_price: Option<f32>,
+) -> Result<(), StorageError> {
+    let closed_at: Option<DateTime<Utc>> = if new_state == "closed" {
+        Some(Utc::now())
+    } else {
+        None
+    };
+    sqlx::query(
+        r#"
+        UPDATE qtss_v2_setups
+           SET state        = $2,
+               koruma       = COALESCE($3, koruma),
+               close_reason = COALESCE($4, close_reason),
+               close_price  = COALESCE($5, close_price),
+               closed_at    = COALESCE($6, closed_at),
+               updated_at   = now()
+         WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .bind(new_state)
+    .bind(koruma)
+    .bind(close_reason)
+    .bind(close_price)
+    .bind(closed_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn fetch_v2_setup(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<Option<V2SetupRow>, StorageError> {
+    let row = sqlx::query_as::<_, V2SetupRow>(
+        r#"SELECT id, created_at, updated_at, venue_class, exchange, symbol,
+                  timeframe, profile, alt_type, state, direction, confluence_id,
+                  entry_price, entry_sl, koruma, target_ref, risk_pct,
+                  close_reason, close_price, closed_at, raw_meta
+             FROM qtss_v2_setups
+            WHERE id = $1"#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn list_open_v2_setups(
+    pool: &PgPool,
+    venue_class: Option<&str>,
+) -> Result<Vec<V2SetupRow>, StorageError> {
+    let rows = sqlx::query_as::<_, V2SetupRow>(
+        r#"SELECT id, created_at, updated_at, venue_class, exchange, symbol,
+                  timeframe, profile, alt_type, state, direction, confluence_id,
+                  entry_price, entry_sl, koruma, target_ref, risk_pct,
+                  close_reason, close_price, closed_at, raw_meta
+             FROM qtss_v2_setups
+            WHERE state IN ('armed','active')
+              AND ($1::text IS NULL OR venue_class = $1)
+            ORDER BY created_at DESC"#,
+    )
+    .bind(venue_class)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SetupFilter {
+    pub limit: i64,
+    pub venue_class: Option<String>,
+    /// If empty, defaults to open-only (`armed`,`active`). Pass explicit
+    /// states (e.g. `["closed"]`) to override.
+    pub states: Vec<String>,
+    pub profile: Option<String>,
+}
+
+pub async fn list_v2_setups_filtered(
+    pool: &PgPool,
+    filter: &SetupFilter,
+) -> Result<Vec<V2SetupRow>, StorageError> {
+    let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+        r#"SELECT id, created_at, updated_at, venue_class, exchange, symbol,
+                  timeframe, profile, alt_type, state, direction, confluence_id,
+                  entry_price, entry_sl, koruma, target_ref, risk_pct,
+                  close_reason, close_price, closed_at, raw_meta
+             FROM qtss_v2_setups
+            WHERE 1=1"#,
+    );
+
+    let effective_states: Vec<String> = if filter.states.is_empty() {
+        vec!["armed".to_string(), "active".to_string()]
+    } else {
+        filter.states.clone()
+    };
+    qb.push(" AND state = ANY(");
+    qb.push_bind(effective_states);
+    qb.push(")");
+
+    if let Some(v) = filter.venue_class.as_ref() {
+        qb.push(" AND venue_class = ");
+        qb.push_bind(v.clone());
+    }
+    if let Some(p) = filter.profile.as_ref() {
+        qb.push(" AND profile = ");
+        qb.push_bind(p.clone());
+    }
+
+    qb.push(" ORDER BY created_at DESC LIMIT ");
+    qb.push_bind(filter.limit);
+
+    let rows = qb.build_query_as::<V2SetupRow>().fetch_all(pool).await?;
+    Ok(rows)
+}
+
+pub async fn list_recent_v2_setups(
+    pool: &PgPool,
+    limit: i64,
+) -> Result<Vec<V2SetupRow>, StorageError> {
+    let rows = sqlx::query_as::<_, V2SetupRow>(
+        r#"SELECT id, created_at, updated_at, venue_class, exchange, symbol,
+                  timeframe, profile, alt_type, state, direction, confluence_id,
+                  entry_price, entry_sl, koruma, target_ref, risk_pct,
+                  close_reason, close_price, closed_at, raw_meta
+             FROM qtss_v2_setups
+            ORDER BY created_at DESC
+            LIMIT $1"#,
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}

@@ -1,5 +1,5 @@
 import { Fragment } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "../lib/api";
 import type {
@@ -35,7 +35,15 @@ function fmtTs(iso: string | null): string {
   return iso.replace("T", " ").replace(/\.\d+Z$/, "Z");
 }
 
-function Card({ card }: { card: StrategyCard }) {
+function Card({
+  card,
+  onSetStatus,
+  pending,
+}: {
+  card: StrategyCard;
+  onSetStatus: (id: string, status: StrategyStatus) => void;
+  pending: boolean;
+}) {
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-4">
       <div className="flex items-baseline justify-between">
@@ -50,6 +58,39 @@ function Card({ card }: { card: StrategyCard }) {
         >
           {card.status}
         </span>
+      </div>
+
+      <div className="mt-3 flex gap-1">
+        {card.status !== "active" && (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => onSetStatus(card.id, "active")}
+            className="rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+          >
+            Resume
+          </button>
+        )}
+        {card.status !== "paused" && (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => onSetStatus(card.id, "paused")}
+            className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
+          >
+            Pause
+          </button>
+        )}
+        {card.status !== "disabled" && (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => onSetStatus(card.id, "disabled")}
+            className="rounded border border-zinc-700 bg-zinc-800/50 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
+          >
+            Disable
+          </button>
+        )}
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
@@ -81,11 +122,27 @@ function Card({ card }: { card: StrategyCard }) {
 }
 
 export function Strategies() {
+  const qc = useQueryClient();
   const query = useQuery({
     queryKey: ["v2", "strategies"],
     queryFn: () => apiFetch<StrategyManagerView>("/v2/strategies"),
     refetchInterval: 5_000,
   });
+
+  const setStatus = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: StrategyStatus }) =>
+      apiFetch<StrategyManagerView>(`/v2/strategies/${id}/status`, {
+        method: "POST",
+        body: JSON.stringify({ status }),
+      }),
+    onSuccess: (data) => {
+      qc.setQueryData(["v2", "strategies"], data);
+    },
+  });
+
+  const handleSetStatus = (id: string, status: StrategyStatus) => {
+    setStatus.mutate({ id, status });
+  };
 
   if (query.isLoading) {
     return <div className="text-sm text-zinc-400">Loading strategies…</div>;
@@ -108,6 +165,12 @@ export function Strategies() {
         <div className="text-xs text-zinc-500">Generated at {view.generated_at}</div>
       </div>
 
+      {setStatus.isError && (
+        <div className="rounded border border-red-800 bg-red-950/40 px-3 py-2 text-xs text-red-300">
+          {(setStatus.error as Error).message}
+        </div>
+      )}
+
       {view.strategies.length === 0 ? (
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-4 py-6 text-sm text-zinc-500">
           No strategies registered.
@@ -115,7 +178,12 @@ export function Strategies() {
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {view.strategies.map((s) => (
-            <Card key={s.id} card={s} />
+            <Card
+              key={s.id}
+              card={s}
+              onSetStatus={handleSetStatus}
+              pending={setStatus.isPending}
+            />
           ))}
         </div>
       )}

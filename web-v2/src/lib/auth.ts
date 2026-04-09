@@ -8,9 +8,9 @@ const TOKEN_KEY = "qtss.v2.token";
 const CLIENT_KEY = "qtss.v2.oauth_client";
 
 interface OAuthClient {
-  client_id: string;
-  client_secret: string;
-  suggested_login_email?: string;
+  clientId: string;
+  clientSecret: string;
+  suggestedLoginEmail?: string;
 }
 
 interface TokenResponse {
@@ -51,8 +51,8 @@ export async function login(email: string, password: string): Promise<void> {
   const client = await fetchBootstrap();
   const body = new URLSearchParams({
     grant_type: "password",
-    client_id: client.client_id,
-    client_secret: client.client_secret,
+    client_id: client.clientId,
+    client_secret: client.clientSecret,
     username: email,
     password,
   });
@@ -72,7 +72,7 @@ export async function login(email: string, password: string): Promise<void> {
 export async function getSuggestedEmail(): Promise<string | undefined> {
   try {
     const client = await fetchBootstrap();
-    return client.suggested_login_email;
+    return client.suggestedLoginEmail;
   } catch {
     return undefined;
   }

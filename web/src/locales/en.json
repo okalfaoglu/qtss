@@ -776,5 +776,76 @@
       "status": "Status",
       "confidence": "Confidence"
     }
+  },
+  "setup": {
+    "title": "Setups",
+    "subtitle": "Setup engine — D / T / Q profiles",
+    "empty": "No setups yet.",
+    "refresh": "Refresh",
+    "filterVenue": "Venue",
+    "filterState": "State",
+    "filterProfile": "Profile",
+    "colCreated": "Created",
+    "colVenue": "Venue",
+    "colSymbol": "Symbol",
+    "colTimeframe": "TF",
+    "colProfile": "Profile",
+    "colDirection": "Direction",
+    "colState": "State",
+    "colAltType": "Wave context",
+    "colEntry": "Entry",
+    "colSL": "SL",
+    "colKoruma": "Trail (koruma)",
+    "colTarget": "Target",
+    "colRiskPct": "Risk %",
+    "colCloseReason": "Close reason",
+    "colClosePrice": "Exit",
+    "openEvents": "View events",
+    "profile": {
+      "t": "T — short term",
+      "q": "Q — short-mid (most market-sensitive)",
+      "d": "D — mid term"
+    },
+    "state": {
+      "flat": "Flat",
+      "armed": "Armed",
+      "active": "Active",
+      "closed": "Closed"
+    },
+    "altType": {
+      "reaction_low": "Reaction low",
+      "trend_low": "Trend low",
+      "reversal_high": "Reversal high",
+      "selling_high": "Selling high"
+    },
+    "direction": {
+      "long": "Long",
+      "short": "Short",
+      "neutral": "Neutral"
+    },
+    "venue": {
+      "crypto": "Crypto",
+      "bist": "BIST",
+      "us_equities": "US equities",
+      "commodities": "Commodities",
+      "fx": "FX"
+    },
+    "event": {
+      "opened": "Opened",
+      "updated": "Updated",
+      "closed": "Closed",
+      "rejected": "Rejected"
+    },
+    "closeReason": {
+      "target_hit": "Target hit",
+      "stop_hit": "Stop hit",
+      "reverse_signal": "Reverse signal",
+      "manual": "Manual"
+    },
+    "rejectReason": {
+      "total_risk_cap": "Total open risk cap reached",
+      "max_concurrent": "Max concurrent setups reached",
+      "correlation_cap": "Correlation group cap reached"
+    }
   }
 }

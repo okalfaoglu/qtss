@@ -39,17 +39,47 @@ pub struct RenkoBrick {
     pub direction: i8,
 }
 
-/// One detection (pattern) overlay row. Kept narrow on purpose --
-/// detector internals (channel scores, validator details) live behind
-/// a separate detail endpoint when the user clicks the marker.
+/// One pivot inside a detection's anchor chain. The frontend connects
+/// these in order with a polyline so the pattern geometry is visible
+/// (impulse waves, triangle apex, double-bottom necks, …).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DetectionAnchor {
+    pub time: DateTime<Utc>,
+    pub price: Decimal,
+    /// Optional label for the pivot — Elliott wave number, harmonic
+    /// point letter, etc. Kept optional so patterns without per-pivot
+    /// labels (e.g. range boundaries) don't have to invent one.
+    pub label: Option<String>,
+}
+
+/// One detection (pattern) overlay row. Carries everything the chart
+/// needs to draw the geometry without a second round-trip: anchor
+/// chain, family/subkind for color coding, lifecycle state, blended
+/// confidence, and the invalidation level so we can render the stop
+/// line. Channel-score detail still lives behind a click-through
+/// endpoint to keep the wire payload bounded.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DetectionOverlay {
     pub id: String,
     pub kind: String,
     pub label: String,
+    pub family: String,
+    pub subkind: String,
+    pub state: String,
     pub anchor_time: DateTime<Utc>,
     pub anchor_price: Decimal,
     pub confidence: Decimal,
+    pub invalidation_price: Decimal,
+    pub anchors: Vec<DetectionAnchor>,
+    /// Forward-projected anchors (Faz 7.6 / A2). Same shape as
+    /// `anchors`, but rendered with a dashed stroke. Empty when the
+    /// detector emitted no projection.
+    #[serde(default)]
+    pub projected_anchors: Vec<DetectionAnchor>,
+    /// Sub-wave decomposition (Faz 7.6 / A3). One inner vec per
+    /// realized segment. Rendered fainter / thinner.
+    #[serde(default)]
+    pub sub_wave_anchors: Vec<Vec<DetectionAnchor>>,
 }
 
 /// One resting/working order overlay.

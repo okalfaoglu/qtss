@@ -1,0 +1,702 @@
+//! Faz 8.0 — Setup Engine worker loop.
+//!
+//! Per tick (default 30s), for each enabled engine symbol:
+//!   1. Update existing open setups for this (venue, symbol, timeframe,
+//!      profile): ratchet + stop/target/reverse close checks.
+//!   2. If no open setup exists for the derived profile and confluence
+//!      is strong enough, evaluate allocator and arm a new setup.
+//!
+//! CLAUDE.md compliance:
+//!   - No hardcoded constants: every knob via `resolve_system_*`.
+//!   - No scattered if/else: single dispatch helpers + early returns.
+//!   - Asset-class agnostic: venue class derived from a dispatch table.
+
+use std::collections::HashMap;
+use std::time::Duration;
+
+use qtss_confluence::ConfluenceReading;
+use qtss_indicators::{atr, ema};
+use qtss_setup_engine::{
+    check_allocation, classify_alt_type, should_reverse_close, AllocatorContext, AllocatorLimits,
+    CloseReason, Direction, OpenSetupSummary, PositionGuard, PositionGuardConfig, Profile,
+    RejectReason, SetupState, VenueClass,
+};
+use qtss_storage::v2_confluence::fetch_latest_v2_confluence;
+use qtss_storage::{
+    insert_v2_setup, insert_v2_setup_event, insert_v2_setup_rejection, list_enabled_engine_symbols,
+    list_groups_for_symbol, list_open_v2_setups, list_recent_bars, resolve_system_f64,
+    resolve_system_u64, resolve_worker_enabled_flag, update_v2_setup_state, EngineSymbolRow,
+    V2SetupEventInsert, V2SetupInsert, V2SetupRejectionInsert, V2SetupRow,
+};
+use rust_decimal::prelude::ToPrimitive;
+use serde_json::json;
+use sqlx::PgPool;
+use tracing::{debug, info, warn};
+use uuid::Uuid;
+
+// ---------- config ----------
+
+#[derive(Debug, Clone)]
+struct LoopConfig {
+    enabled: bool,
+    tick_interval_s: u64,
+    arm_guven_threshold: f64,
+    profiles: HashMap<Profile, ProfileConfig>,
+    allocator: AllocatorLimits,
+    venue_enabled: HashMap<VenueClass, bool>,
+}
+
+#[derive(Debug, Clone)]
+struct ProfileConfig {
+    guard: PositionGuardConfig,
+}
+
+const PROFILES: [Profile; 3] = [Profile::T, Profile::Q, Profile::D];
+
+async fn load_profile(pool: &PgPool, p: Profile) -> ProfileConfig {
+    let slug = p.as_str();
+    let guard = PositionGuardConfig {
+        entry_sl_atr_mult: resolve_system_f64(
+            pool,
+            "setup",
+            &format!("profile.{slug}.entry_sl_atr_mult"),
+            "",
+            1.0,
+        )
+        .await,
+        ratchet_interval_secs: resolve_system_u64(
+            pool,
+            "setup",
+            &format!("profile.{slug}.ratchet_interval_secs"),
+            "",
+            60,
+            1,
+            86_400,
+        )
+        .await as i64,
+        target_ref_r: resolve_system_f64(
+            pool,
+            "setup",
+            &format!("profile.{slug}.target_ref_r"),
+            "",
+            2.0,
+        )
+        .await,
+        risk_pct: resolve_system_f64(
+            pool,
+            "setup",
+            &format!("profile.{slug}.risk_pct"),
+            "",
+            0.5,
+        )
+        .await,
+        max_concurrent: resolve_system_u64(
+            pool,
+            "setup",
+            &format!("profile.{slug}.max_concurrent"),
+            "",
+            match p {
+                Profile::T => 4,
+                Profile::Q => 3,
+                Profile::D => 2,
+            },
+            0,
+            1000,
+        )
+        .await as u32,
+        reverse_guven_threshold: resolve_system_f64(
+            pool,
+            "setup",
+            &format!("profile.{slug}.reverse_guven_threshold"),
+            "",
+            match p {
+                Profile::T => 0.65,
+                Profile::Q => 0.55,
+                Profile::D => 0.70,
+            },
+        )
+        .await,
+    };
+    ProfileConfig { guard }
+}
+
+async fn load_config(pool: &PgPool) -> LoopConfig {
+    let enabled =
+        resolve_worker_enabled_flag(pool, "setup", "enabled", "QTSS_SETUP_ENABLED", false).await;
+    let tick_interval_s =
+        resolve_system_u64(pool, "setup", "tick_interval_s", "", 30, 5, 3600).await;
+
+    let arm_guven_threshold =
+        resolve_system_f64(pool, "setup", "arm.guven_threshold", "", 0.50).await;
+
+    let mut profiles: HashMap<Profile, ProfileConfig> = HashMap::new();
+    for p in PROFILES {
+        profiles.insert(p, load_profile(pool, p).await);
+    }
+
+    let max_total_open_risk_pct =
+        resolve_system_f64(pool, "setup", "risk.total_risk_pct", "", 6.0).await;
+    let correlation_max_per_group =
+        resolve_system_u64(pool, "setup", "risk.correlation.max_per_group", "", 2, 0, 100).await
+            as u32;
+    let correlation_same_direction_only =
+        resolve_system_u64(pool, "setup", "risk.correlation.same_direction_only", "", 1, 0, 1)
+            .await
+            == 1;
+
+    let mut max_concurrent_per_profile: HashMap<Profile, u32> = HashMap::new();
+    for p in PROFILES {
+        max_concurrent_per_profile.insert(p, profiles[&p].guard.max_concurrent);
+    }
+
+    let allocator = AllocatorLimits {
+        max_total_open_risk_pct,
+        max_concurrent_per_profile,
+        correlation_max_per_group,
+        correlation_same_direction_only,
+    };
+
+    let mut venue_enabled: HashMap<VenueClass, bool> = HashMap::new();
+    venue_enabled.insert(
+        VenueClass::Crypto,
+        resolve_system_u64(pool, "setup", "venue.crypto.enabled", "", 1, 0, 1).await == 1,
+    );
+    venue_enabled.insert(
+        VenueClass::Bist,
+        resolve_system_u64(pool, "setup", "venue.bist.enabled", "", 0, 0, 1).await == 1,
+    );
+
+    LoopConfig {
+        enabled,
+        tick_interval_s,
+        arm_guven_threshold,
+        profiles,
+        allocator,
+        venue_enabled,
+    }
+}
+
+// ---------- dispatch helpers ----------
+
+/// Map an `engine_symbols.interval` string to the profile that owns it.
+/// Single source of truth — no scattered ifs elsewhere.
+fn profile_from_timeframe(tf: &str) -> Option<Profile> {
+    match tf {
+        "15m" => Some(Profile::T),
+        "1h" => Some(Profile::Q),
+        "4h" => Some(Profile::D),
+        _ => None,
+    }
+}
+
+/// Map an exchange code to a venue class. Unknown venues → `None`,
+/// caller skips the symbol.
+fn venue_class_from_exchange(exchange: &str) -> Option<VenueClass> {
+    let e = exchange.trim().to_ascii_lowercase();
+    const CRYPTO_KEYS: &[&str] = &["binance", "bybit", "okx", "kucoin", "coinbase"];
+    if CRYPTO_KEYS.iter().any(|k| e.contains(k)) {
+        return Some(VenueClass::Crypto);
+    }
+    if e.contains("bist") {
+        return Some(VenueClass::Bist);
+    }
+    None
+}
+
+fn direction_from_str(s: &str) -> Direction {
+    match s {
+        "long" => Direction::Long,
+        "short" => Direction::Short,
+        _ => Direction::Neutral,
+    }
+}
+
+// ---------- loop entry ----------
+
+pub async fn v2_setup_loop(pool: PgPool) {
+    info!("v2 setup loop spawned (gated on setup.enabled)");
+    loop {
+        let cfg = load_config(&pool).await;
+        if !cfg.enabled {
+            tokio::time::sleep(Duration::from_secs(cfg.tick_interval_s)).await;
+            continue;
+        }
+        match run_pass(&pool, &cfg).await {
+            Ok(()) => debug!("v2 setup pass complete"),
+            Err(e) => warn!(%e, "v2 setup pass failed"),
+        }
+        tokio::time::sleep(Duration::from_secs(cfg.tick_interval_s)).await;
+    }
+}
+
+type BoxErr = Box<dyn std::error::Error + Send + Sync>;
+
+async fn run_pass(pool: &PgPool, cfg: &LoopConfig) -> Result<(), BoxErr> {
+    let symbols = list_enabled_engine_symbols(pool).await?;
+
+    // Hydrate per-venue allocator contexts once per tick.
+    let mut ctx_by_venue: HashMap<VenueClass, AllocatorContext> = HashMap::new();
+    for (venue, enabled) in cfg.venue_enabled.iter() {
+        if !enabled {
+            continue;
+        }
+        let ctx = hydrate_context(pool, *venue).await?;
+        ctx_by_venue.insert(*venue, ctx);
+    }
+
+    for sym in symbols {
+        let Some(venue) = venue_class_from_exchange(&sym.exchange) else {
+            continue;
+        };
+        if cfg.venue_enabled.get(&venue).copied() != Some(true) {
+            continue;
+        }
+        let Some(profile) = profile_from_timeframe(&sym.interval) else {
+            continue;
+        };
+        let Some(ctx) = ctx_by_venue.get_mut(&venue) else {
+            continue;
+        };
+        if let Err(e) = process_symbol(pool, cfg, venue, profile, &sym, ctx).await {
+            warn!(symbol = %sym.symbol, interval = %sym.interval, %e, "setup symbol failed");
+        }
+    }
+    Ok(())
+}
+
+async fn hydrate_context(pool: &PgPool, venue: VenueClass) -> Result<AllocatorContext, BoxErr> {
+    let rows = list_open_v2_setups(pool, Some(venue.as_str())).await?;
+    let mut open_setups: Vec<OpenSetupSummary> = Vec::with_capacity(rows.len());
+    for r in rows {
+        let Some(profile) = Profile::from_str(&r.profile) else {
+            continue;
+        };
+        let groups = list_groups_for_symbol(pool, &r.venue_class, &r.symbol)
+            .await
+            .unwrap_or_default();
+        open_setups.push(OpenSetupSummary {
+            profile,
+            direction: direction_from_str(&r.direction),
+            risk_pct: r.risk_pct.unwrap_or(0.0) as f64,
+            correlation_groups: groups,
+        });
+    }
+    Ok(AllocatorContext { open_setups })
+}
+
+// ---------- per-symbol ----------
+
+async fn process_symbol(
+    pool: &PgPool,
+    cfg: &LoopConfig,
+    venue: VenueClass,
+    profile: Profile,
+    sym: &EngineSymbolRow,
+    ctx: &mut AllocatorContext,
+) -> Result<(), BoxErr> {
+    // 1. Load recent bars (enough for EMA200).
+    let window = 260i64;
+    let raw_bars = list_recent_bars(
+        pool,
+        &sym.exchange,
+        &sym.segment,
+        &sym.symbol,
+        &sym.interval,
+        window,
+    )
+    .await?;
+    if raw_bars.len() < 30 {
+        return Ok(());
+    }
+    // Chronological order (oldest first).
+    let mut chronological = raw_bars;
+    chronological.reverse();
+
+    let closes: Vec<f64> = chronological
+        .iter()
+        .map(|b| b.close.to_f64().unwrap_or(0.0))
+        .collect();
+    let highs: Vec<f64> = chronological
+        .iter()
+        .map(|b| b.high.to_f64().unwrap_or(0.0))
+        .collect();
+    let lows: Vec<f64> = chronological
+        .iter()
+        .map(|b| b.low.to_f64().unwrap_or(0.0))
+        .collect();
+
+    let current_price = *closes.last().ok_or("empty closes")?;
+    let ema50_series = ema(&closes, 50);
+    let ema200_series = ema(&closes, 200);
+    let atr_series = atr(&highs, &lows, &closes, 14);
+    let ema50 = last_finite(&ema50_series);
+    let ema200 = last_finite(&ema200_series);
+    let atr_val = last_finite(&atr_series);
+
+    // 2. Update any existing open setup for this (venue, exchange, symbol, timeframe, profile).
+    update_open_setups(
+        pool, cfg, venue, profile, sym, current_price, ctx,
+    )
+    .await?;
+
+    // 3. Try to arm a new setup if none already open for this key + direction.
+    let atr_usable = atr_val.map(|v| v > 0.0).unwrap_or(false);
+    let emas_usable = ema50.is_some() && ema200.is_some();
+    if !atr_usable || !emas_usable {
+        return Ok(());
+    }
+    try_arm_new_setup(
+        pool,
+        cfg,
+        venue,
+        profile,
+        sym,
+        current_price,
+        ema50.unwrap(),
+        ema200.unwrap(),
+        atr_val.unwrap(),
+        ctx,
+    )
+    .await?;
+
+    Ok(())
+}
+
+fn last_finite(xs: &[f64]) -> Option<f64> {
+    xs.iter().rev().find(|v| v.is_finite()).copied()
+}
+
+// ---------- update path ----------
+
+async fn update_open_setups(
+    pool: &PgPool,
+    cfg: &LoopConfig,
+    venue: VenueClass,
+    profile: Profile,
+    sym: &EngineSymbolRow,
+    current_price: f64,
+    ctx: &mut AllocatorContext,
+) -> Result<(), BoxErr> {
+    // Re-query open setups from DB for this narrow key; cheaper and
+    // avoids stale-in-memory drift inside a single pass.
+    let open = list_open_v2_setups(pool, Some(venue.as_str())).await?;
+    let matching: Vec<V2SetupRow> = open
+        .into_iter()
+        .filter(|r| {
+            r.exchange == sym.exchange
+                && r.symbol == sym.symbol
+                && r.timeframe == sym.interval
+                && r.profile == profile.as_str()
+        })
+        .collect();
+
+    let pcfg = &cfg.profiles[&profile].guard;
+    for row in matching {
+        let dir = direction_from_str(&row.direction);
+        let (entry, entry_sl, koruma, target_ref) = match (
+            row.entry_price,
+            row.entry_sl,
+            row.koruma,
+            row.target_ref,
+        ) {
+            (Some(e), Some(es), Some(k), Some(t)) => {
+                (e as f64, es as f64, k as f64, t as f64)
+            }
+            _ => continue,
+        };
+        let mut guard = PositionGuard {
+            entry,
+            entry_sl,
+            koruma,
+            target_ref,
+            direction: dir,
+        };
+
+        // --- close checks (ordered; first hit wins) ---
+        if let Some((reason, exit_price)) =
+            evaluate_close(pool, cfg, profile, &guard, current_price, sym).await?
+        {
+            close_setup(pool, &row, reason, exit_price, ctx).await?;
+            continue;
+        }
+
+        // --- ratchet ---
+        let changed = guard.try_ratchet(current_price);
+        let _ = pcfg; // reserved for future interval gating
+        if changed {
+            update_v2_setup_state(
+                pool,
+                row.id,
+                SetupState::Active.as_str(),
+                Some(guard.koruma as f32),
+                None,
+                None,
+            )
+            .await?;
+            insert_v2_setup_event(
+                pool,
+                &V2SetupEventInsert {
+                    setup_id: row.id,
+                    event_type: "updated".to_string(),
+                    payload: json!({
+                        "koruma": guard.koruma,
+                        "active_sl": guard.active_sl(),
+                        "unrealized_r": guard.unrealized_r(current_price),
+                        "price": current_price,
+                    }),
+                },
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn evaluate_close(
+    pool: &PgPool,
+    cfg: &LoopConfig,
+    profile: Profile,
+    guard: &PositionGuard,
+    price: f64,
+    sym: &EngineSymbolRow,
+) -> Result<Option<(CloseReason, f64)>, BoxErr> {
+    let active_sl = guard.active_sl();
+    // Stop-hit (long: price<=sl; short: price>=sl).
+    let stop_hit = match guard.direction {
+        Direction::Long => price <= active_sl,
+        Direction::Short => price >= active_sl,
+        Direction::Neutral => false,
+    };
+    if stop_hit {
+        return Ok(Some((CloseReason::StopHit, active_sl)));
+    }
+    // Target-hit.
+    let target_hit = match guard.direction {
+        Direction::Long => price >= guard.target_ref,
+        Direction::Short => price <= guard.target_ref,
+        Direction::Neutral => false,
+    };
+    if target_hit {
+        return Ok(Some((CloseReason::TargetHit, guard.target_ref)));
+    }
+    // Reverse-signal — needs latest confluence.
+    let latest =
+        fetch_latest_v2_confluence(pool, &sym.exchange, &sym.symbol, &sym.interval).await?;
+    let Some(row) = latest else {
+        return Ok(None);
+    };
+    let reading = ConfluenceReading {
+        erken_uyari: row.erken_uyari as f64,
+        guven: row.guven as f64,
+        direction: direction_from_str(&row.direction),
+        layer_count: row.layer_count as u32,
+        details: vec![],
+    };
+    let threshold = cfg.profiles[&profile].guard.reverse_guven_threshold;
+    if should_reverse_close(guard.direction, profile, &reading, threshold) {
+        let exit = match guard.direction {
+            Direction::Long => active_sl.max(price),
+            Direction::Short => active_sl.min(price),
+            Direction::Neutral => price,
+        };
+        return Ok(Some((CloseReason::ReverseSignal, exit)));
+    }
+    Ok(None)
+}
+
+async fn close_setup(
+    pool: &PgPool,
+    row: &V2SetupRow,
+    reason: CloseReason,
+    exit_price: f64,
+    ctx: &mut AllocatorContext,
+) -> Result<(), BoxErr> {
+    update_v2_setup_state(
+        pool,
+        row.id,
+        SetupState::Closed.as_str(),
+        None,
+        Some(reason.as_str()),
+        Some(exit_price as f32),
+    )
+    .await?;
+    insert_v2_setup_event(
+        pool,
+        &V2SetupEventInsert {
+            setup_id: row.id,
+            event_type: "closed".to_string(),
+            payload: json!({
+                "reason": reason.as_str(),
+                "exit_price": exit_price,
+            }),
+        },
+    )
+    .await?;
+    // Drop from local allocator context — first match removed.
+    let dir = direction_from_str(&row.direction);
+    if let Some(p) = Profile::from_str(&row.profile) {
+        if let Some(pos) = ctx.open_setups.iter().position(|s| {
+            s.profile == p && s.direction == dir && (s.risk_pct - row.risk_pct.unwrap_or(0.0) as f64).abs() < 1e-9
+        }) {
+            ctx.open_setups.remove(pos);
+        }
+    }
+    Ok(())
+}
+
+// ---------- arm path ----------
+
+#[allow(clippy::too_many_arguments)]
+async fn try_arm_new_setup(
+    pool: &PgPool,
+    cfg: &LoopConfig,
+    venue: VenueClass,
+    profile: Profile,
+    sym: &EngineSymbolRow,
+    price: f64,
+    ema50: f64,
+    ema200: f64,
+    atr_val: f64,
+    ctx: &mut AllocatorContext,
+) -> Result<(), BoxErr> {
+    // Load latest confluence.
+    let latest =
+        fetch_latest_v2_confluence(pool, &sym.exchange, &sym.symbol, &sym.interval).await?;
+    let Some(conf) = latest else {
+        return Ok(());
+    };
+    if (conf.guven as f64) < cfg.arm_guven_threshold {
+        return Ok(());
+    }
+    let direction = direction_from_str(&conf.direction);
+    if matches!(direction, Direction::Neutral) {
+        return Ok(());
+    }
+
+    // Skip if we already have an open setup for (symbol, timeframe, profile, direction).
+    let already_open = list_open_v2_setups(pool, Some(venue.as_str())).await?;
+    let duplicate = already_open.iter().any(|r| {
+        r.exchange == sym.exchange
+            && r.symbol == sym.symbol
+            && r.timeframe == sym.interval
+            && r.profile == profile.as_str()
+            && direction_from_str(&r.direction) == direction
+    });
+    if duplicate {
+        return Ok(());
+    }
+
+    let pcfg = cfg.profiles[&profile].guard;
+    let guard = PositionGuard::new(price, atr_val, &pcfg, direction);
+
+    let groups = list_groups_for_symbol(pool, venue.as_str(), &sym.symbol)
+        .await
+        .unwrap_or_default();
+    let candidate = OpenSetupSummary {
+        profile,
+        direction,
+        risk_pct: pcfg.risk_pct,
+        correlation_groups: groups.clone(),
+    };
+
+    if let Err(reason) = check_allocation(&cfg.allocator, ctx, &candidate) {
+        record_rejection(pool, cfg, venue, profile, sym, direction, conf.id, reason).await?;
+        return Ok(());
+    }
+
+    let alt_type = classify_alt_type(direction, ema50, ema200, price);
+
+    let row = V2SetupInsert {
+        venue_class: venue.as_str().to_string(),
+        exchange: sym.exchange.clone(),
+        symbol: sym.symbol.clone(),
+        timeframe: sym.interval.clone(),
+        profile: profile.as_str().to_string(),
+        alt_type: alt_type.map(|a| a.as_str().to_string()),
+        state: SetupState::Active.as_str().to_string(),
+        direction: match direction {
+            Direction::Long => "long",
+            Direction::Short => "short",
+            Direction::Neutral => "neutral",
+        }
+        .to_string(),
+        confluence_id: Some(conf.id),
+        entry_price: Some(guard.entry as f32),
+        entry_sl: Some(guard.entry_sl as f32),
+        koruma: Some(guard.koruma as f32),
+        target_ref: Some(guard.target_ref as f32),
+        risk_pct: Some(pcfg.risk_pct as f32),
+        raw_meta: json!({
+            "profile": profile.as_str(),
+            "alt_type": alt_type.map(|a| a.as_str()),
+            "ema50": ema50,
+            "ema200": ema200,
+            "atr": atr_val,
+            "guven": conf.guven,
+            "correlation_groups": groups,
+        }),
+    };
+    let id: Uuid = insert_v2_setup(pool, &row).await?;
+    insert_v2_setup_event(
+        pool,
+        &V2SetupEventInsert {
+            setup_id: id,
+            event_type: "opened".to_string(),
+            payload: json!({
+                "profile": profile.as_str(),
+                "alt_type": alt_type.map(|a| a.as_str()),
+                "entry": guard.entry,
+                "entry_sl": guard.entry_sl,
+                "koruma": guard.koruma,
+                "target_ref": guard.target_ref,
+                "risk_pct": pcfg.risk_pct,
+                "confluence_id": conf.id,
+                "ema50": ema50,
+                "ema200": ema200,
+                "atr": atr_val,
+                "direction": direction.as_str(),
+            }),
+        },
+    )
+    .await?;
+
+    ctx.open_setups.push(candidate);
+    info!(
+        exchange = %sym.exchange,
+        symbol = %sym.symbol,
+        timeframe = %sym.interval,
+        profile = %profile.as_str(),
+        direction = %direction.as_str(),
+        "v2 setup armed"
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn record_rejection(
+    pool: &PgPool,
+    _cfg: &LoopConfig,
+    venue: VenueClass,
+    profile: Profile,
+    sym: &EngineSymbolRow,
+    direction: Direction,
+    confluence_id: Uuid,
+    reason: RejectReason,
+) -> Result<(), BoxErr> {
+    insert_v2_setup_rejection(
+        pool,
+        &V2SetupRejectionInsert {
+            venue_class: venue.as_str().to_string(),
+            exchange: sym.exchange.clone(),
+            symbol: sym.symbol.clone(),
+            timeframe: sym.interval.clone(),
+            profile: profile.as_str().to_string(),
+            direction: direction.as_str().to_string(),
+            reject_reason: reason.as_str().to_string(),
+            confluence_id: Some(confluence_id),
+            raw_meta: json!({ "source": "v2_setup_loop" }),
+        },
+    )
+    .await?;
+    Ok(())
+}

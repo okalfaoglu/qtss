@@ -10,6 +10,9 @@ import { Strategies } from "./pages/Strategies";
 import { MonteCarlo } from "./pages/MonteCarlo";
 import { Regime } from "./pages/Regime";
 import { Chart } from "./pages/Chart";
+import { Detections } from "./pages/Detections";
+import { Tbm } from "./pages/Tbm";
+import { Onchain } from "./pages/Onchain";
 import { Scenarios } from "./pages/Scenarios";
 import { Config } from "./pages/Config";
 import { AiDecisions } from "./pages/AiDecisions";
@@ -44,6 +47,9 @@ export const router = createBrowserRouter([
       { path: "montecarlo", element: <MonteCarlo /> },
       { path: "regime", element: <Regime /> },
       { path: "chart", element: <Chart /> },
+      { path: "detections", element: <Detections /> },
+      { path: "tbm", element: <Tbm /> },
+      { path: "onchain", element: <Onchain /> },
       { path: "scenarios", element: <Scenarios /> },
       { path: "config", element: <Config /> },
       { path: "ai-decisions", element: <AiDecisions /> },

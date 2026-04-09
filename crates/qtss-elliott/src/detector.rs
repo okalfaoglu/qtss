@@ -8,6 +8,8 @@
 use crate::config::ElliottConfig;
 use crate::error::ElliottResult;
 use crate::fibs::{proximity_score, WAVE2_REFS, WAVE3_REFS, WAVE4_REFS};
+use crate::decomposition;
+use crate::projection;
 use crate::rules::{ImpulsePoints, RULES};
 use qtss_domain::v2::detection::{
     Detection, PatternKind, PatternState, PivotRef,
@@ -73,23 +75,30 @@ impl ImpulseDetector {
             return None;
         }
 
-        let kind = PatternKind::Elliott(match direction {
-            Direction::Bullish => "impulse_5_bull".into(),
-            Direction::Bearish => "impulse_5_bear".into(),
-        });
+        let subkind = match direction {
+            Direction::Bullish => "impulse_5_bull".to_string(),
+            Direction::Bearish => "impulse_5_bear".to_string(),
+        };
         let anchors = label_anchors(tail, self.config.pivot_level);
+        let projected =
+            projection::project(&subkind, &anchors, self.config.pivot_level);
+        let sub_waves = decomposition::decompose(tree, &anchors, self.config.pivot_level);
         let invalidation_price = invalidation_for(direction, tail);
 
-        Some(Detection::new(
-            instrument.clone(),
-            timeframe,
-            kind,
-            PatternState::Forming,
-            anchors,
-            score as f32,
-            invalidation_price,
-            regime.clone(),
-        ))
+        Some(
+            Detection::new(
+                instrument.clone(),
+                timeframe,
+                PatternKind::Elliott(subkind),
+                PatternState::Forming,
+                anchors,
+                score as f32,
+                invalidation_price,
+                regime.clone(),
+            )
+            .with_projection(projected)
+            .with_sub_waves(sub_waves),
+        )
     }
 }
 

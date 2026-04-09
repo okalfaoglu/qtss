@@ -176,13 +176,28 @@ export interface RenkoBrick {
   direction: number;
 }
 
+export interface DetectionAnchor {
+  time: string;
+  price: string;
+  label: string | null;
+}
+
 export interface DetectionOverlay {
   id: string;
   kind: string;
   label: string;
+  family: string;
+  subkind: string;
+  state: string;
   anchor_time: string;
   anchor_price: string;
   confidence: string;
+  invalidation_price: string;
+  anchors: DetectionAnchor[];
+  // Faz 7.6 / A2 — forward projection (rendered dashed).
+  projected_anchors?: DetectionAnchor[];
+  // Faz 7.6 / A3 — sub-wave decomposition (rendered fainter/thinner).
+  sub_wave_anchors?: DetectionAnchor[][];
 }
 
 export interface OpenOrderOverlay {

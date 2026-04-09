@@ -9,6 +9,8 @@ use qtss_domain::v2::pivot::PivotLevel;
 
 #[derive(Debug, Clone)]
 pub struct ElliottConfig {
+    // Clone needed: aggregator.rs builds N formation detectors from a
+    // single base config and each takes ownership.
     /// Which pivot level the detector consumes. Detectors declare this
     /// up front so the engine can wire each detector to the right level
     /// of the central PivotTree.

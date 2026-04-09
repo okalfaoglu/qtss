@@ -2323,6 +2323,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "qtss-confluence"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "qtss-domain"
 version = "0.1.0"
 dependencies = [
@@ -2499,6 +2507,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "qtss-onchain"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "qtss-storage",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "qtss-pivots"
 version = "0.1.0"
 dependencies = [
@@ -2631,6 +2655,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "qtss-setup-engine"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "qtss-confluence",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "qtss-signal-card"
 version = "0.1.0"
 dependencies = [
@@ -2699,6 +2734,7 @@ dependencies = [
 name = "qtss-tbm"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "qtss-indicators",
  "serde",
  "serde_json",
@@ -2746,23 +2782,39 @@ dependencies = [
  "axum",
  "chrono",
  "futures-util",
+ "plotters",
  "qtss-ai",
  "qtss-analysis",
  "qtss-binance",
  "qtss-chart-patterns",
+ "qtss-classical",
  "qtss-common",
+ "qtss-confluence",
  "qtss-domain",
+ "qtss-elliott",
+ "qtss-eventbus",
  "qtss-execution",
+ "qtss-harmonic",
+ "qtss-indicators",
  "qtss-nansen",
  "qtss-notify",
+ "qtss-onchain",
+ "qtss-pivots",
  "qtss-reconcile",
+ "qtss-regime",
+ "qtss-risk",
+ "qtss-setup-engine",
  "qtss-storage",
  "qtss-strategy",
+ "qtss-tbm",
+ "qtss-validator",
+ "qtss-wyckoff",
  "reqwest",
  "rust_decimal",
  "serde",
  "serde_json",
  "sqlx",
+ "tempfile",
  "tokio",
  "tokio-tungstenite",
  "tracing",

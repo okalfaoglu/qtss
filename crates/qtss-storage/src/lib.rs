@@ -30,6 +30,32 @@ pub mod range_engine;
 pub mod system_config;
 pub mod user_permissions;
 pub mod users;
+pub mod v2_confluence;
+pub mod v2_correlation_groups;
+pub mod v2_detections;
+pub mod v2_onchain_metrics;
+pub mod v2_setup_events;
+pub mod v2_setup_rejections;
+pub mod v2_setups;
+
+pub use v2_detections::{
+    DetectionFilter, DetectionRow, HistoricalOutcomeRow, NewDetection, V2DetectionRepository,
+};
+pub use v2_correlation_groups::{
+    count_open_setups_in_group, list_groups_for_symbol, CorrelationGroupRow,
+};
+pub use v2_setup_events::{
+    insert_v2_setup_event, list_events_for_setup, list_pending_setup_events,
+    mark_setup_event_delivered, mark_setup_event_failed, V2SetupEventInsert, V2SetupEventRow,
+};
+pub use v2_setup_rejections::{
+    insert_v2_setup_rejection, list_recent_setup_rejections, V2SetupRejectionInsert,
+    V2SetupRejectionRow,
+};
+pub use v2_setups::{
+    fetch_v2_setup, insert_v2_setup, list_open_v2_setups, list_recent_v2_setups,
+    update_v2_setup_state, V2SetupInsert, V2SetupRow,
+};
 
 pub use ai_approval::{AiApprovalRepository, AiApprovalRequestRow};
 pub use audit_log::{
@@ -90,7 +116,8 @@ pub use intake_playbook::{
     IntakePlaybookRunRow,
 };
 pub use market_bars::{
-    fetch_recent_bars_stats, list_bars_in_range, list_recent_bars, upsert_market_bar, MarketBarRow,
+    fetch_recent_bars_stats, list_bars_in_range, list_recent_bars, list_recent_bars_before,
+    upsert_market_bar, MarketBarRow,
     MarketBarUpsert, RecentBarsStats,
 };
 pub use market_confluence_snapshots::{

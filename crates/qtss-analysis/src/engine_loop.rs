@@ -1619,6 +1619,7 @@ async fn run_engines_for_symbol(
                         exchange_netflow: exchange_nf,
                         whale_tx_count: whale_est,
                         funding_rate: funding,
+                        ..Default::default()
                     }
                 } else {
                     qtss_tbm::onchain::OnchainMetrics::default()

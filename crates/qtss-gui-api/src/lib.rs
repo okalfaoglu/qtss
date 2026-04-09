@@ -36,7 +36,8 @@ pub use dashboard::{
     DashboardSnapshot, EquityPoint, OpenPositionView, PortfolioCard, RiskCard,
 };
 pub use chart::{
-    build_renko, CandleBar, ChartWorkspace, DetectionOverlay, OpenOrderOverlay, RenkoBrick,
+    build_renko, CandleBar, ChartWorkspace, DetectionAnchor, DetectionOverlay, OpenOrderOverlay,
+    RenkoBrick,
 };
 pub use ai_decisions::{
     payload_preview, AiDecisionEntry, AiDecisionStatus, AiDecisionsView, PAYLOAD_PREVIEW_MAX_LEN,

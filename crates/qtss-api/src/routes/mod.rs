@@ -32,11 +32,16 @@ mod v2_blotter;
 mod v2_chart;
 mod v2_config;
 mod v2_dashboard;
+mod v2_detections;
 mod v2_montecarlo;
 mod v2_regime;
 mod v2_risk;
 mod v2_scenarios;
 mod v2_strategies;
+mod v2_tbm;
+mod v2_onchain;
+mod v2_confluence;
+mod v2_setups;
 mod v2_users;
 
 pub use v2_ai_decisions::v2_ai_decisions_router;
@@ -45,11 +50,18 @@ pub use v2_blotter::v2_blotter_router;
 pub use v2_chart::v2_chart_router;
 pub use v2_config::v2_config_router;
 pub use v2_dashboard::{v2_dashboard_router, V2DashboardHandle};
+pub use v2_detections::v2_detections_router;
 pub use v2_montecarlo::v2_montecarlo_router;
 pub use v2_regime::v2_regime_router;
 pub use v2_risk::v2_risk_router;
 pub use v2_scenarios::v2_scenarios_router;
-pub use v2_strategies::{default_seed_card, v2_strategies_router, V2StrategyRegistry};
+pub use v2_strategies::{
+    default_seed_card, v2_strategies_admin_router, v2_strategies_router, V2StrategyRegistry,
+};
+pub use v2_tbm::v2_tbm_router;
+pub use v2_onchain::v2_onchain_router;
+pub use v2_confluence::v2_confluence_router;
+pub use v2_setups::v2_setups_router;
 pub use v2_users::v2_users_router;
 
 use axum::middleware::from_fn;
@@ -93,12 +105,18 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(dashboard_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_dashboard_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_chart_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_detections_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_tbm_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_onchain_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_confluence_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_setups_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_scenarios_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_regime_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_montecarlo_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_risk_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_blotter_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_strategies_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_strategies_admin_router().layer(from_fn(require_admin)))
         .merge(v2_config_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_ai_decisions_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_audit_router().layer(from_fn(require_audit_read)))

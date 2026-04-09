@@ -776,5 +776,76 @@
       "status": "Durum",
       "confidence": "Güven"
     }
+  },
+  "setup": {
+    "title": "Setup'lar",
+    "subtitle": "Setup motoru — D / T / Q profilleri",
+    "empty": "Henüz setup yok.",
+    "refresh": "Yenile",
+    "filterVenue": "Pazar",
+    "filterState": "Durum",
+    "filterProfile": "Profil",
+    "colCreated": "Oluşturma",
+    "colVenue": "Pazar",
+    "colSymbol": "Sembol",
+    "colTimeframe": "TF",
+    "colProfile": "Profil",
+    "colDirection": "Yön",
+    "colState": "Durum",
+    "colAltType": "Dalga bağlamı",
+    "colEntry": "Giriş",
+    "colSL": "SL",
+    "colKoruma": "Koruma (iz süren)",
+    "colTarget": "Hedef",
+    "colRiskPct": "Risk %",
+    "colCloseReason": "Kapanış sebebi",
+    "colClosePrice": "Çıkış",
+    "openEvents": "Olayları gör",
+    "profile": {
+      "t": "T — kısa vade",
+      "q": "Q — kısa-orta vade (piyasaya en duyarlı)",
+      "d": "D — orta vade"
+    },
+    "state": {
+      "flat": "Pasif",
+      "armed": "Hazırlandı",
+      "active": "Aktif",
+      "closed": "Kapandı"
+    },
+    "altType": {
+      "reaction_low": "Tepki dibi",
+      "trend_low": "Trend dibi",
+      "reversal_high": "Dönüş tepesi",
+      "selling_high": "Satış tepesi"
+    },
+    "direction": {
+      "long": "Long",
+      "short": "Short",
+      "neutral": "Nötr"
+    },
+    "venue": {
+      "crypto": "Kripto",
+      "bist": "BIST",
+      "us_equities": "ABD borsası",
+      "commodities": "Emtia",
+      "fx": "Parite"
+    },
+    "event": {
+      "opened": "Açıldı",
+      "updated": "Güncellendi",
+      "closed": "Kapandı",
+      "rejected": "Reddedildi"
+    },
+    "closeReason": {
+      "target_hit": "Hedefe ulaşıldı",
+      "stop_hit": "Stop tetiklendi",
+      "reverse_signal": "Ters sinyal",
+      "manual": "Manuel"
+    },
+    "rejectReason": {
+      "total_risk_cap": "Toplam açık risk limitine ulaşıldı",
+      "max_concurrent": "Eş zamanlı setup limitine ulaşıldı",
+      "correlation_cap": "Korelasyon grup limitine ulaşıldı"
+    }
   }
 }

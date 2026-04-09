@@ -13,8 +13,6 @@ use axum::routing::get;
 use axum::{Json, Router};
 use rust_decimal::Decimal;
 use serde::Deserialize;
-use std::str::FromStr;
-
 use qtss_domain::v2::bar::Bar;
 use qtss_domain::v2::instrument::{AssetClass, Instrument, SessionCalendar, Venue};
 use qtss_domain::v2::regime::RegimeSnapshot;
@@ -61,8 +59,8 @@ async fn get_regime(
     let mut rows = rows;
     rows.reverse();
 
-    let timeframe = Timeframe::from_str(&tf)
-        .map_err(|_| ApiError::bad_request(format!("invalid timeframe: {tf}")))?;
+    let timeframe = parse_timeframe(&tf)
+        .ok_or_else(|| ApiError::bad_request(format!("invalid timeframe: {tf}")))?;
     let instrument = placeholder_instrument(&venue, &symbol);
 
     let mut engine = RegimeEngine::new(RegimeConfig::defaults())
@@ -118,6 +116,32 @@ fn placeholder_instrument(venue: &str, symbol: &str) -> Instrument {
         tick_size: Decimal::new(1, 8),
         lot_size: Decimal::new(1, 8),
         session: SessionCalendar::binance_24x7(),
+    }
+}
+
+/// `market_bars` interval strings ("1m", "4h", "1d") → `Timeframe`.
+/// `Timeframe::FromStr` only accepts the lowercase Debug form
+/// ("m1", "h4") so the chart/regime endpoints need this translator.
+/// Mirror of the helper in `qtss-worker::v2_detection_orchestrator`
+/// — kept inline here to avoid pulling the worker crate into the API.
+fn parse_timeframe(interval: &str) -> Option<Timeframe> {
+    match interval.trim().to_lowercase().as_str() {
+        "1m" => Some(Timeframe::M1),
+        "3m" => Some(Timeframe::M3),
+        "5m" => Some(Timeframe::M5),
+        "15m" => Some(Timeframe::M15),
+        "30m" => Some(Timeframe::M30),
+        "1h" => Some(Timeframe::H1),
+        "2h" => Some(Timeframe::H2),
+        "4h" => Some(Timeframe::H4),
+        "6h" => Some(Timeframe::H6),
+        "8h" => Some(Timeframe::H8),
+        "12h" => Some(Timeframe::H12),
+        "1d" => Some(Timeframe::D1),
+        "3d" => Some(Timeframe::D3),
+        "1w" => Some(Timeframe::W1),
+        "1mo" | "1mn" => Some(Timeframe::Mn1),
+        _ => None,
     }
 }
 

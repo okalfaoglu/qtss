@@ -15,7 +15,7 @@ use qtss_storage::{
 };
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::data_sources::registry::{
     NANSEN_FLOW_INTELLIGENCE_DATA_KEY, NANSEN_NETFLOWS_DATA_KEY, NANSEN_PERP_TRADES_DATA_KEY,
@@ -763,6 +763,22 @@ pub async fn onchain_signal_loop(pool: PgPool) {
         )
         .await;
         tokio::time::sleep(Duration::from_secs(tick_secs)).await;
+        // Faz 7.7: Hat A is being retired in favour of the v2 onchain
+        // pipeline. The flag defaults to true (legacy off) but operators
+        // can flip it back to false to re-enable this loop while
+        // troubleshooting the v2 fetcher chain.
+        if qtss_storage::resolve_worker_enabled_flag(
+            &pool,
+            "onchain",
+            "legacy_v1.disabled",
+            "QTSS_ONCHAIN_LEGACY_V1_DISABLED",
+            true,
+        )
+        .await
+        {
+            debug!("hat A onchain_signal_scorer soft-disabled (onchain.legacy_v1.disabled=true)");
+            continue;
+        }
         if last_prune.elapsed() >= prune_every {
             match delete_onchain_signal_scores_older_than(&pool, days).await {
                 Ok(n) if n > 0 => {

@@ -26,15 +26,36 @@
 //!   and target-engine respectively. The detector contract in
 //!   `qtss-domain` makes this enforced at the type level.
 
+mod aggregator;
+mod combination;
+mod common;
+mod decomposition;
 mod config;
 mod detector;
+mod diagonal;
 mod error;
+mod extended_impulse;
 mod fibs;
+mod flat;
+mod formation;
+mod projection;
 mod rules;
+mod triangle;
+mod truncated_fifth;
+mod zigzag;
 
 #[cfg(test)]
 mod tests;
 
+pub use aggregator::{ElliottDetectorSet, ElliottFormationToggles};
+pub use combination::CombinationDetector;
 pub use config::ElliottConfig;
 pub use detector::ImpulseDetector;
+pub use diagonal::{DiagonalDetector, DiagonalKind};
 pub use error::{ElliottError, ElliottResult};
+pub use extended_impulse::ExtendedImpulseDetector;
+pub use flat::FlatDetector;
+pub use formation::FormationDetector;
+pub use triangle::TriangleDetector;
+pub use truncated_fifth::TruncatedFifthDetector;
+pub use zigzag::ZigzagDetector;

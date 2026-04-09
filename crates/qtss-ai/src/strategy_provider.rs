@@ -307,6 +307,8 @@ mod tests {
                 },
                 detected_at: Utc::now(),
                 raw_meta: serde_json::json!({"entry_price": 50000.0}),
+                projected_anchors: Vec::new(),
+                sub_wave_anchors: Vec::new(),
             },
             channel_scores: vec![ChannelScore {
                 channel: "test".into(),

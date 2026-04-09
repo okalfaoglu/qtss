@@ -8,6 +8,13 @@
       "port": 5173
     },
     {
+      "name": "web-v2-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "web-v2"],
+      "port": 5174,
+      "autoPort": true
+    },
+    {
       "name": "api-server",
       "runtimeExecutable": "cargo",
       "runtimeArgs": ["run", "-p", "qtss-api"],

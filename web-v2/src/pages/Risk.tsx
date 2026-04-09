@@ -1,7 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "../lib/api";
 import type { RiskGauge, RiskHud } from "../lib/types";
+
+interface KillSwitchResetResponse {
+  status: string;
+  kill_switch_trading_halted: boolean;
+  note: string;
+}
 
 // Map a 0..1 utilization fraction to a tailwind color class. We do not
 // hardcode thresholds anywhere else — this single function owns the
@@ -39,11 +45,29 @@ function GaugeRow({ gauge }: { gauge: RiskGauge }) {
 }
 
 export function Risk() {
+  const qc = useQueryClient();
   const query = useQuery({
     queryKey: ["v2", "risk"],
     queryFn: () => apiFetch<RiskHud>("/v2/risk"),
     refetchInterval: 5_000,
   });
+
+  const reset = useMutation({
+    mutationFn: () =>
+      apiFetch<KillSwitchResetResponse>("/admin/kill-switch/reset", {
+        method: "POST",
+        body: JSON.stringify({ confirm: true }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["v2", "risk"] });
+    },
+  });
+
+  const handleReset = () => {
+    if (window.confirm("Kill-switch'i sıfırlamak istediğinizden emin misiniz?")) {
+      reset.mutate();
+    }
+  };
 
   if (query.isLoading) {
     return <div className="text-sm text-zinc-400">Loading risk HUD…</div>;
@@ -60,8 +84,16 @@ export function Risk() {
   return (
     <div className="space-y-6">
       {hud.kill_switch_armed && (
-        <div className="rounded border border-red-700 bg-red-950/60 px-4 py-3 text-sm font-semibold text-red-200">
-          KILL-SWITCH ARMED — hard drawdown threshold breached
+        <div className="flex items-center justify-between gap-3 rounded border border-red-700 bg-red-950/60 px-4 py-3 text-sm font-semibold text-red-200">
+          <span>KILL-SWITCH ARMED — hard drawdown threshold breached</span>
+          <button
+            type="button"
+            onClick={handleReset}
+            disabled={reset.isPending}
+            className="rounded border border-red-400/50 bg-red-500/20 px-3 py-1 text-xs uppercase text-red-100 hover:bg-red-500/30 disabled:opacity-50"
+          >
+            {reset.isPending ? "Resetting…" : "Reset kill-switch"}
+          </button>
         </div>
       )}
       {hud.any_breached && !hud.kill_switch_armed && (
@@ -70,8 +102,21 @@ export function Risk() {
         </div>
       )}
       {hud.kill_switch_manual && (
-        <div className="rounded border border-zinc-700 bg-zinc-900/60 px-4 py-3 text-sm text-zinc-300">
-          Manual kill-switch is engaged
+        <div className="flex items-center justify-between gap-3 rounded border border-zinc-700 bg-zinc-900/60 px-4 py-3 text-sm text-zinc-300">
+          <span>Manual kill-switch is engaged</span>
+          <button
+            type="button"
+            onClick={handleReset}
+            disabled={reset.isPending}
+            className="rounded border border-zinc-600 bg-zinc-800 px-3 py-1 text-xs uppercase text-zinc-200 hover:bg-zinc-700 disabled:opacity-50"
+          >
+            {reset.isPending ? "Resetting…" : "Reset kill-switch"}
+          </button>
+        </div>
+      )}
+      {reset.isError && (
+        <div className="rounded border border-red-800 bg-red-950/40 px-3 py-2 text-xs text-red-300">
+          Reset failed: {(reset.error as Error).message}
         </div>
       )}
 

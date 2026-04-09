@@ -21,6 +21,20 @@ qtss-reconcile.workspace = true
 qtss-strategy.workspace = true
 qtss-analysis.workspace = true
 qtss-ai.workspace = true
+qtss-pivots.workspace = true
+qtss-regime.workspace = true
+qtss-elliott.workspace = true
+qtss-harmonic.workspace = true
+qtss-classical.workspace = true
+qtss-wyckoff.workspace = true
+qtss-tbm.workspace = true
+qtss-onchain.workspace = true
+qtss-confluence.workspace = true
+qtss-setup-engine.workspace = true
+qtss-indicators.workspace = true
+qtss-validator = { path = "../qtss-validator" }
+qtss-eventbus = { path = "../qtss-eventbus" }
+qtss-risk = { path = "../qtss-risk" }
 sqlx.workspace = true
 axum.workspace = true
 serde.workspace = true
@@ -35,6 +49,8 @@ tracing.workspace = true
 anyhow.workspace = true
 futures-util.workspace = true
 tokio-tungstenite.workspace = true
+plotters = { version = "0.3.7", default-features = false, features = ["ab_glyph", "bitmap_backend", "bitmap_encoder", "image", "ttf"] }
+tempfile = "3"
 
 [[bin]]
 name = "qtss-worker"

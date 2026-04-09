@@ -34,6 +34,18 @@ mod intake_auto_promote;
 mod intake_playbook_engine;
 mod lifecycle_manager;
 mod position_status_notify;
+mod v2_detection_orchestrator;
+mod v2_detection_sweeper;
+mod v2_detection_validator;
+mod v2_pattern_strategy_bridge;
+mod v2_risk_bridge;
+mod v2_tbm_detector;
+mod v2_onchain_loop;
+mod v2_onchain_bridge;
+mod v2_confluence_loop;
+mod setup_chart;
+mod v2_setup_loop;
+mod v2_setup_telegram_loop;
 
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -260,6 +272,58 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(copy_trade_follower::copy_trade_follower_loop(ct_pool));
         let ctq_pool = pool.clone();
         tokio::spawn(copy_trade_queue::copy_trade_queue_loop(ctq_pool));
+        let v2_det_pool = pool.clone();
+        tokio::spawn(v2_detection_orchestrator::v2_detection_orchestrator_loop(
+            v2_det_pool,
+        ));
+        let v2_sweep_pool = pool.clone();
+        tokio::spawn(v2_detection_sweeper::v2_detection_sweeper_loop(v2_sweep_pool));
+        let v2_tbm_pool = pool.clone();
+        // Faz 7.7: TBM consumes onchain via the StoredV2OnchainProvider
+        // bridge, which reads `qtss_v2_onchain_metrics` (populated by the
+        // v2_onchain_loop fetcher pipeline). Stale-after window is fixed
+        // to 30 minutes here; tunable via `onchain.stale_after_s` would
+        // be a follow-up if operators ask for it.
+        let onchain_provider: std::sync::Arc<dyn qtss_tbm::onchain::OnchainMetricsProvider> =
+            std::sync::Arc::new(v2_onchain_bridge::StoredV2OnchainProvider::new(
+                v2_tbm_pool.clone(),
+                1800,
+            ));
+        tokio::spawn(v2_tbm_detector::v2_tbm_detector_loop(
+            v2_tbm_pool,
+            onchain_provider,
+        ));
+        let v2_onchain_pool = pool.clone();
+        tokio::spawn(v2_onchain_loop::v2_onchain_loop(v2_onchain_pool));
+        let v2_conf_pool = pool.clone();
+        tokio::spawn(v2_confluence_loop::v2_confluence_loop(v2_conf_pool));
+        let v2_setup_pool = pool.clone();
+        tokio::spawn(v2_setup_loop::v2_setup_loop(v2_setup_pool));
+        let v2_setup_tg_pool = pool.clone();
+        tokio::spawn(v2_setup_telegram_loop::v2_setup_telegram_loop(
+            v2_setup_tg_pool,
+        ));
+        let v2_val_pool = pool.clone();
+        // Shared in-process event bus: the validator publishes
+        // PATTERN_VALIDATED here, strategy providers subscribe.
+        let v2_bus = std::sync::Arc::new(qtss_eventbus::InProcessBus::new());
+        let v2_val_bus = v2_bus.clone();
+        tokio::spawn(v2_detection_validator::v2_detection_validator_loop(
+            v2_val_pool,
+            v2_val_bus,
+        ));
+        let v2_strat_pool = pool.clone();
+        let v2_strat_bus = v2_bus.clone();
+        tokio::spawn(v2_pattern_strategy_bridge::v2_pattern_strategy_bridge_loop(
+            v2_strat_pool,
+            v2_strat_bus,
+        ));
+        let v2_risk_pool = pool.clone();
+        let v2_risk_bus = v2_bus.clone();
+        tokio::spawn(v2_risk_bridge::v2_risk_bridge_loop(
+            v2_risk_pool,
+            v2_risk_bus,
+        ));
         strategy_runner::spawn_if_enabled(&pool).await;
         ai_engine::spawn_ai_background_tasks(&pool).await;
         let ai_exec_pool = pool.clone();

@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from "react-router-dom";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { logout } from "../lib/auth";
 
@@ -15,6 +15,9 @@ interface NavEntry {
 const NAV_ENTRIES: NavEntry[] = [
   { label: "Dashboard", to: "/v2/dashboard", enabled: true },
   { label: "Chart", to: "/v2/chart", enabled: true },
+  { label: "Detections", to: "/v2/detections", enabled: true },
+  { label: "TBM", to: "/v2/tbm", enabled: true },
+  { label: "Onchain", to: "/v2/onchain", enabled: true },
   { label: "Regime", to: "/v2/regime", enabled: true },
   { label: "Scenarios", to: "/v2/scenarios", enabled: true },
   { label: "Monte Carlo", to: "/v2/montecarlo", enabled: true },
@@ -29,14 +32,25 @@ const NAV_ENTRIES: NavEntry[] = [
 
 export function Layout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
+  const [navOpen, setNavOpen] = useState(false);
   const handleLogout = () => {
     logout();
     navigate("/login", { replace: true });
   };
 
   return (
-    <div className="flex min-h-screen">
-      <aside className="w-56 shrink-0 border-r border-zinc-800 bg-zinc-900/60">
+    <div className="relative flex min-h-screen">
+      {navOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50"
+          onClick={() => setNavOpen(false)}
+        />
+      )}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 w-56 shrink-0 transform border-r border-zinc-800 bg-zinc-900 transition-transform duration-200 ${
+          navOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
         <div className="px-4 py-5 text-lg font-semibold tracking-tight text-zinc-100">
           QTSS <span className="text-emerald-400">v2</span>
         </div>
@@ -46,6 +60,7 @@ export function Layout({ children }: { children: ReactNode }) {
               <NavLink
                 key={entry.to}
                 to={entry.to}
+                onClick={() => setNavOpen(false)}
                 className={({ isActive }) =>
                   `rounded px-3 py-2 text-sm transition ${
                     isActive
@@ -69,8 +84,34 @@ export function Layout({ children }: { children: ReactNode }) {
         </nav>
       </aside>
       <div className="flex min-h-screen flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/40 px-6 py-3">
-          <div className="text-sm text-zinc-400">QTSS v2 console</div>
+        <header className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/40 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setNavOpen((o) => !o)}
+              aria-label="Toggle navigation"
+              className="flex h-8 w-8 items-center justify-center rounded border border-zinc-700 text-zinc-300 hover:border-zinc-500 hover:text-zinc-100"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <line x1="3" y1="12" x2="21" y2="12" />
+                <line x1="3" y1="18" x2="21" y2="18" />
+              </svg>
+            </button>
+            <div className="text-sm text-zinc-400">
+              QTSS <span className="text-emerald-400">v2</span> console
+            </div>
+          </div>
           <button
             type="button"
             onClick={handleLogout}

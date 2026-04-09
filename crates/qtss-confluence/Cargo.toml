@@ -1,0 +1,10 @@
+[package]
+name = "qtss-confluence"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Faz 7.8 — dual-track confluence scoring (erken_uyari + guven). Pure scoring crate; reads no DB, knows no asset class."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
