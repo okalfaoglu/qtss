@@ -18,7 +18,7 @@ const NAV_ENTRIES: NavEntry[] = [
   { label: "Regime", to: "/v2/regime", enabled: false },
   { label: "Scenarios", to: "/v2/scenarios", enabled: false },
   { label: "Monte Carlo", to: "/v2/montecarlo", enabled: false },
-  { label: "Risk", to: "/v2/risk", enabled: false },
+  { label: "Risk", to: "/v2/risk", enabled: true },
   { label: "Blotter", to: "/v2/blotter", enabled: false },
   { label: "Strategies", to: "/v2/strategies", enabled: false },
   { label: "Config", to: "/v2/config", enabled: false },

@@ -34,6 +34,22 @@ export interface EquityPoint {
   equity: string;
 }
 
+export interface RiskGauge {
+  label: string;
+  value: string;
+  cap: string;
+  utilization: string;
+  breached: boolean;
+}
+
+export interface RiskHud {
+  generated_at: string;
+  kill_switch_manual: boolean;
+  any_breached: boolean;
+  kill_switch_armed: boolean;
+  gauges: RiskGauge[];
+}
+
 export interface DashboardSnapshot {
   portfolio: PortfolioCard;
   risk: RiskCard;
