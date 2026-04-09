@@ -24,7 +24,7 @@ const NAV_ENTRIES: NavEntry[] = [
   { label: "Config", to: "/v2/config", enabled: true },
   { label: "AI Decisions", to: "/v2/ai-decisions", enabled: true },
   { label: "Audit", to: "/v2/audit", enabled: true },
-  { label: "Users", to: "/v2/users", enabled: false },
+  { label: "Users", to: "/v2/users", enabled: true },
 ];
 
 export function Layout({ children }: { children: ReactNode }) {

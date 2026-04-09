@@ -289,6 +289,21 @@ export interface AuditView {
   entries: AuditEntry[];
 }
 
+export interface UserCard {
+  id: string;
+  email: string;
+  display_name: string | null;
+  is_admin: boolean;
+  created_at: string;
+  roles: string[];
+  permissions: string[];
+}
+
+export interface UsersView {
+  generated_at: string;
+  users: UserCard[];
+}
+
 export interface DashboardSnapshot {
   portfolio: PortfolioCard;
   risk: RiskCard;
