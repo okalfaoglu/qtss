@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { FormEvent, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "../lib/api";
 import type { ConfigEditorView, ConfigEntry } from "../lib/types";
@@ -13,14 +13,132 @@ function valuePreview(entry: ConfigEntry): string {
   }
 }
 
+interface UpsertBody {
+  module: string;
+  config_key: string;
+  value: unknown;
+  schema_version?: number;
+  description?: string;
+  is_secret?: boolean;
+}
+
+function EditModal({
+  entry,
+  onClose,
+}: {
+  entry: ConfigEntry;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  // Pretty-print on open so the textarea is editable.
+  const [text, setText] = useState(() => {
+    try {
+      return JSON.stringify(entry.value, null, 2);
+    } catch {
+      return String(entry.value);
+    }
+  });
+  const [parseError, setParseError] = useState<string | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: (body: UpsertBody) =>
+      apiFetch<ConfigEntry>("/admin/system-config", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["v2", "config"] });
+      onClose();
+    },
+  });
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    setParseError(null);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (err) {
+      setParseError(`Invalid JSON: ${(err as Error).message}`);
+      return;
+    }
+    mutation.mutate({
+      module: entry.module,
+      config_key: entry.config_key,
+      value: parsed,
+      schema_version: entry.schema_version,
+      description: entry.description ?? undefined,
+      is_secret: entry.is_secret,
+    });
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={onClose}
+    >
+      <form
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={handleSubmit}
+        className="w-full max-w-2xl space-y-3 rounded-lg border border-zinc-800 bg-zinc-900 p-5 shadow-2xl"
+      >
+        <div>
+          <div className="text-xs uppercase text-zinc-500">{entry.module}</div>
+          <div className="font-mono text-base text-zinc-100">{entry.config_key}</div>
+          {entry.description && (
+            <div className="mt-1 text-xs text-zinc-400">{entry.description}</div>
+          )}
+        </div>
+
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          spellCheck={false}
+          className="h-72 w-full resize-y rounded border border-zinc-700 bg-zinc-950 p-3 font-mono text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none"
+        />
+
+        {parseError && (
+          <div className="rounded border border-red-800 bg-red-950/40 px-3 py-2 text-xs text-red-300">
+            {parseError}
+          </div>
+        )}
+        {mutation.isError && (
+          <div className="rounded border border-red-800 bg-red-950/40 px-3 py-2 text-xs text-red-300">
+            {(mutation.error as Error).message}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:border-zinc-500"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={mutation.isPending}
+            className="rounded bg-emerald-500 px-3 py-1.5 text-sm font-medium text-zinc-950 hover:bg-emerald-400 disabled:opacity-50"
+          >
+            {mutation.isPending ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function GroupSection({
   module,
   entries,
   filter,
+  onEdit,
 }: {
   module: string;
   entries: ConfigEntry[];
   filter: string;
+  onEdit: (entry: ConfigEntry) => void;
 }) {
   const [open, setOpen] = useState(true);
   const filtered = useMemo(() => {
@@ -56,6 +174,7 @@ function GroupSection({
               <th className="px-4 py-2 text-left">Value</th>
               <th className="px-4 py-2 text-left">Description</th>
               <th className="px-4 py-2 text-left">Updated</th>
+              <th className="px-4 py-2 text-left">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -74,6 +193,15 @@ function GroupSection({
                 </td>
                 <td className="px-4 py-2 text-xs text-zinc-400">{e.description ?? "—"}</td>
                 <td className="px-4 py-2 font-mono text-xs text-zinc-500">{e.updated_at}</td>
+                <td className="px-4 py-2">
+                  <button
+                    type="button"
+                    onClick={() => onEdit(e)}
+                    className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:border-emerald-500/40 hover:text-emerald-300"
+                  >
+                    Edit
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -85,6 +213,7 @@ function GroupSection({
 
 export function Config() {
   const [filter, setFilter] = useState("");
+  const [editing, setEditing] = useState<ConfigEntry | null>(null);
   const query = useQuery({
     queryKey: ["v2", "config"],
     queryFn: () => apiFetch<ConfigEditorView>("/v2/config?limit=500"),
@@ -113,11 +242,14 @@ export function Config() {
             module={g.module}
             entries={g.entries}
             filter={filter}
+            onEdit={setEditing}
           />
         ))}
       {query.data && (
         <div className="text-xs text-zinc-500">Generated at {query.data.generated_at}</div>
       )}
+
+      {editing && <EditModal entry={editing} onClose={() => setEditing(null)} />}
     </div>
   );
 }
