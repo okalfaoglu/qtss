@@ -207,6 +207,30 @@ export interface ChartWorkspace {
   open_orders: OpenOrderOverlay[];
 }
 
+export interface TargetBand {
+  low: string;
+  high: string;
+}
+
+export interface ScenarioNode {
+  id: string;
+  label: string;
+  trigger: string;
+  probability: string;
+  target_band: TargetBand;
+  children: ScenarioNode[];
+}
+
+export interface ScenarioTree {
+  generated_at: string;
+  venue: string;
+  symbol: string;
+  timeframe: string;
+  horizon_bars: number;
+  anchor_price: string;
+  root: ScenarioNode;
+}
+
 export interface DashboardSnapshot {
   portfolio: PortfolioCard;
   risk: RiskCard;
