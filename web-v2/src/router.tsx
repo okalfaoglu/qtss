@@ -15,6 +15,7 @@ import { Tbm } from "./pages/Tbm";
 import { Onchain } from "./pages/Onchain";
 import { Scenarios } from "./pages/Scenarios";
 import { Config } from "./pages/Config";
+import { Reconcile } from "./pages/Reconcile";
 import { AiDecisions } from "./pages/AiDecisions";
 import { Audit } from "./pages/Audit";
 import { Users } from "./pages/Users";
@@ -53,6 +54,7 @@ export const router = createBrowserRouter([
       { path: "onchain", element: <Onchain /> },
       { path: "scenarios", element: <Scenarios /> },
       { path: "config", element: <Config /> },
+      { path: "reconcile", element: <Reconcile /> },
       { path: "ai-decisions", element: <AiDecisions /> },
       { path: "audit", element: <Audit /> },
       { path: "users", element: <Users /> },

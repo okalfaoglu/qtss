@@ -29,8 +29,8 @@ use qtss_domain::v2::detection::{
 use qtss_domain::v2::regime::RegimeSnapshot;
 use qtss_eventbus::{topics::PATTERN_VALIDATED, EventBus, InProcessBus};
 use qtss_storage::{
-    resolve_system_f64, resolve_system_u64, resolve_worker_enabled_flag, DetectionFilter,
-    DetectionRow, V2DetectionRepository,
+    resolve_system_f64, resolve_system_u64, resolve_worker_enabled_flag,
+    DetectionFilter, DetectionOutcomeRepository, DetectionRow, V2DetectionRepository,
 };
 use qtss_validator::{
     is_higher_timeframe, HistoricalHitRate, HitRateStat, MultiTimeframeConfluence, RegimeAlignment,
@@ -121,7 +121,7 @@ async fn run_pass(
     .await as i64;
 
     let validator = build_validator(pool).await?;
-    let hit_rates = load_hit_rates(repo.as_ref()).await;
+    let hit_rates = load_hit_rates(repo.as_ref(), pool).await;
     let tbm_boost_cfg = TbmBoostConfig::load(pool).await;
 
     let htf_lookup_limit = resolve_system_u64(
@@ -180,8 +180,31 @@ async fn run_pass(
 /// where `<TF>` is the `Timeframe` Debug variant ("M1", "H4", …).
 /// Failures are logged and degrade gracefully to an empty map — the
 /// historical channel will simply abstain from voting.
-async fn load_hit_rates(repo: &V2DetectionRepository) -> HashMap<String, HitRateStat> {
+async fn load_hit_rates(repo: &V2DetectionRepository, pool: &PgPool) -> HashMap<String, HitRateStat> {
     let mut out: HashMap<String, HitRateStat> = HashMap::new();
+
+    // Prefer real outcomes from detection_outcomes table (self-learning).
+    let outcome_repo = DetectionOutcomeRepository::new(pool.clone());
+    if let Ok(real_rates) = outcome_repo.hit_rates().await {
+        for r in &real_rates {
+            if r.total < 5 {
+                continue; // Need minimum sample size.
+            }
+            let Some(tf_dbg) = timeframe_debug_label(&r.timeframe) else {
+                continue;
+            };
+            let key = format!("{}:{}@{}", r.family, r.subkind, tf_dbg);
+            out.insert(
+                key,
+                HitRateStat {
+                    samples: r.total as u32,
+                    hit_rate: r.win_rate as f32,
+                },
+            );
+        }
+    }
+
+    // Fall back to the cheap proxy for patterns that have no real outcomes yet.
     let rows = match repo.historical_outcome_counts().await {
         Ok(rows) => rows,
         Err(e) => {
@@ -194,6 +217,10 @@ async fn load_hit_rates(repo: &V2DetectionRepository) -> HashMap<String, HitRate
             continue;
         };
         let key = format!("{}:{}@{}", row.family, row.subkind, tf_dbg);
+        // Only insert if real outcomes didn't already provide this key.
+        if out.contains_key(&key) {
+            continue;
+        }
         let total = row.validated_count + row.invalidated_count;
         if total <= 0 {
             continue;
@@ -331,14 +358,18 @@ async fn build_validator(pool: &PgPool) -> anyhow::Result<Validator> {
 /// round-trip cleanly; missing pieces (segment, ValidationContext
 /// extras) are filled with neutral defaults.
 fn reconstruct_detection(row: &DetectionRow) -> Option<Detection> {
-    let timeframe = parse_timeframe(&row.timeframe)?;
+    let Some(timeframe) = parse_timeframe(&row.timeframe) else {
+        warn!(id = %row.id, tf = %row.timeframe, "reconstruct: unknown timeframe");
+        return None;
+    };
     // We don't keep `segment` on the row — fall back to the default
     // crypto-spot/futures heuristic by passing empty segment, which the
     // orchestrator's parser already handles.
     let instrument = build_instrument(&row.exchange, "", &row.symbol);
     let kind = build_pattern_kind(&row.family, &row.subkind);
     let anchors: Vec<PivotRef> = serde_json::from_value(row.anchors.clone()).unwrap_or_default();
-    let regime: RegimeSnapshot = serde_json::from_value(row.regime.clone()).ok()?;
+    let regime: RegimeSnapshot = serde_json::from_value(row.regime.clone())
+        .unwrap_or_else(|_| RegimeSnapshot::neutral_default());
     let state = match row.state.as_str() {
         "forming" => PatternState::Forming,
         "confirmed" => PatternState::Confirmed,

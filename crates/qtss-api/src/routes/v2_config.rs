@@ -5,31 +5,45 @@
 //! Mutations stay on the existing `/admin/system-config` admin route
 //! so the role boundary stays clean: dashboard roles browse the
 //! catalogue, admins edit it.
+//!
+//! **History & rollback** (migration 0037):
+//! - `GET  /v2/config/:module/:key/history` — audit trail (dashboard roles)
+//! - `POST /v2/config/:module/:key/rollback` — restore old value (admin only)
 
-use axum::extract::{Query, State};
-use axum::routing::get;
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use serde::Deserialize;
+use uuid::Uuid;
 
+use qtss_common::{log_business, QtssLogLevel};
 use qtss_gui_api::{group_config_entries, ConfigEditorView, ConfigEntry};
-use qtss_storage::SystemConfigRow;
+use qtss_storage::{SystemConfigAuditRow, SystemConfigRow};
 
 use crate::error::ApiError;
+use crate::oauth::AccessClaims;
 use crate::state::SharedState;
+
+// ─── List ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 pub struct ConfigQuery {
-    /// Optional module filter -- when set, only that module's rows
-    /// are returned (still grouped, just one group).
     pub module: Option<String>,
-    /// Hard cap on rows fetched from storage. Falls back to env, then
-    /// to 500. The repository itself clamps at 500 server-side.
     pub limit: Option<i64>,
 }
 
 pub fn v2_config_router() -> Router<SharedState> {
-    Router::new().route("/v2/config", get(get_config))
+    Router::new()
+        .route("/v2/config", get(get_config))
+        .route("/v2/config/{module}/{key}/history", get(get_history))
+}
+
+/// Rollback requires admin role — mounted separately.
+pub fn v2_config_admin_router() -> Router<SharedState> {
+    Router::new()
+        .route("/v2/config/{module}/{key}/rollback", post(post_rollback))
 }
 
 async fn get_config(
@@ -55,6 +69,84 @@ async fn get_config(
         groups,
     }))
 }
+
+// ─── History ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct HistoryQuery {
+    pub limit: Option<i64>,
+}
+
+async fn get_history(
+    State(st): State<SharedState>,
+    Path((module, key)): Path<(String, String)>,
+    Query(q): Query<HistoryQuery>,
+) -> Result<Json<Vec<SystemConfigAuditRow>>, ApiError> {
+    let limit = q.limit.unwrap_or(20).clamp(1, 100);
+    let rows = st.system_config_audit.history(&module, &key, limit).await?;
+    Ok(Json(rows))
+}
+
+// ─── Rollback ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct RollbackBody {
+    /// The `system_config_audit.id` whose `old_value` (or `new_value`) to restore.
+    pub audit_id: i64,
+    /// Which snapshot to restore: `"old"` (default) or `"new"`.
+    pub snapshot: Option<String>,
+}
+
+async fn post_rollback(
+    axum::Extension(claims): axum::Extension<AccessClaims>,
+    State(st): State<SharedState>,
+    Path((module, key)): Path<(String, String)>,
+    Json(body): Json<RollbackBody>,
+) -> Result<Json<SystemConfigRow>, ApiError> {
+    let uid = Uuid::parse_str(claims.sub.trim()).ok();
+
+    let audit_row = st
+        .system_config_audit
+        .get_by_id(body.audit_id)
+        .await?
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "audit entry not found"))?;
+
+    // Verify the audit entry belongs to the requested key.
+    if audit_row.module != module || audit_row.config_key != key {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "audit entry does not match the requested config key",
+        ));
+    }
+
+    let use_new = body.snapshot.as_deref() == Some("new");
+    let restore_value = if use_new {
+        audit_row.new_value
+    } else {
+        audit_row.old_value
+    };
+    let restore_value = restore_value.ok_or_else(|| {
+        ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "selected snapshot is null (cannot restore)",
+        )
+    })?;
+
+    let row = st
+        .system_config
+        .upsert(&module, &key, restore_value, None, None, None, uid)
+        .await?;
+
+    log_business(
+        QtssLogLevel::Info,
+        "qtss_api::v2_config",
+        format!("rollback {}.{} to audit_id={}", module, key, body.audit_id),
+    );
+
+    Ok(Json(row))
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────
 
 fn row_to_entry(r: SystemConfigRow) -> ConfigEntry {
     let masked = ConfigEntry::detect_masked(&r.value, r.is_secret);

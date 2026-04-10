@@ -40,6 +40,7 @@ mod v2_scenarios;
 mod v2_strategies;
 mod v2_tbm;
 mod v2_onchain;
+mod v2_reconcile;
 mod v2_confluence;
 mod v2_engine_symbols;
 mod v2_events_stream;
@@ -50,7 +51,7 @@ pub use v2_ai_decisions::v2_ai_decisions_router;
 pub use v2_audit::v2_audit_router;
 pub use v2_blotter::v2_blotter_router;
 pub use v2_chart::v2_chart_router;
-pub use v2_config::v2_config_router;
+pub use v2_config::{v2_config_admin_router, v2_config_router};
 pub use v2_dashboard::{v2_dashboard_router, V2DashboardHandle};
 pub use v2_detections::v2_detections_router;
 pub use v2_montecarlo::v2_montecarlo_router;
@@ -62,6 +63,7 @@ pub use v2_strategies::{
 };
 pub use v2_tbm::v2_tbm_router;
 pub use v2_onchain::v2_onchain_router;
+pub use v2_reconcile::v2_reconcile_router;
 pub use v2_confluence::v2_confluence_router;
 pub use v2_engine_symbols::v2_engine_symbols_router;
 pub use v2_events_stream::v2_events_stream_router;
@@ -120,10 +122,12 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_regime_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_montecarlo_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_risk_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_reconcile_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_blotter_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_strategies_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_strategies_admin_router().layer(from_fn(require_admin)))
         .merge(v2_config_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_config_admin_router().layer(from_fn(require_admin)))
         .merge(v2_ai_decisions_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_audit_router().layer(from_fn(require_audit_read)))
         .merge(v2_users_router().layer(from_fn(require_admin)))

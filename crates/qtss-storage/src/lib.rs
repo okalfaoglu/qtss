@@ -1,3 +1,4 @@
+pub mod account_drawdown;
 pub mod ai_approval;
 pub mod audit_log;
 pub mod catalog;
@@ -27,17 +28,22 @@ pub mod range_signal_execution;
 pub mod migration_checksum_sync;
 pub mod pool;
 pub mod range_engine;
+pub mod reconcile_reports;
 pub mod system_config;
+pub mod system_config_audit;
 pub mod user_permissions;
 pub mod users;
 pub mod v2_confluence;
 pub mod v2_correlation_groups;
+pub mod v2_detection_outcomes;
 pub mod v2_detections;
 pub mod v2_onchain_metrics;
 pub mod v2_setup_events;
 pub mod v2_setup_rejections;
 pub mod v2_setups;
 
+pub use account_drawdown::{AccountDrawdownRepository, DrawdownSnapshotRow};
+pub use v2_detection_outcomes::{DetectionOutcomeRepository, DetectionOutcomeRow, OutcomeHitRate};
 pub use v2_detections::{
     DetectionFilter, DetectionRow, HistoricalOutcomeRow, NewDetection, V2DetectionRepository,
 };
@@ -147,10 +153,12 @@ pub use range_engine::{
     clear_refresh_requested, default_range_engine_json, fetch_range_engine_json, merge_json_deep,
     upsert_range_engine_json, RANGE_ENGINE_APP_CONFIG_KEY,
 };
+pub use reconcile_reports::{ReconcileReportRepository, ReconcileReportRow};
 pub use range_signal_execution::{
     list_range_signal_events_pending_paper_execution, try_claim_range_signal_event_for_paper_execution,
     update_range_signal_paper_execution_status, RangeSignalEventPendingExecutionRow,
 };
 pub use system_config::{SystemConfigRepository, SystemConfigRow};
+pub use system_config_audit::{SystemConfigAuditRepository, SystemConfigAuditRow};
 pub use user_permissions::UserPermissionRepository;
 pub use users::UserRepository;

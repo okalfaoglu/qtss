@@ -1,8 +1,8 @@
 use qtss_storage::{
-    AiApprovalRepository, AppConfigRepository, CopySubscriptionRepository,
+    AccountDrawdownRepository, AiApprovalRepository, AppConfigRepository, CopySubscriptionRepository,
     ExchangeAccountRepository, ExchangeFillRepository, ExchangeOrderRepository, NotifyOutboxRepository,
-    PaperLedgerRepository, PnlRollupRepository, SystemConfigRepository, UserPermissionRepository,
-    UserRepository,
+    PaperLedgerRepository, PnlRollupRepository, ReconcileReportRepository,
+    SystemConfigAuditRepository, SystemConfigRepository, UserPermissionRepository, UserRepository,
 };
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -25,7 +25,10 @@ pub struct AppState {
     pub notify_outbox: NotifyOutboxRepository,
     pub user_permissions: UserPermissionRepository,
     pub users: UserRepository,
+    pub account_drawdown: AccountDrawdownRepository,
+    pub reconcile_reports: ReconcileReportRepository,
     pub system_config: SystemConfigRepository,
+    pub system_config_audit: SystemConfigAuditRepository,
     pub jwt: Option<JwtIssuer>,
     pub refresh_ttl_secs: i64,
     pub v2_dashboard: Arc<V2DashboardHandle>,
@@ -173,6 +176,10 @@ impl AppState {
         .map_err(|e| anyhow::anyhow!("pg notify bridge start: {e}"))?;
         let event_bridge = Arc::new(event_bridge);
 
+        let account_drawdown = AccountDrawdownRepository::new(pool.clone());
+        let reconcile_reports = ReconcileReportRepository::new(pool.clone());
+        let system_config_audit = SystemConfigAuditRepository::new(pool.clone());
+
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .user_agent(concat!("qtss-api/", env!("CARGO_PKG_VERSION")))
@@ -193,6 +200,9 @@ impl AppState {
             notify_outbox,
             user_permissions,
             users,
+            account_drawdown,
+            reconcile_reports,
+            system_config_audit,
             system_config,
             jwt: Some(jwt),
             refresh_ttl_secs: refresh_ttl,

@@ -267,6 +267,17 @@ export interface ConfigEditorView {
   groups: ConfigGroup[];
 }
 
+export interface ConfigAuditEntry {
+  id: number;
+  module: string;
+  config_key: string;
+  action: string;
+  old_value: unknown | null;
+  new_value: unknown | null;
+  changed_by: string | null;
+  changed_at: string;
+}
+
 export type AiDecisionStatus = "pending" | "approved" | "rejected" | "other";
 
 export interface AiDecisionEntry {

@@ -38,6 +38,7 @@ mod v2_detection_sweeper;
 mod v2_detection_validator;
 mod v2_pattern_strategy_bridge;
 mod v2_risk_bridge;
+mod v2_drawdown_snapshot;
 mod v2_tbm_detector;
 mod v2_onchain_loop;
 mod v2_onchain_bridge;
@@ -330,6 +331,7 @@ async fn main() -> anyhow::Result<()> {
             v2_risk_pool,
             v2_risk_bus,
         ));
+        tokio::spawn(v2_drawdown_snapshot::v2_drawdown_snapshot_loop(pool.clone()));
         strategy_runner::spawn_if_enabled(&pool).await;
         ai_engine::spawn_ai_background_tasks(&pool).await;
         let ai_exec_pool = pool.clone();

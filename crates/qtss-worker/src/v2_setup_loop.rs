@@ -25,8 +25,9 @@ use qtss_storage::v2_confluence::fetch_latest_v2_confluence;
 use qtss_storage::{
     insert_v2_setup, insert_v2_setup_event, insert_v2_setup_rejection, list_enabled_engine_symbols,
     list_groups_for_symbol, list_open_v2_setups, list_recent_bars, resolve_system_f64,
-    resolve_system_u64, resolve_worker_enabled_flag, update_v2_setup_state, EngineSymbolRow,
-    V2SetupEventInsert, V2SetupInsert, V2SetupRejectionInsert, V2SetupRow,
+    resolve_system_u64, resolve_worker_enabled_flag, update_v2_setup_state,
+    DetectionOutcomeRepository, EngineSymbolRow, V2SetupEventInsert, V2SetupInsert,
+    V2SetupRejectionInsert, V2SetupRow,
 };
 use rust_decimal::prelude::ToPrimitive;
 use serde_json::json;
@@ -532,6 +533,9 @@ async fn close_setup(
         },
     )
     .await?;
+    // Record detection outcome for validator self-learning.
+    record_detection_outcome(pool, row, &reason, exit_price).await;
+
     // Drop from local allocator context — first match removed.
     let dir = direction_from_str(&row.direction);
     if let Some(p) = Profile::from_str(&row.profile) {
@@ -542,6 +546,65 @@ async fn close_setup(
         }
     }
     Ok(())
+}
+
+/// Map close reason to outcome, compute P&L %, and persist.
+async fn record_detection_outcome(
+    pool: &PgPool,
+    row: &V2SetupRow,
+    reason: &CloseReason,
+    exit_price: f64,
+) {
+    // Need a detection_id — try the FK column, fall back to raw_meta.
+    let detection_id = row.detection_id.or_else(|| {
+        row.raw_meta
+            .get("detection_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+    });
+    let Some(det_id) = detection_id else {
+        return; // No originating detection — nothing to record.
+    };
+
+    let outcome = match reason {
+        CloseReason::TargetHit => "win",
+        CloseReason::StopHit => "loss",
+        CloseReason::ReverseSignal | CloseReason::Manual => "scratch",
+    };
+
+    let pnl_pct = row.entry_price.map(|ep| {
+        let ep = ep as f64;
+        if ep.abs() < 1e-12 {
+            return 0.0_f32;
+        }
+        let pct = match row.direction.as_str() {
+            "long" => (exit_price - ep) / ep * 100.0,
+            "short" => (ep - exit_price) / ep * 100.0,
+            _ => 0.0,
+        };
+        pct as f32
+    });
+
+    let duration_secs = row.created_at.signed_duration_since(chrono::DateTime::UNIX_EPOCH).num_seconds();
+    let now_secs = chrono::Utc::now().signed_duration_since(chrono::DateTime::UNIX_EPOCH).num_seconds();
+    let dur = Some(now_secs - duration_secs);
+
+    let repo = DetectionOutcomeRepository::new(pool.clone());
+    if let Err(e) = repo
+        .record(
+            det_id,
+            Some(row.id),
+            outcome,
+            Some(reason.as_str()),
+            pnl_pct,
+            row.entry_price,
+            Some(exit_price as f32),
+            dur,
+        )
+        .await
+    {
+        warn!(%e, "record_detection_outcome failed");
+    }
 }
 
 // ---------- arm path ----------

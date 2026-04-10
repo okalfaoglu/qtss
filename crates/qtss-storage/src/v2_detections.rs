@@ -146,7 +146,8 @@ impl V2DetectionRepository {
     ) -> Result<u64, StorageError> {
         let res = sqlx::query(
             r#"UPDATE qtss_v2_detections
-                   SET confidence = $2,
+                   SET state = 'confirmed',
+                       confidence = $2,
                        channel_scores = $3,
                        validated_at = $4
                  WHERE id = $1"#,

@@ -14,6 +14,7 @@ use qtss_reconcile::{
 use qtss_storage::{
     resolve_system_string, resolve_worker_enabled_flag, resolve_worker_tick_secs,
     ExchangeAccountRepository, ExchangeOrderRepository, ExchangeOrderRow,
+    ReconcileReportRepository,
 };
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -187,6 +188,32 @@ pub async fn binance_futures_reconcile_loop(pool: PgPool) {
                 }
             }
             log_report(user_id, &report);
+            persist_v1_report(&pool, user_id, "binance_futures", &report).await;
         }
+    }
+}
+
+async fn persist_v1_report(pool: &PgPool, user_id: Uuid, venue: &str, r: &ReconcileReport) {
+    let overall = if r.mismatches > 0 { "drift" } else { "none" };
+    let summary = serde_json::json!({
+        "checked_remote": r.checked_remote_orders,
+        "checked_local": r.checked_local_orders,
+        "mismatches": r.mismatches,
+        "local_submitted_not_open": r.local_submitted_not_open_on_venue,
+        "remote_unknown": r.remote_open_unknown_locally,
+        "notes": r.notes,
+        "status_updates_applied": r.status_updates_applied,
+    });
+    let repo = ReconcileReportRepository::new(pool.clone());
+    if let Err(e) = repo.insert(
+        user_id,
+        venue,
+        overall,
+        serde_json::json!([]),
+        summary,
+        0,
+        r.mismatches as i32,
+    ).await {
+        warn!(%e, "persist reconcile report");
     }
 }

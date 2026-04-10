@@ -46,6 +46,25 @@ pub struct RegimeSnapshot {
     pub confidence: f32,
 }
 
+impl RegimeSnapshot {
+    /// Fallback snapshot used when the stored regime JSON is empty or
+    /// malformed (e.g. TBM detections that store `{}`). All values are
+    /// neutral so the validator's regime-alignment channel abstains
+    /// rather than penalising.
+    pub fn neutral_default() -> Self {
+        Self {
+            at: Utc::now(),
+            kind: RegimeKind::Uncertain,
+            trend_strength: TrendStrength::None,
+            adx: Decimal::ZERO,
+            bb_width: Decimal::ZERO,
+            atr_pct: Decimal::ZERO,
+            choppiness: Decimal::ZERO,
+            confidence: 0.0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
