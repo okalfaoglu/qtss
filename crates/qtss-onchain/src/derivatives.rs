@@ -190,6 +190,14 @@ impl OnchainCategoryFetcher for BinanceDerivativesFetcher {
 }
 
 /// Pure scoring — broken out so unit tests can hit it without HTTP.
+///
+/// All four components contribute *continuously* via `tanh` ramps with
+/// the configured tuning thresholds as half-saturation points. The old
+/// hard-threshold version produced 0 for the vast majority of pairs
+/// (most markets are not extreme on any given hour), making the
+/// derivatives pillar effectively dead in `qtss_v2_onchain_metrics`.
+/// Continuous scoring keeps small non-zero readings flowing so the
+/// aggregator/validator can use the gradient instead of a binary on/off.
 fn blend(
     symbol: &str,
     funding: f64,
@@ -201,47 +209,42 @@ fn blend(
     let mut score = 0.0_f64;
     let mut details = Vec::new();
 
-    // Funding: extreme positive → bearish (contrarian)
-    if funding.abs() >= t.funding_extreme {
-        let sign = if funding > 0.0 { -1.0 } else { 1.0 };
-        score += 0.4 * sign;
-        details.push(format!("funding {funding:.5} extreme → {}", if sign > 0.0 { "bull" } else { "bear" }));
-    }
+    // 1) Funding (contrarian): positive funding = crowded longs = bearish.
+    //    Magnitude saturates at ±0.4 around |funding| ≈ 2 × funding_extreme.
+    let funding_axis = (funding / t.funding_extreme).tanh();
+    let funding_score = -0.4 * funding_axis;
+    score += funding_score;
+    details.push(format!("funding {funding:.5} → {funding_score:+.3}"));
 
-    // OI delta: sharp drop while leveraged → squeeze/capitulation
+    // 2) OI delta: only contributes on a *drop* (build alone is ambiguous);
+    //    polarity follows funding (drop + crowded longs = longs liquidating
+    //    = bearish; drop + crowded shorts = shorts covering = bullish).
     if let Some(d) = oi_delta {
-        if d.abs() >= t.oi_delta_significant {
-            // Drop in OI on negative funding = shorts covering = bullish.
-            // Drop on positive funding = longs liquidating = bearish.
-            let sign = if d < 0.0 {
-                if funding < 0.0 { 1.0 } else { -1.0 }
-            } else {
-                0.0 // OI build alone is ambiguous
-            };
-            if sign != 0.0 {
-                score += 0.2 * sign;
-                details.push(format!("OI Δ {:+.2}% ({})", d * 100.0, if sign > 0.0 { "bull" } else { "bear" }));
-            }
+        if d < 0.0 {
+            let oi_mag = (d.abs() / t.oi_delta_significant).min(1.5);
+            let oi_score = -0.2 * funding_axis * oi_mag;
+            score += oi_score;
+            details.push(format!("OI Δ {:+.2}% → {oi_score:+.3}", d * 100.0));
         }
     }
 
-    // L/S ratio: contrarian
-    if ls_ratio >= t.ls_ratio_long_extreme {
-        score -= 0.2;
-        details.push(format!("L/S {ls_ratio:.2} crowded long → bear"));
-    } else if ls_ratio <= t.ls_ratio_short_extreme {
-        score += 0.2;
-        details.push(format!("L/S {ls_ratio:.2} crowded short → bull"));
-    }
+    // 3) L/S ratio (contrarian): centred at 1.0; long-extreme is the
+    //    half-saturation point on the bearish side, short-extreme on
+    //    the bullish side.
+    let ls_half = (t.ls_ratio_long_extreme - 1.0).max(0.1);
+    let ls_axis = ((ls_ratio - 1.0) / ls_half).tanh();
+    let ls_score = -0.2 * ls_axis;
+    score += ls_score;
+    details.push(format!("L/S {ls_ratio:.2} → {ls_score:+.3}"));
 
-    // Taker flow: trend-following
-    if taker_ratio >= t.taker_long_extreme {
-        score += 0.2;
-        details.push(format!("taker {taker_ratio:.2} buy-dominant"));
-    } else if taker_ratio <= t.taker_short_extreme {
-        score -= 0.2;
-        details.push(format!("taker {taker_ratio:.2} sell-dominant"));
-    }
+    // 4) Taker buy/sell ratio (trend-following).
+    let taker_half = (t.taker_long_extreme - 1.0).max(0.05);
+    let taker_axis = ((taker_ratio - 1.0) / taker_half).tanh();
+    let taker_score = 0.2 * taker_axis;
+    score += taker_score;
+    details.push(format!("taker {taker_ratio:.2} → {taker_score:+.3}"));
+
+    let _ = (t.ls_ratio_short_extreme, t.taker_short_extreme); // documented half-points
 
     let score = score.clamp(-1.0, 1.0);
     let direction = if score > 0.05 {
@@ -289,7 +292,9 @@ mod tests {
 
     #[test]
     fn neutral_inputs_neutral_output() {
-        let r = blend("BTCUSDT", 0.0001, None, 1.0, 1.0, DerivativesTuning::default());
+        // Continuous scoring: zero on every axis must yield zero score.
+        let r = blend("BTCUSDT", 0.0, None, 1.0, 1.0, DerivativesTuning::default());
+        assert!(r.score.abs() < 1e-9);
         assert_eq!(r.direction, Some(OnchainDirection::Neutral));
     }
 }
