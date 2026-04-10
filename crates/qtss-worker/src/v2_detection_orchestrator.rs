@@ -49,9 +49,9 @@ use rust_decimal::Decimal;
 use qtss_pivots::{PivotConfig, PivotEngine};
 use qtss_regime::{RegimeConfig, RegimeEngine};
 use qtss_storage::{
-    list_enabled_engine_symbols, list_recent_bars, resolve_system_string, resolve_system_u64,
-    resolve_worker_enabled_flag, DetectionFilter, EngineSymbolRow, NewDetection,
-    V2DetectionRepository,
+    list_enabled_engine_symbols, list_recent_bars, resolve_system_f64, resolve_system_string,
+    resolve_system_u64, resolve_worker_enabled_flag, DetectionFilter, EngineSymbolRow,
+    NewDetection, V2DetectionRepository,
 };
 use qtss_wyckoff::{WyckoffConfig, WyckoffDetector};
 use serde_json::json;
@@ -283,6 +283,82 @@ impl DetectorRunner for RangeRunner {
     }
 }
 
+/// Resolve pivot-level string to enum. Falls back to L1 if unknown.
+fn parse_pivot_level(s: &str) -> PivotLevel {
+    match s.to_lowercase().as_str() {
+        "l0" | "0" => PivotLevel::L0,
+        "l1" | "1" => PivotLevel::L1,
+        "l2" | "2" => PivotLevel::L2,
+        "l3" | "3" => PivotLevel::L3,
+        _ => PivotLevel::L1,
+    }
+}
+
+/// Resolve harmonic detector config from system_config (CLAUDE.md #2).
+/// Every threshold is tuneable from the Config Editor without restarts.
+async fn resolve_harmonic_config(pool: &PgPool) -> HarmonicConfig {
+    let level_str = resolve_system_string(
+        pool, "detection", "harmonic.pivot_level",
+        "QTSS_DETECTION_HARMONIC_PIVOT_LEVEL", "L0",
+    ).await;
+    let min_score = resolve_system_f64(
+        pool, "detection", "harmonic.min_structural_score",
+        "QTSS_DETECTION_HARMONIC_MIN_SCORE", 0.40,
+    ).await as f32;
+    let slack = resolve_system_f64(
+        pool, "detection", "harmonic.global_slack",
+        "QTSS_DETECTION_HARMONIC_GLOBAL_SLACK", 0.05,
+    ).await;
+
+    HarmonicConfig {
+        pivot_level: parse_pivot_level(&level_str),
+        min_structural_score: min_score,
+        global_slack: slack.clamp(0.0, 0.5),
+    }
+}
+
+/// Resolve wyckoff detector config from system_config (CLAUDE.md #2).
+async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
+    let level_str = resolve_system_string(
+        pool, "detection", "wyckoff.pivot_level",
+        "QTSS_DETECTION_WYCKOFF_PIVOT_LEVEL", "L0",
+    ).await;
+    let min_pivots = resolve_system_u64(
+        pool, "detection", "wyckoff.min_range_pivots",
+        "QTSS_DETECTION_WYCKOFF_MIN_RANGE_PIVOTS", 5, 4, 20,
+    ).await as usize;
+    let min_score = resolve_system_f64(
+        pool, "detection", "wyckoff.min_structural_score",
+        "QTSS_DETECTION_WYCKOFF_MIN_SCORE", 0.40,
+    ).await as f32;
+    let edge_tol = resolve_system_f64(
+        pool, "detection", "wyckoff.range_edge_tolerance",
+        "QTSS_DETECTION_WYCKOFF_EDGE_TOL", 0.04,
+    ).await;
+    let climax_vol = resolve_system_f64(
+        pool, "detection", "wyckoff.climax_volume_mult",
+        "QTSS_DETECTION_WYCKOFF_CLIMAX_VOL", 1.8,
+    ).await;
+    let min_pen = resolve_system_f64(
+        pool, "detection", "wyckoff.min_penetration",
+        "QTSS_DETECTION_WYCKOFF_MIN_PEN", 0.02,
+    ).await;
+    let max_pen = resolve_system_f64(
+        pool, "detection", "wyckoff.max_penetration",
+        "QTSS_DETECTION_WYCKOFF_MAX_PEN", 0.30,
+    ).await;
+
+    WyckoffConfig {
+        pivot_level: parse_pivot_level(&level_str),
+        min_range_pivots: min_pivots,
+        range_edge_tolerance: edge_tol,
+        climax_volume_mult: climax_vol,
+        min_penetration: min_pen,
+        max_penetration: max_pen,
+        min_structural_score: min_score,
+    }
+}
+
 /// Resolve per-formation toggles for the Elliott detector set from
 /// `system_config`. Each formation has its own `detection.elliott.<f>.enabled`
 /// row — disabling one is a one-line UPDATE, no worker restart.
@@ -360,7 +436,8 @@ async fn build_runners(pool: &PgPool) -> Vec<Box<dyn DetectorRunner>> {
     )
     .await
     {
-        match HarmonicDetector::new(HarmonicConfig::defaults()) {
+        let harmonic_cfg = resolve_harmonic_config(pool).await;
+        match HarmonicDetector::new(harmonic_cfg) {
             Ok(d) => runners.push(Box::new(HarmonicRunner(d))),
             Err(e) => warn!(?e, "harmonic detector init failed"),
         }
@@ -388,7 +465,8 @@ async fn build_runners(pool: &PgPool) -> Vec<Box<dyn DetectorRunner>> {
     )
     .await
     {
-        match WyckoffDetector::new(WyckoffConfig::defaults()) {
+        let wyckoff_cfg = resolve_wyckoff_config(pool).await;
+        match WyckoffDetector::new(wyckoff_cfg) {
             Ok(d) => runners.push(Box::new(WyckoffRunner(d))),
             Err(e) => warn!(?e, "wyckoff detector init failed"),
         }
@@ -609,6 +687,20 @@ async fn process_symbol(
     };
     let tree = pivot_engine.snapshot();
 
+    // Diagnostic: per-symbol pivot count at each level. Logged once per
+    // symbol so we can verify detectors that require L1 (Harmonic, Wyckoff)
+    // actually have enough data.
+    debug!(
+        symbol = %sym.symbol,
+        interval = %sym.interval,
+        bars = bars.len(),
+        l0 = tree.at_level(PivotLevel::L0).len(),
+        l1 = tree.at_level(PivotLevel::L1).len(),
+        l2 = tree.at_level(PivotLevel::L2).len(),
+        l3 = tree.at_level(PivotLevel::L3).len(),
+        "pivot tree snapshot"
+    );
+
     // Live-revision pre-pass: invalidate any open `forming` row whose
     // invalidation_price has been breached by the most recent close.
     // This catches the case where the detector simply *stops* emitting
@@ -641,11 +733,16 @@ async fn process_symbol(
     }
 
     for runner in runners {
-        // Each runner can now emit 0..N detections per pass — Elliott
-        // is the first family that takes advantage of this (impulse,
-        // diagonals, zigzag, flat, triangle, ...). Iterate the whole
-        // batch and dedup/insert each detection independently.
-        for detection in runner.detect(&tree, &bars, &instrument, timeframe, &regime) {
+        let detections = runner.detect(&tree, &bars, &instrument, timeframe, &regime);
+        if detections.is_empty() {
+            debug!(
+                symbol = %sym.symbol,
+                interval = %sym.interval,
+                family = runner.family(),
+                "detector returned 0 detections"
+            );
+        }
+        for detection in detections {
         stats.emitted += 1;
 
         let (family, subkind) = split_pattern_kind(&detection.kind);

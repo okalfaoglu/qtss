@@ -33,6 +33,11 @@ impl HarmonicDetector {
         &self.config
     }
 
+    /// Scan *all* 5-pivot windows (sliding window) and return the
+    /// highest-scoring detection. The original implementation only
+    /// checked `pivots[len-5..]` which almost never aligns with a
+    /// harmonic ratio set by chance — the sliding scan makes detection
+    /// practical on real data.
     pub fn detect(
         &self,
         tree: &PivotTree,
@@ -44,30 +49,33 @@ impl HarmonicDetector {
         if pivots.len() < 5 {
             return None;
         }
-        let tail = &pivots[pivots.len() - 5..];
 
-        // Bullish XABCD begins with a low at X (so the legs alternate
-        // low-high-low-high-low). Bearish is the mirror.
-        let direction = match tail[0].kind {
-            PivotKind::Low => Direction::Bullish,
-            PivotKind::High => Direction::Bearish,
-        };
-        let pts = collect_points(tail, matches!(direction, Direction::Bearish))?;
+        let mut global_best: Option<(usize, &HarmonicSpec, Direction, f64)> = None;
 
-        // Walk every pattern through the same loop. Highest score wins.
-        let mut best: Option<(&HarmonicSpec, f64)> = None;
-        for spec in PATTERNS {
-            if let Some(score) = match_pattern(spec, &pts, self.config.global_slack) {
-                if best.map(|(_, s)| score > s).unwrap_or(true) {
-                    best = Some((spec, score));
+        for start in 0..=(pivots.len() - 5) {
+            let window = &pivots[start..start + 5];
+            let direction = match window[0].kind {
+                PivotKind::Low => Direction::Bullish,
+                PivotKind::High => Direction::Bearish,
+            };
+            let Some(pts) = collect_points(window, matches!(direction, Direction::Bearish)) else {
+                continue;
+            };
+            for spec in PATTERNS {
+                if let Some(score) = match_pattern(spec, &pts, self.config.global_slack) {
+                    if global_best.as_ref().map(|(_, _, _, s)| score > *s).unwrap_or(true) {
+                        global_best = Some((start, spec, direction, score));
+                    }
                 }
             }
         }
-        let (spec, score) = best?;
+
+        let (start, spec, direction, score) = global_best?;
         if (score as f32) < self.config.min_structural_score {
             return None;
         }
 
+        let window = &pivots[start..start + 5];
         let kind = PatternKind::Harmonic(format!(
             "{}_{}",
             spec.name,
@@ -76,10 +84,8 @@ impl HarmonicDetector {
                 Direction::Bearish => "bear",
             }
         ));
-        let anchors = label_anchors(tail, self.config.pivot_level);
-        // Standard: invalidation lives at the X point. A move beyond X
-        // breaks the harmonic geometry regardless of direction.
-        let invalidation_price = tail[0].price;
+        let anchors = label_anchors(window, self.config.pivot_level);
+        let invalidation_price = window[0].price;
 
         Some(Detection::new(
             instrument.clone(),
