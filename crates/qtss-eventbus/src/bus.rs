@@ -162,6 +162,17 @@ impl InProcessBus {
             .clone()
     }
 
+    /// Raw broadcast receiver for `topic`. The SSE bridge in `qtss-api`
+    /// uses this to forward verbatim JSON envelopes to browsers without
+    /// going through `EventStream`'s typed deserialization (the bridge
+    /// must remain payload-agnostic).
+    pub fn raw_receiver(
+        &self,
+        topic: &str,
+    ) -> broadcast::Receiver<Event<serde_json::Value>> {
+        self.sender(topic).subscribe()
+    }
+
     /// Number of currently active subscribers on `topic`. Useful for
     /// metrics and tests.
     pub fn subscriber_count(&self, topic: &str) -> usize {

@@ -29,6 +29,9 @@ qtss-portfolio.workspace = true
 qtss-risk.workspace = true
 qtss-gui-api.workspace = true
 qtss-regime.workspace = true
+qtss-eventbus.workspace = true
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures = "0.3"
 sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true

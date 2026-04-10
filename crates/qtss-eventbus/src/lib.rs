@@ -23,6 +23,7 @@ mod bus;
 mod envelope;
 mod error;
 mod pg_bridge;
+mod pg_notify_exporter;
 pub mod topics;
 
 #[cfg(test)]
@@ -32,3 +33,4 @@ pub use bus::{EventBus, EventStream, InProcessBus};
 pub use envelope::Event;
 pub use error::{EventBusError, EventBusResult};
 pub use pg_bridge::{PgBridgeHandle, PgNotifyBridge};
+pub use pg_notify_exporter::PgNotifyExporter;

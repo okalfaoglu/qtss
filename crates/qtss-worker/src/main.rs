@@ -304,6 +304,15 @@ async fn main() -> anyhow::Result<()> {
         // Shared in-process event bus: the validator publishes
         // PATTERN_VALIDATED here, strategy providers subscribe.
         let v2_bus = std::sync::Arc::new(qtss_eventbus::InProcessBus::new());
+        // Mirror the SSE-exported topics to Postgres NOTIFY so the
+        // qtss-api SSE bridge can fan them out to browsers across the
+        // process boundary. The handles are intentionally leaked: the
+        // tasks should run for the entire worker lifetime.
+        let _sse_export_handles = qtss_eventbus::PgNotifyExporter::start(
+            v2_bus.clone(),
+            pool.clone(),
+            qtss_eventbus::topics::SSE_EXPORTED_TOPICS,
+        );
         let v2_val_bus = v2_bus.clone();
         tokio::spawn(v2_detection_validator::v2_detection_validator_loop(
             v2_val_pool,

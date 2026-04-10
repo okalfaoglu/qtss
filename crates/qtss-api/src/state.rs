@@ -30,6 +30,12 @@ pub struct AppState {
     pub refresh_ttl_secs: i64,
     pub v2_dashboard: Arc<V2DashboardHandle>,
     pub v2_strategies: Arc<V2StrategyRegistry>,
+    /// Local in-process bus that mirrors worker events received via the
+    /// Postgres NOTIFY bridge. SSE handlers subscribe to it.
+    pub event_bus: Arc<qtss_eventbus::InProcessBus>,
+    /// Kept alive so the listener task survives for the lifetime of the
+    /// app state. Drop on shutdown stops the bridge.
+    pub _event_bridge: Arc<qtss_eventbus::PgBridgeHandle>,
 }
 
 impl AppState {
@@ -148,6 +154,25 @@ impl AppState {
         let v2_dashboard = V2DashboardHandle::new(v2_starting_equity, v2_capacity);
         let v2_strategies = V2StrategyRegistry::new(vec![default_seed_card()]);
 
+        // Cross-process event delivery: the worker mirrors a curated
+        // set of topics to Postgres NOTIFY (`PgNotifyExporter`); we
+        // re-publish them onto a local in-process bus so SSE handlers
+        // can fan them out to browsers without each handler having to
+        // hold its own listener connection.
+        let event_bus = Arc::new(qtss_eventbus::InProcessBus::new());
+        let bridge_topics: Vec<String> = qtss_eventbus::topics::SSE_EXPORTED_TOPICS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let event_bridge = qtss_eventbus::PgNotifyBridge::start(
+            pool.clone(),
+            bridge_topics,
+            event_bus.clone(),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("pg notify bridge start: {e}"))?;
+        let event_bridge = Arc::new(event_bridge);
+
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .user_agent(concat!("qtss-api/", env!("CARGO_PKG_VERSION")))
@@ -173,6 +198,8 @@ impl AppState {
             refresh_ttl_secs: refresh_ttl,
             v2_dashboard,
             v2_strategies,
+            event_bus,
+            _event_bridge: event_bridge,
         })
     }
 }

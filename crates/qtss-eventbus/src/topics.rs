@@ -41,3 +41,30 @@ pub const KILLSWITCH_TRIPPED: &str = "killswitch.tripped";
 pub const ONCHAIN_SIGNAL: &str = "onchain.signal";
 /// Bridged from Postgres NOTIFY emitted by migration 0014's trigger.
 pub const CONFIG_CHANGED: &str = "config_changed";
+
+// ---------- Cross-process exports ----------
+//
+// Topics that the worker mirrors to Postgres `NOTIFY` and the API
+// re-publishes on its local in-process bus so the SSE bridge can fan
+// them out to browsers. Kept short on purpose: every entry costs a
+// LISTEN slot + a roundtrip per event, so high-frequency market-data
+// topics (`bar.live`, `tick.trade`, `book.l2.update`) are deliberately
+// excluded — they belong on a dedicated WebSocket path, not NOTIFY.
+pub const SSE_EXPORTED_TOPICS: &[&str] = &[
+    PATTERN_DETECTED,
+    PATTERN_VALIDATED,
+    PATTERN_INVALIDATED,
+    TARGET_COMPUTED,
+    SCENARIO_UPDATED,
+    FORECAST_UPDATED,
+    SIGNAL_ENVELOPE,
+    INTENT_CREATED,
+    INTENT_APPROVED,
+    INTENT_REJECTED,
+    POSITION_OPENED,
+    POSITION_UPDATED,
+    POSITION_CLOSED,
+    RISK_BREACH,
+    KILLSWITCH_TRIPPED,
+    ONCHAIN_SIGNAL,
+];
