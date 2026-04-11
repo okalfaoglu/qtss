@@ -134,7 +134,7 @@ impl FormationDetector for DiagonalDetector {
         let tight_w3 = nearest_fib_score(w3 / w1, &[0.5, 0.618, 0.786]);
         let tight_w5 = nearest_fib_score(w5 / w3, &[0.5, 0.618, 0.786]);
         let s_w2 = nearest_fib_score(w2 / w1, W2_REFS);
-        let overlap_bonus = if p[4] <= p[1] { 1.0 } else { 0.4 };
+        let overlap_bonus = if p[4] <= p[1] { 1.0 } else { 0.85 };
         let score = mean_score(&[tight_w3, tight_w5, s_w2, overlap_bonus]);
 
         if (score as f32) < self.config.min_structural_score {

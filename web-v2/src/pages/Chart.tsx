@@ -664,12 +664,15 @@ function Detections({
 // flips direction when price retraces by `pct` from the running
 // extreme. Pure client-side — no backend dependency, so the toggle
 // is instant.
+type SwingLabel = "HH" | "LH" | "HL" | "LL" | null;
+type ZigzagPoint = { idx: number; price: number; kind: "H" | "L"; dir: number; swing: SwingLabel };
+
 function computeZigzag(
   candles: CandleBar[],
   pct: number,
-): Array<{ idx: number; price: number; kind: "H" | "L" }> {
+): ZigzagPoint[] {
   if (candles.length < 2) return [];
-  const pts: Array<{ idx: number; price: number; kind: "H" | "L" }> = [];
+  const raw: Array<{ idx: number; price: number; kind: "H" | "L" }> = [];
   let dir: "up" | "down" | null = null;
   let extIdx = 0;
   let extPrice = Number(candles[0].close);
@@ -678,12 +681,12 @@ function computeZigzag(
     const lo = Number(candles[i].low);
     if (dir === null) {
       if (hi >= extPrice * (1 + pct)) {
-        pts.push({ idx: extIdx, price: extPrice, kind: "L" });
+        raw.push({ idx: extIdx, price: extPrice, kind: "L" });
         dir = "up";
         extIdx = i;
         extPrice = hi;
       } else if (lo <= extPrice * (1 - pct)) {
-        pts.push({ idx: extIdx, price: extPrice, kind: "H" });
+        raw.push({ idx: extIdx, price: extPrice, kind: "H" });
         dir = "down";
         extIdx = i;
         extPrice = lo;
@@ -693,7 +696,7 @@ function computeZigzag(
         extIdx = i;
         extPrice = hi;
       } else if (lo <= extPrice * (1 - pct)) {
-        pts.push({ idx: extIdx, price: extPrice, kind: "H" });
+        raw.push({ idx: extIdx, price: extPrice, kind: "H" });
         dir = "down";
         extIdx = i;
         extPrice = lo;
@@ -703,14 +706,38 @@ function computeZigzag(
         extIdx = i;
         extPrice = lo;
       } else if (hi >= extPrice * (1 + pct)) {
-        pts.push({ idx: extIdx, price: extPrice, kind: "L" });
+        raw.push({ idx: extIdx, price: extPrice, kind: "L" });
         dir = "up";
         extIdx = i;
         extPrice = hi;
       }
     }
   }
-  pts.push({ idx: extIdx, price: extPrice, kind: dir === "up" ? "H" : "L" });
+  raw.push({ idx: extIdx, price: extPrice, kind: dir === "up" ? "H" : "L" });
+
+  // Classify swing types: compare each pivot with previous same-kind pivot.
+  // dir: +1 = uptrend confirmed (HL), -1 = downtrend confirmed (LH),
+  //      +2 = strong uptrend (HH), -2 = strong downtrend (LL)
+  let prevH: number | null = null;
+  let prevL: number | null = null;
+  const pts: ZigzagPoint[] = raw.map((p) => {
+    let swing: SwingLabel = null;
+    let d = 0;
+    if (p.kind === "H") {
+      if (prevH !== null) {
+        swing = p.price >= prevH ? "HH" : "LH";
+        d = swing === "HH" ? 2 : -1;
+      }
+      prevH = p.price;
+    } else {
+      if (prevL !== null) {
+        swing = p.price >= prevL ? "HL" : "LL";
+        d = swing === "HL" ? 1 : -2;
+      }
+      prevL = p.price;
+    }
+    return { ...p, dir: d, swing };
+  });
   return pts;
 }
 
@@ -845,6 +872,13 @@ function WyckoffStructureOverlay({
   );
 }
 
+const SWING_COLORS: Record<string, string> = {
+  HH: "rgb(34 197 94)",   // green — bullish continuation
+  HL: "rgb(74 222 128)",   // light green — bullish base
+  LH: "rgb(239 68 68)",    // red — bearish base
+  LL: "rgb(248 113 113)",  // light red — bearish continuation
+};
+
 function Zigzag({ candles, scale }: { candles: CandleBar[]; scale: PriceScale }) {
   if (candles.length === 0) return null;
   const pts = computeZigzag(candles, ZIGZAG_PCT);
@@ -864,15 +898,43 @@ function Zigzag({ candles, scale }: { candles: CandleBar[]; scale: PriceScale })
         strokeWidth={1.5}
         strokeLinejoin="round"
       />
-      {pts.map((p, i) => (
-        <circle
-          key={i}
-          cx={xFor(p.idx)}
-          cy={scale.toY(p.price)}
-          r={2.5}
-          fill="rgb(250 204 21)"
-        />
-      ))}
+      {pts.map((p, i) => {
+        const cx = xFor(p.idx);
+        const cy = scale.toY(p.price);
+        const col = p.swing ? (SWING_COLORS[p.swing] ?? "rgb(250 204 21)") : "rgb(250 204 21)";
+        const isUp = p.kind === "H";
+        return (
+          <g key={i}>
+            <circle cx={cx} cy={cy} r={2.5} fill={col} />
+            {p.swing && (
+              <text
+                x={cx}
+                y={isUp ? cy - 7 : cy + 13}
+                textAnchor="middle"
+                fill={col}
+                fontSize={9}
+                fontWeight={Math.abs(p.dir) === 2 ? 700 : 400}
+                fontFamily="ui-monospace, monospace"
+              >
+                {p.swing}
+              </text>
+            )}
+            {Math.abs(p.dir) === 2 && (
+              <text
+                x={cx}
+                y={isUp ? cy - 17 : cy + 23}
+                textAnchor="middle"
+                fill={col}
+                fontSize={7}
+                fontFamily="ui-monospace, monospace"
+                opacity={0.6}
+              >
+                {p.dir > 0 ? "▲" : "▼"}
+              </text>
+            )}
+          </g>
+        );
+      })}
     </g>
   );
 }
@@ -914,50 +976,103 @@ function TimeframeBar({
   );
 }
 
+const DETAIL_SUB_BUTTONS = [
+  { key: "entry_tp_sl", label: "Entry / TP / SL", icon: "⊞" },
+  { key: "fib_levels", label: "Fib Levels", icon: "φ" },
+  { key: "measured_move", label: "Measured Move", icon: "⟷" },
+  { key: "invalidation", label: "Invalidation Zone", icon: "✕" },
+];
+
 function FamilyToggles({
   modes,
   onCycle,
+  detailLayers,
+  onToggleLayer,
 }: {
   modes: Record<string, FamilyMode>;
   onCycle: (family: string) => void;
+  detailLayers?: Record<string, Set<string>>;
+  onToggleLayer?: (family: string, layer: string) => void;
 }) {
   const entries = Object.entries(FAMILY_COLORS).filter(([k]) => k !== "custom");
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {entries.map(([family, color]) => {
-        const mode = modes[family] ?? "on";
-        const isOff = mode === "off";
-        const isDetail = mode === "detail";
-        return (
-          <button
-            key={family}
-            type="button"
-            onClick={() => onCycle(family)}
-            className="flex items-center gap-1.5 rounded border px-2 py-1 text-xs uppercase tracking-wide transition"
-            style={{
-              borderColor: isOff ? "rgb(63 63 70)" : color,
-              background: isOff
-                ? "rgb(24 24 27)"
-                : isDetail
-                ? `${color}44`
-                : `${color}22`,
-              color: isOff ? "rgb(113 113 122)" : color,
-            }}
-            title={
-              isOff ? `${family}: gizli` : isDetail ? `${family}: detay (Entry/TP/SL)` : `${family}: görünür`
-            }
-          >
-            <span
-              className="inline-block h-2 w-3 rounded-sm"
-              style={{ background: isOff ? "rgb(63 63 70)" : color }}
-            />
-            {family}
-            {isDetail && (
-              <span className="ml-0.5 text-[9px] opacity-70">▸TP/SL</span>
-            )}
-          </button>
-        );
-      })}
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {entries.map(([family, color]) => {
+          const mode = modes[family] ?? "on";
+          const isOff = mode === "off";
+          const isDetail = mode === "detail";
+          return (
+            <button
+              key={family}
+              type="button"
+              onClick={() => onCycle(family)}
+              className="flex items-center gap-1.5 rounded border px-2 py-1 text-xs uppercase tracking-wide transition"
+              style={{
+                borderColor: isOff ? "rgb(63 63 70)" : color,
+                background: isOff
+                  ? "rgb(24 24 27)"
+                  : isDetail
+                  ? `${color}44`
+                  : `${color}22`,
+                color: isOff ? "rgb(113 113 122)" : color,
+              }}
+              title={
+                isOff ? `${family}: gizli` : isDetail ? `${family}: detay (Entry/TP/SL)` : `${family}: görünür`
+              }
+            >
+              <span
+                className="inline-block h-2 w-3 rounded-sm"
+                style={{ background: isOff ? "rgb(63 63 70)" : color }}
+              />
+              {family}
+              {isDetail && (
+                <span className="ml-0.5 text-[9px] opacity-70">▸detay</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      {/* Sub-menu panel — opens below when any family is in detail mode */}
+      {entries.some(([f]) => (modes[f] ?? "on") === "detail") && (
+        <div className="flex flex-wrap items-center gap-1 rounded border border-zinc-700/60 bg-zinc-900/80 px-2 py-1.5">
+          {entries
+            .filter(([f]) => (modes[f] ?? "on") === "detail")
+            .map(([family, color]) => {
+              const layers = detailLayers?.[family] ?? new Set(["entry_tp_sl"]);
+              return (
+                <div key={family} className="flex items-center gap-1">
+                  <span
+                    className="text-[9px] font-bold uppercase tracking-widest"
+                    style={{ color }}
+                  >
+                    {family}
+                  </span>
+                  {DETAIL_SUB_BUTTONS.map((btn) => {
+                    const active = layers.has(btn.key);
+                    return (
+                      <button
+                        key={btn.key}
+                        type="button"
+                        onClick={() => onToggleLayer?.(family, btn.key)}
+                        className="rounded border px-1.5 py-0.5 text-[10px] transition"
+                        style={{
+                          borderColor: active ? color : "rgb(63 63 70)",
+                          background: active ? `${color}33` : "transparent",
+                          color: active ? color : "rgb(113 113 122)",
+                        }}
+                        title={btn.label}
+                      >
+                        {btn.icon} {btn.label}
+                      </button>
+                    );
+                  })}
+                  <span className="mx-1 h-3 w-px bg-zinc-700" />
+                </div>
+              );
+            })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1084,11 +1199,23 @@ export function Chart() {
   // so adding new families needs no migration here.
   // 3-state family toggle: off → on → detail → off
   const [familyModes, setFamilyModes] = useState<Record<string, FamilyMode>>({});
+  const [detailLayers, setDetailLayers] = useState<Record<string, Set<string>>>({});
   const cycleFamily = (family: string) =>
     setFamilyModes((prev) => {
       const cur = prev[family] ?? "on";
       const next: FamilyMode = cur === "off" ? "on" : cur === "on" ? "detail" : "off";
+      // Auto-enable entry_tp_sl when entering detail mode
+      if (next === "detail") {
+        setDetailLayers((dl) => ({ ...dl, [family]: new Set(["entry_tp_sl"]) }));
+      }
       return { ...prev, [family]: next };
+    });
+  const toggleLayer = (family: string, layer: string) =>
+    setDetailLayers((prev) => {
+      const cur = new Set(prev[family] ?? ["entry_tp_sl"]);
+      if (cur.has(layer)) cur.delete(layer);
+      else cur.add(layer);
+      return { ...prev, [family]: cur };
     });
   const fetchingOlderRef = useRef(false);
   const dragRef = useRef<{
@@ -1307,7 +1434,7 @@ export function Chart() {
         </div>
         {/* Row 2: Family toggles (3-state: off → on → detail) */}
         <div className="flex items-center justify-between">
-          <FamilyToggles modes={familyModes} onCycle={cycleFamily} />
+          <FamilyToggles modes={familyModes} onCycle={cycleFamily} detailLayers={detailLayers} onToggleLayer={toggleLayer} />
           <div className="text-[10px] text-zinc-600">
             sürükle = pan · scroll = zoom · Ctrl+scroll = fiyat zoom
           </div>

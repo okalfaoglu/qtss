@@ -100,8 +100,6 @@ impl PositionGuard {
         cfg: &PositionGuardConfig,
         direction: Direction,
     ) -> Self {
-        let sign = direction.sign();
-
         // SL = invalidation price (where the pattern breaks).
         let entry_sl = invalidation_price;
 
