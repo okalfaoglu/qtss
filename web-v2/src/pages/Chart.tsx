@@ -59,18 +59,25 @@ interface PriceScale {
   toY: (price: number) => number;
 }
 
-function buildScale(candles: CandleBar[]): PriceScale {
+function buildScale(candles: CandleBar[], yOffset = 0, yZoom = 1): PriceScale {
   if (candles.length === 0) {
     return { min: 0, max: 1, toY: () => H / 2 };
   }
-  let min = Infinity;
-  let max = -Infinity;
+  let rawMin = Infinity;
+  let rawMax = -Infinity;
   for (const c of candles) {
     const lo = Number(c.low);
     const hi = Number(c.high);
-    if (lo < min) min = lo;
-    if (hi > max) max = hi;
+    if (lo < rawMin) rawMin = lo;
+    if (hi > rawMax) rawMax = hi;
   }
+  const rawSpan = rawMax - rawMin || 1;
+  // Apply vertical zoom: shrink/expand range around center
+  const center = (rawMin + rawMax) / 2;
+  const halfSpan = (rawSpan / 2) / yZoom;
+  // Apply vertical offset (in price units)
+  const min = center - halfSpan + yOffset;
+  const max = center + halfSpan + yOffset;
   const span = max - min || 1;
   const innerH = H - PAD_T - PAD_B;
   return {
@@ -933,6 +940,9 @@ export function Chart() {
   const [viewSize, setViewSize] = useState(DEFAULT_VIEW_SIZE);
   const [isDragging, setIsDragging] = useState(false);
   const [hoverContainer, setHoverContainer] = useState(false);
+  // Vertical pan/zoom: yOffset shifts price center, yZoom magnifies.
+  const [yOffset, setYOffset] = useState(0);
+  const [yZoom, setYZoom] = useState(1);
   const [showZigzag, setShowZigzag] = useState(false);
   const [showVolume, setShowVolume] = useState(true);
   // Per-family visibility. Defaults to all-on; clicking a chip in the
@@ -944,8 +954,11 @@ export function Chart() {
   const fetchingOlderRef = useRef(false);
   const dragRef = useRef<{
     startX: number;
+    startY: number;
     startOffset: number;
+    startYOffset: number;
     pxPerCandle: number;
+    pricePerPx: number;
   } | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
@@ -954,6 +967,8 @@ export function Chart() {
     setOlderPages([]);
     setViewOffsetFromEnd(0);
     setViewSize(DEFAULT_VIEW_SIZE);
+    setYOffset(0);
+    setYZoom(1);
   }, [debounced.venue, debounced.symbol, debounced.timeframe]);
 
   useEffect(() => {
@@ -1010,7 +1025,7 @@ export function Chart() {
     () => (merged ? merged.candles.slice(visibleStart, visibleEnd) : []),
     [merged, visibleStart, visibleEnd],
   );
-  const scale = useMemo(() => buildScale(visibleCandles), [visibleCandles]);
+  const scale = useMemo(() => buildScale(visibleCandles, yOffset, yZoom), [visibleCandles, yOffset, yZoom]);
   const visibleDetections = useMemo(
     () =>
       merged
@@ -1066,12 +1081,18 @@ export function Chart() {
   // candles via the current effective view size. Right-drag = show
   // older history (offset grows), left-drag = walk back toward live.
   const innerW = W - PAD_L - PAD_R;
+  const innerH = H - PAD_T - PAD_B;
   const onMouseDown = (e: React.MouseEvent) => {
     if (effectiveViewSize === 0) return;
+    const priceSpan = scale.max - scale.min || 1;
     dragRef.current = {
       startX: e.clientX,
+      startY: e.clientY,
       startOffset: clampedOffset,
+      startYOffset: yOffset,
       pxPerCandle: innerW / effectiveViewSize,
+      // Map SVG inner height to actual rendered price range
+      pricePerPx: priceSpan / innerH,
     };
     setIsDragging(true);
   };
@@ -1079,9 +1100,14 @@ export function Chart() {
     const drag = dragRef.current;
     if (!drag) return;
     const dx = e.clientX - drag.startX;
+    const dy = e.clientY - drag.startY;
+    // Horizontal pan (candles)
     const candleDelta = Math.round(dx / drag.pxPerCandle);
     const next = Math.max(0, Math.min(maxOffset, drag.startOffset + candleDelta));
     setViewOffsetFromEnd(next);
+    // Vertical pan (price) — dragging up = higher prices visible
+    const priceDelta = dy * drag.pricePerPx;
+    setYOffset(drag.startYOffset + priceDelta);
   };
   const endDrag = () => {
     if (!dragRef.current) return;
@@ -1098,11 +1124,20 @@ export function Chart() {
   };
   const onWheel = (e: React.WheelEvent) => {
     e.preventDefault();
-    zoomBy(e.deltaY > 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR);
+    if (e.ctrlKey || e.metaKey) {
+      // Ctrl+scroll = vertical (price) zoom
+      const factor = e.deltaY > 0 ? 1 / ZOOM_FACTOR : ZOOM_FACTOR;
+      setYZoom((prev) => Math.max(0.1, Math.min(20, prev * factor)));
+    } else {
+      // Plain scroll = horizontal (time) zoom
+      zoomBy(e.deltaY > 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR);
+    }
   };
   const resetView = () => {
     setViewSize(DEFAULT_VIEW_SIZE);
     setViewOffsetFromEnd(0);
+    setYOffset(0);
+    setYZoom(1);
   };
 
   const showControls = hoverContainer && !isDragging;
@@ -1137,7 +1172,7 @@ export function Chart() {
         <div className="ml-auto flex flex-col items-end gap-2">
           <FamilyToggles enabled={familyEnabled} onToggle={toggleFamily} />
           <div className="text-xs text-zinc-500">
-            Otomatik yükleme · sürükle = pan · scroll/+/− = zoom
+            sürükle = pan (X+Y) · scroll = zoom · Ctrl+scroll = fiyat zoom
           </div>
         </div>
       </div>
