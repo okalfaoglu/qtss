@@ -133,6 +133,10 @@ impl ElliottDetectorSet {
 
     /// Run every registered formation against the same pivot snapshot
     /// and return all detections in registration order.
+    /// Run every registered formation against the same pivot snapshot
+    /// and return all detections in registration order. Each Elliott
+    /// detection is automatically tagged with its wave degree label
+    /// based on the timeframe.
     pub fn detect_all(
         &self,
         tree: &PivotTree,
@@ -142,7 +146,9 @@ impl ElliottDetectorSet {
     ) -> Vec<Detection> {
         let mut out = Vec::new();
         for f in &self.formations {
-            out.extend(f.detect(tree, instrument, timeframe, regime));
+            for d in f.detect(tree, instrument, timeframe, regime) {
+                out.push(d.with_degree());
+            }
         }
         out
     }

@@ -49,6 +49,94 @@ pub struct PivotRef {
     pub label: Option<String>,
 }
 
+/// Elliott Wave degree label per Frost & Prechter.
+///
+/// Maps from timeframe resolution to the conventional degree name.
+/// Used as a label only — does NOT change detection rules. A future
+/// multi-degree validation phase will use this for cross-timeframe
+/// consistency checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaveDegree {
+    GrandSupercycle,
+    Supercycle,
+    Cycle,
+    Primary,
+    Intermediate,
+    Minor,
+    Minute,
+    Minuette,
+    Subminuette,
+}
+
+impl WaveDegree {
+    /// Map a timeframe to its default wave degree.
+    ///
+    /// This is a heuristic — the actual degree depends on how many bars
+    /// the pattern spans, not just the chart resolution. A future phase
+    /// will refine this with bar-count context.
+    pub fn from_timeframe(tf: Timeframe) -> Self {
+        match tf {
+            Timeframe::Mn1             => WaveDegree::Primary,
+            Timeframe::W1              => WaveDegree::Intermediate,
+            Timeframe::D1 | Timeframe::D3 => WaveDegree::Minor,
+            Timeframe::H4 | Timeframe::H6 | Timeframe::H8 | Timeframe::H12
+                                       => WaveDegree::Minute,
+            Timeframe::H1 | Timeframe::H2
+                                       => WaveDegree::Minuette,
+            Timeframe::M15 | Timeframe::M30
+                                       => WaveDegree::Minuette,
+            Timeframe::M1 | Timeframe::M3 | Timeframe::M5
+                                       => WaveDegree::Subminuette,
+        }
+    }
+
+    /// Conventional notation for impulse waves at this degree.
+    pub fn impulse_notation(self) -> &'static [&'static str; 5] {
+        match self {
+            WaveDegree::GrandSupercycle => &["[1]", "[2]", "[3]", "[4]", "[5]"],
+            WaveDegree::Supercycle      => &["(I)", "(II)", "(III)", "(IV)", "(V)"],
+            WaveDegree::Cycle           => &["I", "II", "III", "IV", "V"],
+            WaveDegree::Primary         => &["[1]", "[2]", "[3]", "[4]", "[5]"],
+            WaveDegree::Intermediate    => &["(1)", "(2)", "(3)", "(4)", "(5)"],
+            WaveDegree::Minor           => &["1", "2", "3", "4", "5"],
+            WaveDegree::Minute          => &["[i]", "[ii]", "[iii]", "[iv]", "[v]"],
+            WaveDegree::Minuette        => &["(i)", "(ii)", "(iii)", "(iv)", "(v)"],
+            WaveDegree::Subminuette     => &["i", "ii", "iii", "iv", "v"],
+        }
+    }
+
+    /// Conventional notation for corrective waves at this degree.
+    pub fn corrective_notation(self) -> &'static [&'static str; 3] {
+        match self {
+            WaveDegree::GrandSupercycle => &["[a]", "[b]", "[c]"],
+            WaveDegree::Supercycle      => &["(a)", "(b)", "(c)"],
+            WaveDegree::Cycle           => &["a", "b", "c"],
+            WaveDegree::Primary         => &["[A]", "[B]", "[C]"],
+            WaveDegree::Intermediate    => &["(A)", "(B)", "(C)"],
+            WaveDegree::Minor           => &["A", "B", "C"],
+            WaveDegree::Minute          => &["[a]", "[b]", "[c]"],
+            WaveDegree::Minuette        => &["(a)", "(b)", "(c)"],
+            WaveDegree::Subminuette     => &["a", "b", "c"],
+        }
+    }
+
+    /// Human-readable label.
+    pub fn label(self) -> &'static str {
+        match self {
+            WaveDegree::GrandSupercycle => "Grand Supercycle",
+            WaveDegree::Supercycle      => "Supercycle",
+            WaveDegree::Cycle           => "Cycle",
+            WaveDegree::Primary         => "Primary",
+            WaveDegree::Intermediate    => "Intermediate",
+            WaveDegree::Minor           => "Minor",
+            WaveDegree::Minute          => "Minute",
+            WaveDegree::Minuette        => "Minuette",
+            WaveDegree::Subminuette     => "Subminuette",
+        }
+    }
+}
+
 /// How a target was derived. Used by `qtss-target-engine` for clustering
 /// and by the GUI for tooltips.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -170,6 +258,42 @@ impl Detection {
     /// decomposition (one inner vec per realized segment).
     pub fn with_sub_waves(mut self, sub: Vec<Vec<PivotRef>>) -> Self {
         self.sub_wave_anchors = sub;
+        self
+    }
+
+    /// Builder-style helper to set raw_meta JSON.
+    pub fn with_meta(mut self, meta: serde_json::Value) -> Self {
+        self.raw_meta = meta;
+        self
+    }
+
+    /// Inject Elliott wave degree label into raw_meta based on timeframe.
+    /// Only applies to `PatternKind::Elliott` — no-op for other families.
+    pub fn with_degree(mut self) -> Self {
+        if matches!(self.kind, PatternKind::Elliott(_)) {
+            let degree = WaveDegree::from_timeframe(self.timeframe);
+            let meta = match self.raw_meta {
+                serde_json::Value::Object(mut map) => {
+                    map.insert("degree".into(), serde_json::json!(degree));
+                    map.insert("degree_label".into(), serde_json::json!(degree.label()));
+                    serde_json::Value::Object(map)
+                }
+                serde_json::Value::Null => {
+                    serde_json::json!({
+                        "degree": degree,
+                        "degree_label": degree.label()
+                    })
+                }
+                other => {
+                    serde_json::json!({
+                        "previous": other,
+                        "degree": degree,
+                        "degree_label": degree.label()
+                    })
+                }
+            };
+            self.raw_meta = meta;
+        }
         self
     }
 }
