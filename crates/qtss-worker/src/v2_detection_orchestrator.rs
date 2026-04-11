@@ -449,6 +449,26 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
         "QTSS_DETECTION_WYCKOFF_MAX_PEN", 0.30,
     ).await;
 
+    // Phase A
+    let sc_vol_mult = resolve_system_f64(pool, "detector", "wyckoff.sc_volume_multiplier", "", 2.5).await;
+    let sc_bar_mult = resolve_system_f64(pool, "detector", "wyckoff.sc_bar_width_multiplier", "", 2.0).await;
+    let st_max_vol = resolve_system_f64(pool, "detector", "wyckoff.st_max_volume_ratio", "", 0.7).await;
+    let ar_min_ret = resolve_system_f64(pool, "detector", "wyckoff.ar_min_retracement", "", 0.3).await;
+    // Phase B
+    let ua_exceed = resolve_system_f64(pool, "detector", "wyckoff.ua_max_exceed_pct", "", 0.03).await;
+    let stb_decay = resolve_system_f64(pool, "detector", "wyckoff.stb_volume_decay_min", "", 0.85).await;
+    // Phase C
+    let shake_pen = resolve_system_f64(pool, "detector", "wyckoff.shakeout_min_penetration", "", 0.05).await;
+    let shake_bars = resolve_system_u64(pool, "detector", "wyckoff.shakeout_recovery_bars", "", 3, 1, 20).await as usize;
+    // Phase D
+    let sos_vol = resolve_system_f64(pool, "detector", "wyckoff.sos_min_volume_ratio", "", 1.5).await;
+    let lps_ret = resolve_system_f64(pool, "detector", "wyckoff.lps_max_retracement", "", 0.5).await;
+    let lps_vol = resolve_system_f64(pool, "detector", "wyckoff.lps_max_volume_ratio", "", 0.5).await;
+    let creek_pct = resolve_system_f64(pool, "detector", "wyckoff.creek_level_percentile", "", 0.6).await;
+    // Sloping / SOT
+    let slope_thresh = resolve_system_f64(pool, "detector", "wyckoff.slope_threshold_deg", "", 5.0).await;
+    let sot_decay = resolve_system_f64(pool, "detector", "wyckoff.sot_thrust_decay_ratio", "", 0.7).await;
+
     WyckoffConfig {
         pivot_level: parse_pivot_level(&level_str),
         min_range_pivots: min_pivots,
@@ -457,6 +477,20 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
         min_penetration: min_pen,
         max_penetration: max_pen,
         min_structural_score: min_score,
+        sc_volume_multiplier: sc_vol_mult,
+        sc_bar_width_multiplier: sc_bar_mult,
+        st_max_volume_ratio: st_max_vol,
+        ar_min_retracement: ar_min_ret,
+        ua_max_exceed_pct: ua_exceed,
+        stb_volume_decay_min: stb_decay,
+        shakeout_min_penetration: shake_pen,
+        shakeout_recovery_bars: shake_bars,
+        sos_min_volume_ratio: sos_vol,
+        lps_max_retracement: lps_ret,
+        lps_max_volume_ratio: lps_vol,
+        creek_level_percentile: creek_pct,
+        slope_threshold_deg: slope_thresh,
+        sot_thrust_decay_ratio: sot_decay,
     }
 }
 

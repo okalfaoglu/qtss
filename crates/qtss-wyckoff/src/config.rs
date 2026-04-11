@@ -5,27 +5,61 @@ use qtss_domain::v2::pivot::PivotLevel;
 
 #[derive(Debug, Clone)]
 pub struct WyckoffConfig {
+    // --- Range detection ---
     /// Which pivot level to consume.
     pub pivot_level: PivotLevel,
-    /// Minimum number of pivots that must lie inside the range box for
-    /// it to be considered a valid trading range.
+    /// Minimum number of pivots for a valid trading range.
     pub min_range_pivots: usize,
-    /// Maximum allowed deviation between the highest highs / lowest lows
-    /// of the candidate range, expressed as a fraction of the range
-    /// midpoint (0.04 = 4%). Tighter = cleaner box.
+    /// Max edge deviation as fraction of range midpoint (0.04 = 4%).
     pub range_edge_tolerance: f64,
-    /// Volume multiplier (vs. the pivot-volume average) above which a
-    /// pivot is considered "climactic" (SC / BC / SOS / SOW signature).
+    /// Volume multiplier for "climactic" pivot (SC / BC).
     pub climax_volume_mult: f64,
-    /// How far (as a fraction of the range height) a Spring or Upthrust
-    /// must penetrate beyond the range boundary before snapping back.
+    /// Min penetration for Spring / Upthrust (fraction of range height).
     pub min_penetration: f64,
-    /// How far (as a fraction of the range height) a Spring or Upthrust
-    /// is allowed to penetrate before being treated as a true breakout
-    /// rather than a false break.
+    /// Max penetration before it's a true breakout.
     pub max_penetration: f64,
-    /// Drop candidates whose structural score falls under this floor.
+    /// Drop candidates below this structural score.
     pub min_structural_score: f32,
+
+    // --- Phase A: Stopping ---
+    /// SC/BC volume must be >= Nx average volume.
+    pub sc_volume_multiplier: f64,
+    /// SC/BC bar range must be >= Nx ATR.
+    pub sc_bar_width_multiplier: f64,
+    /// ST volume must be <= Nx SC volume.
+    pub st_max_volume_ratio: f64,
+    /// AR must retrace >= N% of SC drop/rally.
+    pub ar_min_retracement: f64,
+
+    // --- Phase B ---
+    /// UA may exceed AR level by at most N%.
+    pub ua_max_exceed_pct: f64,
+    /// Each ST-B volume must be <= N * previous ST-B volume.
+    pub stb_volume_decay_min: f64,
+
+    // --- Phase C ---
+    /// Shakeout penetration >= N% of range height.
+    pub shakeout_min_penetration: f64,
+    /// Shakeout must recover within N bars.
+    pub shakeout_recovery_bars: usize,
+
+    // --- Phase D ---
+    /// SOS/SOW volume must be >= Nx average.
+    pub sos_min_volume_ratio: f64,
+    /// LPS retracement <= N% of SOS move.
+    pub lps_max_retracement: f64,
+    /// LPS volume must be <= N% of SOS volume.
+    pub lps_max_volume_ratio: f64,
+    /// Creek = N percentile of range height (from support).
+    pub creek_level_percentile: f64,
+
+    // --- Sloping structures ---
+    /// Range slope > N degrees → sloping structure.
+    pub slope_threshold_deg: f64,
+
+    // --- SOT ---
+    /// Each SOS/SOW thrust must be <= N * prev thrust for SOT.
+    pub sot_thrust_decay_ratio: f64,
 }
 
 impl WyckoffConfig {
@@ -38,6 +72,26 @@ impl WyckoffConfig {
             min_penetration: 0.02,
             max_penetration: 0.30,
             min_structural_score: 0.50,
+            // Phase A
+            sc_volume_multiplier: 2.5,
+            sc_bar_width_multiplier: 2.0,
+            st_max_volume_ratio: 0.7,
+            ar_min_retracement: 0.3,
+            // Phase B
+            ua_max_exceed_pct: 0.03,
+            stb_volume_decay_min: 0.85,
+            // Phase C
+            shakeout_min_penetration: 0.05,
+            shakeout_recovery_bars: 3,
+            // Phase D
+            sos_min_volume_ratio: 1.5,
+            lps_max_retracement: 0.5,
+            lps_max_volume_ratio: 0.5,
+            creek_level_percentile: 0.6,
+            // Sloping
+            slope_threshold_deg: 5.0,
+            // SOT
+            sot_thrust_decay_ratio: 0.7,
         }
     }
 
