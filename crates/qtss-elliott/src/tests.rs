@@ -1,6 +1,8 @@
+use crate::combination::CombinationDetector;
 use crate::config::ElliottConfig;
 use crate::detector::ImpulseDetector;
 use crate::fibs::{proximity_score, WAVE2_REFS, WAVE3_REFS};
+use crate::formation::FormationDetector;
 use crate::rules::{ImpulsePoints, RULES};
 use chrono::{TimeZone, Utc};
 use qtss_domain::v2::detection::PatternKind;
@@ -288,4 +290,138 @@ fn detect_uses_only_the_latest_six_pivots() {
             &regime()
         )
         .is_some());
+}
+
+// ---------------------------------------------------------------------------
+// Combination (W-X-Y) detector
+// ---------------------------------------------------------------------------
+
+/// Build a textbook bearish W-X-Y combination (correcting a prior bull leg).
+/// W = downward zigzag: H100→L80→H90→L70  (A=-20, B=+10, C=-20)
+/// X = retracement: L70→H85  (retraces 50% of W range 30)
+/// Y = downward zigzag: H85→L65→H75→L55  (A=-20, B=+10, C=-20)
+fn textbook_wxy_bear() -> Vec<Pivot> {
+    vec![
+        pivot(0,  dec!(100), PivotKind::High),  // W start
+        pivot(1,  dec!(80),  PivotKind::Low),   // W-A
+        pivot(2,  dec!(90),  PivotKind::High),  // W-B
+        pivot(3,  dec!(70),  PivotKind::Low),   // W-C
+        pivot(4,  dec!(85),  PivotKind::High),  // X end / Y start
+        pivot(5,  dec!(65),  PivotKind::Low),   // Y-A
+        pivot(6,  dec!(75),  PivotKind::High),  // Y-B
+        pivot(7,  dec!(55),  PivotKind::Low),   // Y-C
+    ]
+}
+
+/// Build a bullish W-X-Y (correcting a prior bear leg).
+fn textbook_wxy_bull() -> Vec<Pivot> {
+    vec![
+        pivot(0,  dec!(50),  PivotKind::Low),    // W start
+        pivot(1,  dec!(70),  PivotKind::High),   // W-A
+        pivot(2,  dec!(60),  PivotKind::Low),    // W-B
+        pivot(3,  dec!(80),  PivotKind::High),   // W-C
+        pivot(4,  dec!(65),  PivotKind::Low),    // X end / Y start
+        pivot(5,  dec!(85),  PivotKind::High),   // Y-A
+        pivot(6,  dec!(75),  PivotKind::Low),    // Y-B
+        pivot(7,  dec!(95),  PivotKind::High),   // Y-C
+    ]
+}
+
+#[test]
+fn combo_returns_none_on_too_few_pivots() {
+    let det = CombinationDetector::new(ElliottConfig::defaults()).unwrap();
+    let tree = tree_from(vec![
+        pivot(0, dec!(100), PivotKind::High),
+        pivot(1, dec!(90), PivotKind::Low),
+        pivot(2, dec!(95), PivotKind::High),
+    ]);
+    assert!(det.detect(&tree, &instrument(), Timeframe::H4, &regime()).is_empty());
+}
+
+#[test]
+fn combo_detects_bearish_wxy() {
+    let det = CombinationDetector::new(ElliottConfig::defaults()).unwrap();
+    let tree = tree_from(textbook_wxy_bear());
+    let results = det.detect(&tree, &instrument(), Timeframe::H4, &regime());
+    assert!(!results.is_empty(), "bearish W-X-Y should be detected");
+    let d = &results[0];
+    if let PatternKind::Elliott(ref name) = d.kind {
+        assert!(name.contains("combination_wxy"), "got {name}");
+        assert!(name.ends_with("_bear"), "got {name}");
+    } else {
+        panic!("expected Elliott pattern kind");
+    }
+    assert_eq!(d.anchors.len(), 8);
+    assert_eq!(d.invalidation_price, dec!(100)); // W start
+}
+
+#[test]
+fn combo_detects_bullish_wxy() {
+    let det = CombinationDetector::new(ElliottConfig::defaults()).unwrap();
+    let tree = tree_from(textbook_wxy_bull());
+    let results = det.detect(&tree, &instrument(), Timeframe::H4, &regime());
+    assert!(!results.is_empty(), "bullish W-X-Y should be detected");
+    let d = &results[0];
+    if let PatternKind::Elliott(ref name) = d.kind {
+        assert!(name.contains("combination_wxy"), "got {name}");
+        assert!(name.ends_with("_bull"), "got {name}");
+    } else {
+        panic!("expected Elliott pattern kind");
+    }
+}
+
+#[test]
+fn combo_rejects_when_x_too_deep() {
+    // X retraces 100% of W — that's not a connecting wave.
+    let pivots = vec![
+        pivot(0, dec!(100), PivotKind::High),
+        pivot(1, dec!(80), PivotKind::Low),
+        pivot(2, dec!(90), PivotKind::High),
+        pivot(3, dec!(70), PivotKind::Low),
+        pivot(4, dec!(100), PivotKind::High),  // X = full retrace
+        pivot(5, dec!(65), PivotKind::Low),
+        pivot(6, dec!(75), PivotKind::High),
+        pivot(7, dec!(55), PivotKind::Low),
+    ];
+    let det = CombinationDetector::new(ElliottConfig::defaults()).unwrap();
+    assert!(det.detect(&tree_from(pivots), &instrument(), Timeframe::H4, &regime()).is_empty());
+}
+
+#[test]
+fn combo_rejects_when_y_goes_opposite() {
+    // Y goes up instead of continuing W's direction (down).
+    let pivots = vec![
+        pivot(0, dec!(100), PivotKind::High),
+        pivot(1, dec!(80), PivotKind::Low),
+        pivot(2, dec!(90), PivotKind::High),
+        pivot(3, dec!(70), PivotKind::Low),    // W end
+        pivot(4, dec!(85), PivotKind::High),   // X end
+        pivot(5, dec!(95), PivotKind::Low),    // Y goes opposite
+        pivot(6, dec!(105), PivotKind::High),  // Y-B
+        pivot(7, dec!(110), PivotKind::Low),   // Y end — wrong direction
+    ];
+    let det = CombinationDetector::new(ElliottConfig::defaults()).unwrap();
+    assert!(det.detect(&tree_from(pivots), &instrument(), Timeframe::H4, &regime()).is_empty());
+}
+
+#[test]
+fn combo_skips_when_score_floor_too_high() {
+    // Use a geometrically valid but ratio-imperfect W-X-Y so that the
+    // structural score stays well below 0.99.
+    let mut cfg = ElliottConfig::defaults();
+    cfg.min_structural_score = 0.99;
+    let det = CombinationDetector::new(cfg).unwrap();
+    let imperfect = vec![
+        pivot(0,  dec!(100), PivotKind::High),
+        pivot(1,  dec!(82),  PivotKind::Low),    // W-A
+        pivot(2,  dec!(93),  PivotKind::High),   // W-B (non-standard retrace)
+        pivot(3,  dec!(71),  PivotKind::Low),    // W-C
+        pivot(4,  dec!(84),  PivotKind::High),   // X end
+        pivot(5,  dec!(68),  PivotKind::Low),    // Y-A
+        pivot(6,  dec!(77),  PivotKind::High),   // Y-B
+        pivot(7,  dec!(52),  PivotKind::Low),    // Y-C
+    ];
+    assert!(det
+        .detect(&tree_from(imperfect), &instrument(), Timeframe::H4, &regime())
+        .is_empty());
 }
