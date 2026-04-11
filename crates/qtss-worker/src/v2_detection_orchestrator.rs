@@ -45,7 +45,7 @@ use qtss_domain::v2::regime::RegimeSnapshot;
 use qtss_domain::v2::timeframe::Timeframe;
 use qtss_elliott::{ElliottConfig, ElliottDetectorSet, ElliottFormationToggles};
 use qtss_harmonic::{HarmonicConfig, HarmonicDetector};
-use rust_decimal::prelude::FromPrimitive;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
 use qtss_pivots::{PivotConfig, PivotEngine};
 use qtss_regime::{RegimeConfig, RegimeEngine};
@@ -1077,10 +1077,164 @@ async fn process_symbol(
         {
             warn!(symbol = %sym.symbol, family, subkind, %e, "supersede_previous_forming failed");
         }
+        // Wyckoff structure tracker: when a wyckoff family detection is
+        // inserted, feed it into the persistent structure state machine.
+        if family == "wyckoff" {
+            if let Err(e) = upsert_wyckoff_structure_from_detection(
+                pool, &sym.exchange, &sym.symbol, &sym.interval, subkind,
+                &detection, inserted_id,
+            ).await {
+                warn!(symbol = %sym.symbol, %e, "wyckoff structure upsert failed");
+            }
+        }
         }
     }
 
     Ok(stats)
+}
+
+/// Feed a Wyckoff detection into the persistent structure tracker.
+/// Creates a new structure if none exists, or updates the existing one
+/// with the new event.
+async fn upsert_wyckoff_structure_from_detection(
+    pool: &PgPool,
+    exchange: &str,
+    symbol: &str,
+    interval: &str,
+    subkind: &str,
+    detection: &Detection,
+    _detection_id: Uuid,
+) -> anyhow::Result<()> {
+    use qtss_storage::{
+        find_active_wyckoff_structure, insert_wyckoff_structure, update_wyckoff_structure,
+        WyckoffStructureInsert,
+    };
+    use qtss_wyckoff::{WyckoffEvent, WyckoffSchematic, WyckoffStructureTracker};
+
+    // Parse event from subkind (e.g. "selling_climax_accumulation" → "selling_climax")
+    let event_name = subkind.rsplit('_').skip(1).collect::<Vec<_>>().into_iter().rev()
+        .collect::<Vec<_>>().join("_");
+    let variant = subkind.rsplit('_').next().unwrap_or("");
+
+    let wy_event = match WyckoffStructureTracker::event_from_detector_name(&event_name) {
+        Some(e) => e,
+        None => {
+            // trading_range and some events don't map directly
+            // Try the full subkind minus the variant
+            let alt = subkind.strip_suffix(&format!("_{variant}")).unwrap_or(subkind);
+            match WyckoffStructureTracker::event_from_detector_name(alt) {
+                Some(e) => e,
+                None => return Ok(()), // Not a trackable event
+            }
+        }
+    };
+
+    let last_anchor = detection.anchors.last();
+    let price = last_anchor
+        .map(|a| a.price.to_f64().unwrap_or(0.0))
+        .unwrap_or(0.0);
+    let bar_idx = last_anchor.map(|a| a.bar_index).unwrap_or(0);
+
+    // Check if there's an active structure for this symbol/interval
+    let existing = find_active_wyckoff_structure(pool, symbol, interval).await?;
+
+    match existing {
+        Some(row) => {
+            // Deserialize tracker state from events_json
+            let events: Vec<qtss_wyckoff::RecordedEvent> =
+                serde_json::from_value(row.events_json.clone()).unwrap_or_default();
+            let schematic = match row.schematic.as_str() {
+                "accumulation" => WyckoffSchematic::Accumulation,
+                "distribution" => WyckoffSchematic::Distribution,
+                "reaccumulation" => WyckoffSchematic::ReAccumulation,
+                "redistribution" => WyckoffSchematic::ReDistribution,
+                _ => WyckoffSchematic::Accumulation,
+            };
+            let mut tracker = WyckoffStructureTracker::new(
+                schematic,
+                row.range_top.unwrap_or(0.0),
+                row.range_bottom.unwrap_or(0.0),
+            );
+            tracker.creek = row.creek_level;
+            tracker.ice = row.ice_level;
+            tracker.events = events;
+            // Re-derive phase from events
+            for ev in &tracker.events {
+                let _ = ev; // phase is re-derived in record_event
+            }
+
+            // Record new event
+            tracker.record_event(wy_event, bar_idx, price, detection.structural_score as f64);
+
+            let events_json = serde_json::to_value(&tracker.events)?;
+            update_wyckoff_structure(
+                pool,
+                row.id,
+                tracker.current_phase.as_str(),
+                tracker.schematic.as_str(),
+                tracker.range_top,
+                tracker.range_bottom,
+                tracker.creek,
+                tracker.ice,
+                &events_json,
+                tracker.confidence(),
+            )
+            .await?;
+        }
+        None => {
+            // Create new structure
+            let schematic = match variant {
+                "accumulation" => WyckoffSchematic::Accumulation,
+                "distribution" => WyckoffSchematic::Distribution,
+                _ => {
+                    // Infer from event type
+                    if matches!(wy_event, WyckoffEvent::SC | WyckoffEvent::Spring | WyckoffEvent::SOS) {
+                        WyckoffSchematic::Accumulation
+                    } else {
+                        WyckoffSchematic::Distribution
+                    }
+                }
+            };
+
+            let mut tracker = WyckoffStructureTracker::new(schematic, price, price);
+            tracker.record_event(wy_event, bar_idx, price, detection.structural_score as f64);
+
+            // Use detection anchors to estimate range
+            let mut hi = f64::MIN;
+            let mut lo = f64::MAX;
+            for a in &detection.anchors {
+                let p = a.price.to_f64().unwrap_or(0.0);
+                if p > hi { hi = p; }
+                if p < lo { lo = p; }
+            }
+            if hi > lo {
+                tracker.range_top = hi;
+                tracker.range_bottom = lo;
+            }
+
+            let events_json = serde_json::to_value(&tracker.events)?;
+            let segment = "futures"; // default, TODO: from engine_symbol
+            insert_wyckoff_structure(
+                pool,
+                &WyckoffStructureInsert {
+                    symbol,
+                    interval,
+                    exchange,
+                    segment,
+                    schematic: schematic.as_str(),
+                    current_phase: tracker.current_phase.as_str(),
+                    range_top: tracker.range_top,
+                    range_bottom: tracker.range_bottom,
+                    creek_level: tracker.creek,
+                    ice_level: tracker.ice,
+                    events_json,
+                    confidence: tracker.confidence(),
+                },
+            )
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 /// Look up the most recent open detection for this (symbol, tf, family,

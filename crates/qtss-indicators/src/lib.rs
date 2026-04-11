@@ -13,6 +13,7 @@ pub mod fibonacci;
 pub mod volatility;
 pub mod divergence;
 pub mod indicator_bundle;
+pub mod volume_profile;
 
 pub use ema::{ema, ema_step, sma};
 pub use macd::{macd, MacdResult};
@@ -26,3 +27,4 @@ pub use fibonacci::{fib_retracements, fib_extensions, FibLevel};
 pub use volatility::{atr, bb_squeeze, compression_detector};
 pub use divergence::{detect_divergences, Divergence, DivergenceType};
 pub use indicator_bundle::{compute_all, IndicatorBundle};
+pub use volume_profile::{volume_profile, OhlcvInput, VolumeProfile};
