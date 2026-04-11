@@ -108,6 +108,17 @@ async fn post_json_path(
         });
     }
 
+    // Log credit consumption for every successful Nansen API call
+    if let Some(ref used) = meta.credits_used {
+        let remaining = meta.credits_remaining.as_deref().unwrap_or("?");
+        tracing::info!(
+            credits_used = %used,
+            credits_remaining = %remaining,
+            endpoint = %path,
+            "nansen API credit consumption"
+        );
+    }
+
     let v: Value = serde_json::from_str(&text)?;
     Ok((v, meta))
 }
