@@ -44,6 +44,7 @@ mod v2_reconcile;
 mod v2_confluence;
 mod v2_engine_symbols;
 mod v2_events_stream;
+mod v2_q_radar;
 mod v2_setups;
 mod v2_users;
 mod v2_wyckoff;
@@ -68,6 +69,7 @@ pub use v2_reconcile::v2_reconcile_router;
 pub use v2_confluence::v2_confluence_router;
 pub use v2_engine_symbols::v2_engine_symbols_router;
 pub use v2_events_stream::v2_events_stream_router;
+pub use v2_q_radar::v2_q_radar_router;
 pub use v2_setups::v2_setups_router;
 pub use v2_users::v2_users_router;
 pub use v2_wyckoff::v2_wyckoff_router;
@@ -118,6 +120,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_onchain_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_confluence_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_setups_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_q_radar_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_engine_symbols_router().layer(from_fn(require_admin)))
         .merge(v2_events_stream_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_scenarios_router().layer(from_fn(require_dashboard_roles)))

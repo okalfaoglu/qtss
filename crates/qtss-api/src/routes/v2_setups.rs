@@ -54,6 +54,8 @@ pub struct SetupEntry {
     pub close_reason: Option<String>,
     pub close_price: Option<f32>,
     pub closed_at: Option<DateTime<Utc>>,
+    pub pnl_pct: Option<f32>,
+    pub risk_mode: Option<String>,
     pub confluence_id: Option<Uuid>,
     pub raw_meta: serde_json::Value,
 }
@@ -147,6 +149,8 @@ fn row_to_entry(row: V2SetupRow) -> SetupEntry {
         close_reason: row.close_reason,
         close_price: row.close_price,
         closed_at: row.closed_at,
+        pnl_pct: row.pnl_pct,
+        risk_mode: row.risk_mode,
         confluence_id: row.confluence_id,
         raw_meta: row.raw_meta,
     }

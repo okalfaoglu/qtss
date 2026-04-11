@@ -78,15 +78,73 @@ impl AltType {
     }
 }
 
+/// Market risk mode derived from the dominant regime.
+/// Determines per-profile behavior: which profiles can arm new
+/// setups, what guven threshold to use, whether to stop entirely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskMode {
+    RiskOn,
+    RiskNeutral,
+    RiskOff,
+}
+
+impl RiskMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RiskMode::RiskOn => "risk_on",
+            RiskMode::RiskNeutral => "risk_neutral",
+            RiskMode::RiskOff => "risk_off",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "risk_on" => Some(RiskMode::RiskOn),
+            "risk_neutral" => Some(RiskMode::RiskNeutral),
+            "risk_off" => Some(RiskMode::RiskOff),
+            _ => None,
+        }
+    }
+}
+
+/// Per-profile behavior in a given risk mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RiskModeBehavior {
+    /// Normal setup arming.
+    Active,
+    /// Raise guven threshold, only strong structures.
+    Selective,
+    /// Keep existing setups, no new ones.
+    Continue,
+    /// Stop all new setups, minimize exposure.
+    Stopped,
+}
+
+impl RiskModeBehavior {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "active" => Self::Active,
+            "selective" => Self::Selective,
+            "continue" => Self::Continue,
+            "stopped" => Self::Stopped,
+            _ => Self::Selective,
+        }
+    }
+}
+
 /// Setup lifecycle state. English slugs are the on-disk format —
 /// localisation lives in `web/locales`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum SetupState {
     Flat,
     Armed,
     Active,
     Closed,
+    ClosedWin,
+    ClosedLoss,
+    ClosedManual,
 }
 
 impl SetupState {
@@ -96,6 +154,9 @@ impl SetupState {
             SetupState::Armed => "armed",
             SetupState::Active => "active",
             SetupState::Closed => "closed",
+            SetupState::ClosedWin => "closed_win",
+            SetupState::ClosedLoss => "closed_loss",
+            SetupState::ClosedManual => "closed_manual",
         }
     }
 
@@ -105,7 +166,24 @@ impl SetupState {
             "armed" => Some(SetupState::Armed),
             "active" => Some(SetupState::Active),
             "closed" => Some(SetupState::Closed),
+            "closed_win" => Some(SetupState::ClosedWin),
+            "closed_loss" => Some(SetupState::ClosedLoss),
+            "closed_manual" => Some(SetupState::ClosedManual),
             _ => None,
+        }
+    }
+
+    pub fn is_closed(self) -> bool {
+        matches!(self, Self::Closed | Self::ClosedWin | Self::ClosedLoss | Self::ClosedManual)
+    }
+
+    /// Derive the granular close state from a CloseReason.
+    pub fn from_close_reason(reason: CloseReason) -> Self {
+        match reason {
+            CloseReason::TargetHit => SetupState::ClosedWin,
+            CloseReason::StopHit => SetupState::ClosedLoss,
+            CloseReason::ReverseSignal => SetupState::ClosedLoss,
+            CloseReason::Manual => SetupState::ClosedManual,
         }
     }
 }

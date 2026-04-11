@@ -39,6 +39,10 @@ pub struct V2SetupRow {
     /// FK to the originating detection (migration 0040). Nullable for
     /// setups created before the column existed.
     pub detection_id: Option<Uuid>,
+    /// D/T/Q: realised P&L % (migration 0055).
+    pub pnl_pct: Option<f32>,
+    /// D/T/Q: risk mode at setup creation (migration 0055).
+    pub risk_mode: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -141,7 +145,8 @@ pub async fn fetch_v2_setup(
         r#"SELECT id, created_at, updated_at, venue_class, exchange, symbol,
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
-                  close_reason, close_price, closed_at, raw_meta, detection_id
+                  close_reason, close_price, closed_at, raw_meta, detection_id,
+                  pnl_pct, risk_mode
              FROM qtss_v2_setups
             WHERE id = $1"#,
     )
@@ -159,7 +164,8 @@ pub async fn list_open_v2_setups(
         r#"SELECT id, created_at, updated_at, venue_class, exchange, symbol,
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
-                  close_reason, close_price, closed_at, raw_meta, detection_id
+                  close_reason, close_price, closed_at, raw_meta, detection_id,
+                  pnl_pct, risk_mode
              FROM qtss_v2_setups
             WHERE state IN ('armed','active')
               AND ($1::text IS NULL OR venue_class = $1)
@@ -189,7 +195,8 @@ pub async fn list_v2_setups_filtered(
         r#"SELECT id, created_at, updated_at, venue_class, exchange, symbol,
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
-                  close_reason, close_price, closed_at, raw_meta, detection_id
+                  close_reason, close_price, closed_at, raw_meta, detection_id,
+                  pnl_pct, risk_mode
              FROM qtss_v2_setups
             WHERE 1=1"#,
     );
@@ -227,7 +234,8 @@ pub async fn list_recent_v2_setups(
         r#"SELECT id, created_at, updated_at, venue_class, exchange, symbol,
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
-                  close_reason, close_price, closed_at, raw_meta, detection_id
+                  close_reason, close_price, closed_at, raw_meta, detection_id,
+                  pnl_pct, risk_mode
              FROM qtss_v2_setups
             ORDER BY created_at DESC
             LIMIT $1"#,

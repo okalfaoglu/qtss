@@ -43,12 +43,12 @@ pub async fn regime_performance(
                 ) as regime
             FROM qtss_v2_setups s
             WHERE s.created_at > now() - make_interval(days => $1)
-              AND s.state IN ('closed_win', 'closed_loss', 'closed_manual')
+              AND s.state IN ('closed', 'closed_win', 'closed_loss', 'closed_manual')
         )
         SELECT
             regime,
             COUNT(*) as total,
-            COUNT(*) FILTER (WHERE state = 'closed_win') as wins,
+            COUNT(*) FILTER (WHERE state = 'closed_win' OR (state = 'closed' AND pnl_pct > 0)) as wins,
             CASE WHEN COUNT(*) > 0
                  THEN ROUND(100.0 * COUNT(*) FILTER (WHERE state = 'closed_win') / COUNT(*), 1)
                  ELSE 0.0 END as win_rate,

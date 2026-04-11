@@ -43,5 +43,6 @@ pub use classifier::classify_alt_type;
 pub use guard::{PositionGuard, PositionGuardConfig};
 pub use reverse::should_reverse_close;
 pub use types::{
-    AltType, CloseReason, Direction, Profile, RejectReason, SetupState, VenueClass,
+    AltType, CloseReason, Direction, Profile, RejectReason, RiskMode, RiskModeBehavior,
+    SetupState, VenueClass,
 };
