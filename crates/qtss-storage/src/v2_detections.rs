@@ -125,6 +125,30 @@ impl V2DetectionRepository {
         Ok(row)
     }
 
+    /// Refresh a forming detection's projection data and structural score
+    /// without inserting a new row. Called when dedup detects the same
+    /// structure (same last_anchor_idx) but we still want fresh forecasts.
+    pub async fn update_projection(
+        &self,
+        id: Uuid,
+        structural_score: f32,
+        raw_meta: Json,
+    ) -> Result<u64, StorageError> {
+        let res = sqlx::query(
+            r#"UPDATE qtss_v2_detections
+                   SET structural_score = $2,
+                       raw_meta = $3,
+                       updated_at = NOW()
+                 WHERE id = $1"#,
+        )
+        .bind(id)
+        .bind(structural_score)
+        .bind(raw_meta)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// Move a detection between forming/confirmed/invalidated/completed.
     /// Returns the number of rows updated (0 = unknown id).
     pub async fn update_state(&self, id: Uuid, state: &str) -> Result<u64, StorageError> {
@@ -362,7 +386,7 @@ impl V2DetectionRepository {
                    AND timeframe = $3
                    AND family   = $4
                    AND subkind  = $5
-                   AND state    = 'forming'
+                   AND state IN ('forming', 'confirmed')
                    AND id       <> $6"#,
         )
         .bind(exchange)

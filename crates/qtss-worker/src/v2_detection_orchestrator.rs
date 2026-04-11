@@ -860,7 +860,7 @@ async fn process_symbol(
         let (family, subkind) = split_pattern_kind(&detection.kind);
         let last_anchor_idx = detection.anchors.last().map(|a| a.bar_index).unwrap_or(0);
 
-        if dedup_open(
+        if let Some(existing_id) = dedup_open(
             repo.as_ref(),
             &sym.exchange,
             &sym.symbol,
@@ -871,6 +871,47 @@ async fn process_symbol(
         )
         .await?
         {
+            // Same structure detected — don't insert a duplicate, but
+            // refresh the projection data so forecasts stay up-to-date
+            // as new bars close (fixes frozen forecast bug).
+            let bar_interval = chronological
+                .windows(2)
+                .last()
+                .map(|w| w[1].open_time - w[0].open_time)
+                .unwrap_or_else(|| chrono::Duration::seconds(60));
+            let last_chrono_idx = chronological.len().saturating_sub(1) as u64;
+            let last_chrono_time = chronological
+                .last()
+                .map(|r| r.open_time)
+                .unwrap_or_else(chrono::Utc::now);
+            let projected_json = json!(detection
+                .projected_anchors
+                .iter()
+                .map(|a| {
+                    let offset = a.bar_index.saturating_sub(last_chrono_idx) as i32;
+                    let proj_time = last_chrono_time + bar_interval * offset;
+                    json!({
+                        "bar_index": a.bar_index,
+                        "time": proj_time.to_rfc3339(),
+                        "price": a.price.to_string(),
+                        "level": format!("{:?}", a.level),
+                        "label": a.label,
+                    })
+                })
+                .collect::<Vec<_>>());
+            let updated_meta = json!({
+                "detection_id": detection.id,
+                "last_anchor_idx": last_anchor_idx,
+                "structural_score": detection.structural_score,
+                "projected_anchors": projected_json,
+            });
+            if let Err(e) = repo.update_projection(
+                existing_id,
+                detection.structural_score,
+                updated_meta,
+            ).await {
+                warn!(symbol = %sym.symbol, %e, "update_projection on dedup failed");
+            }
             stats.deduped += 1;
             continue;
         }
@@ -1009,8 +1050,9 @@ async fn process_symbol(
 }
 
 /// Look up the most recent open detection for this (symbol, tf, family,
-/// subkind) and return `true` if its last anchor matches — meaning the
-/// new detection is the same structure and we should skip the insert.
+/// subkind) and return its id if its last anchor matches — meaning the
+/// new detection is the same structure. The caller can then update the
+/// existing row's projection instead of inserting a duplicate.
 async fn dedup_open(
     repo: &V2DetectionRepository,
     exchange: &str,
@@ -1019,7 +1061,7 @@ async fn dedup_open(
     family: &str,
     _subkind: &str,
     last_anchor_idx: u64,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<Option<Uuid>> {
     let rows = repo
         .list_filtered(DetectionFilter {
             exchange: Some(exchange),
@@ -1039,11 +1081,11 @@ async fn dedup_open(
             .and_then(|v| v.as_u64())
         {
             if idx == last_anchor_idx {
-                return Ok(true);
+                return Ok(Some(row.id));
             }
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
 // ---------------------------------------------------------------------
