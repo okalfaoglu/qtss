@@ -176,6 +176,7 @@ pub enum RejectReason {
     TotalRiskCap,
     MaxConcurrent,
     CorrelationCap,
+    CommissionGate,
 }
 
 impl RejectReason {
@@ -184,6 +185,7 @@ impl RejectReason {
             RejectReason::TotalRiskCap => "total_risk_cap",
             RejectReason::MaxConcurrent => "max_concurrent",
             RejectReason::CorrelationCap => "correlation_cap",
+            RejectReason::CommissionGate => "commission_gate",
         }
     }
 }

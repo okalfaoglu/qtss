@@ -667,6 +667,26 @@ async fn try_arm_new_setup(
         return Ok(());
     }
 
+    // Commission gate: reject if expected profit < round-trip commission cost.
+    // Commission is expressed in bps (config table); we compare profit % vs
+    // 2 × taker_bps (entry + exit taker fills, worst case).
+    {
+        let taker_bps =
+            resolve_system_f64(pool, "setup", "commission.taker_bps", "", 5.0).await;
+        let round_trip_pct = (taker_bps * 2.0) / 10_000.0 * 100.0; // convert to %
+        let entry = guard.entry;
+        let target = guard.target_ref;
+        let profit_pct = match direction {
+            Direction::Long => ((target - entry) / entry) * 100.0,
+            Direction::Short => ((entry - target) / entry) * 100.0,
+            Direction::Neutral => 0.0,
+        };
+        if profit_pct <= round_trip_pct {
+            record_rejection(pool, cfg, venue, profile, sym, direction, conf.id, RejectReason::CommissionGate).await?;
+            return Ok(());
+        }
+    }
+
     let alt_type = classify_alt_type(direction, ema50, ema200, price);
 
     let row = V2SetupInsert {
