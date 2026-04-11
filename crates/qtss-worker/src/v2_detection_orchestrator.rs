@@ -36,6 +36,7 @@ use std::time::Duration;
 use chrono::Utc;
 use qtss_chart_patterns::{analyze_trading_range, OhlcBar, TradingRangeParams};
 use qtss_classical::{ClassicalConfig, ClassicalDetector};
+use qtss_range::RangeDetectorConfig;
 use qtss_domain::v2::bar::Bar;
 use qtss_domain::v2::detection::{Detection, PatternKind, PatternState, PivotRef};
 use qtss_domain::v2::instrument::{AssetClass, Instrument, SessionCalendar, Venue};
@@ -283,6 +284,106 @@ impl DetectorRunner for RangeRunner {
     }
 }
 
+/// Range sub-detector runner — FVG, Order Block, Liquidity Pool, Equal Highs/Lows.
+/// Wraps `qtss_range::detect_all` into DetectorRunner. Each sub-detection
+/// becomes a separate `Detection` with `PatternKind::Range(subkind)`.
+struct RangeSubRunner {
+    cfg: RangeDetectorConfig,
+}
+
+impl RangeSubRunner {
+    fn new(cfg: RangeDetectorConfig) -> Self {
+        Self { cfg }
+    }
+}
+
+impl DetectorRunner for RangeSubRunner {
+    fn family(&self) -> &'static str {
+        "range"
+    }
+
+    fn detect(
+        &self,
+        _tree: &PivotTree,
+        bars: &[Bar],
+        instrument: &Instrument,
+        timeframe: Timeframe,
+        regime: &RegimeSnapshot,
+    ) -> Vec<Detection> {
+        if bars.len() < 30 {
+            return Vec::new();
+        }
+
+        let ohlc: Vec<qtss_range::OhlcBar> = bars
+            .iter()
+            .enumerate()
+            .map(|(i, b)| qtss_range::OhlcBar {
+                open: b.open.to_string().parse().unwrap_or(0.0),
+                high: b.high.to_string().parse().unwrap_or(0.0),
+                low: b.low.to_string().parse().unwrap_or(0.0),
+                close: b.close.to_string().parse().unwrap_or(0.0),
+                bar_index: i as i64,
+                volume: b.volume.to_string().parse().ok(),
+            })
+            .collect();
+
+        // Compute ATR for the sub-detectors
+        let atr_series = qtss_range::helpers::wilder_atr(&ohlc, 14);
+        let atr_value = atr_series.last().copied().unwrap_or(0.0);
+        if !atr_value.is_finite() || atr_value <= 1e-12 {
+            return Vec::new();
+        }
+
+        let matches = qtss_range::detect_all(&ohlc, atr_value, &self.cfg);
+        let mut detections = Vec::new();
+
+        for m in matches {
+            let high_decimal = Decimal::from_f64(m.zone_high).unwrap_or_default();
+            let low_decimal = Decimal::from_f64(m.zone_low).unwrap_or_default();
+            let bar_idx = m.bar_index as u64;
+
+            let anchors = vec![
+                PivotRef {
+                    bar_index: bar_idx,
+                    price: high_decimal,
+                    level: PivotLevel::L0,
+                    label: Some(format!("{}_high", m.subkind)),
+                },
+                PivotRef {
+                    bar_index: bar_idx,
+                    price: low_decimal,
+                    level: PivotLevel::L0,
+                    label: Some(format!("{}_low", m.subkind)),
+                },
+            ];
+
+            // Invalidation: opposite boundary
+            let invalidation = if m.subkind.contains("bullish") || m.subkind.contains("_low") || m.subkind.contains("equal_lows") {
+                high_decimal
+            } else {
+                low_decimal
+            };
+
+            let structural_score = m.score as f32;
+
+            let mut det = Detection::new(
+                instrument.clone(),
+                timeframe,
+                PatternKind::Range(m.subkind),
+                PatternState::Confirmed,
+                anchors,
+                structural_score.clamp(0.0, 1.0),
+                invalidation,
+                regime.clone(),
+            );
+            det.raw_meta = m.meta;
+            detections.push(det);
+        }
+
+        detections
+    }
+}
+
 /// Resolve pivot-level string to enum. Falls back to L1 if unknown.
 fn parse_pivot_level(s: &str) -> PivotLevel {
     match s.to_lowercase().as_str() {
@@ -481,6 +582,17 @@ async fn build_runners(pool: &PgPool) -> Vec<Box<dyn DetectorRunner>> {
     .await
     {
         runners.push(Box::new(RangeRunner::new(TradingRangeParams::default())));
+    }
+    if resolve_worker_enabled_flag(
+        pool,
+        "detection",
+        "range_sub.enabled",
+        "QTSS_DETECTION_RANGE_SUB_ENABLED",
+        true,
+    )
+    .await
+    {
+        runners.push(Box::new(RangeSubRunner::new(RangeDetectorConfig::default())));
     }
 
     runners

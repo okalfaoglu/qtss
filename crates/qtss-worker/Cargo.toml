@@ -12,6 +12,7 @@ plotters_ttf = ["qtss-ai/plotters_ttf"]
 qtss-common.workspace = true
 qtss-binance.workspace = true
 qtss-chart-patterns.workspace = true
+qtss-range.workspace = true
 qtss-storage.workspace = true
 qtss-notify.workspace = true
 qtss-nansen.workspace = true
