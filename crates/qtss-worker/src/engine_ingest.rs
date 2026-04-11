@@ -144,14 +144,35 @@ async fn run_one_target(
     let mut last_backfill: Option<chrono::DateTime<Utc>> = None;
     let mut last_err: Option<String> = None;
 
-    // Full history mode: when enabled AND this series has no data yet
-    // (or very little), fetch the entire listing history from the
-    // exchange by passing limit=0 to the provider.
-    if full_history && count == 0 {
+    // Full history mode: when enabled, check whether the oldest bar in
+    // this series is "old enough". If the existing data only goes back a
+    // few months but the pair has been listed for years, we need to
+    // backfill further. The heuristic: if oldest bar is less than
+    // `full_history_min_age_days` old, trigger a full fetch.
+    // For series with zero bars, always trigger.
+    let full_history_min_age_days: i64 = 365; // at least 1 year of history
+    let needs_full = if full_history {
+        match (count, min_ot) {
+            (0, _) => true,
+            (_, Some(oldest)) => {
+                let age_days = now.signed_duration_since(oldest).num_days();
+                age_days < full_history_min_age_days
+            }
+            _ => false,
+        }
+    } else {
+        false
+    };
+
+    if needs_full {
+        let age_info = min_ot
+            .map(|t| format!("oldest={}, age={}d", t.format("%Y-%m-%d"), now.signed_duration_since(t).num_days()))
+            .unwrap_or_else(|| "no data".into());
         info!(
             engine_symbol_id = %row.id,
             symbol = %sym,
             interval = %iv,
+            %age_info,
             "engine_ingest: FULL HISTORY backfill starting (listing → now)"
         );
         match provider.backfill_bars(sym, iv, seg, 0).await {
