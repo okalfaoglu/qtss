@@ -19,6 +19,7 @@ const NAV_ENTRIES: NavEntry[] = [
   { label: "TBM", to: "/v2/tbm", enabled: true },
   { label: "Onchain", to: "/v2/onchain", enabled: true },
   { label: "Regime", to: "/v2/regime", enabled: true },
+  { label: "Wyckoff", to: "/v2/wyckoff", enabled: true },
   { label: "Scenarios", to: "/v2/scenarios", enabled: true },
   { label: "Monte Carlo", to: "/v2/montecarlo", enabled: true },
   { label: "Risk", to: "/v2/risk", enabled: true },

@@ -20,6 +20,7 @@ import { AiDecisions } from "./pages/AiDecisions";
 import { Audit } from "./pages/Audit";
 import { Users } from "./pages/Users";
 import { EngineSymbols } from "./pages/EngineSymbols";
+import { Wyckoff } from "./pages/Wyckoff";
 
 // Guard: bounce to /login when there is no token in storage. We deliberately
 // keep this check synchronous (localStorage) so the first paint never flashes
@@ -59,6 +60,7 @@ export const router = createBrowserRouter([
       { path: "audit", element: <Audit /> },
       { path: "users", element: <Users /> },
       { path: "engine-symbols", element: <EngineSymbols /> },
+      { path: "wyckoff", element: <Wyckoff /> },
     ],
   },
   { path: "/", element: <Navigate to="/v2/dashboard" replace /> },
