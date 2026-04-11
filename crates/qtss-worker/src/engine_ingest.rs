@@ -3,9 +3,9 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use qtss_binance::backfill_binance_public_klines;
+use qtss_domain::bar::MarketBarProvider;
 use qtss_storage::{
-    count_market_bars_series, is_binance_futures_tradable, list_enabled_engine_symbols,
+    count_market_bars_series, list_enabled_engine_symbols,
     list_recent_bar_open_times_desc, resolve_system_u64, resolve_worker_tick_secs,
     upsert_engine_symbol_ingestion_state, EngineSymbolRow,
 };
@@ -72,6 +72,7 @@ async fn run_one_target(
     row: &EngineSymbolRow,
     min_bars: i64,
     gap_window: i64,
+    provider: &dyn MarketBarProvider,
 ) {
     let ex = row.exchange.trim();
     let seg = row.segment.trim();
@@ -79,7 +80,7 @@ async fn run_one_target(
     let iv = row.interval.trim();
     let now = Utc::now();
 
-    if !ex.eq_ignore_ascii_case("binance") {
+    if !ex.eq_ignore_ascii_case(provider.exchange_id()) {
         let _ = upsert_engine_symbol_ingestion_state(
             pool,
             row.id,
@@ -90,35 +91,32 @@ async fn run_one_target(
             None,
             None,
             now,
-            Some("non_binance_auto_ingest_not_supported"),
+            Some("exchange_mismatch_auto_ingest_skipped"),
         )
         .await;
         return;
     }
 
-    if segment_db(seg) == "futures" {
-        let tradable = is_binance_futures_tradable(pool, sym).await.unwrap_or(false);
-        if !tradable {
-            debug!(
-                engine_symbol_id = %row.id,
-                symbol = %sym,
-                "engine_ingest: skip backfill — symbol not Binance USDT-M tradable (catalog)"
-            );
-            let _ = upsert_engine_symbol_ingestion_state(
-                pool,
-                row.id,
-                0,
-                None,
-                None,
-                0,
-                None,
-                None,
-                now,
-                Some("not_binance_usdt_m_tradable"),
-            )
-            .await;
-            return;
-        }
+    if !provider.is_tradable(sym, seg).await {
+        debug!(
+            engine_symbol_id = %row.id,
+            symbol = %sym,
+            "engine_ingest: skip backfill — symbol not tradable on provider"
+        );
+        let _ = upsert_engine_symbol_ingestion_state(
+            pool,
+            row.id,
+            0,
+            None,
+            None,
+            0,
+            None,
+            None,
+            now,
+            Some("not_tradable_on_provider"),
+        )
+        .await;
+        return;
     }
 
     let (count, min_ot, max_ot) = match count_market_bars_series(pool, ex, segment_db(seg), sym, iv).await {
@@ -148,7 +146,7 @@ async fn run_one_target(
     if count < min_bars {
         let need = (min_bars - count).max(0) as i64;
         let fetch_n = need.saturating_add(200).clamp(300, 15_000);
-        match backfill_binance_public_klines(pool, sym, iv, seg, fetch_n).await {
+        match provider.backfill_bars(sym, iv, seg, fetch_n).await {
             Ok(n) => {
                 last_backfill = Some(Utc::now());
                 info!(
@@ -228,7 +226,7 @@ async fn run_one_target(
         .map(|n| n.clamp(300, 15_000));
 
     if let Some(fetch_n) = needs_patch {
-        match backfill_binance_public_klines(pool, sym, iv, seg, fetch_n).await {
+        match provider.backfill_bars(sym, iv, seg, fetch_n).await {
             Ok(n) => {
                 last_backfill = Some(Utc::now());
                 info!(
@@ -302,6 +300,11 @@ async fn run_one_target(
 }
 
 pub async fn engine_symbol_ingest_loop(pool: PgPool) {
+    // Construct provider once — currently only Binance. Adding a new
+    // exchange is a new impl + one entry here (CLAUDE.md rule #1).
+    let binance = qtss_binance::BinanceBarProvider::new(pool.clone());
+    let providers: Vec<&dyn MarketBarProvider> = vec![&binance];
+
     loop {
         let tick = resolve_worker_tick_secs(
             &pool,
@@ -336,7 +339,20 @@ pub async fn engine_symbol_ingest_loop(pool: PgPool) {
         match list_enabled_engine_symbols(&pool).await {
             Ok(rows) => {
                 for r in rows {
-                    run_one_target(&pool, &r, min_bars, gap_window).await;
+                    let ex = r.exchange.trim();
+                    let provider = providers
+                        .iter()
+                        .find(|p| p.exchange_id().eq_ignore_ascii_case(ex));
+                    match provider {
+                        Some(p) => run_one_target(&pool, &r, min_bars, gap_window, *p).await,
+                        None => {
+                            debug!(
+                                symbol = %r.symbol,
+                                exchange = %ex,
+                                "engine_ingest: no provider for exchange, skipping"
+                            );
+                        }
+                    }
                 }
             }
             Err(e) => warn!(%e, "engine_ingest list_enabled_engine_symbols"),

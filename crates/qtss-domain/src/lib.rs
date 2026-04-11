@@ -21,7 +21,7 @@ pub mod symbol;
 pub mod tenancy;
 pub mod v2;
 
-pub use bar::{TimestampBar, TimestampBarFeed};
+pub use bar::{MarketBarProvider, TimestampBar, TimestampBarFeed};
 pub use commission::{
     commission_fee, rate_from_bps, CommissionPolicy, CommissionQuote, CommissionResolver,
     CommissionSource,

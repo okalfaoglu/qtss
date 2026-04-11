@@ -4,6 +4,7 @@
 //! - Emir ve hesap uçları için [`BinanceClientConfig::mainnet_with_keys`].
 //! - Testnet: [`BinanceEndpoints::testnet`] ile [`BinanceClientConfig`] oluşturun.
 
+pub mod bar_provider;
 mod commission;
 mod config;
 mod error;
@@ -30,6 +31,7 @@ pub use commission::{
 pub use config::{BinanceClientConfig, BinanceCredentials, BinanceEndpoints};
 pub use error::BinanceError;
 pub use klines::{parse_klines_json, KlineBar};
+pub use bar_provider::BinanceBarProvider;
 pub use market_bars_backfill::backfill_binance_public_klines;
 pub use order_parse::venue_order_id_from_binance_order_response;
 pub use ws::{
