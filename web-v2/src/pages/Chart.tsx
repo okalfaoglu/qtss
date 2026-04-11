@@ -32,6 +32,27 @@ const SUBWAVE_COLOR = "rgb(250 204 21)"; // amber-400
 // (≈14% of inner height) and faint so candles above stay readable.
 const VOL_BAND_H = 56;
 
+interface WyckoffOverlayData {
+  id: string;
+  schematic: string;
+  phase: string;
+  confidence: number | null;
+  range: { top: number | null; bottom: number | null };
+  creek: number | null;
+  ice: number | null;
+  slope_deg: number | null;
+  events: Array<{ event: string; bar_index: number; price: number; score: number }>;
+  started_at: string;
+}
+
+const WYCKOFF_PHASE_COLORS: Record<string, string> = {
+  A: "rgb(239 68 68)",   // red
+  B: "rgb(249 115 22)",  // orange
+  C: "rgb(234 179 8)",   // yellow
+  D: "rgb(34 197 94)",   // green
+  E: "rgb(59 130 246)",  // blue
+};
+
 interface PriceScale {
   min: number;
   max: number;
@@ -596,6 +617,137 @@ function computeZigzag(
   return pts;
 }
 
+// =========================================================================
+// Wyckoff Structure Overlay (Faz 10)
+// =========================================================================
+// Renders: range box, creek/ice lines, event labels, phase badge.
+
+function WyckoffStructureOverlay({
+  data,
+  scale,
+}: {
+  data: WyckoffOverlayData;
+  scale: PriceScale;
+}) {
+  const innerW = W - PAD_L - PAD_R;
+  const rangeTop = data.range.top;
+  const rangeBot = data.range.bottom;
+  if (rangeTop == null || rangeBot == null) return null;
+
+  const yTop = scale.toY(rangeTop);
+  const yBot = scale.toY(rangeBot);
+  const boxH = yBot - yTop;
+  if (boxH <= 0) return null;
+
+  const phaseColor = WYCKOFF_PHASE_COLORS[data.phase] ?? "rgb(156 163 175)";
+  const isAccum = data.schematic === "accumulation" || data.schematic === "reaccumulation";
+  const boxFill = isAccum ? "rgba(34,197,94,0.06)" : "rgba(239,68,68,0.06)";
+  const boxStroke = isAccum ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)";
+
+  return (
+    <g className="wyckoff-overlay">
+      {/* Range box */}
+      <rect
+        x={PAD_L}
+        y={yTop}
+        width={innerW}
+        height={boxH}
+        fill={boxFill}
+        stroke={boxStroke}
+        strokeWidth={1}
+        strokeDasharray="6 3"
+      />
+      {/* Creek line */}
+      {data.creek != null && (
+        <line
+          x1={PAD_L}
+          y1={scale.toY(data.creek)}
+          x2={PAD_L + innerW}
+          y2={scale.toY(data.creek)}
+          stroke="rgba(59,130,246,0.5)"
+          strokeWidth={1}
+          strokeDasharray="4 4"
+        />
+      )}
+      {data.creek != null && (
+        <text
+          x={PAD_L + 4}
+          y={scale.toY(data.creek) - 3}
+          fill="rgba(59,130,246,0.7)"
+          fontSize={9}
+        >
+          Creek
+        </text>
+      )}
+      {/* Ice line */}
+      {data.ice != null && (
+        <line
+          x1={PAD_L}
+          y1={scale.toY(data.ice)}
+          x2={PAD_L + innerW}
+          y2={scale.toY(data.ice)}
+          stroke="rgba(239,68,68,0.5)"
+          strokeWidth={1}
+          strokeDasharray="4 4"
+        />
+      )}
+      {data.ice != null && (
+        <text
+          x={PAD_L + 4}
+          y={scale.toY(data.ice) - 3}
+          fill="rgba(239,68,68,0.7)"
+          fontSize={9}
+        >
+          Ice
+        </text>
+      )}
+      {/* Phase badge */}
+      <rect
+        x={PAD_L + innerW - 120}
+        y={yTop + 4}
+        width={116}
+        height={18}
+        rx={4}
+        fill="rgba(0,0,0,0.7)"
+        stroke={phaseColor}
+        strokeWidth={1}
+      />
+      <text
+        x={PAD_L + innerW - 116}
+        y={yTop + 16}
+        fill={phaseColor}
+        fontSize={10}
+        fontWeight="bold"
+      >
+        {data.schematic.toUpperCase()} · Phase {data.phase}
+        {data.confidence != null ? ` · ${(data.confidence * 100).toFixed(0)}%` : ""}
+      </text>
+      {/* Event labels */}
+      {data.events.map((ev, i) => {
+        const yEv = scale.toY(ev.price);
+        // Distribute labels horizontally across the range box
+        const xFrac = data.events.length > 1 ? i / (data.events.length - 1) : 0.5;
+        const xEv = PAD_L + innerW * 0.05 + innerW * 0.9 * xFrac;
+        return (
+          <g key={`${ev.event}-${i}`}>
+            <circle cx={xEv} cy={yEv} r={3} fill={phaseColor} />
+            <text
+              x={xEv}
+              y={yEv - 6}
+              fill="rgb(229 231 235)"
+              fontSize={8}
+              textAnchor="middle"
+              fontWeight="bold"
+            >
+              {ev.event}
+            </text>
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
 function Zigzag({ candles, scale }: { candles: CandleBar[]; scale: PriceScale }) {
   if (candles.length === 0) return null;
   const pts = computeZigzag(candles, ZIGZAG_PCT);
@@ -867,6 +1019,17 @@ export function Chart() {
     [merged, familyEnabled],
   );
 
+  // Wyckoff structure overlay (Faz 10)
+  const wyckoffQuery = useQuery({
+    queryKey: ["v2", "wyckoff", "overlay", debounced.symbol, debounced.timeframe],
+    queryFn: () =>
+      apiFetch<{ overlay: WyckoffOverlayData | null }>(
+        `/v2/wyckoff/overlay/${debounced.symbol}/${debounced.timeframe}`,
+      ),
+    refetchInterval: 30_000,
+  });
+  const wyckoffOverlay = wyckoffQuery.data?.overlay ?? null;
+
   // Auto-prefetch older history when the user pans close to the left
   // edge of the loaded buffer. Fires once per page load (guarded by
   // fetchingOlderRef) so spam-dragging doesn't queue up duplicates.
@@ -1019,6 +1182,9 @@ export function Chart() {
               {showVolume && <Volume candles={visibleCandles} />}
               <Candles candles={visibleCandles} scale={scale} />
               {showZigzag && <Zigzag candles={visibleCandles} scale={scale} />}
+              {wyckoffOverlay && familyEnabled["wyckoff"] !== false && (
+                <WyckoffStructureOverlay data={wyckoffOverlay} scale={scale} />
+              )}
               <Detections
                 detections={visibleDetections}
                 candles={visibleCandles}

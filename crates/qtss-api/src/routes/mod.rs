@@ -46,6 +46,7 @@ mod v2_engine_symbols;
 mod v2_events_stream;
 mod v2_setups;
 mod v2_users;
+mod v2_wyckoff;
 
 pub use v2_ai_decisions::v2_ai_decisions_router;
 pub use v2_audit::v2_audit_router;
@@ -69,6 +70,7 @@ pub use v2_engine_symbols::v2_engine_symbols_router;
 pub use v2_events_stream::v2_events_stream_router;
 pub use v2_setups::v2_setups_router;
 pub use v2_users::v2_users_router;
+pub use v2_wyckoff::v2_wyckoff_router;
 
 use axum::middleware::from_fn;
 use axum::middleware::from_fn_with_state;
@@ -122,6 +124,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_regime_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_montecarlo_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_risk_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_wyckoff_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_reconcile_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_blotter_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_strategies_router().layer(from_fn(require_dashboard_roles)))
