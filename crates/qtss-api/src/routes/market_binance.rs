@@ -112,7 +112,7 @@ async fn binance_klines(
     let client = BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?;
     let seg = q.segment.as_deref().unwrap_or("spot").trim().to_lowercase();
     let upstream = match seg.as_str() {
-        "futures" | "usdt_futures" | "fapi" => "fapi",
+        "future" | "futures" | "usdt_futures" | "fapi" => "fapi",
         _ => "spot_then_maybe_fapi",
     };
     debug!(
@@ -124,7 +124,7 @@ async fn binance_klines(
         "binance klines"
     );
     let raw = match seg.as_str() {
-        "futures" | "usdt_futures" | "fapi" => client
+        "future" | "futures" | "usdt_futures" | "fapi" => client
             .fapi_klines(&q.symbol, &q.interval, q.start_time, q.end_time, q.limit)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?,
@@ -165,7 +165,7 @@ async fn binance_commission_defaults(
         let cfg = BinanceClientConfig::public_mainnet();
         let client = BinanceClient::new(cfg).map_err(|e| ApiError::internal(e.to_string()))?;
         let raw = match seg {
-            "futures" | "usdt_futures" | "fapi" => client
+            "future" | "futures" | "usdt_futures" | "fapi" => client
                 .fapi_exchange_info(Some(sym))
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?,
@@ -175,7 +175,7 @@ async fn binance_commission_defaults(
                 .map_err(|e| ApiError::internal(e.to_string()))?,
         };
         from_info = match seg {
-            "futures" | "usdt_futures" | "fapi" => {
+            "future" | "futures" | "usdt_futures" | "fapi" => {
                 futures_commission_hint_from_exchange_info(&raw, sym)
             }
             _ => spot_commission_hint_from_exchange_info(&raw, sym),
@@ -186,7 +186,7 @@ async fn binance_commission_defaults(
     }
 
     let defaults: CommissionBps = from_info.unwrap_or_else(|| match seg {
-        "futures" | "usdt_futures" | "fapi" => default_usdt_futures_commission_bps(),
+        "future" | "futures" | "usdt_futures" | "fapi" => default_usdt_futures_commission_bps(),
         _ => default_spot_commission_bps(),
     });
     Ok(Json(json!({
@@ -199,7 +199,7 @@ async fn binance_commission_defaults(
 
 fn commission_account_segment_db(seg: &str) -> Result<&'static str, ApiError> {
     match seg {
-        "futures" | "usdt_futures" | "fapi" => Ok("futures"),
+        "future" | "futures" | "usdt_futures" | "fapi" => Ok("futures"),
         "spot" => Ok("spot"),
         _ => Err(ApiError::bad_request("segment: spot veya futures")),
     }
@@ -312,7 +312,7 @@ async fn backfill_market_bars_from_rest(
     }
     let seg = body.segment.as_deref().unwrap_or("spot");
     let seg_db = match seg {
-        "futures" | "usdt_futures" | "fapi" => "futures",
+        "future" | "futures" | "usdt_futures" | "fapi" => "futures",
         _ => "spot",
     };
     let target = i64::from(body.limit.unwrap_or(500).clamp(1, 50_000));

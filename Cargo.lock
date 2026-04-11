@@ -2583,6 +2583,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "qtss-range"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "qtss-reconcile"
 version = "0.1.0"
 dependencies = [
@@ -2831,6 +2839,7 @@ dependencies = [
  "qtss-notify",
  "qtss-onchain",
  "qtss-pivots",
+ "qtss-range",
  "qtss-reconcile",
  "qtss-regime",
  "qtss-risk",

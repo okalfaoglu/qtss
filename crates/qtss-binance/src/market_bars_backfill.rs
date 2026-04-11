@@ -27,7 +27,7 @@ pub async fn backfill_binance_public_klines(
         return Err(BinanceError::Other("interval required".into()));
     }
     let seg_db = match segment_ui.trim() {
-        "futures" | "usdt_futures" | "fapi" => "futures",
+        "future" | "futures" | "usdt_futures" | "fapi" => "futures",
         _ => "spot",
     };
     let target = target_bars.clamp(1, 50_000);
