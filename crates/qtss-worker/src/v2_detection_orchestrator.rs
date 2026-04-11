@@ -40,7 +40,7 @@ use qtss_range::RangeDetectorConfig;
 use qtss_domain::v2::bar::Bar;
 use qtss_domain::v2::detection::{Detection, PatternKind, PatternState, PivotRef};
 use qtss_domain::v2::instrument::{AssetClass, Instrument, SessionCalendar, Venue};
-use qtss_domain::v2::pivot::{PivotLevel, PivotTree};
+use qtss_domain::v2::pivot::{PivotKind, PivotLevel, PivotTree};
 use qtss_domain::v2::regime::RegimeSnapshot;
 use qtss_domain::v2::timeframe::Timeframe;
 use qtss_elliott::{ElliottConfig, ElliottDetectorSet, ElliottFormationToggles};
@@ -53,6 +53,7 @@ use qtss_storage::{
     list_enabled_engine_symbols, list_recent_bars, resolve_system_f64, resolve_system_string,
     resolve_system_u64, resolve_worker_enabled_flag, DetectionFilter, EngineSymbolRow,
     NewDetection, V2DetectionRepository,
+    max_cached_bar_index, upsert_pivot_cache_batch, PivotCacheRow,
 };
 use qtss_wyckoff::{WyckoffConfig, WyckoffDetector};
 use serde_json::json;
@@ -832,6 +833,70 @@ async fn process_symbol(
         return Ok(stats);
     };
     let tree = pivot_engine.snapshot();
+
+    // ── Pivot cache: write newly computed pivots ──────────────────────
+    // For each level, find pivots with bar_index > max cached and batch-
+    // upsert them. This makes future ticks cheaper: only new bars need
+    // pivot extraction; everything else comes from DB.
+    {
+        let levels = [
+            (PivotLevel::L0, "L0"),
+            (PivotLevel::L1, "L1"),
+            (PivotLevel::L2, "L2"),
+            (PivotLevel::L3, "L3"),
+        ];
+        for (level, level_str) in &levels {
+            let cached_max = max_cached_bar_index(
+                pool,
+                &sym.exchange,
+                &sym.symbol,
+                &sym.interval,
+                level_str,
+            )
+            .await
+            .unwrap_or(None)
+            .unwrap_or(-1);
+
+            let new_pivots: Vec<PivotCacheRow> = tree
+                .at_level(*level)
+                .iter()
+                .filter(|p| p.bar_index as i64 > cached_max)
+                .map(|p| PivotCacheRow {
+                    exchange: sym.exchange.clone(),
+                    symbol: sym.symbol.clone(),
+                    timeframe: sym.interval.clone(),
+                    level: level_str.to_string(),
+                    bar_index: p.bar_index as i64,
+                    open_time: p.time,
+                    price: p.price,
+                    kind: match p.kind {
+                        PivotKind::High => "High".to_string(),
+                        PivotKind::Low => "Low".to_string(),
+                    },
+                    prominence: p.prominence,
+                    volume_at_pivot: p.volume_at_pivot,
+                    swing_type: p.swing_type.map(|s| format!("{:?}", s)),
+                })
+                .collect();
+
+            if !new_pivots.is_empty() {
+                match upsert_pivot_cache_batch(pool, &new_pivots).await {
+                    Ok(n) => debug!(
+                        symbol = %sym.symbol,
+                        interval = %sym.interval,
+                        level = %level_str,
+                        count = n,
+                        "pivot_cache: wrote new pivots"
+                    ),
+                    Err(e) => warn!(
+                        symbol = %sym.symbol,
+                        %e,
+                        "pivot_cache upsert failed"
+                    ),
+                }
+            }
+        }
+    }
 
     // Diagnostic: per-symbol pivot count at each level. Logged once per
     // symbol so we can verify detectors that require L1 (Harmonic, Wyckoff)
