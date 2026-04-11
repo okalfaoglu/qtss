@@ -19,13 +19,13 @@ use qtss_indicators::{atr, ema};
 use qtss_setup_engine::{
     check_allocation, classify_alt_type, should_reverse_close, AllocatorContext, AllocatorLimits,
     CloseReason, Direction, OpenSetupSummary, PositionGuard, PositionGuardConfig, Profile,
-    RejectReason, RiskMode, RiskModeBehavior, SetupState, VenueClass,
+    RejectReason, SetupState, VenueClass,
 };
 use qtss_storage::v2_confluence::fetch_latest_v2_confluence;
 use qtss_storage::{
     insert_v2_setup, insert_v2_setup_event, insert_v2_setup_rejection, list_enabled_engine_symbols,
     list_groups_for_symbol, list_open_v2_setups, list_recent_bars, resolve_system_f64,
-    resolve_system_string, resolve_system_u64, resolve_worker_enabled_flag, update_v2_setup_state,
+    resolve_system_u64, resolve_worker_enabled_flag, update_v2_setup_state,
     DetectionOutcomeRepository, EngineSymbolRow, V2SetupEventInsert, V2SetupInsert,
     V2SetupRejectionInsert, V2SetupRow,
 };
@@ -45,11 +45,7 @@ struct LoopConfig {
     profiles: HashMap<Profile, ProfileConfig>,
     allocator: AllocatorLimits,
     venue_enabled: HashMap<VenueClass, bool>,
-    // D/T/Q risk mode
-    regime_risk_map: HashMap<String, RiskMode>,
-    profile_risk_behavior: HashMap<(Profile, RiskMode), RiskModeBehavior>,
-    selective_guven_mult: f64,
-    // TP override
+    // TP override (pragmatic behavior — all D/T/Q models share this)
     tp_override_enabled: bool,
     tp_override_guven_threshold: f64,
     tp_override_max_extension_r: f64,
@@ -175,30 +171,7 @@ async fn load_config(pool: &PgPool) -> LoopConfig {
         resolve_system_u64(pool, "setup", "venue.bist.enabled", "", 0, 0, 1).await == 1,
     );
 
-    // D/T/Q risk mode mapping
-    let regime_map_json = resolve_system_string(
-        pool, "setup", "risk_mode.regime_map", "",
-        r#"{"trending_up":"risk_on","trending_down":"risk_on","ranging":"risk_neutral","squeeze":"risk_neutral","volatile":"risk_off","uncertain":"risk_off"}"#,
-    ).await;
-    let regime_risk_raw: HashMap<String, String> =
-        serde_json::from_str(&regime_map_json).unwrap_or_default();
-    let regime_risk_map: HashMap<String, RiskMode> = regime_risk_raw
-        .into_iter()
-        .filter_map(|(k, v)| Some((k, RiskMode::from_str(&v)?)))
-        .collect();
-
-    let mut profile_risk_behavior: HashMap<(Profile, RiskMode), RiskModeBehavior> = HashMap::new();
-    for p in PROFILES {
-        for rm in [RiskMode::RiskOn, RiskMode::RiskNeutral, RiskMode::RiskOff] {
-            let key = format!("risk_mode.{}.{}", p.as_str(), rm.as_str());
-            let val = resolve_system_string(pool, "setup", &key, "", "selective").await;
-            profile_risk_behavior.insert((p, rm), RiskModeBehavior::from_str(&val));
-        }
-    }
-    let selective_guven_mult =
-        resolve_system_f64(pool, "setup", "risk_mode.selective_guven_mult", "", 1.3).await;
-
-    // TP override
+    // TP override (pragmatic behavior shared by all D/T/Q models)
     let tp_override_enabled =
         resolve_system_u64(pool, "setup", "tp_override.enabled", "", 1, 0, 1).await == 1;
     let tp_override_guven_threshold =
@@ -213,9 +186,6 @@ async fn load_config(pool: &PgPool) -> LoopConfig {
         profiles,
         allocator,
         venue_enabled,
-        regime_risk_map,
-        profile_risk_behavior,
-        selective_guven_mult,
         tp_override_enabled,
         tp_override_guven_threshold,
         tp_override_max_extension_r,
@@ -719,34 +689,7 @@ async fn try_arm_new_setup(
     let Some(conf) = latest else {
         return Ok(());
     };
-
-    // Risk mode gate: derive from dominant regime → per-profile behavior.
-    let risk_mode = resolve_risk_mode(pool, cfg, &sym.symbol).await;
-    let behavior = cfg
-        .profile_risk_behavior
-        .get(&(profile, risk_mode))
-        .copied()
-        .unwrap_or(RiskModeBehavior::Selective);
-
-    match behavior {
-        RiskModeBehavior::Stopped => {
-            debug!(symbol = %sym.symbol, profile = %profile.as_str(), "risk mode stopped — skipping arm");
-            return Ok(());
-        }
-        RiskModeBehavior::Continue => {
-            // Only continue existing, don't arm new.
-            return Ok(());
-        }
-        _ => {} // Active or Selective — proceed with adjusted threshold.
-    }
-
-    // In selective mode, raise guven threshold.
-    let effective_guven_threshold = match behavior {
-        RiskModeBehavior::Selective => cfg.arm_guven_threshold * cfg.selective_guven_mult,
-        _ => cfg.arm_guven_threshold,
-    };
-
-    if (conf.guven as f64) < effective_guven_threshold {
+    if (conf.guven as f64) < cfg.arm_guven_threshold {
         return Ok(());
     }
     let direction = direction_from_str(&conf.direction);
@@ -835,18 +778,9 @@ async fn try_arm_new_setup(
             "atr": atr_val,
             "guven": conf.guven,
             "correlation_groups": groups,
-            "risk_mode": risk_mode.as_str(),
         }),
     };
     let id: Uuid = insert_v2_setup(pool, &row).await?;
-
-    // Write risk_mode to the setup row.
-    sqlx::query("UPDATE qtss_v2_setups SET risk_mode = $1 WHERE id = $2")
-        .bind(risk_mode.as_str())
-        .bind(id)
-        .execute(pool)
-        .await?;
-
     insert_v2_setup_event(
         pool,
         &V2SetupEventInsert {
@@ -911,30 +845,4 @@ async fn record_rejection(
     Ok(())
 }
 
-// ---------- risk mode from regime ----------
 
-/// Resolve the current risk mode for a symbol by looking up the
-/// dominant regime from the latest regime snapshots.
-async fn resolve_risk_mode(pool: &PgPool, cfg: &LoopConfig, symbol: &str) -> RiskMode {
-    use qtss_storage::latest_snapshots_for_symbol;
-
-    let snapshots = match latest_snapshots_for_symbol(pool, symbol).await {
-        Ok(s) => s,
-        Err(_) => return RiskMode::RiskNeutral,
-    };
-    if snapshots.is_empty() {
-        return RiskMode::RiskNeutral;
-    }
-
-    // Use the highest-weight timeframe's regime as dominant.
-    // If no regime found, default to risk_neutral.
-    let dominant_regime = snapshots
-        .first()
-        .map(|s| s.regime.clone())
-        .unwrap_or_else(|| "uncertain".to_string());
-
-    cfg.regime_risk_map
-        .get(&dominant_regime)
-        .copied()
-        .unwrap_or(RiskMode::RiskNeutral)
-}

@@ -34,6 +34,7 @@ pub mod allocator;
 pub mod classifier;
 pub mod guard;
 pub mod reverse;
+pub mod sharing;
 pub mod types;
 
 pub use allocator::{
@@ -42,6 +43,7 @@ pub use allocator::{
 pub use classifier::classify_alt_type;
 pub use guard::{PositionGuard, PositionGuardConfig};
 pub use reverse::should_reverse_close;
+pub use sharing::{evaluate_sharing, QRadarShareInfo, SharingChannel, SharingConfig, SharingDecision};
 pub use types::{
     AltType, CloseReason, Direction, Profile, RejectReason, RiskMode, RiskModeBehavior,
     SetupState, VenueClass,
