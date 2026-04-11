@@ -46,6 +46,8 @@ pub const EVENTS: &[EventSpec] = &[
     EventSpec { name: "last_point_of_supply",  eval: eval_last_point_of_supply },
     EventSpec { name: "jump_across_creek",     eval: eval_jump_across_creek },
     EventSpec { name: "break_of_ice",          eval: eval_break_of_ice },
+    // SOT
+    EventSpec { name: "shortening_of_thrust",  eval: eval_shortening_of_thrust },
 ];
 
 // =========================================================================
@@ -920,6 +922,90 @@ fn eval_break_of_ice(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch
         score: score.min(1.0),
         invalidation: Decimal::try_from(ice).ok().unwrap_or(Decimal::ZERO),
         variant: "distribution",
+        anchor_labels: labels,
+    })
+}
+
+// =========================================================================
+// Shortening of Thrust (SOT)
+// =========================================================================
+// Each successive SOS/SOW thrust covers less distance — momentum is
+// waning. We look for 3+ same-kind pivots (all highs or all lows) where
+// successive thrust distances decay by cfg.sot_thrust_decay_ratio.
+
+fn eval_shortening_of_thrust(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
+    if pivots.len() < 5 {
+        return None;
+    }
+    let range = TradingRange::from_pivots(pivots)?;
+
+    // Check highs (bullish SOT → weakening SOS thrusts)
+    let highs: Vec<(usize, f64)> = pivots
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.kind == PivotKind::High)
+        .filter_map(|(i, p)| Some((i, p.price.to_f64()?)))
+        .collect();
+
+    if let Some(m) = check_sot_sequence(&highs, cfg.sot_thrust_decay_ratio, pivots, &range, "distribution") {
+        return Some(m);
+    }
+
+    // Check lows (bearish SOT → weakening SOW thrusts)
+    let lows: Vec<(usize, f64)> = pivots
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.kind == PivotKind::Low)
+        .filter_map(|(i, p)| Some((i, p.price.to_f64()?)))
+        .collect();
+
+    check_sot_sequence(&lows, cfg.sot_thrust_decay_ratio, pivots, &range, "accumulation")
+}
+
+fn check_sot_sequence(
+    pts: &[(usize, f64)],
+    decay_ratio: f64,
+    pivots: &[Pivot],
+    range: &TradingRange,
+    variant: &'static str,
+) -> Option<EventMatch> {
+    if pts.len() < 3 {
+        return None;
+    }
+    // Compute thrust distances between consecutive same-kind pivots
+    let mut thrusts: Vec<f64> = Vec::new();
+    for w in pts.windows(2) {
+        thrusts.push((w[1].1 - w[0].1).abs());
+    }
+    if thrusts.len() < 2 {
+        return None;
+    }
+    // Check decay: each thrust <= decay_ratio * previous
+    let mut sot_count = 0;
+    for w in thrusts.windows(2) {
+        if w[0] > 0.0 && w[1] <= w[0] * decay_ratio {
+            sot_count += 1;
+        }
+    }
+    if sot_count == 0 {
+        return None;
+    }
+    let score = (sot_count as f64 / (thrusts.len() - 1) as f64).min(1.0);
+    if score < 0.3 {
+        return None;
+    }
+
+    let mut labels: Vec<&'static str> = (0..pivots.len()).map(label_for).collect();
+    // Mark the last few pivots involved
+    for &(idx, _) in pts.iter().rev().take(3) {
+        if idx < labels.len() {
+            labels[idx] = "SOT";
+        }
+    }
+    Some(EventMatch {
+        score,
+        invalidation: Decimal::try_from(range.support).ok().unwrap_or(Decimal::ZERO),
+        variant,
         anchor_labels: labels,
     })
 }

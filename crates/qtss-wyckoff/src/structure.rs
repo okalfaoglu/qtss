@@ -309,6 +309,7 @@ impl WyckoffStructureTracker {
             "last_point_of_supply" => Some(WyckoffEvent::LPSY),
             "jump_across_creek" => Some(WyckoffEvent::JAC),
             "break_of_ice" => Some(WyckoffEvent::BreakOfIce),
+            "shortening_of_thrust" => Some(WyckoffEvent::SOT),
             _ => None,
         }
     }

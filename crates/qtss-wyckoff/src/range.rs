@@ -94,6 +94,46 @@ fn mean_bottom(sorted: &[f64]) -> f64 {
     }
 }
 
+impl TradingRange {
+    /// Compute the slope of the range via simple linear regression on
+    /// all pivot prices vs their bar_index. Returns degrees (-90..+90).
+    /// Positive = rising range, negative = falling range.
+    pub fn slope_degrees(&self, pivots: &[Pivot]) -> Option<f64> {
+        if pivots.len() < 3 {
+            return None;
+        }
+        // Linear regression: y = price, x = bar_index
+        let n = pivots.len() as f64;
+        let mut sum_x = 0.0_f64;
+        let mut sum_y = 0.0_f64;
+        let mut sum_xy = 0.0_f64;
+        let mut sum_x2 = 0.0_f64;
+        for p in pivots {
+            let x = p.bar_index as f64;
+            let y = p.price.to_f64()?;
+            sum_x += x;
+            sum_y += y;
+            sum_xy += x * y;
+            sum_x2 += x * x;
+        }
+        let denom = n * sum_x2 - sum_x * sum_x;
+        if denom.abs() < 1e-12 {
+            return None;
+        }
+        let slope = (n * sum_xy - sum_x * sum_y) / denom;
+        // Normalize slope relative to range height to get meaningful degrees
+        let normalized = slope * (pivots.len() as f64) / self.height.max(1e-9);
+        Some(normalized.atan().to_degrees())
+    }
+
+    /// Returns true if the range is "sloping" (above threshold degrees).
+    pub fn is_sloping(&self, pivots: &[Pivot], threshold_deg: f64) -> bool {
+        self.slope_degrees(pivots)
+            .map(|d| d.abs() > threshold_deg)
+            .unwrap_or(false)
+    }
+}
+
 /// Average pivot volume over the slice. Used as the baseline against
 /// which a single pivot's volume is compared to declare it climactic.
 pub fn average_volume(pivots: &[Pivot]) -> Option<Decimal> {
