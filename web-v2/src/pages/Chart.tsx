@@ -169,6 +169,39 @@ const FAMILY_COLORS: Record<string, string> = {
   custom: "rgb(212 212 216)",      // zinc-300
 };
 
+// Sub-kind specific colors for range sub-detectors.
+// Each sub-detector gets a distinct color for visual clarity.
+const RANGE_SUBKIND_COLORS: Record<string, string> = {
+  bullish_fvg:         "rgb(52 211 153)",   // emerald-400
+  bearish_fvg:         "rgb(248 113 113)",  // red-400
+  bullish_ob:          "rgb(96 165 250)",   // blue-400
+  bearish_ob:          "rgb(251 146 60)",   // orange-400
+  liquidity_pool_high: "rgb(250 204 21)",   // yellow-400
+  liquidity_pool_low:  "rgb(250 204 21)",   // yellow-400
+  equal_highs:         "rgb(192 132 252)",  // purple-400
+  equal_lows:          "rgb(192 132 252)",  // purple-400
+};
+
+// Sub-kinds that should render as a zone box (rect) instead of polyline.
+const ZONE_BOX_SUBKINDS = new Set([
+  "bullish_fvg", "bearish_fvg",
+  "bullish_ob", "bearish_ob",
+  "liquidity_pool_high", "liquidity_pool_low",
+  "equal_highs", "equal_lows",
+]);
+
+// Labels for human-readable display.
+const RANGE_SUBKIND_LABELS: Record<string, string> = {
+  bullish_fvg:         "FVG ▲",
+  bearish_fvg:         "FVG ▼",
+  bullish_ob:          "OB ▲",
+  bearish_ob:          "OB ▼",
+  liquidity_pool_high: "LIQ ═",
+  liquidity_pool_low:  "LIQ ═",
+  equal_highs:         "EQH ═",
+  equal_lows:          "EQL ═",
+};
+
 const STATE_DASH: Record<string, string> = {
   forming: "4 3",
   confirmed: "",
@@ -176,7 +209,10 @@ const STATE_DASH: Record<string, string> = {
   invalidated: "1 4",
 };
 
-function familyColor(family: string): string {
+function familyColor(family: string, subkind?: string): string {
+  if (family === "range" && subkind && RANGE_SUBKIND_COLORS[subkind]) {
+    return RANGE_SUBKIND_COLORS[subkind];
+  }
   return FAMILY_COLORS[family] ?? FAMILY_COLORS.custom;
 }
 
@@ -227,13 +263,14 @@ function Detections({
   return (
     <g>
       {detections.map((d) => {
-        const color = familyColor(d.family);
+        const color = familyColor(d.family, d.subkind);
         const dash = STATE_DASH[d.state] ?? "";
         const conf = Number(d.confidence) || 0;
         const baseOpacity = 0.35 + 0.55 * Math.min(1, Math.max(0, conf));
         const isHover = hovered === d.id;
         const opacity = isHover ? 1 : baseOpacity;
         const strokeW = isHover ? 2.5 : 1.5;
+        const isZoneBox = ZONE_BOX_SUBKINDS.has(d.subkind);
 
         const points: Array<{ x: number; y: number; label: string | null }> =
           d.anchors.length > 0
@@ -254,6 +291,11 @@ function Detections({
         const last = points[points.length - 1];
         const invalY = scale.toY(Number(d.invalidation_price));
 
+        // Zone box geometry: two anchors define top/bottom of the zone.
+        // Box extends left by ~30 candles and right to the last anchor x.
+        const zoneBoxWidth = step * 25;
+        const zoneLabel = RANGE_SUBKIND_LABELS[d.subkind] ?? d.subkind;
+
         return (
           <g
             key={d.id}
@@ -261,6 +303,83 @@ function Detections({
             onMouseLeave={() => onHover(null)}
             style={{ cursor: "pointer" }}
           >
+            {/* ── Zone box rendering for FVG / OB / Liquidity / Equal ── */}
+            {isZoneBox && points.length >= 2 && (() => {
+              const yTop = Math.min(points[0].y, points[1].y);
+              const yBot = Math.max(points[0].y, points[1].y);
+              const boxH = Math.max(yBot - yTop, 2);
+              const boxX = last.x - zoneBoxWidth;
+              return (
+                <g>
+                  {/* Semi-transparent zone fill */}
+                  <rect
+                    x={boxX}
+                    y={yTop}
+                    width={zoneBoxWidth}
+                    height={boxH}
+                    fill={color}
+                    fillOpacity={isHover ? 0.25 : 0.12}
+                    rx={2}
+                  />
+                  {/* Zone border */}
+                  <rect
+                    x={boxX}
+                    y={yTop}
+                    width={zoneBoxWidth}
+                    height={boxH}
+                    fill="none"
+                    stroke={color}
+                    strokeOpacity={opacity * 0.8}
+                    strokeWidth={isHover ? 1.5 : 0.8}
+                    strokeDasharray={d.subkind.includes("fvg") ? "" : "3 2"}
+                    rx={2}
+                  />
+                  {/* Top edge line (solid for emphasis) */}
+                  <line
+                    x1={boxX} x2={boxX + zoneBoxWidth}
+                    y1={yTop} y2={yTop}
+                    stroke={color}
+                    strokeOpacity={opacity}
+                    strokeWidth={isHover ? 1.5 : 1}
+                  />
+                  {/* Bottom edge line */}
+                  <line
+                    x1={boxX} x2={boxX + zoneBoxWidth}
+                    y1={yBot} y2={yBot}
+                    stroke={color}
+                    strokeOpacity={opacity}
+                    strokeWidth={isHover ? 1.5 : 1}
+                  />
+                  {/* Direction arrow inside box */}
+                  <text
+                    x={boxX + 4}
+                    y={yTop + boxH / 2 + 4}
+                    fontSize={11}
+                    fill={color}
+                    fillOpacity={isHover ? 0.9 : 0.6}
+                    fontFamily="ui-monospace, monospace"
+                    fontWeight="bold"
+                  >
+                    {zoneLabel}
+                  </text>
+                  {/* Confidence badge on hover */}
+                  {isHover && conf > 0 && (
+                    <text
+                      x={boxX + zoneBoxWidth - 4}
+                      y={yTop - 4}
+                      fontSize={9}
+                      fill={color}
+                      fillOpacity={0.9}
+                      fontFamily="ui-monospace, monospace"
+                      textAnchor="end"
+                    >
+                      {(conf * 100).toFixed(0)}%
+                    </text>
+                  )}
+                </g>
+              );
+            })()}
+
             {/* invalidation (stop) line — only on hover so we don't
                 clutter the chart with horizontal stripes for every
                 detection. Spans from the last anchor a short way to
@@ -279,8 +398,8 @@ function Detections({
               />
             )}
 
-            {/* anchor polyline (the geometry of the pattern) */}
-            {points.length >= 2 && (
+            {/* anchor polyline (the geometry of the pattern) — skip for zone boxes */}
+            {!isZoneBox && points.length >= 2 && (
               <polyline
                 points={polyPoints}
                 fill="none"
@@ -402,18 +521,20 @@ function Detections({
               </g>
             ))}
 
-            {/* pattern label at the last anchor */}
-            <text
-              x={last.x + 6}
-              y={last.y - 8}
-              fontSize={10}
-              fill={color}
-              fillOpacity={Math.min(1, opacity + 0.15)}
-              fontFamily="ui-monospace, monospace"
-            >
-              {d.subkind}
-              {conf > 0 && ` · ${(conf * 100).toFixed(0)}%`}
-            </text>
+            {/* pattern label at the last anchor — zone boxes have their own label inside */}
+            {!isZoneBox && (
+              <text
+                x={last.x + 6}
+                y={last.y - 8}
+                fontSize={10}
+                fill={color}
+                fillOpacity={Math.min(1, opacity + 0.15)}
+                fontFamily="ui-monospace, monospace"
+              >
+                {d.subkind}
+                {conf > 0 && ` · ${(conf * 100).toFixed(0)}%`}
+              </text>
+            )}
           </g>
         );
       })}
