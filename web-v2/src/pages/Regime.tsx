@@ -53,6 +53,10 @@ interface TransitionView {
   detected_at: string; resolved_at: string | null; was_correct: boolean | null;
 }
 
+interface PerformanceRow {
+  regime: string; total: number; wins: number; win_rate: number; avg_pnl_pct: number;
+}
+
 // =========================================================================
 // Shared components
 // =========================================================================
@@ -372,10 +376,74 @@ function RegimeClassic() {
 }
 
 // =========================================================================
+// Performance tab
+// =========================================================================
+
+function RegimePerformance() {
+  const [days, setDays] = useState(30);
+  const { data, isLoading } = useQuery({
+    queryKey: ["v2", "regime", "performance", days],
+    queryFn: () => apiFetch<PerformanceRow[]>(`/v2/regime/performance?days=${days}`),
+    refetchInterval: 60_000,
+  });
+
+  if (isLoading || !data) return <div className="text-sm text-zinc-400">Loading performance…</div>;
+  if (data.length === 0) return <div className="text-sm text-zinc-500">No performance data yet.</div>;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-zinc-500">Period:</span>
+        {[7, 30, 90].map((d) => (
+          <button
+            key={d}
+            onClick={() => setDays(d)}
+            className={`rounded px-2 py-0.5 text-xs font-medium ${days === d ? "bg-zinc-700 text-zinc-100" : "text-zinc-500 hover:text-zinc-300"}`}
+          >
+            {d}d
+          </button>
+        ))}
+      </div>
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-zinc-800 text-zinc-500">
+            <th className="px-3 py-2 text-left font-medium">Regime</th>
+            <th className="px-3 py-2 text-right font-medium">Total</th>
+            <th className="px-3 py-2 text-right font-medium">Wins</th>
+            <th className="px-3 py-2 text-right font-medium">Win Rate</th>
+            <th className="px-3 py-2 text-right font-medium">Avg P&L %</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((r) => (
+            <tr key={r.regime} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
+              <td className="px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <Dot regime={r.regime} />
+                  <span className="text-zinc-200">{r.regime.replace("_", " ")}</span>
+                </div>
+              </td>
+              <td className="px-3 py-2 text-right font-mono text-zinc-300">{r.total}</td>
+              <td className="px-3 py-2 text-right font-mono text-zinc-300">{r.wins}</td>
+              <td className={`px-3 py-2 text-right font-mono ${r.win_rate >= 50 ? "text-emerald-400" : "text-red-400"}`}>
+                {r.win_rate.toFixed(1)}%
+              </td>
+              <td className={`px-3 py-2 text-right font-mono ${r.avg_pnl_pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                {r.avg_pnl_pct >= 0 ? "+" : ""}{r.avg_pnl_pct.toFixed(2)}%
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// =========================================================================
 // Main page with tabs
 // =========================================================================
 
-const TAB_LIST = ["Dashboard", "Heatmap", "Transitions", "Single Symbol"];
+const TAB_LIST = ["Dashboard", "Heatmap", "Transitions", "Performance", "Single Symbol"];
 
 export function Regime() {
   const [tab, setTab] = useState("Dashboard");
@@ -390,6 +458,7 @@ export function Regime() {
       {tab === "Dashboard" && <RegimeDashboard />}
       {tab === "Heatmap" && <RegimeHeatmap />}
       {tab === "Transitions" && <RegimeTransitions />}
+      {tab === "Performance" && <RegimePerformance />}
       {tab === "Single Symbol" && <RegimeClassic />}
     </div>
   );

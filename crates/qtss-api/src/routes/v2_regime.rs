@@ -24,7 +24,7 @@ use qtss_gui_api::{
     RegimeTimeline, RegimeTimelinePoint, RegimeTransitionView, RegimeView,
 };
 use qtss_regime::{RegimeConfig, RegimeEngine};
-use qtss_storage::{market_bars, regime_snapshots, regime_transitions, regime_param_overrides};
+use qtss_storage::{market_bars, regime_snapshots, regime_transitions, regime_param_overrides, regime_performance};
 
 use crate::error::ApiError;
 use crate::state::SharedState;
@@ -47,6 +47,7 @@ pub fn v2_regime_router() -> Router<SharedState> {
         .route("/v2/regime/timeline/{symbol}/{interval}", get(get_timeline))
         .route("/v2/regime/params/{regime}", get(get_params))
         .route("/v2/regime/params/{regime}", put(put_params))
+        .route("/v2/regime/performance", get(get_performance))
 }
 
 async fn get_regime(
@@ -303,6 +304,20 @@ async fn put_params(
         updated += 1;
     }
     Ok(Json(serde_json::json!({ "updated": updated })))
+}
+
+#[derive(Debug, Deserialize)]
+struct PerformanceQuery {
+    days: Option<i64>,
+}
+
+async fn get_performance(
+    State(st): State<SharedState>,
+    Query(q): Query<PerformanceQuery>,
+) -> Result<Json<Vec<regime_performance::RegimePerformanceRow>>, ApiError> {
+    let days = q.days.unwrap_or(30).clamp(1, 365);
+    let rows = regime_performance::regime_performance(&st.pool, days).await?;
+    Ok(Json(rows))
 }
 
 /// Convert a DB row into a domain RegimeSnapshot (for multi-TF computation).

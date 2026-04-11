@@ -30,6 +30,7 @@ pub mod migration_checksum_sync;
 pub mod pool;
 pub mod range_engine;
 pub mod regime_param_overrides;
+pub mod regime_performance;
 pub mod regime_snapshots;
 pub mod regime_transitions;
 pub mod reconcile_reports;
