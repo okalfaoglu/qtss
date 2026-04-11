@@ -4,6 +4,7 @@
 //! out of the confidence blend.
 
 use qtss_domain::v2::detection::{Detection, PatternKind};
+use qtss_domain::v2::regime::RegimeKind;
 use qtss_domain::v2::timeframe::Timeframe;
 use std::collections::HashMap;
 
@@ -18,6 +19,17 @@ pub struct ValidationContext {
     /// validator never queries the database directly so this crate stays
     /// pure (CLAUDE.md asset-class agnostic core principle).
     pub hit_rates: HashMap<String, HitRateStat>,
+    /// Multi-TF regime confluence (Faz 11). Populated from
+    /// `regime_snapshots` by the orchestrator; `None` = not computed yet.
+    pub multi_tf_regime: Option<MultiTfRegimeContext>,
+}
+
+/// Summary of multi-timeframe regime confluence, injected by the caller.
+#[derive(Debug, Clone)]
+pub struct MultiTfRegimeContext {
+    pub dominant_regime: RegimeKind,
+    pub confluence_score: f64,
+    pub is_transitioning: bool,
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -157,3 +157,37 @@ impl ConfirmationChannel for HistoricalHitRate {
         Some(stat.hit_rate as f64)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Multi-TF regime confluence (Faz 11)
+// ---------------------------------------------------------------------------
+
+/// Boosts confidence when the multi-TF regime agrees with the pattern's
+/// preferred regime, penalises when it disagrees or is transitioning.
+pub struct MultiTfRegimeConfluence;
+
+impl ConfirmationChannel for MultiTfRegimeConfluence {
+    fn name(&self) -> &'static str {
+        "multi_tf_regime_confluence"
+    }
+
+    fn evaluate(&self, det: &Detection, ctx: &ValidationContext) -> Option<f64> {
+        let mtf = ctx.multi_tf_regime.as_ref()?;
+        let pref = preferred_regime(&det.kind);
+
+        // Transition penalty: if timeframes disagree, reduce confidence
+        let transition_penalty = if mtf.is_transitioning { 0.15 } else { 0.0 };
+
+        let alignment = match (pref, mtf.dominant_regime) {
+            (PreferredRegime::Either, _) => 0.7,
+            (PreferredRegime::Trending, RegimeKind::TrendingUp | RegimeKind::TrendingDown) => 0.9,
+            (PreferredRegime::Trending, _) => 0.3,
+            (PreferredRegime::Ranging, RegimeKind::Ranging | RegimeKind::Squeeze) => 0.9,
+            (PreferredRegime::Ranging, _) => 0.3,
+        };
+
+        // Weight by confluence score (how aligned the TFs are)
+        let score = (alignment * mtf.confluence_score - transition_penalty).clamp(0.0, 1.0);
+        Some(score)
+    }
+}

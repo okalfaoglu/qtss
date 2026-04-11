@@ -33,7 +33,8 @@ use qtss_storage::{
     DetectionFilter, DetectionOutcomeRepository, DetectionRow, V2DetectionRepository,
 };
 use qtss_validator::{
-    is_higher_timeframe, HistoricalHitRate, HitRateStat, MultiTimeframeConfluence, RegimeAlignment,
+    is_higher_timeframe, HistoricalHitRate, HitRateStat, MultiTfRegimeConfluence,
+    MultiTfRegimeContext, MultiTimeframeConfluence, RegimeAlignment,
     ValidationContext, Validator, ValidatorConfig,
 };
 use std::collections::HashMap;
@@ -146,9 +147,11 @@ async fn run_pass(
         };
         let higher_tf_detections =
             load_higher_tf_detections(repo.as_ref(), &row, &detection, htf_lookup_limit).await;
+        let multi_tf_regime = load_multi_tf_regime(pool, &row.symbol).await;
         let ctx = ValidationContext {
             higher_tf_detections,
             hit_rates: hit_rates.clone(),
+            multi_tf_regime,
         };
         match validator.validate(detection, &ctx) {
             Some(mut v) => {
@@ -347,6 +350,7 @@ async fn build_validator(pool: &PgPool) -> anyhow::Result<Validator> {
         .map_err(|e| anyhow::anyhow!("validator config invalid: {e}"))?;
     validator.register(Arc::new(RegimeAlignment));
     validator.register(Arc::new(MultiTimeframeConfluence));
+    validator.register(Arc::new(MultiTfRegimeConfluence));
     validator.register(Arc::new(HistoricalHitRate {
         min_samples: hit_rate_min_samples,
     }));
@@ -509,5 +513,55 @@ fn build_pattern_kind(family: &str, subkind: &str) -> PatternKind {
         "range" => PatternKind::Range(sub),
         _ => PatternKind::Custom(sub),
     }
+}
+
+/// Load multi-TF regime confluence from the regime_snapshots table.
+async fn load_multi_tf_regime(
+    pool: &sqlx::PgPool,
+    symbol: &str,
+) -> Option<MultiTfRegimeContext> {
+    use qtss_domain::v2::regime::RegimeKind;
+
+    let rows = qtss_storage::latest_snapshots_for_symbol(pool, symbol)
+        .await
+        .ok()?;
+    if rows.is_empty() {
+        return None;
+    }
+
+    let tf_weights_str = qtss_storage::resolve_system_string(
+        pool, "regime", "tf_weights", "",
+        r#"{"5m":0.1,"15m":0.15,"1h":0.25,"4h":0.30,"1d":0.20}"#,
+    ).await;
+    let tf_weights: std::collections::HashMap<String, f64> =
+        serde_json::from_str(&tf_weights_str)
+            .unwrap_or_else(|_| qtss_regime::multi_tf::default_tf_weights());
+
+    let snap_pairs: Vec<(String, qtss_domain::v2::regime::RegimeSnapshot)> = rows
+        .iter()
+        .filter_map(|r| {
+            let kind = RegimeKind::from_str_opt(&r.regime)?;
+            let ts = qtss_domain::v2::regime::TrendStrength::from_str_opt(
+                r.trend_strength.as_deref().unwrap_or("none"),
+            ).unwrap_or(qtss_domain::v2::regime::TrendStrength::None);
+            Some((r.interval.clone(), qtss_domain::v2::regime::RegimeSnapshot {
+                at: r.computed_at,
+                kind,
+                trend_strength: ts,
+                adx: rust_decimal::Decimal::from_f64_retain(r.adx.unwrap_or(0.0)).unwrap_or_default(),
+                bb_width: rust_decimal::Decimal::from_f64_retain(r.bb_width.unwrap_or(0.0)).unwrap_or_default(),
+                atr_pct: rust_decimal::Decimal::from_f64_retain(r.atr_pct.unwrap_or(0.0)).unwrap_or_default(),
+                choppiness: rust_decimal::Decimal::from_f64_retain(r.choppiness.unwrap_or(0.0)).unwrap_or_default(),
+                confidence: r.confidence as f32,
+            }))
+        })
+        .collect();
+
+    let mtf = qtss_regime::multi_tf::compute_confluence(symbol, &snap_pairs, &tf_weights)?;
+    Some(MultiTfRegimeContext {
+        dominant_regime: mtf.dominant_regime,
+        confluence_score: mtf.confluence_score,
+        is_transitioning: mtf.is_transitioning,
+    })
 }
 
