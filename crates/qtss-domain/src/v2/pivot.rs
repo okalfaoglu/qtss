@@ -20,6 +20,25 @@ pub enum PivotKind {
     Low,
 }
 
+/// Swing classification relative to the previous same-kind pivot.
+/// Derived after pivot detection; `None` for the first pivot of its kind.
+///
+/// Maps to PineScript's `dir = ±2` concept:
+/// - `HH` / `LL` = trend confirmation (dir=±2)
+/// - `LH` / `HL` = potential reversal / CHoCH
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SwingType {
+    /// Higher High — bullish continuation.
+    HH,
+    /// Lower High — potential bearish reversal (CHoCH if after HH sequence).
+    LH,
+    /// Higher Low — bullish continuation.
+    HL,
+    /// Lower Low — bearish continuation.
+    LL,
+}
+
 /// Pivot detail level. Each level uses progressively coarser ATR thresholds:
 /// L0 = tick / micro, L3 = macro (Elliott main wave / Wyckoff phase).
 ///
@@ -58,6 +77,9 @@ pub struct Pivot {
     /// Distance to neighbors (used by validators / target engine).
     pub prominence: Decimal,
     pub volume_at_pivot: Decimal,
+    /// HH/HL/LH/LL classification. `None` for first pivot of its kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swing_type: Option<SwingType>,
 }
 
 /// Immutable snapshot of all pivot levels for a bar series.
@@ -90,6 +112,77 @@ impl PivotTree {
 
     pub fn count(&self, level: PivotLevel) -> usize {
         self.at_level(level).len()
+    }
+
+    /// Detect Change of Character (CHoCH) at the given level.
+    ///
+    /// CHoCH = first LH after a sequence of HH (bearish CHoCH)
+    ///       = first HL after a sequence of LL (bullish CHoCH)
+    ///
+    /// Returns `Some((pivot_index, SwingType))` of the CHoCH pivot, or None.
+    pub fn detect_choch(&self, level: PivotLevel) -> Option<(usize, SwingType)> {
+        let pivots = self.at_level(level);
+        if pivots.len() < 4 {
+            return None;
+        }
+        // Walk backwards looking for the most recent trend break.
+        for i in (1..pivots.len()).rev() {
+            let curr = &pivots[i];
+            let Some(st) = curr.swing_type else { continue };
+            match st {
+                // Bearish CHoCH: LH after HH sequence.
+                SwingType::LH => {
+                    // Check if previous High was HH.
+                    if let Some(prev_high) = pivots[..i].iter().rev().find(|p| p.kind == PivotKind::High) {
+                        if prev_high.swing_type == Some(SwingType::HH) {
+                            return Some((i, SwingType::LH));
+                        }
+                    }
+                }
+                // Bullish CHoCH: HL after LL sequence.
+                SwingType::HL => {
+                    if let Some(prev_low) = pivots[..i].iter().rev().find(|p| p.kind == PivotKind::Low) {
+                        if prev_low.swing_type == Some(SwingType::LL) {
+                            return Some((i, SwingType::HL));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Detect Break of Structure (BOS) at the given level.
+    ///
+    /// BOS = HH continuing an existing uptrend (bullish BOS)
+    ///     = LL continuing an existing downtrend (bearish BOS)
+    ///
+    /// Returns the most recent BOS pivot, or None.
+    pub fn detect_bos(&self, level: PivotLevel) -> Option<(usize, SwingType)> {
+        let pivots = self.at_level(level);
+        for i in (1..pivots.len()).rev() {
+            let curr = &pivots[i];
+            let Some(st) = curr.swing_type else { continue };
+            match st {
+                SwingType::HH => {
+                    if let Some(prev_high) = pivots[..i].iter().rev().find(|p| p.kind == PivotKind::High) {
+                        if prev_high.swing_type == Some(SwingType::HH) {
+                            return Some((i, SwingType::HH));
+                        }
+                    }
+                }
+                SwingType::LL => {
+                    if let Some(prev_low) = pivots[..i].iter().rev().find(|p| p.kind == PivotKind::Low) {
+                        if prev_low.swing_type == Some(SwingType::LL) {
+                            return Some((i, SwingType::LL));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     /// Validate the subset invariant. Returns the first level pair that
@@ -125,6 +218,7 @@ mod tests {
             level,
             prominence: dec!(1),
             volume_at_pivot: dec!(10),
+            swing_type: None,
         }
     }
 

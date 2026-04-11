@@ -52,7 +52,7 @@ impl WyckoffPhase {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WyckoffEvent {
     // Phase A
@@ -169,7 +169,27 @@ impl WyckoffStructureTracker {
     }
 
     /// Record a new event and advance phase if warranted.
+    ///
+    /// Dedup: skip if the same event type was already recorded at the
+    /// same bar_index, or within a 3-bar tolerance window with the
+    /// same price (prevents 3200-duplicate bugs seen in production).
     pub fn record_event(&mut self, event: WyckoffEvent, bar_index: u64, price: f64, score: f64) {
+        let dominated = self.events.iter().any(|e| {
+            e.event == event && bar_index.abs_diff(e.bar_index) <= 3
+        });
+        if dominated {
+            // Update score if the new one is better, but don't append.
+            if let Some(existing) = self.events.iter_mut().find(|e| {
+                e.event == event && bar_index.abs_diff(e.bar_index) <= 3
+            }) {
+                if score > existing.score {
+                    existing.score = score;
+                    existing.price = price;
+                    existing.bar_index = bar_index;
+                }
+            }
+            return;
+        }
         self.events.push(RecordedEvent {
             event,
             bar_index,
@@ -273,14 +293,38 @@ impl WyckoffStructureTracker {
         self.schematic = new_schematic;
     }
 
-    /// Confidence estimate based on events collected and their scores.
+    /// Confidence estimate based on **distinct** event types and their
+    /// best scores. Phase A with only BC → low confidence; Phase A
+    /// with BC + AR + ST → high confidence. Event *count* is
+    /// irrelevant — only diversity and quality matter.
     pub fn confidence(&self) -> f64 {
         if self.events.is_empty() {
             return 0.0;
         }
-        let total_score: f64 = self.events.iter().map(|e| e.score).sum();
-        let avg = total_score / self.events.len() as f64;
-        // Bonus for later phases (more confirmed)
+        // Collect best score per distinct event type.
+        let mut best: std::collections::HashMap<WyckoffEvent, f64> =
+            std::collections::HashMap::new();
+        for e in &self.events {
+            let entry = best.entry(e.event).or_insert(0.0);
+            if e.score > *entry {
+                *entry = e.score;
+            }
+        }
+        let distinct_count = best.len() as f64;
+        let avg_best: f64 = best.values().sum::<f64>() / distinct_count;
+
+        // Expected event count per phase for normalization.
+        let expected = match self.current_phase {
+            WyckoffPhase::A => 3.0, // climax + AR + ST
+            WyckoffPhase::B => 5.0,
+            WyckoffPhase::C => 6.0,
+            WyckoffPhase::D => 8.0,
+            WyckoffPhase::E => 9.0,
+        };
+        // Diversity ratio: how many of expected events are present.
+        let diversity = (distinct_count / expected).min(1.0);
+
+        // Phase bonus for later phases (more confirmed).
         let phase_bonus = match self.current_phase {
             WyckoffPhase::A => 0.0,
             WyckoffPhase::B => 0.05,
@@ -288,7 +332,7 @@ impl WyckoffStructureTracker {
             WyckoffPhase::D => 0.15,
             WyckoffPhase::E => 0.20,
         };
-        (avg + phase_bonus).min(1.0)
+        (avg_best * diversity + phase_bonus).min(1.0)
     }
 
     /// Map event name from detector to WyckoffEvent.

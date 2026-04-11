@@ -41,7 +41,7 @@ pub use allocator::{
     check_allocation, AllocatorContext, AllocatorLimits, OpenSetupSummary,
 };
 pub use classifier::classify_alt_type;
-pub use guard::{PositionGuard, PositionGuardConfig};
+pub use guard::{PositionGuard, PositionGuardConfig, StructuralTarget};
 pub use reverse::should_reverse_close;
 pub use sharing::{evaluate_sharing, QRadarShareInfo, SharingChannel, SharingConfig, SharingDecision};
 pub use types::{

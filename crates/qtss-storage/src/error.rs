@@ -8,4 +8,6 @@ pub enum StorageError {
     Migrate(#[from] sqlx::migrate::MigrateError),
     #[error("{0}")]
     Other(String),
+    #[error("duplicate open setup — skipped")]
+    DuplicateSetup,
 }

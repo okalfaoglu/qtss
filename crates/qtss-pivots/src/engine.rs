@@ -89,7 +89,9 @@ impl PivotEngine {
             let threshold = atr * self.config.atr_mult[i];
             let confirmed = self.zigzags[i].on_sample(&s, threshold);
             if let Some(cp) = confirmed {
-                let pivot = build_pivot(&cp, level);
+                let mut pivot = build_pivot(&cp, level);
+                // Classify swing type (HH/HL/LH/LL) vs previous same-kind pivot.
+                pivot.swing_type = classify_swing(&self.confirmed[i], &pivot);
                 self.confirmed[i].push(pivot.clone());
                 emitted.push(NewPivot { level, pivot });
                 // Cascade: feed this confirmation forward as a synthetic
@@ -135,5 +137,27 @@ fn build_pivot(cp: &ConfirmedPivot, level: PivotLevel) -> Pivot {
         level,
         prominence: cp.prominence,
         volume_at_pivot: cp.volume_at_pivot,
+        swing_type: None, // Set by classify_swing after construction.
+    }
+}
+
+/// Compare a new pivot with the previous pivot of the same kind at the
+/// same level. Produces HH/HL/LH/LL classification (PineScript dir=±2).
+fn classify_swing(
+    confirmed: &[Pivot],
+    new: &Pivot,
+) -> Option<qtss_domain::v2::pivot::SwingType> {
+    use qtss_domain::v2::pivot::{PivotKind, SwingType};
+    // Find the last pivot of the same kind (High→last High, Low→last Low).
+    let prev = confirmed.iter().rev().find(|p| p.kind == new.kind)?;
+    match new.kind {
+        PivotKind::High => {
+            if new.price >= prev.price { Some(SwingType::HH) }
+            else { Some(SwingType::LH) }
+        }
+        PivotKind::Low => {
+            if new.price <= prev.price { Some(SwingType::LL) }
+            else { Some(SwingType::HL) }
+        }
     }
 }

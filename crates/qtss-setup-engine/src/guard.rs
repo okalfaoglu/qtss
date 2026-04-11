@@ -44,6 +44,14 @@ pub struct PositionGuardConfig {
     pub reverse_guven_threshold: f64,
 }
 
+/// Structural target from a detection (measured move, fib extension, etc.).
+#[derive(Debug, Clone, Copy)]
+pub struct StructuralTarget {
+    pub price: f64,
+    pub weight: f64,
+    pub label: &'static str,
+}
+
 /// Live state for a single setup. Owned by the engine; mutated in
 /// place on each tick.
 #[derive(Debug, Clone, Copy)]
@@ -53,16 +61,21 @@ pub struct PositionGuard {
     /// Ratchet trailing stop — the only stop that actually moves.
     pub koruma: f64,
     pub target_ref: f64,
+    /// Secondary target (e.g., 1.618× measured move).
+    pub target_ref2: Option<f64>,
     pub direction: Direction,
+    /// Whether entry/sl/tp came from structural detection vs ATR fallback.
+    pub structural: bool,
 }
 
 impl PositionGuard {
     /// Construct a fresh guard from entry, ATR, profile config and
     /// direction. `koruma` starts at `entry_sl` (no ratchet yet).
+    /// This is the **ATR fallback** — used when no structural detection
+    /// provides invalidation/targets.
     pub fn new(entry: f64, atr: f64, cfg: &PositionGuardConfig, direction: Direction) -> Self {
         let stop_distance = atr * cfg.entry_sl_atr_mult;
         let sign = direction.sign();
-        // Long: entry_sl below; Short: entry_sl above; Neutral: no offset.
         let entry_sl = entry - sign * stop_distance;
         let target_ref = entry + sign * stop_distance * cfg.target_ref_r;
         Self {
@@ -70,7 +83,66 @@ impl PositionGuard {
             entry_sl,
             koruma: entry_sl,
             target_ref,
+            target_ref2: None,
             direction,
+            structural: false,
+        }
+    }
+
+    /// Construct from **structural detection** data — invalidation
+    /// price becomes SL, measured move / fib targets become TP.
+    /// Falls back to ATR-based values if structural data is missing.
+    pub fn new_structural(
+        entry: f64,
+        invalidation_price: f64,
+        targets: &[StructuralTarget],
+        atr: f64,
+        cfg: &PositionGuardConfig,
+        direction: Direction,
+    ) -> Self {
+        let sign = direction.sign();
+
+        // SL = invalidation price (where the pattern breaks).
+        let entry_sl = invalidation_price;
+
+        // Validate SL is on the correct side of entry.
+        let sl_valid = match direction {
+            Direction::Long => entry_sl < entry,
+            Direction::Short => entry_sl > entry,
+            Direction::Neutral => false,
+        };
+
+        if !sl_valid || targets.is_empty() {
+            // Fall back to ATR-based guard.
+            return Self::new(entry, atr, cfg, direction);
+        }
+
+        // Sort targets by weight descending, pick best two.
+        let mut sorted: Vec<StructuralTarget> = targets.to_vec();
+        sorted.sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap_or(std::cmp::Ordering::Equal));
+
+        let target_ref = sorted[0].price;
+        let target_ref2 = sorted.get(1).map(|t| t.price);
+
+        // Validate target is on the correct side of entry.
+        let tp_valid = match direction {
+            Direction::Long => target_ref > entry,
+            Direction::Short => target_ref < entry,
+            Direction::Neutral => false,
+        };
+
+        if !tp_valid {
+            return Self::new(entry, atr, cfg, direction);
+        }
+
+        Self {
+            entry,
+            entry_sl,
+            koruma: entry_sl,
+            target_ref,
+            target_ref2,
+            direction,
+            structural: true,
         }
     }
 
@@ -214,5 +286,56 @@ mod tests {
     fn neutral_never_ratchets() {
         let mut g = PositionGuard::new(100.0, 2.0, &cfg(), Direction::Neutral);
         assert!(!g.try_ratchet(200.0));
+    }
+
+    #[test]
+    fn structural_long_double_bottom() {
+        // W pattern: neckline=105, double bottom at 95.
+        // Invalidation = 95 (below double bottom).
+        // Measured move target = 105 + (105-95) = 115.
+        let targets = vec![
+            StructuralTarget { price: 115.0, weight: 0.8, label: "MM 1.0x" },
+            StructuralTarget { price: 121.18, weight: 0.5, label: "MM 1.618x" },
+        ];
+        let g = PositionGuard::new_structural(
+            105.0, 95.0, &targets, 2.0, &cfg(), Direction::Long,
+        );
+        assert!(g.structural);
+        assert_eq!(g.entry, 105.0);
+        assert_eq!(g.entry_sl, 95.0);        // invalidation, not ATR
+        assert_eq!(g.target_ref, 115.0);      // MM 1.0×, not ATR×R
+        assert_eq!(g.target_ref2, Some(121.18)); // MM 1.618×
+        assert_eq!(g.r_value(), 10.0);        // |105-95|
+    }
+
+    #[test]
+    fn structural_fallback_on_invalid_sl() {
+        // SL above entry for long → invalid → falls back to ATR.
+        let targets = vec![
+            StructuralTarget { price: 115.0, weight: 0.8, label: "MM 1.0x" },
+        ];
+        let g = PositionGuard::new_structural(
+            100.0, 105.0, &targets, 2.0, &cfg(), Direction::Long,
+        );
+        assert!(!g.structural);
+        assert_eq!(g.entry_sl, 98.0); // ATR fallback
+    }
+
+    #[test]
+    fn structural_short_head_and_shoulders() {
+        // H&S: neckline=100, head=110.
+        // Invalidation = 110 (above head).
+        // Target = 100 - (110-100) = 90.
+        let targets = vec![
+            StructuralTarget { price: 90.0, weight: 0.8, label: "MM 1.0x" },
+            StructuralTarget { price: 83.82, weight: 0.5, label: "MM 1.618x" },
+        ];
+        let g = PositionGuard::new_structural(
+            100.0, 110.0, &targets, 2.0, &cfg(), Direction::Short,
+        );
+        assert!(g.structural);
+        assert_eq!(g.entry_sl, 110.0);
+        assert_eq!(g.target_ref, 90.0);
+        assert_eq!(g.target_ref2, Some(83.82));
     }
 }

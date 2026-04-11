@@ -19,15 +19,15 @@ use qtss_indicators::{atr, ema};
 use qtss_setup_engine::{
     check_allocation, classify_alt_type, should_reverse_close, AllocatorContext, AllocatorLimits,
     CloseReason, Direction, OpenSetupSummary, PositionGuard, PositionGuardConfig, Profile,
-    RejectReason, SetupState, VenueClass,
+    RejectReason, SetupState, StructuralTarget, VenueClass,
 };
 use qtss_storage::v2_confluence::fetch_latest_v2_confluence;
 use qtss_storage::{
     insert_v2_setup, insert_v2_setup_event, insert_v2_setup_rejection, list_enabled_engine_symbols,
     list_groups_for_symbol, list_open_v2_setups, list_recent_bars, resolve_system_f64,
     resolve_system_u64, resolve_worker_enabled_flag, update_v2_setup_state,
-    DetectionOutcomeRepository, EngineSymbolRow, V2SetupEventInsert, V2SetupInsert,
-    V2SetupRejectionInsert, V2SetupRow,
+    DetectionOutcomeRepository, DetectionRow, EngineSymbolRow, V2DetectionRepository,
+    V2SetupEventInsert, V2SetupInsert, V2SetupRejectionInsert, V2SetupRow,
 };
 use rust_decimal::prelude::ToPrimitive;
 use serde_json::json;
@@ -425,7 +425,9 @@ async fn update_open_setups(
             entry_sl,
             koruma,
             target_ref,
+            target_ref2: None,
             direction: dir,
+            structural: false,
         };
 
         // --- close checks (ordered; first hit wins) ---
@@ -711,7 +713,51 @@ async fn try_arm_new_setup(
     }
 
     let pcfg = cfg.profiles[&profile].guard;
-    let guard = PositionGuard::new(price, atr_val, &pcfg, direction);
+
+    // Try structural guard: use detection invalidation + target-engine
+    // measured-move targets instead of ATR-based fallback.
+    let guard = {
+        let det_repo = V2DetectionRepository::new(pool.clone());
+        let detections = det_repo
+            .list_for_chart(&sym.exchange, &sym.symbol, &sym.interval, 10)
+            .await
+            .unwrap_or_default();
+
+        // Find the best confirmed detection matching our direction.
+        let best_det = detections.iter().find(|d| {
+            let det_dir = match d.family.as_str() {
+                _ if d.subkind.contains("bull") => Direction::Long,
+                _ if d.subkind.contains("bear") => Direction::Short,
+                _ => Direction::Neutral,
+            };
+            (d.state == "confirmed" || d.state == "forming")
+                && det_dir == direction
+                && d.structural_score >= 0.60
+        });
+
+        match best_det {
+            Some(det) => {
+                let inv_price = det.invalidation_price.to_f64().unwrap_or(0.0);
+                // Extract targets from anchors using measured-move formula.
+                let targets = compute_structural_targets(det, direction);
+                if targets.is_empty() {
+                    PositionGuard::new(price, atr_val, &pcfg, direction)
+                } else {
+                    info!(
+                        symbol = %sym.symbol,
+                        subkind = %det.subkind,
+                        inv = inv_price,
+                        tp1 = targets[0].price,
+                        "structural guard from detection"
+                    );
+                    PositionGuard::new_structural(
+                        price, inv_price, &targets, atr_val, &pcfg, direction,
+                    )
+                }
+            }
+            None => PositionGuard::new(price, atr_val, &pcfg, direction),
+        }
+    };
 
     let groups = list_groups_for_symbol(pool, venue.as_str(), &sym.symbol)
         .await
@@ -780,7 +826,14 @@ async fn try_arm_new_setup(
             "correlation_groups": groups,
         }),
     };
-    let id: Uuid = insert_v2_setup(pool, &row).await?;
+    let id: Uuid = match insert_v2_setup(pool, &row).await {
+        Ok(id) => id,
+        Err(qtss_storage::error::StorageError::DuplicateSetup) => {
+            debug!(symbol = %sym.symbol, "duplicate open setup — skipped");
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    };
     insert_v2_setup_event(
         pool,
         &V2SetupEventInsert {
@@ -793,6 +846,8 @@ async fn try_arm_new_setup(
                 "entry_sl": guard.entry_sl,
                 "koruma": guard.koruma,
                 "target_ref": guard.target_ref,
+                "target_ref2": guard.target_ref2,
+                "structural": guard.structural,
                 "risk_pct": pcfg.risk_pct,
                 "confluence_id": conf.id,
                 "ema50": ema50,
@@ -845,4 +900,111 @@ async fn record_rejection(
     Ok(())
 }
 
+// ── Structural target extraction from detection anchors ─────────
 
+/// Extract measured-move targets from a detection's anchors.
+/// Works for classical (double_top/bottom, H&S), harmonic, and Elliott.
+fn compute_structural_targets(det: &DetectionRow, direction: Direction) -> Vec<StructuralTarget> {
+    let anchors: Vec<serde_json::Value> = match serde_json::from_value(det.anchors.clone()) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    if anchors.len() < 3 {
+        return Vec::new();
+    }
+
+    // Helper: extract price from anchor JSON {"price": "72000.50", ...}
+    let price_of = |a: &serde_json::Value| -> Option<f64> {
+        a.get("price")
+            .and_then(|v| v.as_str().or_else(|| v.as_f64().map(|_| "")).and_then(|s| {
+                if s.is_empty() { v.as_f64() } else { s.parse::<f64>().ok() }
+            }))
+    };
+
+    let subkind = det.subkind.as_str();
+    let sign = direction.sign();
+
+    // Double top/bottom: 3 anchors [H1/L1, T, H2/L2]
+    if subkind.starts_with("double_top") || subkind.starts_with("double_bottom") {
+        if let (Some(extreme), Some(neck)) = (price_of(&anchors[0]), price_of(&anchors[1])) {
+            let height = (extreme - neck).abs();
+            let t1 = neck - sign * height;         // 1.0× measured move
+            let t2 = neck - sign * height * 1.618;  // 1.618× extension
+            return vec![
+                StructuralTarget { price: t1, weight: 0.80, label: "MM 1.0x" },
+                StructuralTarget { price: t2, weight: 0.50, label: "MM 1.618x" },
+            ];
+        }
+    }
+
+    // Head & shoulders / inverse: 5 anchors [S1, N1, H, N2, S2]
+    if subkind.contains("head_and_shoulders") {
+        if anchors.len() >= 5 {
+            if let (Some(head), Some(neck1), Some(neck2)) =
+                (price_of(&anchors[2]), price_of(&anchors[1]), price_of(&anchors[3]))
+            {
+                let neckline = (neck1 + neck2) / 2.0;
+                let height = (head - neckline).abs();
+                let t1 = neckline - sign * height;
+                let t2 = neckline - sign * height * 1.618;
+                return vec![
+                    StructuralTarget { price: t1, weight: 0.80, label: "MM 1.0x" },
+                    StructuralTarget { price: t2, weight: 0.50, label: "MM 1.618x" },
+                ];
+            }
+        }
+    }
+
+    // Harmonic patterns (butterfly, gartley, bat, crab): XABCD
+    if matches!(det.family.as_str(), "harmonic") {
+        if anchors.len() >= 5 {
+            if let (Some(a_price), Some(d_price)) =
+                (price_of(&anchors[1]), price_of(&anchors[4]))
+            {
+                let ad_range = (a_price - d_price).abs();
+                // Retracement targets of AD leg
+                let t1 = d_price + sign * ad_range * 0.382;
+                let t2 = d_price + sign * ad_range * 0.618;
+                return vec![
+                    StructuralTarget { price: t1, weight: 0.70, label: "AD 0.382" },
+                    StructuralTarget { price: t2, weight: 0.85, label: "AD 0.618" },
+                ];
+            }
+        }
+    }
+
+    // Elliott impulse: 6 pivots [0,1,2,3,4,5]
+    if subkind.contains("impulse") && anchors.len() >= 6 {
+        if let (Some(p0), Some(p1), Some(p4)) =
+            (price_of(&anchors[0]), price_of(&anchors[1]), price_of(&anchors[4]))
+        {
+            let w1_height = (p1 - p0).abs();
+            let t1 = p4 + sign * w1_height * 1.0;
+            let t2 = p4 + sign * w1_height * 1.618;
+            return vec![
+                StructuralTarget { price: t1, weight: 0.70, label: "Fib 1.0x" },
+                StructuralTarget { price: t2, weight: 0.85, label: "Fib 1.618x" },
+            ];
+        }
+    }
+
+    // Wyckoff spring/upthrust
+    if subkind.contains("spring") || subkind.contains("upthrust") {
+        // Use detection's raw_meta for range if available
+        if let (Some(top), Some(bot)) = (
+            det.raw_meta.get("range_top").and_then(|v| v.as_f64()),
+            det.raw_meta.get("range_bottom").and_then(|v| v.as_f64()),
+        ) {
+            let range_h = (top - bot).abs();
+            let base = det.invalidation_price.to_f64().unwrap_or(0.0);
+            let t1 = base + sign * range_h * 0.5;
+            let t2 = base + sign * range_h * 1.0;
+            return vec![
+                StructuralTarget { price: t1, weight: 0.70, label: "Range 0.5x" },
+                StructuralTarget { price: t2, weight: 0.85, label: "Range 1.0x" },
+            ];
+        }
+    }
+
+    Vec::new()
+}

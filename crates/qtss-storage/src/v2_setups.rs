@@ -75,6 +75,9 @@ pub async fn insert_v2_setup(
             state, direction, confluence_id,
             entry_price, entry_sl, koruma, target_ref, risk_pct, raw_meta
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        ON CONFLICT (exchange, symbol, timeframe, profile, direction)
+            WHERE state IN ('armed', 'open')
+        DO NOTHING
         RETURNING id
         "#,
     )
@@ -93,9 +96,12 @@ pub async fn insert_v2_setup(
     .bind(row.target_ref)
     .bind(row.risk_pct)
     .bind(&row.raw_meta)
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await?;
-    Ok(id)
+    match id {
+        Some(id) => Ok(id),
+        None => Err(StorageError::DuplicateSetup),
+    }
 }
 
 /// Move a setup forward. `close_reason`/`close_price` are only set
