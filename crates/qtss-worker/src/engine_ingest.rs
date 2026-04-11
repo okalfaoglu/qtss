@@ -34,7 +34,7 @@ fn binance_kline_interval_seconds(iv: &str) -> Option<i64> {
 
 fn segment_db(segment: &str) -> &'static str {
     match segment.trim().to_lowercase().as_str() {
-        "futures" | "usdt_futures" | "fapi" => "futures",
+        "future" | "futures" | "usdt_futures" | "fapi" => "futures",
         _ => "spot",
     }
 }

@@ -24,6 +24,16 @@ use crate::data_sources::registry::{
     NANSEN_WHALE_WATCHLIST_KEY, NANSEN_WHO_BOUGHT_DATA_KEY,
 };
 
+/// Read Nansen API key: DB (`worker.nansen_api_key`) first, env
+/// `NANSEN_API_KEY` as fallback. Returns `None` when blank/missing so
+/// the loop can sleep-skip cleanly (CLAUDE.md #2).
+async fn resolve_nansen_api_key(pool: &PgPool) -> Option<String> {
+    let s = qtss_storage::resolve_system_string(
+        pool, "worker", "nansen_api_key", "NANSEN_API_KEY", "",
+    ).await;
+    if s.is_empty() { None } else { Some(s) }
+}
+
 fn nansen_api_base() -> String {
     std::env::var("NANSEN_API_BASE")
         .ok()
@@ -33,7 +43,11 @@ fn nansen_api_base() -> String {
 }
 
 fn default_pagination_body() -> Value {
-    json!({ "pagination": { "page": 1, "per_page": 100 } })
+    let per_page: u64 = std::env::var("NANSEN_PER_PAGE")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(500);
+    json!({ "pagination": { "page": 1, "per_page": per_page } })
 }
 
 fn json_merge(base: &mut Value, extra: Value) {
@@ -52,7 +66,7 @@ fn default_chains_for_smart_money() -> Value {
     std::env::var("NANSEN_SMART_MONEY_CHAINS_JSON")
         .ok()
         .and_then(|s| serde_json::from_str::<Value>(s.trim()).ok())
-        .unwrap_or_else(|| json!(["ethereum"]))
+        .unwrap_or_else(|| json!(["all"]))
 }
 
 fn default_netflows_request_body() -> Value {
@@ -176,6 +190,8 @@ async fn persist_nansen_result(
             } else {
                 info!(%source_key, "nansen data_snapshots güncellendi");
             }
+            // Persist raw flow rows for AI consumption
+            persist_raw_flows(pool, source_key, &v).await;
         }
         Err(e) => {
             let insufficient = e.is_insufficient_credits();
@@ -205,6 +221,47 @@ async fn persist_nansen_result(
                 warn!(%source_key, %err_s, "nansen_extended request failed");
             }
         }
+    }
+}
+
+/// Map source_key to source_type for raw flow extraction.
+fn source_type_for_key(source_key: &str) -> Option<&'static str> {
+    match source_key {
+        "nansen_netflows" => Some("netflow"),
+        "nansen_holdings" => Some("holdings"),
+        "nansen_smart_money_dex_trades" => Some("dex_trades"),
+        "nansen_flow_intelligence" => Some("flow_intel"),
+        _ => None,
+    }
+}
+
+async fn persist_raw_flows(pool: &PgPool, source_key: &str, response: &Value) {
+    let Some(source_type) = source_type_for_key(source_key) else {
+        return; // not a flow-type snapshot
+    };
+    let raw_rows = qtss_onchain::nansen_enriched::extract_raw_flow_rows(source_type, response);
+    if raw_rows.is_empty() {
+        return;
+    }
+    let now = chrono::Utc::now();
+    let inserts: Vec<qtss_storage::nansen_enriched::NansenRawFlowInsert<'_>> = raw_rows
+        .iter()
+        .map(|r| qtss_storage::nansen_enriched::NansenRawFlowInsert {
+            source_type: &r.source_type,
+            chain: r.chain.as_deref(),
+            token_symbol: r.token_symbol.as_deref(),
+            token_address: r.token_address.as_deref(),
+            engine_symbol: None, // mapped later by enriched analyzer
+            direction: r.direction.as_deref(),
+            value_usd: r.value_usd,
+            balance_pct_change: r.balance_pct_change,
+            raw_row: &r.raw_row,
+            snapshot_at: now,
+        })
+        .collect();
+    match qtss_storage::nansen_enriched::insert_raw_flows(pool, &inserts).await {
+        Ok(n) => debug!(%source_key, rows = n, "nansen raw flows persisted"),
+        Err(e) => warn!(%e, %source_key, "nansen raw flows insert failed"),
     }
 }
 
@@ -250,10 +307,7 @@ pub async fn nansen_netflows_loop(pool: PgPool) {
             900,
         )
         .await;
-        let Some(key) = std::env::var("NANSEN_API_KEY")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-        else {
+        let Some(key) = resolve_nansen_api_key(&pool).await else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
@@ -309,10 +363,7 @@ pub async fn nansen_holdings_loop(pool: PgPool) {
             900,
         )
         .await;
-        let Some(key) = std::env::var("NANSEN_API_KEY")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-        else {
+        let Some(key) = resolve_nansen_api_key(&pool).await else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
@@ -362,10 +413,7 @@ pub async fn nansen_perp_trades_loop(pool: PgPool) {
             900,
         )
         .await;
-        let Some(key) = std::env::var("NANSEN_API_KEY")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-        else {
+        let Some(key) = resolve_nansen_api_key(&pool).await else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
@@ -417,10 +465,7 @@ pub async fn nansen_who_bought_loop(pool: PgPool) {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
-        let Some(key) = std::env::var("NANSEN_API_KEY")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-        else {
+        let Some(key) = resolve_nansen_api_key(&pool).await else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
@@ -465,10 +510,7 @@ pub async fn nansen_flow_intel_loop(pool: PgPool) {
             600,
         )
         .await;
-        let Some(api_key) = std::env::var("NANSEN_API_KEY")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-        else {
+        let Some(api_key) = resolve_nansen_api_key(&pool).await else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
@@ -594,10 +636,7 @@ pub async fn nansen_perp_leaderboard_loop(pool: PgPool) {
             3_600,
         )
         .await;
-        let Some(api_key) = std::env::var("NANSEN_API_KEY")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-        else {
+        let Some(api_key) = resolve_nansen_api_key(&pool).await else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
@@ -662,10 +701,7 @@ pub async fn nansen_whale_perp_aggregate_loop(pool: PgPool) {
             600,
         )
         .await;
-        let Some(api_key) = std::env::var("NANSEN_API_KEY")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-        else {
+        let Some(api_key) = resolve_nansen_api_key(&pool).await else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
@@ -783,10 +819,7 @@ macro_rules! nansen_opt_in_tgm_loop {
                 }
                 let tick =
                     resolve_worker_tick_secs(&pool, "worker", $tdb, $tenv, $def, $min).await;
-                let Some(api_key) = std::env::var("NANSEN_API_KEY")
-                    .ok()
-                    .filter(|s| !s.trim().is_empty())
-                else {
+                let Some(api_key) = resolve_nansen_api_key(&pool).await else {
                     tokio::time::sleep(Duration::from_secs(tick)).await;
                     continue;
                 };
@@ -1012,10 +1045,7 @@ pub async fn nansen_perp_screener_loop(pool: PgPool) {
             600,
         )
         .await;
-        let Some(api_key) = std::env::var("NANSEN_API_KEY")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-        else {
+        let Some(api_key) = resolve_nansen_api_key(&pool).await else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };
@@ -1052,7 +1082,7 @@ fn smart_money_dex_trades_request_body() -> Value {
         }
     }
     let mut body = default_pagination_body();
-    json_merge(&mut body, json!({ "chains": ["ethereum"] }));
+    json_merge(&mut body, json!({ "chains": default_chains_for_smart_money() }));
     body
 }
 
@@ -1084,10 +1114,7 @@ pub async fn nansen_smart_money_dex_trades_loop(pool: PgPool) {
             900,
         )
         .await;
-        let Some(api_key) = std::env::var("NANSEN_API_KEY")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-        else {
+        let Some(api_key) = resolve_nansen_api_key(&pool).await else {
             tokio::time::sleep(Duration::from_secs(tick)).await;
             continue;
         };

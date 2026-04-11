@@ -82,6 +82,8 @@ pub enum FetcherError {
     Disabled(&'static str),
     #[error("unsupported symbol: {0}")]
     UnsupportedSymbol(String),
+    #[error("no data: {0}")]
+    NoData(String),
 }
 
 /// Fetcher contract — async because everything here hits the network.

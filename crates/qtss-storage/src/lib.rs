@@ -19,6 +19,7 @@ pub mod intake_playbook;
 pub mod market_bars;
 pub mod market_confluence_snapshots;
 pub mod nansen;
+pub mod nansen_enriched;
 pub mod nansen_setup_scan;
 pub mod notify_outbox;
 pub mod onchain_signal_scores;

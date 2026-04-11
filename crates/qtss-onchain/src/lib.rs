@@ -27,6 +27,7 @@ pub mod cryptoquant;
 pub mod derivatives;
 pub mod glassnode;
 pub mod nansen;
+pub mod nansen_enriched;
 pub mod stablecoin;
 pub mod types;
 

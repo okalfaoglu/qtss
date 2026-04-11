@@ -564,7 +564,7 @@ pub struct SeriesCatalogIds {
 pub fn ui_segment_to_market_keys(segment: &str) -> (&'static str, &'static str) {
     let s = segment.trim().to_lowercase();
     match s.as_str() {
-        "futures" | "usdt_futures" | "fapi" => ("futures", "usdt_m"),
+        "future" | "futures" | "usdt_futures" | "fapi" => ("futures", "usdt_m"),
         _ => ("spot", ""),
     }
 }

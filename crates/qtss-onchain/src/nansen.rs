@@ -125,7 +125,6 @@ impl SymbolKey {
 
 fn resolve_symbol(map: &Value, symbol: &str) -> Option<SymbolKey> {
     let entry = map.get(symbol).or_else(|| {
-        // Allow lookup by stripped form: BTCUSDT → BTC.
         let stripped = symbol
             .strip_suffix("USDT")
             .or_else(|| symbol.strip_suffix("USD"))
@@ -136,6 +135,22 @@ fn resolve_symbol(map: &Value, symbol: &str) -> Option<SymbolKey> {
     if !entry.is_object() {
         return None;
     }
+
+    // New multi-chain format: { "chains": { "ethereum": { "symbol": "WETH", "address": "0x..." } } }
+    if let Some(chains_obj) = entry.get("chains").and_then(|v| v.as_object()) {
+        // Use the first chain entry for primary matching; SymbolKey.matches_row
+        // is chain-agnostic (matches by address or symbol across all rows).
+        let first = chains_obj.values().next()?;
+        let chain = chains_obj.keys().next().map(String::from);
+        let address = first.get("address").and_then(|v| v.as_str()).map(String::from);
+        let nansen_symbol = first.get("symbol").and_then(|v| v.as_str()).map(String::from);
+        if address.is_none() && nansen_symbol.is_none() {
+            return None;
+        }
+        return Some(SymbolKey { chain, address, nansen_symbol });
+    }
+
+    // Old single-chain format
     let chain = entry.get("chain").and_then(|v| v.as_str()).map(String::from);
     let address = entry
         .get("address")
@@ -195,6 +210,47 @@ fn score_netflow_like(resp: &Value, key: &SymbolKey, field_aliases: &[&str]) -> 
     Some((net / abs).clamp(-1.0, 1.0))
 }
 
+fn is_stablecoin(sym: &str) -> bool {
+    matches!(
+        sym,
+        "USDC" | "USDT" | "DAI" | "BUSD" | "TUSD" | "USDP" | "FDUSD"
+    )
+}
+
+fn classify_dex_row(row: &Value) -> Option<(&'static str, f64)> {
+    let value = json_f64(row.get("trade_value_usd"))
+        .or_else(|| json_f64(row.get("value_usd")))
+        .or_else(|| json_f64(row.get("usd_value")))
+        .unwrap_or(0.0)
+        .max(0.0);
+    if value <= 0.0 {
+        return None;
+    }
+    // Format 1: explicit action/side
+    let action = row
+        .get("action")
+        .or_else(|| row.get("side"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if action.contains("buy") {
+        return Some(("buy", value));
+    }
+    if action.contains("sell") {
+        return Some(("sell", value));
+    }
+    // Format 2: swap (token_bought/token_sold)
+    let sold = row.get("token_sold_symbol").and_then(|v| v.as_str()).unwrap_or("").to_ascii_uppercase();
+    let bought = row.get("token_bought_symbol").and_then(|v| v.as_str()).unwrap_or("").to_ascii_uppercase();
+    if is_stablecoin(&sold) && !is_stablecoin(&bought) {
+        return Some(("buy", value));
+    }
+    if !is_stablecoin(&sold) && is_stablecoin(&bought) {
+        return Some(("sell", value));
+    }
+    None
+}
+
 fn score_dex_trades(resp: &Value, key: &SymbolKey) -> Option<f64> {
     let rows = rows_of(resp);
     let mut buy = 0.0_f64;
@@ -204,25 +260,12 @@ fn score_dex_trades(resp: &Value, key: &SymbolKey) -> Option<f64> {
         if !key.matches_row(row) {
             continue;
         }
-        let action = row
-            .get("action")
-            .or_else(|| row.get("side"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let value = json_f64(row.get("trade_value_usd"))
-            .or_else(|| json_f64(row.get("value_usd")))
-            .or_else(|| json_f64(row.get("usd_value")))
-            .unwrap_or(0.0)
-            .max(0.0);
-        if value <= 0.0 {
-            continue;
-        }
-        if action.contains("buy") {
-            buy += value;
-            hits += 1;
-        } else if action.contains("sell") {
-            sell += value;
+        if let Some((side, value)) = classify_dex_row(row) {
+            if side == "buy" {
+                buy += value;
+            } else {
+                sell += value;
+            }
             hits += 1;
         }
     }
@@ -241,7 +284,8 @@ fn score_holdings(resp: &Value, key: &SymbolKey) -> Option<f64> {
         if !key.matches_row(row) {
             continue;
         }
-        if let Some(p) = json_f64(row.get("balance_change_24h_pct"))
+        if let Some(p) = json_f64(row.get("balance_24h_percent_change"))
+            .or_else(|| json_f64(row.get("balance_change_24h_pct")))
             .or_else(|| json_f64(row.get("balance_change_pct_24h")))
             .or_else(|| json_f64(row.get("balance_change_24h")))
         {
@@ -303,19 +347,27 @@ impl OnchainCategoryFetcher for NansenFetcher {
             score_netflow_like(r, &key, &["net_flow", "netFlow", "net_volume", "net_flow_24h_usd"])
         });
         let flow_intel = flow_intel_resp.as_ref().and_then(|r| {
-            score_netflow_like(r, &key, &["net_flow", "netFlow", "net_flow_usd"])
+            score_netflow_like(r, &key, &["net_flow_24h_usd", "net_flow", "netFlow", "net_flow_usd"])
         });
         let dex = dex_trades_resp.as_ref().and_then(|r| score_dex_trades(r, &key));
         let holdings = holdings_resp.as_ref().and_then(|r| score_holdings(r, &key));
 
-        Ok(blend(
+        let reading = blend(
             netflow,
             flow_intel,
             dex,
             holdings,
             &self.tuning,
             symbol,
-        ))
+        );
+        // When all snapshots are stale or missing (confidence=0) return
+        // an error so the aggregator skips the phantom zero reading.
+        if reading.confidence <= 0.0 {
+            return Err(FetcherError::NoData(format!(
+                "nansen: all snapshots stale/missing for {symbol}"
+            )));
+        }
+        Ok(reading)
     }
 }
 

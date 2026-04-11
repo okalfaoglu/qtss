@@ -159,7 +159,15 @@ impl OnchainCategoryFetcher for CryptoQuantFetcher {
         .ok()
         .flatten();
 
-        Ok(blend(sopr, netflow, mvrv, self.tuning))
+        let reading = blend(sopr, netflow, mvrv, self.tuning);
+        // When all three API calls failed (confidence=0) propagate as
+        // an error so the aggregator does not consume a phantom reading.
+        if reading.confidence <= 0.0 {
+            return Err(FetcherError::NoData(format!(
+                "cryptoquant: all 3 endpoints returned no data for {symbol}"
+            )));
+        }
+        Ok(reading)
     }
 }
 

@@ -19,6 +19,7 @@ use qtss_onchain::{
     aggregate, AggregatorWeights, BinanceDerivativesFetcher, CategoryKind, CategoryReading,
     CryptoQuantFetcher, GlassnodeFetcher, NansenFetcher, NansenTuning, OnchainCategoryFetcher,
     StablecoinMacroFetcher,
+    nansen_enriched::{self, EnrichedConfig, EnrichedSignal},
 };
 use qtss_storage::{
     list_enabled_engine_symbols, resolve_system_f64, resolve_system_string, resolve_system_u64,
@@ -43,6 +44,7 @@ struct LoopConfig {
     cryptoquant_key: String,
     nansen_on: bool,
     nansen_tuning: NansenTuning,
+    enriched: EnrichedConfig,
 }
 
 pub async fn v2_onchain_loop(pool: PgPool) {
@@ -145,6 +147,39 @@ async fn load_config(pool: &PgPool) -> LoopConfig {
         symbol_map: load_nansen_symbol_map(pool).await,
     };
 
+    let enriched = EnrichedConfig {
+        enabled: resolve_worker_enabled_flag(
+            pool, "onchain", "nansen.enriched.enabled", "QTSS_NANSEN_ENRICHED", false,
+        ).await,
+        cross_chain_min_chains: resolve_system_u64(
+            pool, "onchain", "nansen.enriched.cross_chain.min_chains", "QTSS_NANSEN_CC_MIN", 2, 2, 10,
+        ).await as usize,
+        cross_chain_agreement_boost: resolve_system_f64(
+            pool, "onchain", "nansen.enriched.cross_chain.agreement_boost", "QTSS_NANSEN_CC_BOOST", 0.3,
+        ).await,
+        dex_spike_threshold_x: resolve_system_f64(
+            pool, "onchain", "nansen.enriched.dex_spike.threshold_x", "QTSS_NANSEN_SPIKE_X", 3.0,
+        ).await,
+        dex_spike_min_value_usd: resolve_system_f64(
+            pool, "onchain", "nansen.enriched.dex_spike.min_value_usd", "QTSS_NANSEN_SPIKE_MIN", 50_000.0,
+        ).await,
+        whale_top_n: resolve_system_u64(
+            pool, "onchain", "nansen.enriched.whale.top_n", "QTSS_NANSEN_WHALE_N", 10, 1, 100,
+        ).await as usize,
+        whale_delta_threshold: resolve_system_f64(
+            pool, "onchain", "nansen.enriched.whale.delta_threshold", "QTSS_NANSEN_WHALE_D", 0.05,
+        ).await,
+        w_cross_chain: resolve_system_f64(
+            pool, "onchain", "nansen.enriched.weight.cross_chain", "QTSS_NANSEN_W_CC", 0.15,
+        ).await,
+        w_dex_spike: resolve_system_f64(
+            pool, "onchain", "nansen.enriched.weight.dex_spike", "QTSS_NANSEN_W_SPIKE", 0.10,
+        ).await,
+        w_whale_conc: resolve_system_f64(
+            pool, "onchain", "nansen.enriched.weight.whale_conc", "QTSS_NANSEN_W_WHALE", 0.10,
+        ).await,
+    };
+
     LoopConfig {
         enabled,
         tick_interval_s,
@@ -157,6 +192,7 @@ async fn load_config(pool: &PgPool) -> LoopConfig {
         cryptoquant_key,
         nansen_on,
         nansen_tuning,
+        enriched,
     }
 }
 
@@ -268,8 +304,43 @@ async fn process_symbol(
         }
     }
 
-    let agg = aggregate(&readings, cfg.weights);
+    let has_chain = readings.iter().any(|r| r.category == CategoryKind::Chain);
+    if !has_chain {
+        debug!(symbol = %symbol, "no chain reading — check NANSEN_API_KEY / CryptoQuant key validity");
+    }
 
+    // ── Enriched analysis (cross-chain, DEX spike, whale) ──────────
+    #[allow(unused_assignments)]
+    let mut enriched_signals: Vec<EnrichedSignal> = Vec::new();
+    let mut enriched_meta = json!({});
+    if cfg.enriched.enabled {
+        debug!(symbol = %symbol, "enriched analysis running");
+        if let Some(enriched_result) = run_enriched_analysis(pool, symbol, &cfg.nansen_tuning, &cfg.enriched).await {
+            enriched_signals = enriched_result.signals;
+            enriched_meta = enriched_result.meta;
+            // If enriched produced a blended score, inject as chain reading
+            if let Some((escore, econf)) = nansen_enriched::blend_enriched(&enriched_signals, &cfg.enriched) {
+                if econf > 0.0 {
+                    readings.push(CategoryReading {
+                        category: CategoryKind::Chain,
+                        score: escore,
+                        confidence: econf,
+                        direction: Some(if escore > 0.05 {
+                            qtss_onchain::OnchainDirection::Long
+                        } else if escore < -0.05 {
+                            qtss_onchain::OnchainDirection::Short
+                        } else {
+                            qtss_onchain::OnchainDirection::Neutral
+                        }),
+                        details: vec![format!("[enriched] score={escore:.2} conf={econf:.2}")],
+                    });
+                }
+            }
+        }
+    }
+
+    // Re-aggregate with enriched readings included
+    let agg = aggregate(&readings, cfg.weights);
     let pick = |k: CategoryKind| -> Option<f64> {
         readings.iter().find(|r| r.category == k).map(|r| r.score)
     };
@@ -278,6 +349,7 @@ async fn process_symbol(
         "details": agg.details,
         "per_category": agg.per_category,
         "fetcher_count": readings.len(),
+        "enriched": enriched_meta,
     });
 
     insert_v2_onchain_metrics(
@@ -295,4 +367,187 @@ async fn process_symbol(
     )
     .await?;
     Ok(())
+}
+
+// ── Enriched analysis runner ───────────────────────────────────────
+
+struct EnrichedResult {
+    signals: Vec<EnrichedSignal>,
+    meta: Value,
+}
+
+async fn run_enriched_analysis(
+    pool: &PgPool,
+    symbol: &str,
+    nansen_tuning: &NansenTuning,
+    ecfg: &EnrichedConfig,
+) -> Option<EnrichedResult> {
+    let key = nansen_enriched::parse_multi_chain_keys(&nansen_tuning.symbol_map, symbol)?;
+
+    // Load the same snapshots the NansenFetcher uses
+    let staleness = nansen_tuning.staleness_s;
+    let netflow_resp = load_snapshot(pool, "nansen_netflows", staleness).await;
+    let dex_resp = load_snapshot(pool, "nansen_smart_money_dex_trades", staleness).await;
+    let holdings_resp = load_snapshot(pool, "nansen_holdings", staleness).await;
+
+    debug!(
+        symbol = %symbol,
+        netflow = netflow_resp.is_some(),
+        dex = dex_resp.is_some(),
+        holdings = holdings_resp.is_some(),
+        chains = key.chains.len(),
+        "enriched: snapshots loaded"
+    );
+
+    if netflow_resp.is_none() && dex_resp.is_none() && holdings_resp.is_none() {
+        return None;
+    }
+
+    let mut signals: Vec<EnrichedSignal> = Vec::new();
+
+    // 1. Cross-chain flow
+    let cc_sig = nansen_enriched::analyze_cross_chain_flow(netflow_resp.as_ref(), &key, ecfg);
+    debug!(symbol = %symbol, has_signal = cc_sig.is_some(), "enriched: cross_chain_flow");
+    if let Some(sig) = cc_sig {
+        persist_enriched(pool, symbol, &sig).await;
+        signals.push(sig);
+    }
+
+    // 2. DEX volume spike (get previous baseline)
+    let prev_vol = qtss_storage::nansen_enriched::fetch_latest_enriched(
+        pool, symbol, "dex_volume_spike", staleness,
+    )
+    .await
+    .ok()
+    .flatten()
+    .and_then(|r| r.details.as_ref().and_then(|d| d.get("total_volume_usd").and_then(|v| v.as_f64())));
+
+    let dex_sig = nansen_enriched::analyze_dex_volume_spike(dex_resp.as_ref(), &key, ecfg, prev_vol);
+    debug!(symbol = %symbol, has_signal = dex_sig.is_some(), prev_vol = ?prev_vol, "enriched: dex_volume_spike");
+    if let Some(sig) = dex_sig {
+        if sig.details.as_ref().and_then(|d| d.get("is_spike")).and_then(|v| v.as_bool()).unwrap_or(false) {
+            fire_enriched_alert(pool, symbol, &sig, ecfg).await;
+        }
+        persist_enriched(pool, symbol, &sig).await;
+        signals.push(sig);
+    }
+
+    // 3. Whale concentration
+    let prev_conc = qtss_storage::nansen_enriched::fetch_latest_enriched(
+        pool, symbol, "whale_concentration", staleness,
+    )
+    .await
+    .ok()
+    .flatten()
+    .and_then(|r| r.details.as_ref().and_then(|d| d.get("top_n_avg_change_pct").and_then(|v| v.as_f64())));
+
+    let whale_sig = nansen_enriched::analyze_whale_concentration(holdings_resp.as_ref(), &key, ecfg, prev_conc);
+    debug!(symbol = %symbol, has_signal = whale_sig.is_some(), prev_conc = ?prev_conc, "enriched: whale_concentration");
+    if let Some(sig) = whale_sig {
+        if sig.confidence > 0.6 {
+            fire_enriched_alert(pool, symbol, &sig, ecfg).await;
+        }
+        persist_enriched(pool, symbol, &sig).await;
+        signals.push(sig);
+    }
+
+    let sig_count = signals.len();
+    let meta = json!({
+        "enriched_signals": sig_count,
+        "types": signals.iter().map(|s| s.signal_type).collect::<Vec<_>>(),
+    });
+
+    if sig_count > 0 {
+        debug!(symbol = %symbol, count = sig_count, "enriched signals produced");
+    }
+
+    Some(EnrichedResult { signals, meta })
+}
+
+async fn load_snapshot(pool: &PgPool, key: &str, staleness_s: i64) -> Option<Value> {
+    let row = qtss_storage::data_snapshots::fetch_data_snapshot(pool, key)
+        .await
+        .ok()
+        .flatten()?;
+    if row.error.is_some() {
+        return None;
+    }
+    let age = chrono::Utc::now()
+        .signed_duration_since(row.computed_at)
+        .num_seconds();
+    if age > staleness_s {
+        return None;
+    }
+    row.response_json
+}
+
+async fn persist_enriched(pool: &PgPool, symbol: &str, sig: &EnrichedSignal) {
+    let insert = qtss_storage::nansen_enriched::EnrichedSignalInsert {
+        symbol,
+        signal_type: sig.signal_type,
+        score: sig.score,
+        direction: sig.direction,
+        confidence: sig.confidence,
+        chain_breakdown: sig.chain_breakdown.clone(),
+        details: sig.details.clone(),
+    };
+    if let Err(e) = qtss_storage::nansen_enriched::insert_enriched_signal(pool, &insert).await {
+        warn!(%e, symbol, signal_type = sig.signal_type, "enriched signal insert failed");
+    }
+}
+
+async fn fire_enriched_alert(
+    pool: &PgPool,
+    symbol: &str,
+    sig: &EnrichedSignal,
+    _ecfg: &EnrichedConfig,
+) {
+    let repo = qtss_storage::NotifyOutboxRepository::new(pool.clone());
+    let event_key = format!("nansen_{}", sig.signal_type);
+
+    // Dedupe: 1 hour per (event_key, symbol)
+    match repo.exists_recent_global_event_symbol(&event_key, symbol, 3600).await {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(e) => {
+            warn!(%e, "enriched alert dedupe check failed");
+            return;
+        }
+    }
+
+    let title = match sig.signal_type {
+        "dex_volume_spike" => format!("{symbol}: SM DEX Volume Spike"),
+        "whale_concentration" => format!("{symbol}: Whale Konsantrasyon Degisimi"),
+        "cross_chain_flow" => format!("{symbol}: Cross-Chain Akis Sinyali"),
+        _ => format!("{symbol}: Nansen Sinyal"),
+    };
+    let body = format!(
+        "Skor: {:.2} | Yon: {} | Guven: {:.0}%\n{}",
+        sig.score,
+        sig.direction,
+        sig.confidence * 100.0,
+        sig.details
+            .as_ref()
+            .map(|d| serde_json::to_string_pretty(d).unwrap_or_default())
+            .unwrap_or_default()
+    );
+
+    if let Err(e) = repo
+        .enqueue_with_meta(
+            None,
+            Some(&event_key),
+            "warning",
+            None,
+            None,
+            Some(symbol),
+            &title,
+            &body,
+            vec!["telegram".to_string()],
+        )
+        .await
+    {
+        warn!(%e, "enriched alert enqueue failed");
+    } else {
+        info!(symbol, signal_type = sig.signal_type, "enriched alert enqueued");
+    }
 }

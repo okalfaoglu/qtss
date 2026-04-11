@@ -15,6 +15,7 @@ mod data_sources;
 mod engines;
 mod kill_switch;
 mod live_position_notify;
+mod nansen_credit_monitor;
 mod nansen_engine;
 mod nansen_extended;
 mod nansen_query;
@@ -32,6 +33,8 @@ mod engine_ingest;
 mod intake_auto_promote;
 mod intake_playbook_engine;
 mod lifecycle_manager;
+#[allow(dead_code, unused_variables, unused_imports)]
+mod nansen_symbol_lifecycle;
 mod position_status_notify;
 mod v2_detection_orchestrator;
 mod v2_detection_sweeper;
@@ -192,6 +195,8 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(intake_auto_promote::intake_auto_promote_loop(auto_promote_pool));
         let lifecycle_pool = pool.clone();
         tokio::spawn(lifecycle_manager::lifecycle_manager_loop(lifecycle_pool));
+        let nansen_lc_pool = pool.clone();
+        tokio::spawn(nansen_symbol_lifecycle::nansen_symbol_lifecycle_loop(nansen_lc_pool));
         let range_exec_pool = pool.clone();
         tokio::spawn(range_signal_execute_loop::range_signal_execute_loop(
             range_exec_pool,
@@ -230,6 +235,8 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(nansen_engine::nansen_perp_screener_loop(nansen_ps));
         let nansen_smd = pool.clone();
         tokio::spawn(nansen_engine::nansen_smart_money_dex_trades_loop(nansen_smd));
+        let nansen_cm = pool.clone();
+        tokio::spawn(nansen_credit_monitor::nansen_credit_monitor_loop(nansen_cm));
         let setup_pool = pool.clone();
         tokio::spawn(setup_scan_engine::nansen_setup_scan_loop(setup_pool));
         // Auto-sync: aktif engine_symbols için eksik Binance veri kaynaklarını oluştur
@@ -566,21 +573,21 @@ async fn main() -> anyhow::Result<()> {
 
 fn segment_ws_db(segment: &str) -> &'static str {
     match segment {
-        "futures" | "usdt_futures" | "fapi" => "futures",
+        "future" | "futures" | "usdt_futures" | "fapi" => "futures",
         _ => "spot",
     }
 }
 
 fn kline_url(symbol: &str, interval: &str, segment: &str) -> String {
     match segment {
-        "futures" | "usdt_futures" | "fapi" => public_usdm_kline_url(symbol, interval),
+        "future" | "futures" | "usdt_futures" | "fapi" => public_usdm_kline_url(symbol, interval),
         _ => public_spot_kline_url(symbol, interval),
     }
 }
 
 fn combined_kline_url(symbols: &[String], interval: &str, segment: &str) -> String {
     match segment {
-        "futures" | "usdt_futures" | "fapi" => public_usdm_combined_kline_url(symbols, interval),
+        "future" | "futures" | "usdt_futures" | "fapi" => public_usdm_combined_kline_url(symbols, interval),
         _ => public_spot_combined_kline_url(symbols, interval),
     }
 }
