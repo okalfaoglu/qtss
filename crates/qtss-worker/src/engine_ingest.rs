@@ -72,6 +72,7 @@ async fn run_one_target(
     row: &EngineSymbolRow,
     min_bars: i64,
     gap_window: i64,
+    full_history: bool,
     provider: &dyn MarketBarProvider,
 ) {
     let ex = row.exchange.trim();
@@ -143,7 +144,33 @@ async fn run_one_target(
     let mut last_backfill: Option<chrono::DateTime<Utc>> = None;
     let mut last_err: Option<String> = None;
 
-    if count < min_bars {
+    // Full history mode: when enabled AND this series has no data yet
+    // (or very little), fetch the entire listing history from the
+    // exchange by passing limit=0 to the provider.
+    if full_history && count == 0 {
+        info!(
+            engine_symbol_id = %row.id,
+            symbol = %sym,
+            interval = %iv,
+            "engine_ingest: FULL HISTORY backfill starting (listing → now)"
+        );
+        match provider.backfill_bars(sym, iv, seg, 0).await {
+            Ok(n) => {
+                last_backfill = Some(Utc::now());
+                info!(
+                    engine_symbol_id = %row.id,
+                    symbol = %sym,
+                    interval = %iv,
+                    upserted = n,
+                    "engine_ingest: full history backfill complete"
+                );
+            }
+            Err(e) => {
+                last_err = Some(format!("full_history_backfill:{e}"));
+                warn!(%e, engine_symbol_id = %row.id, symbol = %sym, "engine_ingest full history backfill");
+            }
+        }
+    } else if count < min_bars {
         let need = (min_bars - count).max(0) as i64;
         let fetch_n = need.saturating_add(200).clamp(300, 15_000);
         match provider.backfill_bars(sym, iv, seg, fetch_n).await {
@@ -335,6 +362,16 @@ pub async fn engine_symbol_ingest_loop(pool: PgPool) {
             20_000,
         )
         .await as i64;
+        let full_history = resolve_system_u64(
+            &pool,
+            "worker",
+            "engine_ingest_full_history",
+            "QTSS_ENGINE_INGEST_FULL_HISTORY",
+            0,  // default: off
+            0,
+            1,
+        )
+        .await == 1;
 
         match list_enabled_engine_symbols(&pool).await {
             Ok(rows) => {
@@ -344,7 +381,7 @@ pub async fn engine_symbol_ingest_loop(pool: PgPool) {
                         .iter()
                         .find(|p| p.exchange_id().eq_ignore_ascii_case(ex));
                     match provider {
-                        Some(p) => run_one_target(&pool, &r, min_bars, gap_window, *p).await,
+                        Some(p) => run_one_target(&pool, &r, min_bars, gap_window, full_history, *p).await,
                         None => {
                             debug!(
                                 symbol = %r.symbol,

@@ -24,6 +24,7 @@ pub mod nansen_setup_scan;
 pub mod notify_outbox;
 pub mod onchain_signal_scores;
 pub mod paper;
+pub mod pivot_cache;
 pub mod pnl;
 pub mod q_radar_portfolio;
 pub mod range_signal_execution;
@@ -74,6 +75,11 @@ pub use wyckoff_structures::{
     complete_wyckoff_structure, fail_wyckoff_structure, find_active_wyckoff_structure,
     get_wyckoff_structure, insert_wyckoff_structure, list_active_wyckoff_structures,
     list_wyckoff_history, update_wyckoff_structure, WyckoffStructureInsert, WyckoffStructureRow,
+};
+
+pub use pivot_cache::{
+    count_pivot_cache, list_pivot_cache, max_cached_bar_index,
+    upsert_pivot_cache, upsert_pivot_cache_batch, PivotCacheRow,
 };
 
 pub use regime_snapshots::{
