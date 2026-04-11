@@ -181,10 +181,55 @@ impl TargetMethodCalc for FibExtensionMethod {
 // Harmonic PRZ retracement (XABCD)
 // ---------------------------------------------------------------------------
 //
-// For a completed harmonic the next moves typically retrace 0.382 / 0.618
-// of the AD leg back toward A. We project from D and weight 0.618 highest.
+// Pattern-specific PRZ projection: each harmonic has different target levels
+// based on its XABCD structure. We use both:
+//   1. AD-leg retracements (pattern-specific ratios)
+//   2. XA-leg extensions (for patterns like Butterfly/Crab that extend beyond X)
+//   3. PRZ zone (range between closest targets = high-probability reversal area)
 
 pub struct HarmonicRetracementMethod;
+
+/// Pattern-specific PRZ target ratios (AD retracement + XA extension).
+/// Format: (ad_retracement_ratio, weight, label)
+fn harmonic_target_levels(subkind: &str) -> Vec<(f64, f32, &'static str)> {
+    // Strip direction prefix (e.g. "bull_gartley" → "gartley")
+    let name = subkind
+        .strip_prefix("bull_").or_else(|| subkind.strip_prefix("bear_"))
+        .unwrap_or(subkind);
+
+    match name {
+        "gartley" => vec![
+            // Gartley: D at 0.786 XA → targets retrace toward A
+            (0.382, 0.70, "gartley T1 (0.382 AD)"),
+            (0.618, 0.90, "gartley T2 (0.618 AD)"),
+            (0.786, 0.65, "gartley T3 (0.786 AD)"),
+        ],
+        "bat" => vec![
+            // Bat: D at 0.886 XA → deeper reversal, conservative targets
+            (0.382, 0.75, "bat T1 (0.382 AD)"),
+            (0.618, 0.85, "bat T2 (0.618 AD)"),
+            (1.0,   0.50, "bat T3 (1.0 AD)"),
+        ],
+        "butterfly" => vec![
+            // Butterfly: D extends beyond X (1.27 XA) → aggressive targets
+            (0.618, 0.80, "butterfly T1 (0.618 AD)"),
+            (1.0,   0.90, "butterfly T2 (1.0 AD)"),
+            (1.272, 0.60, "butterfly T3 (1.272 AD)"),
+        ],
+        "crab" => vec![
+            // Crab: D at 1.618 XA → most extreme extension, strongest reversal
+            (0.618, 0.85, "crab T1 (0.618 AD)"),
+            (1.0,   0.90, "crab T2 (1.0 AD)"),
+            (1.618, 0.55, "crab T3 (1.618 AD)"),
+        ],
+        _ => vec![
+            // Generic fallback
+            (0.382, 0.65, "harm 0.382"),
+            (0.618, 0.85, "harm 0.618"),
+            (1.0,   0.45, "harm 1.0"),
+        ],
+    }
+}
 
 impl TargetMethodCalc for HarmonicRetracementMethod {
     fn name(&self) -> &'static str {
@@ -196,29 +241,64 @@ impl TargetMethodCalc for HarmonicRetracementMethod {
             Some(d) => d,
             None => return Vec::new(),
         };
-        if !matches!(&det.kind, PatternKind::Harmonic(_)) {
-            return Vec::new();
-        }
+        let subkind = match &det.kind {
+            PatternKind::Harmonic(s) => s.as_str(),
+            _ => return Vec::new(),
+        };
+
         let a_o: Option<f64> = anchor(det, "A").and_then(|p| p.price.to_f64());
         let d_o: Option<f64> = anchor(det, "D").and_then(|p| p.price.to_f64());
+        let x_o: Option<f64> = anchor(det, "X").and_then(|p| p.price.to_f64());
         let (a, d_pt): (f64, f64) = match (a_o, d_o) {
             (Some(a), Some(d)) => (a, d),
             _ => return Vec::new(),
         };
-        let leg: f64 = (a - d_pt).abs();
-        if leg <= 0.0 {
+        let ad_leg: f64 = (a - d_pt).abs();
+        if ad_leg <= 0.0 {
             return Vec::new();
         }
-        let levels = [(0.382, 0.65, "harm 0.382"), (0.618, 0.85, "harm 0.618"), (1.0, 0.45, "harm 1.0")];
-        levels
+
+        let levels = harmonic_target_levels(subkind);
+        let mut targets: Vec<Target> = levels
             .into_iter()
             .map(|(mult, w, label)| Target {
-                price: d(project_price(d_pt, leg * mult, dir)),
+                price: d(project_price(d_pt, ad_leg * mult, dir)),
                 method: TargetMethod::HarmonicPrz,
                 weight: w,
                 label: Some(label.into()),
             })
-            .collect()
+            .collect();
+
+        // PRZ zone target: midpoint of the two closest targets as the
+        // "sweet spot" where multiple confluences converge.
+        if targets.len() >= 2 {
+            let t1_price = targets[0].price.to_f64().unwrap_or(0.0);
+            let t2_price = targets[1].price.to_f64().unwrap_or(0.0);
+            let prz_mid = (t1_price + t2_price) / 2.0;
+            targets.push(Target {
+                price: d(prz_mid),
+                method: TargetMethod::HarmonicPrz,
+                weight: 0.95,
+                label: Some(format!("{} PRZ zone", subkind.split('_').last().unwrap_or(subkind))),
+            });
+        }
+
+        // XA extension targets for extended patterns (butterfly, crab)
+        if let Some(x_pt) = x_o {
+            let xa_leg = (a - x_pt).abs();
+            if xa_leg > 0.0 && (subkind.contains("butterfly") || subkind.contains("crab")) {
+                // BC projection from D: 0.618 and 1.0 of XA as secondary targets
+                let ext_1 = project_price(d_pt, xa_leg * 0.618, dir);
+                targets.push(Target {
+                    price: d(ext_1),
+                    method: TargetMethod::HarmonicPrz,
+                    weight: 0.55,
+                    label: Some(format!("{} XA 0.618", subkind.split('_').last().unwrap_or(subkind))),
+                });
+            }
+        }
+
+        targets
     }
 }
 
