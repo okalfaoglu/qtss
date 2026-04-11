@@ -14,42 +14,59 @@
 -- Current PK is (id), which is a UUID — not time-based.
 -- We need to: drop PK, recreate with (id, open_time), then convert.
 
--- Drop FK constraints first (they reference this table's PK).
-ALTER TABLE market_bars DROP CONSTRAINT IF EXISTS market_bars_bar_interval_id_fkey;
-ALTER TABLE market_bars DROP CONSTRAINT IF EXISTS market_bars_instrument_id_fkey;
+-- Only convert if not already a hypertable.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM timescaledb_information.hypertables
+        WHERE hypertable_name = 'market_bars'
+    ) THEN
+        -- Drop FK constraints first (they reference this table's PK).
+        ALTER TABLE market_bars DROP CONSTRAINT IF EXISTS market_bars_bar_interval_id_fkey;
+        ALTER TABLE market_bars DROP CONSTRAINT IF EXISTS market_bars_instrument_id_fkey;
 
--- Drop old PK and recreate with open_time included.
-ALTER TABLE market_bars DROP CONSTRAINT market_bars_pkey;
-ALTER TABLE market_bars ADD PRIMARY KEY (id, open_time);
+        -- Drop old PK and recreate with open_time included.
+        ALTER TABLE market_bars DROP CONSTRAINT IF EXISTS market_bars_pkey;
+        ALTER TABLE market_bars ADD PRIMARY KEY (id, open_time);
 
--- Convert to hypertable. chunk_time_interval = 1 month.
--- migrate_data => true moves existing rows into chunks.
-SELECT create_hypertable(
-    'market_bars',
-    'open_time',
-    chunk_time_interval => INTERVAL '1 month',
-    migrate_data => true
-);
+        -- Convert to hypertable. chunk_time_interval = 1 month.
+        PERFORM create_hypertable(
+            'market_bars',
+            'open_time',
+            chunk_time_interval => INTERVAL '1 month',
+            migrate_data => true
+        );
 
--- Re-add FK constraints (SET NULL on delete, non-enforced in practice).
-ALTER TABLE market_bars
-    ADD CONSTRAINT market_bars_instrument_id_fkey
-    FOREIGN KEY (instrument_id) REFERENCES instruments(id) ON DELETE SET NULL;
-ALTER TABLE market_bars
-    ADD CONSTRAINT market_bars_bar_interval_id_fkey
-    FOREIGN KEY (bar_interval_id) REFERENCES bar_intervals(id) ON DELETE SET NULL;
+        -- Re-add FK constraints.
+        ALTER TABLE market_bars
+            ADD CONSTRAINT market_bars_instrument_id_fkey
+            FOREIGN KEY (instrument_id) REFERENCES instruments(id) ON DELETE SET NULL;
+        ALTER TABLE market_bars
+            ADD CONSTRAINT market_bars_bar_interval_id_fkey
+            FOREIGN KEY (bar_interval_id) REFERENCES bar_intervals(id) ON DELETE SET NULL;
+    END IF;
+END
+$$;
 
 -- =========================================================================
 -- 2. Compression policy — compress chunks older than 6 months
 -- =========================================================================
 
-ALTER TABLE market_bars SET (
-    timescaledb.compress,
-    timescaledb.compress_segmentby = 'exchange, segment, symbol, interval',
-    timescaledb.compress_orderby = 'open_time DESC'
-);
-
-SELECT add_compression_policy('market_bars', INTERVAL '6 months');
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM timescaledb_information.hypertables
+        WHERE hypertable_name = 'market_bars' AND compression_enabled = true
+    ) THEN
+        ALTER TABLE market_bars SET (
+            timescaledb.compress,
+            timescaledb.compress_segmentby = 'exchange, segment, symbol, interval',
+            timescaledb.compress_orderby = 'open_time DESC'
+        );
+        PERFORM add_compression_policy('market_bars', INTERVAL '6 months');
+    END IF;
+END
+$$;
 
 -- =========================================================================
 -- 3. pivot_cache — pre-computed pivots for historical data
@@ -72,10 +89,10 @@ CREATE TABLE IF NOT EXISTS pivot_cache (
     CONSTRAINT pivot_cache_unique UNIQUE (exchange, symbol, timeframe, level, bar_index)
 );
 
-CREATE INDEX idx_pivot_cache_series
+CREATE INDEX IF NOT EXISTS idx_pivot_cache_series
     ON pivot_cache (exchange, symbol, timeframe, level, open_time DESC);
 
-CREATE INDEX idx_pivot_cache_kind
+CREATE INDEX IF NOT EXISTS idx_pivot_cache_kind
     ON pivot_cache (exchange, symbol, timeframe, level, kind);
 
 -- =========================================================================
@@ -103,10 +120,10 @@ CREATE TABLE IF NOT EXISTS wave_chain (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_wave_chain_series
+CREATE INDEX IF NOT EXISTS idx_wave_chain_series
     ON wave_chain (exchange, symbol, timeframe, bar_start DESC);
 
-CREATE INDEX idx_wave_chain_parent
+CREATE INDEX IF NOT EXISTS idx_wave_chain_parent
     ON wave_chain (parent_id) WHERE parent_id IS NOT NULL;
 
 COMMENT ON TABLE pivot_cache IS 'Pre-computed pivot points from historical bar data. Eliminates re-computation on every detection tick.';
