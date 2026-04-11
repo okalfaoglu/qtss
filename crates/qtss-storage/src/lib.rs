@@ -29,6 +29,9 @@ pub mod range_signal_execution;
 pub mod migration_checksum_sync;
 pub mod pool;
 pub mod range_engine;
+pub mod regime_param_overrides;
+pub mod regime_snapshots;
+pub mod regime_transitions;
 pub mod reconcile_reports;
 pub mod system_config;
 pub mod system_config_audit;
@@ -69,6 +72,21 @@ pub use wyckoff_structures::{
     complete_wyckoff_structure, fail_wyckoff_structure, find_active_wyckoff_structure,
     get_wyckoff_structure, insert_wyckoff_structure, list_active_wyckoff_structures,
     list_wyckoff_history, update_wyckoff_structure, WyckoffStructureInsert, WyckoffStructureRow,
+};
+
+pub use regime_snapshots::{
+    insert_regime_snapshot, latest_regime_snapshot, latest_snapshots_all,
+    latest_snapshots_for_symbol, purge_old_snapshots, regime_timeline,
+    RegimeSnapshotInsert, RegimeSnapshotRow,
+};
+pub use regime_transitions::{
+    insert_regime_transition, list_active_transitions, list_recent_transitions,
+    resolve_transition, RegimeTransitionInsert, RegimeTransitionRow,
+};
+pub use regime_param_overrides::{
+    get_override as get_regime_override, list_all_overrides, list_overrides_for_regime,
+    resolve_regime_f64, upsert_override as upsert_regime_override,
+    RegimeParamOverrideRow,
 };
 
 pub use ai_approval::{AiApprovalRepository, AiApprovalRequestRow};

@@ -46,6 +46,54 @@ pub struct RegimeSnapshot {
     pub confidence: f32,
 }
 
+impl RegimeKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TrendingUp => "trending_up",
+            Self::TrendingDown => "trending_down",
+            Self::Ranging => "ranging",
+            Self::Squeeze => "squeeze",
+            Self::Volatile => "volatile",
+            Self::Uncertain => "uncertain",
+        }
+    }
+
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s {
+            "trending_up" => Some(Self::TrendingUp),
+            "trending_down" => Some(Self::TrendingDown),
+            "ranging" => Some(Self::Ranging),
+            "squeeze" => Some(Self::Squeeze),
+            "volatile" => Some(Self::Volatile),
+            "uncertain" => Some(Self::Uncertain),
+            _ => None,
+        }
+    }
+}
+
+impl TrendStrength {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Weak => "weak",
+            Self::Moderate => "moderate",
+            Self::Strong => "strong",
+            Self::VeryStrong => "very_strong",
+        }
+    }
+
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s {
+            "none" => Some(Self::None),
+            "weak" => Some(Self::Weak),
+            "moderate" => Some(Self::Moderate),
+            "strong" => Some(Self::Strong),
+            "very_strong" => Some(Self::VeryStrong),
+            _ => None,
+        }
+    }
+}
+
 impl RegimeSnapshot {
     /// Fallback snapshot used when the stored regime JSON is empty or
     /// malformed (e.g. TBM detections that store `{}`). All values are

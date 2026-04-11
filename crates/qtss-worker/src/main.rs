@@ -49,6 +49,7 @@ mod v2_confluence_loop;
 mod setup_chart;
 mod v2_setup_loop;
 mod v2_setup_telegram_loop;
+mod regime_deep_loop;
 
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -343,6 +344,8 @@ async fn main() -> anyhow::Result<()> {
         ai_engine::spawn_ai_background_tasks(&pool).await;
         let ai_exec_pool = pool.clone();
         tokio::spawn(ai_tactical_executor::ai_tactical_executor_loop(ai_exec_pool));
+        let regime_pool = pool.clone();
+        tokio::spawn(regime_deep_loop::regime_deep_loop(regime_pool));
         binance_user_stream::spawn_binance_user_stream_tasks(&pool).await;
         Some(pool)
     } else {

@@ -46,7 +46,11 @@ pub use audit::{details_preview, extract_kind, AuditEntry, AuditView};
 pub use blotter::{merge_blotter, BlotterEntry, BlotterFeed};
 pub use config_editor::{group_config_entries, ConfigEditorView, ConfigEntry, ConfigGroup};
 pub use montecarlo::{build_montecarlo_fan, FanBand, MonteCarloFan};
-pub use regime::{RegimeHud, RegimePoint, RegimeView};
+pub use regime::{
+    RegimeDashboard, RegimeDashboardEntry, RegimeHeatmap, RegimeHeatmapCell,
+    RegimeHud, RegimeIntervalEntry, RegimeParamOverrideView, RegimePoint,
+    RegimeTimeline, RegimeTimelinePoint, RegimeTransitionView, RegimeView,
+};
 pub use risk::{build_risk_hud, RiskGauge, RiskHud};
 pub use scenarios::{build_volatility_tree, ScenarioNode, ScenarioTree, TargetBand};
 pub use strategy_manager::{

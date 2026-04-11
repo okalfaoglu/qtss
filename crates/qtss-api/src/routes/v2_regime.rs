@@ -9,17 +9,22 @@
 //! never inspects venue/asset_class/session here.
 
 use axum::extract::{Path, Query, State};
-use axum::routing::get;
+use axum::routing::{get, put};
 use axum::{Json, Router};
 use rust_decimal::Decimal;
 use serde::Deserialize;
+use std::collections::HashMap;
 use qtss_domain::v2::bar::Bar;
 use qtss_domain::v2::instrument::{AssetClass, Instrument, SessionCalendar, Venue};
-use qtss_domain::v2::regime::RegimeSnapshot;
+use qtss_domain::v2::regime::{RegimeKind, RegimeSnapshot};
 use qtss_domain::v2::timeframe::Timeframe;
-use qtss_gui_api::{RegimeHud, RegimePoint, RegimeView};
+use qtss_gui_api::{
+    RegimeDashboard, RegimeDashboardEntry, RegimeHeatmap, RegimeHeatmapCell,
+    RegimeHud, RegimeIntervalEntry, RegimeParamOverrideView, RegimePoint,
+    RegimeTimeline, RegimeTimelinePoint, RegimeTransitionView, RegimeView,
+};
 use qtss_regime::{RegimeConfig, RegimeEngine};
-use qtss_storage::market_bars;
+use qtss_storage::{market_bars, regime_snapshots, regime_transitions, regime_param_overrides};
 
 use crate::error::ApiError;
 use crate::state::SharedState;
@@ -34,7 +39,14 @@ pub struct RegimeQuery {
 }
 
 pub fn v2_regime_router() -> Router<SharedState> {
-    Router::new().route("/v2/regime/{venue}/{symbol}/{tf}", get(get_regime))
+    Router::new()
+        .route("/v2/regime/{venue}/{symbol}/{tf}", get(get_regime))
+        .route("/v2/regime/dashboard", get(get_dashboard))
+        .route("/v2/regime/heatmap", get(get_heatmap))
+        .route("/v2/regime/transitions", get(get_transitions))
+        .route("/v2/regime/timeline/{symbol}/{interval}", get(get_timeline))
+        .route("/v2/regime/params/{regime}", get(get_params))
+        .route("/v2/regime/params/{regime}", put(put_params))
 }
 
 async fn get_regime(
@@ -99,6 +111,215 @@ async fn get_regime(
         current,
         history: strip,
     }))
+}
+
+// =========================================================================
+// Faz 11 — new endpoints
+// =========================================================================
+
+async fn get_dashboard(
+    State(st): State<SharedState>,
+) -> Result<Json<RegimeDashboard>, ApiError> {
+    let rows = regime_snapshots::latest_snapshots_all(&st.pool).await?;
+
+    // Group by symbol
+    let mut by_symbol: HashMap<String, Vec<&regime_snapshots::RegimeSnapshotRow>> = HashMap::new();
+    for r in &rows {
+        by_symbol.entry(r.symbol.clone()).or_default().push(r);
+    }
+
+    let tf_weights_str = qtss_storage::resolve_system_string(
+        &st.pool, "regime", "tf_weights", "", r#"{"5m":0.1,"15m":0.15,"1h":0.25,"4h":0.30,"1d":0.20}"#,
+    ).await;
+    let tf_weights: HashMap<String, f64> = serde_json::from_str(&tf_weights_str)
+        .unwrap_or_else(|_| qtss_regime::multi_tf::default_tf_weights());
+
+    let mut entries = Vec::new();
+    for (symbol, snap_rows) in &by_symbol {
+        let intervals: Vec<RegimeIntervalEntry> = snap_rows.iter().map(|r| {
+            RegimeIntervalEntry {
+                interval: r.interval.clone(),
+                regime: RegimeKind::from_str_opt(&r.regime).unwrap_or(RegimeKind::Uncertain),
+                confidence: r.confidence as f32,
+            }
+        }).collect();
+
+        // Build snapshots for multi-TF computation
+        let snap_pairs: Vec<(String, RegimeSnapshot)> = snap_rows.iter().filter_map(|r| {
+            Some((r.interval.clone(), row_to_snapshot(r)?))
+        }).collect();
+
+        let mtf = qtss_regime::multi_tf::compute_confluence(symbol, &snap_pairs, &tf_weights);
+        let (dominant, score, transitioning) = match mtf {
+            Some(m) => (m.dominant_regime, m.confluence_score, m.is_transitioning),
+            None => (RegimeKind::Uncertain, 0.0, false),
+        };
+
+        entries.push(RegimeDashboardEntry {
+            symbol: symbol.clone(),
+            intervals,
+            dominant_regime: dominant,
+            confluence_score: score,
+            is_transitioning: transitioning,
+        });
+    }
+    entries.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+
+    Ok(Json(RegimeDashboard {
+        generated_at: chrono::Utc::now(),
+        entries,
+    }))
+}
+
+async fn get_heatmap(
+    State(st): State<SharedState>,
+) -> Result<Json<RegimeHeatmap>, ApiError> {
+    let rows = regime_snapshots::latest_snapshots_all(&st.pool).await?;
+
+    let mut symbols_set = std::collections::BTreeSet::new();
+    let mut intervals_set = std::collections::BTreeSet::new();
+    let mut cells = Vec::new();
+
+    for r in &rows {
+        symbols_set.insert(r.symbol.clone());
+        intervals_set.insert(r.interval.clone());
+        cells.push(RegimeHeatmapCell {
+            symbol: r.symbol.clone(),
+            interval: r.interval.clone(),
+            regime: RegimeKind::from_str_opt(&r.regime).unwrap_or(RegimeKind::Uncertain),
+            confidence: r.confidence as f32,
+        });
+    }
+
+    Ok(Json(RegimeHeatmap {
+        generated_at: chrono::Utc::now(),
+        symbols: symbols_set.into_iter().collect(),
+        intervals: intervals_set.into_iter().collect(),
+        cells,
+    }))
+}
+
+async fn get_transitions(
+    State(st): State<SharedState>,
+    Query(q): Query<TransitionQuery>,
+) -> Result<Json<Vec<RegimeTransitionView>>, ApiError> {
+    let limit = q.limit.unwrap_or(50).clamp(1, 500);
+    let rows = if q.active_only.unwrap_or(false) {
+        regime_transitions::list_active_transitions(&st.pool).await?
+    } else {
+        regime_transitions::list_recent_transitions(&st.pool, limit as i64).await?
+    };
+
+    let views: Vec<RegimeTransitionView> = rows.iter().map(|r| {
+        RegimeTransitionView {
+            id: r.id.to_string(),
+            symbol: r.symbol.clone(),
+            interval: r.interval.clone(),
+            from_regime: r.from_regime.clone(),
+            to_regime: r.to_regime.clone(),
+            transition_speed: r.transition_speed,
+            confidence: r.confidence,
+            confirming_indicators: r.confirming_indicators.0.clone(),
+            detected_at: r.detected_at,
+            resolved_at: r.resolved_at,
+            was_correct: r.was_correct,
+        }
+    }).collect();
+
+    Ok(Json(views))
+}
+
+#[derive(Debug, Deserialize)]
+struct TransitionQuery {
+    limit: Option<usize>,
+    active_only: Option<bool>,
+}
+
+async fn get_timeline(
+    State(st): State<SharedState>,
+    Path((symbol, interval)): Path<(String, String)>,
+    Query(q): Query<TimelineQuery>,
+) -> Result<Json<RegimeTimeline>, ApiError> {
+    let limit = q.limit.unwrap_or(200).clamp(1, 2000) as i64;
+    let mut rows = regime_snapshots::regime_timeline(&st.pool, &symbol, &interval, limit).await?;
+    rows.reverse(); // oldest first for timeline
+
+    let points: Vec<RegimeTimelinePoint> = rows.iter().map(|r| {
+        RegimeTimelinePoint {
+            at: r.computed_at,
+            regime: r.regime.clone(),
+            confidence: r.confidence,
+        }
+    }).collect();
+
+    Ok(Json(RegimeTimeline { symbol, interval, points }))
+}
+
+#[derive(Debug, Deserialize)]
+struct TimelineQuery {
+    limit: Option<usize>,
+}
+
+async fn get_params(
+    State(st): State<SharedState>,
+    Path(regime): Path<String>,
+) -> Result<Json<Vec<RegimeParamOverrideView>>, ApiError> {
+    let rows = regime_param_overrides::list_overrides_for_regime(&st.pool, &regime).await?;
+    let views: Vec<RegimeParamOverrideView> = rows.iter().map(|r| {
+        RegimeParamOverrideView {
+            module: r.module.clone(),
+            config_key: r.config_key.clone(),
+            regime: r.regime.clone(),
+            value: r.value.0.clone(),
+            description: r.description.clone(),
+        }
+    }).collect();
+    Ok(Json(views))
+}
+
+#[derive(Debug, Deserialize)]
+struct ParamUpdate {
+    module: String,
+    config_key: String,
+    value: serde_json::Value,
+    description: Option<String>,
+}
+
+async fn put_params(
+    State(st): State<SharedState>,
+    Path(regime): Path<String>,
+    Json(body): Json<Vec<ParamUpdate>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let mut updated = 0u32;
+    for p in &body {
+        regime_param_overrides::upsert_override(
+            &st.pool,
+            &p.module,
+            &p.config_key,
+            &regime,
+            p.value.clone(),
+            p.description.as_deref(),
+        ).await?;
+        updated += 1;
+    }
+    Ok(Json(serde_json::json!({ "updated": updated })))
+}
+
+/// Convert a DB row into a domain RegimeSnapshot (for multi-TF computation).
+fn row_to_snapshot(r: &regime_snapshots::RegimeSnapshotRow) -> Option<RegimeSnapshot> {
+    use rust_decimal::Decimal;
+    Some(RegimeSnapshot {
+        at: r.computed_at,
+        kind: RegimeKind::from_str_opt(&r.regime)?,
+        trend_strength: r.trend_strength.as_deref()
+            .and_then(qtss_domain::v2::regime::TrendStrength::from_str_opt)
+            .unwrap_or(qtss_domain::v2::regime::TrendStrength::None),
+        adx: Decimal::from_f64_retain(r.adx.unwrap_or(0.0)).unwrap_or_default(),
+        bb_width: Decimal::from_f64_retain(r.bb_width.unwrap_or(0.0)).unwrap_or_default(),
+        atr_pct: Decimal::from_f64_retain(r.atr_pct.unwrap_or(0.0)).unwrap_or_default(),
+        choppiness: Decimal::from_f64_retain(r.choppiness.unwrap_or(0.0)).unwrap_or_default(),
+        confidence: r.confidence as f32,
+    })
 }
 
 /// Transport-only instrument; the regime classifier consumes OHLCV

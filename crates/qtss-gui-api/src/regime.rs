@@ -74,6 +74,93 @@ pub struct RegimeHud {
     pub history: Vec<RegimePoint>,
 }
 
+// =========================================================================
+// Faz 11 — Regime Deep wire types
+// =========================================================================
+
+/// Dashboard row for one symbol across all timeframes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeDashboardEntry {
+    pub symbol: String,
+    /// Per-interval snapshot.
+    pub intervals: Vec<RegimeIntervalEntry>,
+    pub dominant_regime: RegimeKind,
+    pub confluence_score: f64,
+    pub is_transitioning: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeIntervalEntry {
+    pub interval: String,
+    pub regime: RegimeKind,
+    pub confidence: f32,
+}
+
+/// Full dashboard response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeDashboard {
+    pub generated_at: DateTime<Utc>,
+    pub entries: Vec<RegimeDashboardEntry>,
+}
+
+/// Heatmap cell.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeHeatmapCell {
+    pub symbol: String,
+    pub interval: String,
+    pub regime: RegimeKind,
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeHeatmap {
+    pub generated_at: DateTime<Utc>,
+    pub symbols: Vec<String>,
+    pub intervals: Vec<String>,
+    pub cells: Vec<RegimeHeatmapCell>,
+}
+
+/// Transition alert.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeTransitionView {
+    pub id: String,
+    pub symbol: String,
+    pub interval: String,
+    pub from_regime: String,
+    pub to_regime: String,
+    pub transition_speed: Option<f64>,
+    pub confidence: f64,
+    pub confirming_indicators: Vec<String>,
+    pub detected_at: DateTime<Utc>,
+    pub resolved_at: Option<DateTime<Utc>>,
+    pub was_correct: Option<bool>,
+}
+
+/// Regime param override wire type.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeParamOverrideView {
+    pub module: String,
+    pub config_key: String,
+    pub regime: String,
+    pub value: serde_json::Value,
+    pub description: Option<String>,
+}
+
+/// Timeline point for chart overlay.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeTimelinePoint {
+    pub at: DateTime<Utc>,
+    pub regime: String,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeTimeline {
+    pub symbol: String,
+    pub interval: String,
+    pub points: Vec<RegimeTimelinePoint>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

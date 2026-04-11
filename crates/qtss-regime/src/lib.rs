@@ -31,6 +31,8 @@ mod classifier;
 mod config;
 mod engine;
 mod error;
+pub mod multi_tf;
+pub mod transition;
 
 #[cfg(test)]
 mod tests;
