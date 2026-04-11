@@ -62,6 +62,7 @@ fn label_for(idx: usize) -> &'static str {
 }
 
 /// Find the pivot with the highest volume in a slice.
+#[allow(dead_code)]
 fn highest_volume_pivot(pivots: &[Pivot]) -> Option<(usize, f64)> {
     let mut best: Option<(usize, f64)> = None;
     for (i, p) in pivots.iter().enumerate() {

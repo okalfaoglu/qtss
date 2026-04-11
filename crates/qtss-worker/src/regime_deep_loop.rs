@@ -7,7 +7,6 @@
 //! 4. Insert transition row + optional Telegram alert.
 //! 5. Purge old snapshots beyond retention window.
 
-use chrono::Utc;
 use qtss_domain::v2::bar::Bar;
 use qtss_domain::v2::instrument::{AssetClass, Instrument, SessionCalendar, Venue};
 use qtss_domain::v2::regime::{RegimeKind, RegimeSnapshot, TrendStrength};

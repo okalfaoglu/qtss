@@ -163,7 +163,7 @@ async fn check_credits(pool: &PgPool) -> Result<(), Box<dyn std::error::Error + 
             // No remaining header but got 403 insufficient
             fire_alert(
                 pool,
-                "critical",
+                "error",
                 "Nansen Kredisi Tukendi",
                 "Nansen API 403 Insufficient Credits dondu. Tum chain pillar verileri durdu.",
                 &channels,
@@ -198,7 +198,7 @@ async fn check_credits(pool: &PgPool) -> Result<(), Box<dyn std::error::Error + 
     if remaining <= 0.0 || any_insufficient {
         fire_alert(
             pool,
-            "critical",
+            "error",
             "Nansen Kredisi Tukendi!",
             &format!(
                 "Kalan: {:.0} / {:.0} ({:.1}%)\nChain pillar verileri durdu. Nansen hesabini kontrol et.",
@@ -211,7 +211,7 @@ async fn check_credits(pool: &PgPool) -> Result<(), Box<dyn std::error::Error + 
     } else if pct_remaining <= critical_pct {
         fire_alert(
             pool,
-            "critical",
+            "error",
             "Nansen Kredisi Kritik Seviyede!",
             &format!(
                 "Kalan: {:.0} / {:.0} ({:.1}%)\nKritik esik: %{:.0}. Kredi yuklemesi gerekiyor.",
@@ -275,7 +275,7 @@ async fn fire_alert(
 
     // Log
     match severity {
-        "critical" => {
+        "error" => {
             warn!(title, body, "NANSEN CREDIT ALERT");
             qtss_common::log_critical("nansen_credit_monitor", &format!("{title}: {body}"));
         }
