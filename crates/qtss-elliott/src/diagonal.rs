@@ -141,7 +141,36 @@ impl FormationDetector for DiagonalDetector {
             return Vec::new();
         }
 
-        let subkind = format!("{}_{}", self.flavor.subkind_prefix(), dir.suffix());
+        // ── Position check: leading vs ending ──────────────────────
+        // Leading diagonal = start of a new move (wave 1 or wave A).
+        //   → The wedge should appear AFTER a retracement / reversal.
+        //   → Pivots BEFORE the wedge should be in the opposite direction.
+        // Ending diagonal = climax of an existing move (wave 5 or wave C).
+        //   → The wedge should EXTEND a prior move in the same direction.
+        //   → Pivots BEFORE the wedge should trend in the same direction.
+        let actual_flavor = {
+            let all_pivots = tree.at_level(self.config.pivot_level);
+            if all_pivots.len() >= 9 {
+                // Look at the 3 pivots before our 6-pivot wedge.
+                let pre = &all_pivots[all_pivots.len() - 9..all_pivots.len() - 6];
+                let pre_p = normalize(pre, dir);
+                // If pre-context trends in the SAME direction as the wedge
+                // (i.e., prior high > prior low in bullish frame), this is
+                // an ending diagonal (extends the prior move).
+                let prior_net = pre_p.last().copied().unwrap_or(0.0)
+                    - pre_p.first().copied().unwrap_or(0.0);
+                if prior_net > 0.0 {
+                    DiagonalKind::Ending // extends prior trend → ending
+                } else {
+                    DiagonalKind::Leading // reverses prior trend → leading
+                }
+            } else {
+                // Not enough context — assume the configured flavor.
+                self.flavor
+            }
+        };
+
+        let subkind = format!("{}_{}", actual_flavor.subkind_prefix(), dir.suffix());
         let anchors = label_anchors(tail, self.config.pivot_level, ANCHOR_LABELS);
         let projected =
             projection::project(&subkind, &anchors, self.config.pivot_level);
