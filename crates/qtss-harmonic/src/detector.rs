@@ -85,7 +85,36 @@ impl HarmonicDetector {
             }
         ));
         let anchors = label_anchors(window, self.config.pivot_level);
-        let invalidation_price = window[0].price;
+
+        // Invalidation = the price level where the pattern breaks.
+        // For extension patterns (butterfly, crab) where D extends beyond X:
+        //   Bull: invalidation = below D (further extension would break pattern)
+        //   Bear: invalidation = above D (further extension would break pattern)
+        // For retracement patterns (gartley, bat) where D stays between X and A:
+        //   Bull: invalidation = below X (break of structure start)
+        //   Bear: invalidation = above X (break of structure start)
+        let d_price = window[4].price;
+        let x_price = window[0].price;
+        let is_extension = spec.ad.hi > 1.0; // butterfly, crab extend beyond X
+        let invalidation_price = match (direction, is_extension) {
+            // Extension patterns: SL beyond D (D is already past X).
+            // Use XA distance × 10% buffer below/above D.
+            (Direction::Bullish, true) => {
+                let xa = (window[1].price - x_price).abs();
+                let buffer = Decimal::from_f64_retain(0.10)
+                    .unwrap_or(Decimal::ZERO) * xa;
+                d_price - buffer // SL below D
+            }
+            (Direction::Bearish, true) => {
+                let xa = (window[1].price - x_price).abs();
+                let buffer = Decimal::from_f64_retain(0.10)
+                    .unwrap_or(Decimal::ZERO) * xa;
+                d_price + buffer // SL above D
+            }
+            // Retracement patterns: SL at X (start of pattern).
+            (Direction::Bullish, false) => x_price,
+            (Direction::Bearish, false) => x_price,
+        };
 
         Some(Detection::new(
             instrument.clone(),

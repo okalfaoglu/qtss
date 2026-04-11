@@ -49,6 +49,7 @@ fn pivot(idx: u64, price: Decimal, kind: PivotKind) -> Pivot {
         level: PivotLevel::L1,
         prominence: dec!(1),
         volume_at_pivot: dec!(1),
+        swing_type: None,
     }
 }
 
@@ -223,6 +224,7 @@ fn detect_finds_bearish_mirror_impulse() {
             level: p.level,
             prominence: p.prominence,
             volume_at_pivot: p.volume_at_pivot,
+            swing_type: None,
         })
         .collect();
     let det = ImpulseDetector::new(ElliottConfig::defaults()).unwrap();

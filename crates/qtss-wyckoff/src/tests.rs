@@ -45,6 +45,7 @@ fn pivot(idx: u64, price: Decimal, kind: PivotKind, vol: Decimal) -> Pivot {
         level: PivotLevel::L1,
         prominence: dec!(1),
         volume_at_pivot: vol,
+        swing_type: None,
     }
 }
 
