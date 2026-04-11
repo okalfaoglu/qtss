@@ -250,12 +250,14 @@ function Detections({
   scale,
   hovered,
   onHover,
+  familyModes,
 }: {
   detections: DetectionOverlay[];
   candles: CandleBar[];
   scale: PriceScale;
   hovered: string | null;
   onHover: (id: string | null) => void;
+  familyModes: Record<string, FamilyMode>;
 }) {
   if (detections.length === 0 || candles.length === 0) return null;
   const innerW = W - PAD_L - PAD_R;
@@ -317,7 +319,6 @@ function Detections({
 
         const polyPoints = points.map((p) => `${p.x},${p.y}`).join(" ");
         const last = points[points.length - 1];
-        const invalY = scale.toY(Number(d.invalidation_price));
 
         // Zone box geometry: two anchors define top/bottom of the zone.
         // Box extends left by ~30 candles and right to the last anchor x.
@@ -408,23 +409,112 @@ function Detections({
               );
             })()}
 
-            {/* invalidation (stop) line — only on hover so we don't
-                clutter the chart with horizontal stripes for every
-                detection. Spans from the last anchor a short way to
-                the right (~15% of chart width) instead of the whole
-                axis. */}
-            {isHover && Number.isFinite(invalY) && points.length > 0 && (
-              <line
-                x1={last.x}
-                x2={Math.min(W - PAD_R, last.x + (W - PAD_L - PAD_R) * 0.15)}
-                y1={invalY}
-                y2={invalY}
-                stroke={color}
-                strokeOpacity={0.7}
-                strokeWidth={1}
-                strokeDasharray="2 4"
-              />
-            )}
+            {/* ── Entry / TP / SL lines (detail mode or hover) ── */}
+            {(() => {
+              const showDetail = (familyModes[d.family] ?? "on") === "detail" || isHover;
+              if (!showDetail || points.length === 0) return null;
+
+              const lineX1 = last.x;
+              const lineX2 = Math.min(W - PAD_R, last.x + (W - PAD_L - PAD_R) * 0.25);
+              const inv = Number(d.invalidation_price);
+
+              // Compute measured-move targets from anchors.
+              const anchors = d.anchors;
+              let tp1: number | null = null;
+              let tp2: number | null = null;
+              let entryPrice: number | null = null;
+
+              if (d.subkind.includes("double_top") || d.subkind.includes("double_bottom")) {
+                if (anchors.length >= 3) {
+                  const extreme = Number(anchors[0].price);
+                  const neck = Number(anchors[1].price);
+                  const height = Math.abs(extreme - neck);
+                  const dir = d.subkind.includes("bull") ? 1 : -1;
+                  entryPrice = neck;
+                  tp1 = neck + dir * height;
+                  tp2 = neck + dir * height * 1.618;
+                }
+              } else if (d.subkind.includes("head_and_shoulders")) {
+                if (anchors.length >= 5) {
+                  const head = Number(anchors[2].price);
+                  const n1 = Number(anchors[1].price);
+                  const n2 = Number(anchors[3].price);
+                  const neckline = (n1 + n2) / 2;
+                  const height = Math.abs(head - neckline);
+                  const dir = d.subkind.includes("bull") ? 1 : -1;
+                  entryPrice = neckline;
+                  tp1 = neckline + dir * height;
+                  tp2 = neckline + dir * height * 1.618;
+                }
+              } else if (d.family === "harmonic" && anchors.length >= 5) {
+                const aP = Number(anchors[1].price);
+                const dP = Number(anchors[4].price);
+                const adRange = Math.abs(aP - dP);
+                const dir = d.subkind.includes("bull") ? 1 : -1;
+                entryPrice = dP;
+                tp1 = dP + dir * adRange * 0.382;
+                tp2 = dP + dir * adRange * 0.618;
+              } else if (d.subkind.includes("impulse") && anchors.length >= 6) {
+                const p0 = Number(anchors[0].price);
+                const p1 = Number(anchors[1].price);
+                const p4 = Number(anchors[4].price);
+                const w1h = Math.abs(p1 - p0);
+                const dir = d.subkind.includes("bull") ? 1 : -1;
+                entryPrice = p4;
+                tp1 = p4 + dir * w1h;
+                tp2 = p4 + dir * w1h * 1.618;
+              }
+
+              // Label rendering helper
+              const labelAt = (y: number, text: string, col: string) => (
+                <text
+                  x={lineX2 + 3}
+                  y={y + 3}
+                  fontSize={9}
+                  fill={col}
+                  fillOpacity={0.9}
+                >
+                  {text}
+                </text>
+              );
+
+              return (
+                <g>
+                  {/* SL (invalidation) — red dashed */}
+                  {Number.isFinite(inv) && (
+                    <>
+                      <line x1={lineX1} x2={lineX2} y1={scale.toY(inv)} y2={scale.toY(inv)}
+                        stroke="rgb(239 68 68)" strokeOpacity={0.8} strokeWidth={1.2} strokeDasharray="4 3" />
+                      {labelAt(scale.toY(inv), `SL ${inv.toFixed(2)}`, "rgb(239 68 68)")}
+                    </>
+                  )}
+                  {/* Entry — white solid */}
+                  {entryPrice && Number.isFinite(entryPrice) && (
+                    <>
+                      <line x1={lineX1} x2={lineX2} y1={scale.toY(entryPrice)} y2={scale.toY(entryPrice)}
+                        stroke="rgb(212 212 216)" strokeOpacity={0.8} strokeWidth={1.2} strokeDasharray="2 2" />
+                      {labelAt(scale.toY(entryPrice), `Entry ${entryPrice.toFixed(2)}`, "rgb(212 212 216)")}
+                    </>
+                  )}
+                  {/* TP1 — green solid */}
+                  {tp1 && Number.isFinite(tp1) && (
+                    <>
+                      <line x1={lineX1} x2={lineX2} y1={scale.toY(tp1)} y2={scale.toY(tp1)}
+                        stroke="rgb(52 211 153)" strokeOpacity={0.8} strokeWidth={1.2} strokeDasharray="4 3" />
+                      {labelAt(scale.toY(tp1), `TP1 ${tp1.toFixed(2)}`, "rgb(52 211 153)")}
+                    </>
+                  )}
+                  {/* TP2 — green dashed fainter */}
+                  {tp2 && Number.isFinite(tp2) && (
+                    <>
+                      <line x1={lineX1} x2={lineX2} y1={scale.toY(tp2)} y2={scale.toY(tp2)}
+                        stroke="rgb(52 211 153)" strokeOpacity={0.5} strokeWidth={1} strokeDasharray="2 4" />
+                      {labelAt(scale.toY(tp2), `TP2 ${tp2.toFixed(2)}`, "rgb(52 211 153)")}
+                    </>
+                  )}
+                </g>
+              );
+            })()}
 
             {/* anchor polyline (the geometry of the pattern) — skip for zone boxes */}
             {!isZoneBox && points.length >= 2 && (
@@ -791,36 +881,80 @@ function Zigzag({ candles, scale }: { candles: CandleBar[]; scale: PriceScale })
 // visibility on/off. Lives next to the symbol/timeframe controls so the
 // operator can dim noisy families without scrolling. State is owned by
 // the parent so the SVG layer can filter detections accordingly.
-function FamilyToggles({
-  enabled,
-  onToggle,
+// Family visibility: "off" = hidden, "on" = formation lines only,
+// "detail" = formation + Entry/TP/SL overlay lines + sub-buttons.
+type FamilyMode = "off" | "on" | "detail";
+
+const TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M"];
+
+function TimeframeBar({
+  active,
+  onChange,
 }: {
-  enabled: Record<string, boolean>;
-  onToggle: (family: string) => void;
+  active: string;
+  onChange: (tf: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-0.5 rounded bg-zinc-900 p-0.5">
+      {TIMEFRAMES.map((tf) => (
+        <button
+          key={tf}
+          type="button"
+          onClick={() => onChange(tf)}
+          className={`rounded px-2 py-1 text-xs font-medium transition ${
+            tf === active
+              ? "bg-zinc-700 text-zinc-100"
+              : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+          }`}
+        >
+          {tf}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function FamilyToggles({
+  modes,
+  onCycle,
+}: {
+  modes: Record<string, FamilyMode>;
+  onCycle: (family: string) => void;
 }) {
   const entries = Object.entries(FAMILY_COLORS).filter(([k]) => k !== "custom");
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-wrap items-center gap-1.5">
       {entries.map(([family, color]) => {
-        const on = enabled[family] !== false;
+        const mode = modes[family] ?? "on";
+        const isOff = mode === "off";
+        const isDetail = mode === "detail";
         return (
           <button
             key={family}
             type="button"
-            onClick={() => onToggle(family)}
+            onClick={() => onCycle(family)}
             className="flex items-center gap-1.5 rounded border px-2 py-1 text-xs uppercase tracking-wide transition"
             style={{
-              borderColor: on ? color : "rgb(63 63 70)",
-              background: on ? `${color}22` : "rgb(24 24 27)",
-              color: on ? color : "rgb(113 113 122)",
+              borderColor: isOff ? "rgb(63 63 70)" : color,
+              background: isOff
+                ? "rgb(24 24 27)"
+                : isDetail
+                ? `${color}44`
+                : `${color}22`,
+              color: isOff ? "rgb(113 113 122)" : color,
             }}
-            title={on ? `${family}: görünür` : `${family}: gizli`}
+            title={
+              isOff ? `${family}: gizli` : isDetail ? `${family}: detay (Entry/TP/SL)` : `${family}: görünür`
+            }
           >
             <span
               className="inline-block h-2 w-3 rounded-sm"
-              style={{ background: on ? color : "rgb(63 63 70)" }}
+              style={{ background: isOff ? "rgb(63 63 70)" : color }}
             />
             {family}
+            {isDetail && (
+              <span className="ml-0.5 text-[9px] opacity-70">▸TP/SL</span>
+            )}
           </button>
         );
       })}
@@ -948,9 +1082,14 @@ export function Chart() {
   // Per-family visibility. Defaults to all-on; clicking a chip in the
   // top toolbar flips that family. Sparse map (missing key = visible)
   // so adding new families needs no migration here.
-  const [familyEnabled, setFamilyEnabled] = useState<Record<string, boolean>>({});
-  const toggleFamily = (family: string) =>
-    setFamilyEnabled((prev) => ({ ...prev, [family]: prev[family] === false }));
+  // 3-state family toggle: off → on → detail → off
+  const [familyModes, setFamilyModes] = useState<Record<string, FamilyMode>>({});
+  const cycleFamily = (family: string) =>
+    setFamilyModes((prev) => {
+      const cur = prev[family] ?? "on";
+      const next: FamilyMode = cur === "off" ? "on" : cur === "on" ? "detail" : "off";
+      return { ...prev, [family]: next };
+    });
   const fetchingOlderRef = useRef(false);
   const dragRef = useRef<{
     startX: number;
@@ -1029,9 +1168,9 @@ export function Chart() {
   const visibleDetections = useMemo(
     () =>
       merged
-        ? merged.detections.filter((d) => familyEnabled[d.family] !== false)
+        ? merged.detections.filter((d) => (familyModes[d.family] ?? "on") !== "off")
         : [],
-    [merged, familyEnabled],
+    [merged, familyModes],
   );
 
   // Wyckoff structure overlay (Faz 10)
@@ -1144,35 +1283,33 @@ export function Chart() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end gap-3 rounded-lg border border-zinc-800 bg-zinc-900/60 p-4 text-sm">
-        <label className="flex flex-col gap-1">
-          <span className="text-xs uppercase text-zinc-500">Venue</span>
-          <input
-            value={form.venue}
-            onChange={(e) => setForm({ ...form, venue: e.target.value })}
-            className="w-32 rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-zinc-100"
+      <div className="space-y-2 rounded-lg border border-zinc-800 bg-zinc-900/60 p-3 text-sm">
+        {/* Row 1: Venue + Symbol + Timeframe buttons */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <input
+              value={form.venue}
+              onChange={(e) => setForm({ ...form, venue: e.target.value })}
+              className="w-24 rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-100"
+              placeholder="venue"
+            />
+            <input
+              value={form.symbol}
+              onChange={(e) => setForm({ ...form, symbol: e.target.value })}
+              className="w-28 rounded border border-zinc-700 bg-zinc-950 px-2 py-1 font-mono text-xs text-zinc-100"
+              placeholder="symbol"
+            />
+          </div>
+          <TimeframeBar
+            active={form.timeframe}
+            onChange={(tf) => setForm({ ...form, timeframe: tf })}
           />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs uppercase text-zinc-500">Symbol</span>
-          <input
-            value={form.symbol}
-            onChange={(e) => setForm({ ...form, symbol: e.target.value })}
-            className="w-32 rounded border border-zinc-700 bg-zinc-950 px-2 py-1 font-mono text-zinc-100"
-          />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs uppercase text-zinc-500">Timeframe</span>
-          <input
-            value={form.timeframe}
-            onChange={(e) => setForm({ ...form, timeframe: e.target.value })}
-            className="w-20 rounded border border-zinc-700 bg-zinc-950 px-2 py-1 font-mono text-zinc-100"
-          />
-        </label>
-        <div className="ml-auto flex flex-col items-end gap-2">
-          <FamilyToggles enabled={familyEnabled} onToggle={toggleFamily} />
-          <div className="text-xs text-zinc-500">
-            sürükle = pan (X+Y) · scroll = zoom · Ctrl+scroll = fiyat zoom
+        </div>
+        {/* Row 2: Family toggles (3-state: off → on → detail) */}
+        <div className="flex items-center justify-between">
+          <FamilyToggles modes={familyModes} onCycle={cycleFamily} />
+          <div className="text-[10px] text-zinc-600">
+            sürükle = pan · scroll = zoom · Ctrl+scroll = fiyat zoom
           </div>
         </div>
       </div>
@@ -1217,7 +1354,7 @@ export function Chart() {
               {showVolume && <Volume candles={visibleCandles} />}
               <Candles candles={visibleCandles} scale={scale} />
               {showZigzag && <Zigzag candles={visibleCandles} scale={scale} />}
-              {wyckoffOverlay && familyEnabled["wyckoff"] !== false && (
+              {wyckoffOverlay && (familyModes["wyckoff"] ?? "on") !== "off" && (
                 <WyckoffStructureOverlay data={wyckoffOverlay} scale={scale} />
               )}
               <Detections
@@ -1226,6 +1363,7 @@ export function Chart() {
                 scale={scale}
                 hovered={hovered}
                 onHover={setHovered}
+                familyModes={familyModes}
               />
               <TimeAxis candles={visibleCandles} />
             </svg>
