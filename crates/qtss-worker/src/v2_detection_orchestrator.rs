@@ -1394,6 +1394,24 @@ async fn link_elliott_to_wave_chain(
         return Ok(());
     }
 
+    // Dedup: if there's already an active wave_chain with the same
+    // (exchange, symbol, timeframe, subkind), skip to avoid duplicates
+    // from the orchestrator re-detecting the same pattern each tick.
+    {
+        let subkind_str = match &detection.kind {
+            PatternKind::Elliott(s) => s.as_str(),
+            _ => "",
+        };
+        let existing: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT id FROM wave_chain WHERE exchange=$1 AND symbol=$2 AND timeframe=$3 AND subkind=$4 AND state='active' LIMIT 1"
+        )
+        .bind(exchange).bind(symbol).bind(interval).bind(subkind_str)
+        .fetch_optional(pool).await?;
+        if existing.is_some() {
+            return Ok(());
+        }
+    }
+
     let degree = WaveDegree::from_timeframe(timeframe);
     let subkind = match &detection.kind {
         PatternKind::Elliott(s) => s.clone(),
