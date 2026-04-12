@@ -471,14 +471,17 @@ export function Chart() {
     const candleSeries = candleSeriesRef.current;
     const volumeSeries = volumeSeriesRef.current;
 
-    // Convert candles — deduplicate by timestamp (TV requires strictly ascending)
+    // Convert candles — sort + deduplicate (TV requires strictly ascending time)
+    const sorted = [...merged.candles].sort(
+      (a, b) => new Date(a.open_time).getTime() - new Date(b.open_time).getTime(),
+    );
     const candleData: CandlestickData<Time>[] = [];
     const volData: HistogramData<Time>[] = [];
-    const seenTs = new Set<number>();
-    for (const c of merged.candles) {
+    let prevTs = -1;
+    for (const c of sorted) {
       const t = isoToUnix(c.open_time) as number;
-      if (seenTs.has(t)) continue;
-      seenTs.add(t);
+      if (t <= prevTs) continue; // skip duplicate or out-of-order
+      prevTs = t;
       candleData.push({
         time: t as Time,
         open: Number(c.open),
