@@ -471,23 +471,29 @@ export function Chart() {
     const candleSeries = candleSeriesRef.current;
     const volumeSeries = volumeSeriesRef.current;
 
-    // Convert candles
-    const candleData: CandlestickData<Time>[] = merged.candles.map((c) => ({
-      time: isoToUnix(c.open_time),
-      open: Number(c.open),
-      high: Number(c.high),
-      low: Number(c.low),
-      close: Number(c.close),
-    }));
+    // Convert candles — deduplicate by timestamp (TV requires strictly ascending)
+    const candleData: CandlestickData<Time>[] = [];
+    const volData: HistogramData<Time>[] = [];
+    const seenTs = new Set<number>();
+    for (const c of merged.candles) {
+      const t = isoToUnix(c.open_time) as number;
+      if (seenTs.has(t)) continue;
+      seenTs.add(t);
+      candleData.push({
+        time: t as Time,
+        open: Number(c.open),
+        high: Number(c.high),
+        low: Number(c.low),
+        close: Number(c.close),
+      });
+      volData.push({
+        time: t as Time,
+        value: Number(c.volume),
+        color: Number(c.close) >= Number(c.open) ? "#34d39940" : "#f8717140",
+      });
+    }
 
     candleSeries.setData(candleData);
-
-    // Volume
-    const volData: HistogramData<Time>[] = merged.candles.map((c) => ({
-      time: isoToUnix(c.open_time),
-      value: Number(c.volume),
-      color: Number(c.close) >= Number(c.open) ? "#34d39940" : "#f8717140",
-    }));
     volumeSeries.setData(showVolume ? volData : []);
 
     // ── Remove old overlay lines ──
