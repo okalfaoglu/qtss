@@ -92,6 +92,7 @@ type FamilyMode = "off" | "on" | "detail";
 
 const DETAIL_SUB_BUTTONS = [
   { key: "entry_tp_sl", label: "Entry / TP / SL", icon: "⊞" },
+  { key: "labels", label: "Labels", icon: "Aa" },
   { key: "fib_levels", label: "Fib Levels", icon: "φ" },
   { key: "measured_move", label: "Measured Move", icon: "⟷" },
   { key: "invalidation", label: "Invalidation Zone", icon: "✕" },
@@ -275,6 +276,7 @@ export function Chart() {
   const [showVolume, setShowVolume] = useState(true);
   const [familyModes, setFamilyModes] = useState<Record<string, FamilyMode>>({});
   const [detailLayers, setDetailLayers] = useState<Record<string, Set<string>>>({});
+  const [showLabels, setShowLabels] = useState(true);
   const [activeTool, setActiveTool] = useState<ToolId>("crosshair");
 
   const fetchingOlderRef = useRef(false);
@@ -293,7 +295,7 @@ export function Chart() {
       const cur = prev[family] ?? "on";
       const next: FamilyMode = cur === "off" ? "on" : cur === "on" ? "detail" : "off";
       if (next === "detail") {
-        setDetailLayers((dl) => ({ ...dl, [family]: new Set(["entry_tp_sl"]) }));
+        setDetailLayers((dl) => ({ ...dl, [family]: new Set(["entry_tp_sl", "labels"]) }));
       }
       return { ...prev, [family]: next };
     });
@@ -674,27 +676,70 @@ export function Chart() {
         });
         zigLine.setData(sortLineData(pts.map((p) => ({ time: p.time, value: p.price }))));
         overlayLinesRef.current.push(zigLine);
+      }
+    }
 
-        // Swing labels as markers on the candle series
-        const swingColors: Record<string, string> = {
-          HH: "#22c55e", HL: "#4ade80", LH: "#ef4444", LL: "#f87171",
-        };
-        const markers: SeriesMarker<Time>[] = pts
-          .filter((p) => p.swing)
-          .map((p) => ({
-            time: p.time,
-            position: p.kind === "H" ? "aboveBar" as const : "belowBar" as const,
-            color: swingColors[p.swing!] ?? "#facc15",
+    // ── Markers: detection anchor labels + zigzag swing labels ──
+    const allMarkers: SeriesMarker<Time>[] = [];
+
+    // Detection anchor labels (e.g. "1", "2", "3", "W-A", "W-B", etc.)
+    if (showLabels) {
+      for (const d of visibleDetections) {
+        if (ZONE_BOX_SUBKINDS.has(d.subkind)) continue;
+        const color = familyColor(d.family, d.subkind);
+        for (const a of d.anchors) {
+          if (!a.label) continue;
+          const price = Number(a.price);
+          // Determine if anchor is a local high or low relative to neighbors
+          const anchorIdx = d.anchors.indexOf(a);
+          const prevPrice = anchorIdx > 0 ? Number(d.anchors[anchorIdx - 1].price) : price;
+          const nextPrice = anchorIdx < d.anchors.length - 1 ? Number(d.anchors[anchorIdx + 1].price) : price;
+          const isTop = price >= prevPrice && price >= nextPrice;
+          allMarkers.push({
+            time: isoToUnix(a.time),
+            position: isTop ? "aboveBar" as const : "belowBar" as const,
+            color,
             shape: "circle" as const,
-            text: p.swing!,
-          }));
-        if (markers.length > 0) {
-          if (markersRef.current) markersRef.current.detach();
-          markersRef.current = createSeriesMarkers(candleSeries, markers);
+            text: a.label,
+          });
+        }
+        // Subkind label at last anchor
+        const lastAnchor = d.anchors[d.anchors.length - 1];
+        if (lastAnchor) {
+          allMarkers.push({
+            time: isoToUnix(lastAnchor.time),
+            position: "aboveBar" as const,
+            color,
+            shape: "square" as const,
+            text: d.subkind,
+          });
         }
       }
-    } else {
-      if (markersRef.current) { markersRef.current.detach(); markersRef.current = null; }
+    }
+
+    // Zigzag swing labels
+    if (showZigzag && merged.candles.length > 2) {
+      const pts = computeZigzag(merged.candles, ZIGZAG_PCT);
+      const swingColors: Record<string, string> = {
+        HH: "#22c55e", HL: "#4ade80", LH: "#ef4444", LL: "#f87171",
+      };
+      for (const p of pts) {
+        if (!p.swing) continue;
+        allMarkers.push({
+          time: p.time,
+          position: p.kind === "H" ? "aboveBar" as const : "belowBar" as const,
+          color: swingColors[p.swing] ?? "#facc15",
+          shape: "circle" as const,
+          text: p.swing,
+        });
+      }
+    }
+
+    // Sort markers by time (TV requires ascending) and apply
+    allMarkers.sort((a, b) => (a.time as number) - (b.time as number));
+    if (markersRef.current) { markersRef.current.detach(); markersRef.current = null; }
+    if (allMarkers.length > 0) {
+      markersRef.current = createSeriesMarkers(candleSeries, allMarkers);
     }
 
     // ── Wyckoff overlay ──
@@ -777,7 +822,7 @@ export function Chart() {
       }
     }
 
-  }, [merged, showVolume, showZigzag, visibleDetections, hovered, familyModes, wyckoffQuery.data]);
+  }, [merged, showVolume, showZigzag, showLabels, visibleDetections, hovered, familyModes, wyckoffQuery.data]);
 
   // ═══════════════════════════════════════════════════════════════
   // RENDER
@@ -828,6 +873,19 @@ export function Chart() {
           }`}
         >
           Z
+        </button>
+        {/* Labels toggle */}
+        <button
+          type="button"
+          onClick={() => setShowLabels((v) => !v)}
+          title={showLabels ? "Label gizle" : "Label göster"}
+          className={`flex h-8 w-8 items-center justify-center rounded text-[10px] font-bold transition ${
+            showLabels
+              ? "bg-sky-500/20 text-sky-300"
+              : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+          }`}
+        >
+          Aa
         </button>
       </div>
 
@@ -973,12 +1031,12 @@ export function Chart() {
         <div
           ref={chartContainerRef}
           className="flex-1 bg-zinc-950"
-          style={{ minHeight: 400 }}
+          style={{ minHeight: 500 }}
         />
 
         {/* ── Detections Table ─────────────────────────────────── */}
         {merged && merged.detections.length > 0 && (
-          <div className="max-h-48 overflow-auto border-t border-zinc-800 bg-zinc-950">
+          <div className="max-h-36 overflow-auto border-t border-zinc-800 bg-zinc-950">
             <table className="w-full text-[11px]">
               <thead className="sticky top-0 bg-zinc-900 text-[10px] uppercase text-zinc-500">
                 <tr>
