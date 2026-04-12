@@ -210,6 +210,35 @@ pub async fn list_waves_for_symbol(
     .await
 }
 
+/// List active waves at a specific timeframe, optionally within a time range.
+pub async fn list_waves_at_tf(
+    pool: &PgPool,
+    exchange: &str,
+    symbol: &str,
+    timeframe: &str,
+    time_start: Option<DateTime<Utc>>,
+    time_end: Option<DateTime<Utc>>,
+    limit: i64,
+) -> Result<Vec<WaveChainRow>, sqlx::Error> {
+    sqlx::query_as::<_, WaveChainRow>(
+        r#"SELECT * FROM wave_chain
+           WHERE exchange = $1 AND symbol = $2 AND timeframe = $3
+             AND state != 'invalidated'
+             AND ($4::timestamptz IS NULL OR time_start >= $4)
+             AND ($5::timestamptz IS NULL OR time_end <= $5)
+           ORDER BY time_start ASC NULLS LAST
+           LIMIT $6"#,
+    )
+    .bind(exchange)
+    .bind(symbol)
+    .bind(timeframe)
+    .bind(time_start)
+    .bind(time_end)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
 /// Invalidate a wave and optionally cascade to children.
 pub async fn invalidate_wave(pool: &PgPool, wave_id: Uuid, cascade: bool) -> Result<u64, sqlx::Error> {
     let mut affected = 0u64;

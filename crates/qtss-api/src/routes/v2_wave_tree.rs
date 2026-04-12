@@ -1,7 +1,8 @@
-//! `GET /v2/wave-tree/{venue}/{symbol}` — Elliott Deep wave hierarchy.
+//! Elliott Deep wave hierarchy — lazy TF-by-TF drill-down.
 //!
-//! Returns all active wave_chain rows for a symbol, plus ancestor chains
-//! for each root wave. The frontend builds an interactive tree view.
+//! `GET /v2/wave-tree/{venue}/{symbol}/tf/{tf}` — formations + wave segments
+//! at a single timeframe. Optional `?time_start=&time_end=` to scope within
+//! a parent wave's range. Frontend calls this lazily as user clicks deeper.
 
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
@@ -15,153 +16,158 @@ use qtss_storage::wave_chain;
 use crate::error::ApiError;
 use crate::state::SharedState;
 
+// ─── Wire types ──────────────────────────────────────────────────────
+
 #[derive(Debug, Serialize)]
-pub struct WaveNodeWire {
+pub struct WaveSegmentWire {
     pub id: String,
-    pub parent_id: Option<String>,
-    pub timeframe: String,
-    pub degree: String,
-    pub kind: String,
-    pub direction: String,
     pub wave_number: Option<String>,
+    pub direction: String,
     pub price_start: String,
     pub price_end: String,
     pub time_start: Option<DateTime<Utc>>,
     pub time_end: Option<DateTime<Utc>>,
     pub structural_score: f32,
     pub state: String,
-    pub children: Vec<WaveNodeWire>,
+    /// How many children this wave has at the next lower TF.
+    pub child_count: usize,
 }
 
 #[derive(Debug, Serialize)]
-pub struct WaveTreeResponse {
+pub struct FormationWire {
+    pub id: String,
+    pub kind: String,
+    pub direction: String,
+    pub degree: String,
+    pub state: String,
+    pub price_start: String,
+    pub price_end: String,
+    pub time_start: Option<DateTime<Utc>>,
+    pub time_end: Option<DateTime<Utc>>,
+    pub avg_score: f32,
+    pub waves: Vec<WaveSegmentWire>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TfLevelResponse {
     pub exchange: String,
     pub symbol: String,
-    pub roots: Vec<WaveNodeWire>,
-    pub total_waves: usize,
+    pub timeframe: String,
+    pub formations: Vec<FormationWire>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct WaveTreeQuery {
-    pub limit: Option<i64>,
+pub struct TfQuery {
+    pub time_start: Option<DateTime<Utc>>,
+    pub time_end: Option<DateTime<Utc>>,
 }
+
+// ─── Router ──────────────────────────────────────────────────────────
 
 pub fn v2_wave_tree_router() -> Router<SharedState> {
     Router::new()
-        .route("/v2/wave-tree/{venue}/{symbol}", get(get_wave_tree))
-        .route("/v2/wave-tree/{venue}/{symbol}/{wave_id}/ancestors", get(get_ancestors))
+        .route("/v2/wave-tree/{venue}/{symbol}/tf/{tf}", get(get_tf_level))
+        .route("/v2/wave-tree/{venue}/{symbol}/{wave_id}/children", get(get_wave_children))
 }
 
-async fn get_wave_tree(
+/// Get formations at a specific TF, optionally scoped to a time range.
+async fn get_tf_level(
     State(st): State<SharedState>,
-    Path((venue, symbol)): Path<(String, String)>,
-    Query(q): Query<WaveTreeQuery>,
-) -> Result<Json<WaveTreeResponse>, ApiError> {
-    let limit = q.limit.unwrap_or(200).min(1000);
-    let rows = wave_chain::list_waves_for_symbol(&st.pool, &venue, &symbol, limit)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    Path((venue, symbol, tf)): Path<(String, String, String)>,
+    Query(q): Query<TfQuery>,
+) -> Result<Json<TfLevelResponse>, ApiError> {
+    let rows = wave_chain::list_waves_at_tf(
+        &st.pool, &venue, &symbol, &tf,
+        q.time_start, q.time_end, 200,
+    ).await.map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let total_waves = rows.len();
+    // Group wave segments into formations by shared parent_id
+    let mut groups: std::collections::BTreeMap<String, Vec<wave_chain::WaveChainRow>> =
+        std::collections::BTreeMap::new();
+    for row in rows {
+        let key = row.parent_id.map(|p| p.to_string()).unwrap_or_else(|| format!("solo_{}", row.id));
+        groups.entry(key).or_default().push(row);
+    }
 
-    // Build tree: collect all rows, then nest children under parents
-    let mut nodes: std::collections::HashMap<Uuid, WaveNodeWire> = std::collections::HashMap::new();
-    let mut order: Vec<Uuid> = Vec::new();
+    let mut formations = Vec::new();
+    for (_key, mut waves) in groups {
+        waves.sort_by_key(|w| w.time_start);
+        let first = &waves[0];
+        let last = &waves[waves.len() - 1];
+        let any_active = waves.iter().any(|w| w.state == "active");
 
-    for row in &rows {
-        order.push(row.id);
-        nodes.insert(row.id, WaveNodeWire {
-            id: row.id.to_string(),
-            parent_id: row.parent_id.map(|p| p.to_string()),
-            timeframe: row.timeframe.clone(),
-            degree: row.degree.clone(),
-            kind: row.kind.clone(),
-            direction: row.direction.clone(),
-            wave_number: row.wave_number.clone(),
-            price_start: row.price_start.to_string(),
-            price_end: row.price_end.to_string(),
-            time_start: row.time_start,
-            time_end: row.time_end,
-            structural_score: row.structural_score,
-            state: row.state.clone(),
-            children: Vec::new(),
+        // Count children for each wave segment
+        let mut wire_waves = Vec::new();
+        for w in &waves {
+            let children = wave_chain::list_children(&st.pool, w.id)
+                .await
+                .unwrap_or_default();
+            wire_waves.push(WaveSegmentWire {
+                id: w.id.to_string(),
+                wave_number: w.wave_number.clone(),
+                direction: w.direction.clone(),
+                price_start: w.price_start.to_string(),
+                price_end: w.price_end.to_string(),
+                time_start: w.time_start,
+                time_end: w.time_end,
+                structural_score: w.structural_score,
+                state: w.state.clone(),
+                child_count: children.len(),
+            });
+        }
+
+        let avg_score = waves.iter().map(|w| w.structural_score).sum::<f32>() / waves.len() as f32;
+        formations.push(FormationWire {
+            id: first.id.to_string(),
+            kind: first.kind.clone(),
+            direction: first.direction.clone(),
+            degree: first.degree.clone(),
+            state: if any_active { "active".into() } else { "completed".into() },
+            price_start: first.price_start.to_string(),
+            price_end: last.price_end.to_string(),
+            time_start: first.time_start,
+            time_end: last.time_end,
+            avg_score,
+            waves: wire_waves,
         });
     }
 
-    // Collect parent→child edges, then nest
-    let mut child_map: std::collections::HashMap<Uuid, Vec<Uuid>> = std::collections::HashMap::new();
-    let mut root_ids: Vec<Uuid> = Vec::new();
-    for row in &rows {
-        match row.parent_id {
-            Some(pid) if nodes.contains_key(&pid) => {
-                child_map.entry(pid).or_default().push(row.id);
-            }
-            _ => root_ids.push(row.id),
-        }
-    }
-
-    // Recursively build tree (max depth bounded by degree hierarchy ~9)
-    fn build_tree(
-        id: Uuid,
-        nodes: &mut std::collections::HashMap<Uuid, WaveNodeWire>,
-        child_map: &std::collections::HashMap<Uuid, Vec<Uuid>>,
-    ) -> Option<WaveNodeWire> {
-        let children_ids = child_map.get(&id).cloned().unwrap_or_default();
-        let children: Vec<WaveNodeWire> = children_ids
-            .into_iter()
-            .filter_map(|cid| build_tree(cid, nodes, child_map))
-            .collect();
-        let mut node = nodes.remove(&id)?;
-        node.children = children;
-        Some(node)
-    }
-
-    let roots: Vec<WaveNodeWire> = root_ids
-        .into_iter()
-        .filter_map(|rid| build_tree(rid, &mut nodes, &child_map))
-        .collect();
-
-    Ok(Json(WaveTreeResponse {
+    Ok(Json(TfLevelResponse {
         exchange: venue,
         symbol,
-        roots,
-        total_waves,
+        timeframe: tf,
+        formations,
     }))
 }
 
-#[derive(Debug, Serialize)]
-pub struct AncestorChainResponse {
-    pub chain: Vec<WaveNodeWire>,
-}
-
-async fn get_ancestors(
+/// Get direct children of a wave segment (for inline expansion).
+async fn get_wave_children(
     State(st): State<SharedState>,
     Path((_venue, _symbol, wave_id)): Path<(String, String, String)>,
-) -> Result<Json<AncestorChainResponse>, ApiError> {
+) -> Result<Json<Vec<WaveSegmentWire>>, ApiError> {
     let id: Uuid = wave_id.parse().map_err(|_| ApiError::bad_request("invalid uuid"))?;
-    let rows = wave_chain::get_ancestor_chain(&st.pool, id)
+    let children = wave_chain::list_children(&st.pool, id)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let chain = rows
-        .into_iter()
-        .map(|row| WaveNodeWire {
-            id: row.id.to_string(),
-            parent_id: row.parent_id.map(|p| p.to_string()),
-            timeframe: row.timeframe,
-            degree: row.degree,
-            kind: row.kind,
-            direction: row.direction,
-            wave_number: row.wave_number,
-            price_start: row.price_start.to_string(),
-            price_end: row.price_end.to_string(),
-            time_start: row.time_start,
-            time_end: row.time_end,
-            structural_score: row.structural_score,
-            state: row.state,
-            children: Vec::new(),
-        })
-        .collect();
+    let mut result = Vec::new();
+    for c in &children {
+        let grandchildren = wave_chain::list_children(&st.pool, c.id)
+            .await
+            .unwrap_or_default();
+        result.push(WaveSegmentWire {
+            id: c.id.to_string(),
+            wave_number: c.wave_number.clone(),
+            direction: c.direction.clone(),
+            price_start: c.price_start.to_string(),
+            price_end: c.price_end.to_string(),
+            time_start: c.time_start,
+            time_end: c.time_end,
+            structural_score: c.structural_score,
+            state: c.state.clone(),
+            child_count: grandchildren.len(),
+        });
+    }
 
-    Ok(Json(AncestorChainResponse { chain }))
+    Ok(Json(result))
 }
