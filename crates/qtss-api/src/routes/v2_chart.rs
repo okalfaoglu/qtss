@@ -34,6 +34,7 @@ use qtss_gui_api::{
     OpenPositionView,
 };
 use qtss_storage::{market_bars, DetectionRow, V2DetectionRepository};
+use qtss_storage::wave_chain;
 
 use crate::error::ApiError;
 use crate::state::SharedState;
@@ -163,7 +164,33 @@ async fn detections_for(
             return Vec::new();
         }
     };
-    rows.into_iter().map(detection_row_to_overlay).collect()
+    let mut overlays: Vec<DetectionOverlay> = rows.into_iter().map(detection_row_to_overlay).collect();
+
+    // Enrich elliott detections with wave_chain ancestor breadcrumb
+    for overlay in &mut overlays {
+        if overlay.family == "elliott" {
+            if let Ok(det_id) = uuid::Uuid::parse_str(&overlay.id) {
+                if let Ok(Some(wave)) = wave_chain::find_by_detection(&st.pool, det_id).await {
+                    if let Ok(chain) = wave_chain::get_ancestor_chain(&st.pool, wave.id).await {
+                        let breadcrumb = chain
+                            .iter()
+                            .rev() // root first
+                            .filter_map(|w| {
+                                let num = w.wave_number.as_deref().unwrap_or("?");
+                                Some(format!("{} {}", w.degree, num))
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" › ");
+                        if !breadcrumb.is_empty() {
+                            overlay.wave_context = Some(breadcrumb);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    overlays
 }
 
 fn detection_row_to_overlay(row: DetectionRow) -> DetectionOverlay {
@@ -205,6 +232,7 @@ fn detection_row_to_overlay(row: DetectionRow) -> DetectionOverlay {
         anchors,
         projected_anchors,
         sub_wave_anchors,
+        wave_context: None,
     }
 }
 

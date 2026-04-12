@@ -20,6 +20,7 @@ import { AiDecisions } from "./pages/AiDecisions";
 import { Audit } from "./pages/Audit";
 import { Users } from "./pages/Users";
 import { EngineSymbols } from "./pages/EngineSymbols";
+import { WaveTree } from "./pages/WaveTree";
 import { Wyckoff } from "./pages/Wyckoff";
 
 // Guard: bounce to /login when there is no token in storage. We deliberately
@@ -60,6 +61,7 @@ export const router = createBrowserRouter([
       { path: "audit", element: <Audit /> },
       { path: "users", element: <Users /> },
       { path: "engine-symbols", element: <EngineSymbols /> },
+      { path: "wave-tree", element: <WaveTree /> },
       { path: "wyckoff", element: <Wyckoff /> },
     ],
   },

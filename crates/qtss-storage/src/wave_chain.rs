@@ -189,6 +189,27 @@ pub async fn find_by_detection(pool: &PgPool, detection_id: Uuid) -> Result<Opti
     .await
 }
 
+/// List all active waves for a symbol, ordered by degree rank DESC then time_start.
+pub async fn list_waves_for_symbol(
+    pool: &PgPool,
+    exchange: &str,
+    symbol: &str,
+    limit: i64,
+) -> Result<Vec<WaveChainRow>, sqlx::Error> {
+    sqlx::query_as::<_, WaveChainRow>(
+        r#"SELECT * FROM wave_chain
+           WHERE exchange = $1 AND symbol = $2
+             AND state != 'invalidated'
+           ORDER BY time_start DESC NULLS LAST
+           LIMIT $3"#,
+    )
+    .bind(exchange)
+    .bind(symbol)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
 /// Invalidate a wave and optionally cascade to children.
 pub async fn invalidate_wave(pool: &PgPool, wave_id: Uuid, cascade: bool) -> Result<u64, sqlx::Error> {
     let mut affected = 0u64;

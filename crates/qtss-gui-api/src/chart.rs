@@ -80,6 +80,10 @@ pub struct DetectionOverlay {
     /// realized segment. Rendered fainter / thinner.
     #[serde(default)]
     pub sub_wave_anchors: Vec<Vec<DetectionAnchor>>,
+    /// Elliott Deep: degree breadcrumb from wave_chain ancestor walk.
+    /// e.g. "Cycle III > Primary [3] > Intermediate (3)"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wave_context: Option<String>,
 }
 
 /// One resting/working order overlay.

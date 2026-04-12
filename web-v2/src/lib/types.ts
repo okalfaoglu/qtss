@@ -198,6 +198,8 @@ export interface DetectionOverlay {
   projected_anchors?: DetectionAnchor[];
   // Faz 7.6 / A3 — sub-wave decomposition (rendered fainter/thinner).
   sub_wave_anchors?: DetectionAnchor[][];
+  /** Elliott Deep: degree breadcrumb e.g. "Cycle III › Primary [3] › Intermediate (3)" */
+  wave_context?: string;
 }
 
 export interface OpenOrderOverlay {

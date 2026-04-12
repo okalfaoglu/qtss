@@ -8,7 +8,7 @@
  * preserved and rendered via TV primitives / markers / line series.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   createChart,
@@ -1066,8 +1066,8 @@ export function Chart() {
               </thead>
               <tbody className="font-mono text-zinc-100">
                 {merged.detections.map((d) => (
+                  <Fragment key={d.id}>
                   <tr
-                    key={d.id}
                     className={`border-t border-zinc-800/40 transition-colors ${
                       hovered === d.id ? "bg-zinc-800/60" : "hover:bg-zinc-900"
                     }`}
@@ -1083,6 +1083,14 @@ export function Chart() {
                     <td className="px-2 py-0.5 text-right text-zinc-500">{d.invalidation_price}</td>
                     <td className="px-2 py-0.5 text-right">{d.confidence}</td>
                   </tr>
+                  {d.wave_context && (
+                    <tr className="border-t border-zinc-800/20">
+                      <td colSpan={6} className="px-2 py-0.5 text-[10px] text-sky-400/70">
+                        {d.wave_context}
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
