@@ -56,10 +56,15 @@ pub struct TfLevelResponse {
     pub formations: Vec<FormationWire>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct TfQuery {
+    #[serde(default)]
     pub time_start: Option<DateTime<Utc>>,
+    #[serde(default)]
     pub time_end: Option<DateTime<Utc>>,
+    /// If true, only return formations with at least one active wave.
+    #[serde(default)]
+    pub active_only: Option<bool>,
 }
 
 // ─── Router ──────────────────────────────────────────────────────────
@@ -130,6 +135,12 @@ async fn get_tf_level(
             avg_score,
             waves: wire_waves,
         });
+    }
+
+    // Filter by active_only if requested
+    let active_only = q.active_only.unwrap_or(false);
+    if active_only {
+        formations.retain(|f| f.state == "active");
     }
 
     Ok(Json(TfLevelResponse {

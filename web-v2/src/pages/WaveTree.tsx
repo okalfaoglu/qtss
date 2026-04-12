@@ -339,19 +339,20 @@ function FormationBlock({
 }
 
 // ─── TF Scanner: walks down TF_CHAIN, shows first found or "yok" ────
-function TfScanner({ venue, symbol }: { venue: string; symbol: string }) {
+function TfScanner({ venue, symbol, activeOnly }: { venue: string; symbol: string; activeOnly: boolean }) {
   const [levels, setLevels] = useState<Record<string, TfLevelResponse | "loading" | "empty" | "error">>({});
 
-  // Scan all TFs on mount
+  // Scan all TFs on mount (or when activeOnly changes)
   useEffect(() => {
     setLevels({});
     let cancelled = false;
+    const qs = activeOnly ? "?active_only=true" : "";
     (async () => {
       for (const tf of TF_CHAIN) {
         if (cancelled) break;
         setLevels((prev) => ({ ...prev, [tf]: "loading" }));
         try {
-          const res = await apiFetch<TfLevelResponse>(`/v2/wave-tree/${venue}/${symbol}/tf/${tf}`);
+          const res = await apiFetch<TfLevelResponse>(`/v2/wave-tree/${venue}/${symbol}/tf/${tf}${qs}`);
           if (cancelled) break;
           setLevels((prev) => ({ ...prev, [tf]: res.formations.length > 0 ? res : "empty" }));
         } catch {
@@ -361,7 +362,7 @@ function TfScanner({ venue, symbol }: { venue: string; symbol: string }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [venue, symbol]);
+  }, [venue, symbol, activeOnly]);
 
   return (
     <div className="space-y-0">
@@ -423,6 +424,7 @@ export function WaveTree() {
   const [venue, setVenue] = useState("binance");
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [activeSymbol, setActiveSymbol] = useState({ venue: "binance", symbol: "BTCUSDT" });
+  const [activeOnly, setActiveOnly] = useState(false);
 
   const handleLoad = () => {
     setActiveSymbol({ venue, symbol });
@@ -455,6 +457,17 @@ export function WaveTree() {
         >
           Yukle
         </button>
+        <div className="h-4 w-px bg-zinc-700" />
+        <button
+          onClick={() => setActiveOnly(!activeOnly)}
+          className={`px-2.5 py-1 rounded text-[10px] font-medium transition-colors ${
+            activeOnly
+              ? "bg-emerald-900/50 text-emerald-400 border border-emerald-700/50"
+              : "bg-zinc-800 text-zinc-500 border border-zinc-700/50 hover:text-zinc-300"
+          }`}
+        >
+          {activeOnly ? "Sadece Aktif" : "Tumu"}
+        </button>
       </div>
 
       {/* Column headers */}
@@ -471,9 +484,10 @@ export function WaveTree() {
       {/* Content — scanner walks through TFs */}
       <div className="flex-1 overflow-auto">
         <TfScanner
-          key={`${activeSymbol.venue}_${activeSymbol.symbol}`}
+          key={`${activeSymbol.venue}_${activeSymbol.symbol}_${activeOnly}`}
           venue={activeSymbol.venue}
           symbol={activeSymbol.symbol}
+          activeOnly={activeOnly}
         />
       </div>
 

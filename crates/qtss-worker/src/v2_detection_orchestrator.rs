@@ -1385,8 +1385,14 @@ async fn link_elliott_to_wave_chain(
 ) -> anyhow::Result<()> {
     use qtss_domain::v2::detection::WaveDegree;
     use qtss_storage::wave_chain::{
-        adopt_children, find_parent_wave, insert_wave_chain, WaveChainInsert,
+        adopt_children, find_by_detection, find_parent_wave, insert_wave_chain,
+        WaveChainInsert,
     };
+
+    // Dedup: if this detection already has wave_chain rows, skip
+    if let Ok(Some(_)) = find_by_detection(pool, detection_id).await {
+        return Ok(());
+    }
 
     let degree = WaveDegree::from_timeframe(timeframe);
     let subkind = match &detection.kind {
@@ -1401,67 +1407,67 @@ async fn link_elliott_to_wave_chain(
         degree.corrective_notation().as_slice()
     };
 
-    // Direction from anchor movement: first→last
-    let _direction = match (detection.anchors.first(), detection.anchors.last()) {
-        (Some(first), Some(last)) if last.price >= first.price => "bullish",
-        _ => "bearish",
-    };
+    // Build segment data first (time ranges needed for parent lookup)
+    struct SegData {
+        label: Option<String>,
+        time_start: Option<chrono::DateTime<chrono::Utc>>,
+        time_end: Option<chrono::DateTime<chrono::Utc>>,
+        price_start: Decimal,
+        price_end: Decimal,
+        bar_start: i64,
+        bar_end: i64,
+        direction: String,
+    }
 
-    // Full detection time range
-    let det_time_start = detection
-        .anchors
-        .first()
-        .and_then(|a| chronological.get(a.bar_index as usize))
-        .map(|r| r.open_time);
-    let det_time_end = detection
-        .anchors
-        .last()
-        .and_then(|a| chronological.get(a.bar_index as usize))
-        .map(|r| r.open_time);
-
-    // Try to find a parent wave on the parent TF whose range contains this detection
-    let parent_id = if let (Some(ts), Some(te)) = (det_time_start, det_time_end) {
-        if let Some(parent_tf) = degree.parent_timeframe() {
-            if let Some(parent_deg) = degree.parent() {
-                find_parent_wave(
-                    pool,
-                    exchange,
-                    symbol,
-                    timeframe_to_interval(parent_tf),
-                    parent_deg.label(),
-                    ts,
-                    te,
-                )
-                .await
-                .ok()
-                .flatten()
-                .map(|row| row.id)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    // Insert one wave segment per consecutive anchor pair
     let anchors = &detection.anchors;
-    let mut inserted_ids: Vec<Uuid> = Vec::new();
+    let mut segments: Vec<SegData> = Vec::new();
     for (i, pair) in anchors.windows(2).enumerate() {
         let a = &pair[0];
         let b = &pair[1];
-        let wave_label = if i < notation.len() {
+        let label = if i < notation.len() {
             Some(notation[i].to_string())
         } else {
             a.label.clone().or_else(|| Some(format!("{}", i + 1)))
         };
+        let ts = chronological.get(a.bar_index as usize).map(|r| r.open_time);
+        let te = chronological.get(b.bar_index as usize).map(|r| r.open_time);
+        let dir = if b.price >= a.price { "bullish" } else { "bearish" };
+        segments.push(SegData {
+            label,
+            time_start: ts,
+            time_end: te,
+            price_start: a.price,
+            price_end: b.price,
+            bar_start: a.bar_index as i64,
+            bar_end: b.bar_index as i64,
+            direction: dir.to_string(),
+        });
+    }
 
-        let time_start = chronological.get(a.bar_index as usize).map(|r| r.open_time);
-        let time_end = chronological.get(b.bar_index as usize).map(|r| r.open_time);
+    if segments.is_empty() {
+        return Ok(());
+    }
 
-        let seg_direction = if b.price >= a.price { "bullish" } else { "bearish" };
+    // Insert segments and link parents per-segment
+    let parent_tf_interval = degree.parent_timeframe().map(timeframe_to_interval);
+    let parent_deg_label = degree.parent().map(|d| d.label());
+    let child_tf_interval = degree.child_timeframe().map(timeframe_to_interval);
+    let child_deg_label = degree.child().map(|d| d.label());
+
+    let mut inserted_ids: Vec<(Uuid, Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>)> = Vec::new();
+
+    for (i, seg) in segments.iter().enumerate() {
+        // Per-segment parent lookup: find a parent wave whose range contains THIS segment
+        let parent_id = match (seg.time_start, seg.time_end, &parent_tf_interval, &parent_deg_label) {
+            (Some(ts), Some(te), Some(ptf), Some(pdeg)) => {
+                find_parent_wave(pool, exchange, symbol, ptf, pdeg, ts, te)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|row| row.id)
+            }
+            _ => None,
+        };
 
         let row = WaveChainInsert {
             parent_id,
@@ -1470,55 +1476,43 @@ async fn link_elliott_to_wave_chain(
             timeframe: interval.to_string(),
             degree: degree.label().to_string(),
             kind: kind.to_string(),
-            direction: seg_direction.to_string(),
-            wave_number: wave_label,
-            bar_start: a.bar_index as i64,
-            bar_end: b.bar_index as i64,
-            price_start: a.price,
-            price_end: b.price,
+            direction: seg.direction.clone(),
+            wave_number: seg.label.clone(),
+            bar_start: seg.bar_start,
+            bar_end: seg.bar_end,
+            price_start: seg.price_start,
+            price_end: seg.price_end,
             structural_score: detection.structural_score,
             state: "active".to_string(),
             detection_id: if i == 0 { Some(detection_id) } else { None },
-            time_start,
-            time_end,
+            time_start: seg.time_start,
+            time_end: seg.time_end,
         };
 
         match insert_wave_chain(pool, &row).await {
-            Ok(id) => inserted_ids.push(id),
+            Ok(id) => inserted_ids.push((id, seg.time_start, seg.time_end)),
             Err(e) => {
                 tracing::warn!(%e, "wave_chain insert failed for segment {i}");
             }
         }
     }
 
-    // Adopt orphan children on child TF that fall within this detection's range
-    if let (Some(ts), Some(te)) = (det_time_start, det_time_end) {
-        if let Some(child_tf) = degree.child_timeframe() {
-            if let Some(child_deg) = degree.child() {
-                for &seg_id in &inserted_ids {
-                    let _ = adopt_children(
-                        pool,
-                        seg_id,
-                        exchange,
-                        symbol,
-                        timeframe_to_interval(child_tf),
-                        child_deg.label(),
-                        ts,
-                        te,
-                    )
-                    .await;
-                }
+    // Adopt orphan children: per-segment, using each segment's own time range
+    if let (Some(ctf), Some(cdeg)) = (&child_tf_interval, &child_deg_label) {
+        for &(seg_id, ts, te) in &inserted_ids {
+            if let (Some(ts), Some(te)) = (ts, te) {
+                let _ = adopt_children(pool, seg_id, exchange, symbol, ctf, cdeg, ts, te).await;
             }
         }
     }
 
+    let linked_parents = inserted_ids.iter().filter(|(_, _, _)| true).count();
     tracing::info!(
         symbol,
         interval,
         degree = degree.label(),
         segments = inserted_ids.len(),
-        parent = ?parent_id,
-        "wave_chain linked"
+        "wave_chain linked ({linked_parents} segments)"
     );
 
     Ok(())
