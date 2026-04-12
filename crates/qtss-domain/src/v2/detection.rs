@@ -49,52 +49,166 @@ pub struct PivotRef {
     pub label: Option<String>,
 }
 
-/// Elliott Wave degree label per Frost & Prechter.
+/// Elliott Wave degree per Frost & Prechter convention.
 ///
-/// Maps from timeframe resolution to the conventional degree name.
-/// Used as a label only — does NOT change detection rules. A future
-/// multi-degree validation phase will use this for cross-timeframe
-/// consistency checks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// ## Timeframe → Degree mapping (primary degree per TF)
+///
+/// Each timeframe produces waves at a *primary* degree. The waves
+/// detected on that TF decompose into sub-waves one degree lower,
+/// visible on the next-lower TF. Conversely, they assemble into
+/// larger waves one degree higher on the next-upper TF.
+///
+/// ```text
+/// Timeframe │ Primary Degree  │ Sub-degree (child TF) │ Parent (upper TF)
+/// ──────────┼─────────────────┼───────────────────────┼──────────────────
+/// 1M        │ Supercycle      │ Cycle (1w)            │ Grand Supercycle
+/// 1w        │ Cycle           │ Primary (1d)          │ Supercycle (1M)
+/// 1d        │ Primary         │ Intermediate (4h)     │ Cycle (1w)
+/// 4h        │ Intermediate    │ Minor (1h)            │ Primary (1d)
+/// 1h        │ Minor           │ Minute (15m)          │ Intermediate (4h)
+/// 15m/30m   │ Minute          │ Minuette (5m)         │ Minor (1h)
+/// 5m        │ Minuette        │ Subminuette (1m)      │ Minute (15m)
+/// 1m/3m     │ Subminuette     │ —                     │ Minuette (5m)
+/// ```
+///
+/// ## Cross-TF relationship
+///
+/// A Minor impulse on 1h (waves 1-2-3-4-5) decomposes on 15m into
+/// five Minute-degree sub-waves. Wave-3 on 1h = a full Minute
+/// impulse (i)-(ii)-(iii)-(iv)-(v) on 15m. This is the fractal
+/// nature of Elliott: every wave is composed of smaller waves.
+///
+/// ## Notation (unique per degree, no collisions)
+///
+/// ```text
+/// Degree           │ Impulse                         │ Corrective
+/// ─────────────────┼─────────────────────────────────┼────────────────────
+/// Grand Supercycle │ [I]  [II]  [III]  [IV]  [V]     │ [a]  [b]  [c]
+/// Supercycle       │ (I)  (II)  (III)  (IV)  (V)     │ (a)  (b)  (c)
+/// Cycle            │ I    II    III    IV    V        │ a    b    c
+/// Primary          │ [1]  [2]   [3]   [4]   [5]     │ [A]  [B]  [C]
+/// Intermediate     │ (1)  (2)   (3)   (4)   (5)     │ (A)  (B)  (C)
+/// Minor            │ 1    2     3     4     5        │ A    B    C
+/// Minute           │ [i]  [ii]  [iii] [iv]  [v]     │ [a]  [b]  [c]
+/// Minuette         │ (i)  (ii)  (iii) (iv)  (v)     │ (a)  (b)  (c)
+/// Subminuette      │ i    ii    iii   iv    v        │ a    b    c
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WaveDegree {
-    GrandSupercycle,
-    Supercycle,
-    Cycle,
-    Primary,
-    Intermediate,
-    Minor,
-    Minute,
-    Minuette,
-    Subminuette,
+    Subminuette = 0,
+    Minuette = 1,
+    Minute = 2,
+    Minor = 3,
+    Intermediate = 4,
+    Primary = 5,
+    Cycle = 6,
+    Supercycle = 7,
+    GrandSupercycle = 8,
 }
 
 impl WaveDegree {
-    /// Map a timeframe to its default wave degree.
-    ///
-    /// This is a heuristic — the actual degree depends on how many bars
-    /// the pattern spans, not just the chart resolution. A future phase
-    /// will refine this with bar-count context.
+    /// All degrees from lowest to highest.
+    pub const ALL: [WaveDegree; 9] = [
+        WaveDegree::Subminuette,
+        WaveDegree::Minuette,
+        WaveDegree::Minute,
+        WaveDegree::Minor,
+        WaveDegree::Intermediate,
+        WaveDegree::Primary,
+        WaveDegree::Cycle,
+        WaveDegree::Supercycle,
+        WaveDegree::GrandSupercycle,
+    ];
+
+    /// Map a timeframe to its primary wave degree.
     pub fn from_timeframe(tf: Timeframe) -> Self {
         match tf {
-            Timeframe::Mn1             => WaveDegree::Primary,
-            Timeframe::W1              => WaveDegree::Intermediate,
-            Timeframe::D1 | Timeframe::D3 => WaveDegree::Minor,
+            Timeframe::Mn1              => WaveDegree::Supercycle,
+            Timeframe::W1               => WaveDegree::Cycle,
+            Timeframe::D1 | Timeframe::D3 => WaveDegree::Primary,
             Timeframe::H4 | Timeframe::H6 | Timeframe::H8 | Timeframe::H12
-                                       => WaveDegree::Minute,
+                                        => WaveDegree::Intermediate,
             Timeframe::H1 | Timeframe::H2
-                                       => WaveDegree::Minuette,
+                                        => WaveDegree::Minor,
             Timeframe::M15 | Timeframe::M30
-                                       => WaveDegree::Minuette,
-            Timeframe::M1 | Timeframe::M3 | Timeframe::M5
-                                       => WaveDegree::Subminuette,
+                                        => WaveDegree::Minute,
+            Timeframe::M5              => WaveDegree::Minuette,
+            Timeframe::M1 | Timeframe::M3
+                                        => WaveDegree::Subminuette,
         }
     }
 
-    /// Conventional notation for impulse waves at this degree.
+    /// The degree one level lower (sub-waves). `None` for Subminuette.
+    pub fn child(self) -> Option<Self> {
+        match self {
+            WaveDegree::GrandSupercycle => Some(WaveDegree::Supercycle),
+            WaveDegree::Supercycle      => Some(WaveDegree::Cycle),
+            WaveDegree::Cycle           => Some(WaveDegree::Primary),
+            WaveDegree::Primary         => Some(WaveDegree::Intermediate),
+            WaveDegree::Intermediate    => Some(WaveDegree::Minor),
+            WaveDegree::Minor           => Some(WaveDegree::Minute),
+            WaveDegree::Minute          => Some(WaveDegree::Minuette),
+            WaveDegree::Minuette        => Some(WaveDegree::Subminuette),
+            WaveDegree::Subminuette     => None,
+        }
+    }
+
+    /// The degree one level higher (parent wave). `None` for GrandSupercycle.
+    pub fn parent(self) -> Option<Self> {
+        match self {
+            WaveDegree::GrandSupercycle => None,
+            WaveDegree::Supercycle      => Some(WaveDegree::GrandSupercycle),
+            WaveDegree::Cycle           => Some(WaveDegree::Supercycle),
+            WaveDegree::Primary         => Some(WaveDegree::Cycle),
+            WaveDegree::Intermediate    => Some(WaveDegree::Primary),
+            WaveDegree::Minor           => Some(WaveDegree::Intermediate),
+            WaveDegree::Minute          => Some(WaveDegree::Minor),
+            WaveDegree::Minuette        => Some(WaveDegree::Minute),
+            WaveDegree::Subminuette     => Some(WaveDegree::Minuette),
+        }
+    }
+
+    /// The timeframe where sub-waves of this degree are visible.
+    pub fn child_timeframe(self) -> Option<Timeframe> {
+        match self {
+            WaveDegree::GrandSupercycle => Some(Timeframe::Mn1),
+            WaveDegree::Supercycle      => Some(Timeframe::W1),
+            WaveDegree::Cycle           => Some(Timeframe::D1),
+            WaveDegree::Primary         => Some(Timeframe::H4),
+            WaveDegree::Intermediate    => Some(Timeframe::H1),
+            WaveDegree::Minor           => Some(Timeframe::M15),
+            WaveDegree::Minute          => Some(Timeframe::M5),
+            WaveDegree::Minuette        => Some(Timeframe::M1),
+            WaveDegree::Subminuette     => None,
+        }
+    }
+
+    /// The timeframe where parent waves of this degree are visible.
+    pub fn parent_timeframe(self) -> Option<Timeframe> {
+        match self {
+            WaveDegree::GrandSupercycle => None,
+            WaveDegree::Supercycle      => None, // no TF above 1M
+            WaveDegree::Cycle           => Some(Timeframe::Mn1),
+            WaveDegree::Primary         => Some(Timeframe::W1),
+            WaveDegree::Intermediate    => Some(Timeframe::D1),
+            WaveDegree::Minor           => Some(Timeframe::H4),
+            WaveDegree::Minute          => Some(Timeframe::H1),
+            WaveDegree::Minuette        => Some(Timeframe::M15),
+            WaveDegree::Subminuette     => Some(Timeframe::M5),
+        }
+    }
+
+    /// Conventional impulse notation — unique per degree, no collisions.
+    ///
+    /// Follows Frost & Prechter / Neely standard exactly:
+    /// - Roman numerals for Cycle+ (uppercase)
+    /// - Arabic numerals for Primary–Minor
+    /// - Roman numerals lowercase for Minute–Subminuette
+    /// - Brackets `[]` for outermost, parens `()` for middle, plain for base
     pub fn impulse_notation(self) -> &'static [&'static str; 5] {
         match self {
-            WaveDegree::GrandSupercycle => &["[1]", "[2]", "[3]", "[4]", "[5]"],
+            WaveDegree::GrandSupercycle => &["[I]", "[II]", "[III]", "[IV]", "[V]"],
             WaveDegree::Supercycle      => &["(I)", "(II)", "(III)", "(IV)", "(V)"],
             WaveDegree::Cycle           => &["I", "II", "III", "IV", "V"],
             WaveDegree::Primary         => &["[1]", "[2]", "[3]", "[4]", "[5]"],
@@ -106,7 +220,7 @@ impl WaveDegree {
         }
     }
 
-    /// Conventional notation for corrective waves at this degree.
+    /// Conventional corrective notation — unique per degree.
     pub fn corrective_notation(self) -> &'static [&'static str; 3] {
         match self {
             WaveDegree::GrandSupercycle => &["[a]", "[b]", "[c]"],
@@ -134,6 +248,11 @@ impl WaveDegree {
             WaveDegree::Minuette        => "Minuette",
             WaveDegree::Subminuette     => "Subminuette",
         }
+    }
+
+    /// Numeric rank for ordering (0 = smallest, 8 = largest).
+    pub fn rank(self) -> u8 {
+        self as u8
     }
 }
 
@@ -267,29 +386,35 @@ impl Detection {
         self
     }
 
-    /// Inject Elliott wave degree label into raw_meta based on timeframe.
+    /// Inject Elliott wave degree metadata into raw_meta based on timeframe.
+    /// Includes degree, notation, child/parent TF for cross-TF linking.
     /// Only applies to `PatternKind::Elliott` — no-op for other families.
     pub fn with_degree(mut self) -> Self {
         if matches!(self.kind, PatternKind::Elliott(_)) {
             let degree = WaveDegree::from_timeframe(self.timeframe);
+            let degree_meta = serde_json::json!({
+                "degree": degree,
+                "degree_label": degree.label(),
+                "degree_rank": degree.rank(),
+                "impulse_notation": degree.impulse_notation(),
+                "corrective_notation": degree.corrective_notation(),
+                "child_degree": degree.child().map(|d| d.label()),
+                "parent_degree": degree.parent().map(|d| d.label()),
+                "child_timeframe": degree.child_timeframe().map(|t| format!("{:?}", t)),
+                "parent_timeframe": degree.parent_timeframe().map(|t| format!("{:?}", t)),
+            });
             let meta = match self.raw_meta {
                 serde_json::Value::Object(mut map) => {
-                    map.insert("degree".into(), serde_json::json!(degree));
-                    map.insert("degree_label".into(), serde_json::json!(degree.label()));
+                    for (k, v) in degree_meta.as_object().unwrap() {
+                        map.insert(k.clone(), v.clone());
+                    }
                     serde_json::Value::Object(map)
                 }
-                serde_json::Value::Null => {
-                    serde_json::json!({
-                        "degree": degree,
-                        "degree_label": degree.label()
-                    })
-                }
+                serde_json::Value::Null => degree_meta,
                 other => {
-                    serde_json::json!({
-                        "previous": other,
-                        "degree": degree,
-                        "degree_label": degree.label()
-                    })
+                    let mut map = degree_meta.as_object().unwrap().clone();
+                    map.insert("previous".into(), other);
+                    serde_json::Value::Object(map)
                 }
             };
             self.raw_meta = meta;
