@@ -102,6 +102,20 @@ function isoToUnix(iso: string): Time {
   return Math.floor(new Date(iso).getTime() / 1000) as Time;
 }
 
+/** Sort + deduplicate line data for TV strict-ascending requirement */
+function sortLineData<T extends { time: Time }>(data: T[]): T[] {
+  const sorted = [...data].sort((a, b) => (a.time as number) - (b.time as number));
+  const out: T[] = [];
+  let prev = -1;
+  for (const d of sorted) {
+    const t = d.time as number;
+    if (t <= prev) continue;
+    prev = t;
+    out.push(d);
+  }
+  return out;
+}
+
 function familyColor(family: string, subkind?: string): string {
   if (family === "range" && subkind && RANGE_SUBKIND_COLORS[subkind]) {
     return RANGE_SUBKIND_COLORS[subkind];
@@ -531,7 +545,7 @@ export function Chart() {
           time: isoToUnix(a.time),
           value: Number(a.price),
         }));
-        formLine.setData(lineData);
+        formLine.setData(sortLineData(lineData));
         overlayLinesRef.current.push(formLine);
 
         // Projected anchors (dashed continuation)
@@ -554,7 +568,7 @@ export function Chart() {
               value: Number(a.price),
             })),
           ];
-          projLine.setData(projData);
+          projLine.setData(sortLineData(projData));
           overlayLinesRef.current.push(projLine);
         }
 
@@ -572,10 +586,10 @@ export function Chart() {
               pointMarkersVisible: true,
               pointMarkersRadius: 2,
             });
-            swLine.setData(seg.map((a) => ({
+            swLine.setData(sortLineData(seg.map((a) => ({
               time: isoToUnix(a.time),
               value: Number(a.price),
-            })));
+            }))));
             overlayLinesRef.current.push(swLine);
           }
         }
@@ -600,10 +614,10 @@ export function Chart() {
           const endTime = isoToUnix(d.anchors[d.anchors.length - 1].time);
           const startIdx = Math.max(0, merged.candles.length - 30);
           const startTime = isoToUnix(merged.candles[startIdx].open_time);
-          hl.setData([
+          hl.setData(sortLineData([
             { time: startTime, value: price },
             { time: endTime, value: price },
-          ]);
+          ]));
           overlayLinesRef.current.push(hl);
         }
       }
@@ -630,10 +644,10 @@ export function Chart() {
             lastValueVisible: false,
             priceLineVisible: false,
           });
-          lvl.setData([
+          lvl.setData(sortLineData([
             { time: lastTime, value: price },
             { time: futureTime, value: price },
-          ]);
+          ]));
           overlayLinesRef.current.push(lvl);
         };
 
@@ -658,7 +672,7 @@ export function Chart() {
           pointMarkersVisible: true,
           pointMarkersRadius: 3,
         });
-        zigLine.setData(pts.map((p) => ({ time: p.time, value: p.price })));
+        zigLine.setData(sortLineData(pts.map((p) => ({ time: p.time, value: p.price }))));
         overlayLinesRef.current.push(zigLine);
 
         // Swing labels as markers on the candle series
@@ -702,10 +716,10 @@ export function Chart() {
         });
         const firstT = isoToUnix(merged.candles[0].open_time);
         const lastT = isoToUnix(merged.candles[merged.candles.length - 1].open_time);
-        topLine.setData([
+        topLine.setData(sortLineData([
           { time: firstT, value: wRange.top },
           { time: lastT, value: wRange.top },
-        ]);
+        ]));
         overlayLinesRef.current.push(topLine);
       }
       if (wRange.bottom != null) {
@@ -719,10 +733,10 @@ export function Chart() {
         });
         const firstT = isoToUnix(merged.candles[0].open_time);
         const lastT = isoToUnix(merged.candles[merged.candles.length - 1].open_time);
-        botLine.setData([
+        botLine.setData(sortLineData([
           { time: firstT, value: wRange.bottom },
           { time: lastT, value: wRange.bottom },
-        ]);
+        ]));
         overlayLinesRef.current.push(botLine);
       }
       // Creek line
@@ -737,10 +751,10 @@ export function Chart() {
         });
         const firstT = isoToUnix(merged.candles[0].open_time);
         const lastT = isoToUnix(merged.candles[merged.candles.length - 1].open_time);
-        creekLine.setData([
+        creekLine.setData(sortLineData([
           { time: firstT, value: creek },
           { time: lastT, value: creek },
-        ]);
+        ]));
         overlayLinesRef.current.push(creekLine);
       }
       // Ice line
@@ -755,10 +769,10 @@ export function Chart() {
         });
         const firstT = isoToUnix(merged.candles[0].open_time);
         const lastT = isoToUnix(merged.candles[merged.candles.length - 1].open_time);
-        iceLine.setData([
+        iceLine.setData(sortLineData([
           { time: firstT, value: ice },
           { time: lastT, value: ice },
-        ]);
+        ]));
         overlayLinesRef.current.push(iceLine);
       }
     }
