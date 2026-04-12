@@ -1484,9 +1484,10 @@ async fn link_elliott_to_wave_chain(
             price_end: seg.price_end,
             structural_score: detection.structural_score,
             state: "active".to_string(),
-            detection_id: if i == 0 { Some(detection_id) } else { None },
+            detection_id: Some(detection_id),
             time_start: seg.time_start,
             time_end: seg.time_end,
+            subkind: subkind.clone(),
         };
 
         match insert_wave_chain(pool, &row).await {

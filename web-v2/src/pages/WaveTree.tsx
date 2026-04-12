@@ -18,6 +18,7 @@ interface WaveSegment {
 interface Formation {
   id: string;
   kind: string;
+  subkind: string;
   direction: string;
   degree: string;
   state: string;
@@ -288,10 +289,15 @@ function FormationBlock({
           {f.degree}
         </span>
 
-        {/* Kind (Impulse / Corrective) */}
+        {/* Kind + subkind name */}
         <span className="font-semibold text-xs" style={{ color: sc.text }}>
           {f.kind === "impulse" ? "IMPULSE" : "CORRECTIVE"}
         </span>
+        {f.subkind && (
+          <span className="text-[10px] text-zinc-400 italic">
+            {f.subkind.replace(/_/g, " ")}
+          </span>
+        )}
 
         {/* Direction */}
         <span className={`text-[10px] ${f.direction === "bullish" ? "text-emerald-400/70" : "text-red-400/70"}`}>

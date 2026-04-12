@@ -37,6 +37,7 @@ pub struct WaveSegmentWire {
 pub struct FormationWire {
     pub id: String,
     pub kind: String,
+    pub subkind: String,
     pub direction: String,
     pub degree: String,
     pub state: String,
@@ -86,11 +87,13 @@ async fn get_tf_level(
         q.time_start, q.time_end, 200,
     ).await.map_err(|e| ApiError::internal(e.to_string()))?;
 
-    // Group wave segments into formations by shared parent_id
+    // Group wave segments into formations by shared detection_id
     let mut groups: std::collections::BTreeMap<String, Vec<wave_chain::WaveChainRow>> =
         std::collections::BTreeMap::new();
     for row in rows {
-        let key = row.parent_id.map(|p| p.to_string()).unwrap_or_else(|| format!("solo_{}", row.id));
+        let key = row.detection_id
+            .map(|d| d.to_string())
+            .unwrap_or_else(|| format!("solo_{}", row.id));
         groups.entry(key).or_default().push(row);
     }
 
@@ -125,6 +128,7 @@ async fn get_tf_level(
         formations.push(FormationWire {
             id: first.id.to_string(),
             kind: first.kind.clone(),
+            subkind: first.subkind.clone(),
             direction: first.direction.clone(),
             degree: first.degree.clone(),
             state: if any_active { "active".into() } else { "completed".into() },

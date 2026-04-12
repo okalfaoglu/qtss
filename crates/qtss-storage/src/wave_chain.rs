@@ -30,6 +30,7 @@ pub struct WaveChainRow {
     pub detection_id: Option<Uuid>,
     pub time_start: Option<DateTime<Utc>>,
     pub time_end: Option<DateTime<Utc>>,
+    pub subkind: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -53,6 +54,7 @@ pub struct WaveChainInsert {
     pub detection_id: Option<Uuid>,
     pub time_start: Option<DateTime<Utc>>,
     pub time_end: Option<DateTime<Utc>>,
+    pub subkind: String,
 }
 
 /// Insert a wave segment, return the generated UUID.
@@ -61,8 +63,8 @@ pub async fn insert_wave_chain(pool: &PgPool, row: &WaveChainInsert) -> Result<U
         r#"INSERT INTO wave_chain
            (parent_id, exchange, symbol, timeframe, degree, kind, direction,
             wave_number, bar_start, bar_end, price_start, price_end,
-            structural_score, state, detection_id, time_start, time_end)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+            structural_score, state, detection_id, time_start, time_end, subkind)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
            RETURNING id"#,
     )
     .bind(row.parent_id)
@@ -82,6 +84,7 @@ pub async fn insert_wave_chain(pool: &PgPool, row: &WaveChainInsert) -> Result<U
     .bind(row.detection_id)
     .bind(row.time_start)
     .bind(row.time_end)
+    .bind(&row.subkind)
     .fetch_one(pool)
     .await?;
     Ok(id.0)
