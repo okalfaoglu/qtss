@@ -99,9 +99,9 @@ async fn get_tf_level(
         // Count children for each wave segment
         let mut wire_waves = Vec::new();
         for w in &waves {
-            let children = wave_chain::list_children(&st.pool, w.id)
+            let child_count = wave_chain::count_children(&st.pool, w.id)
                 .await
-                .unwrap_or_default();
+                .unwrap_or(0) as usize;
             wire_waves.push(WaveSegmentWire {
                 id: w.id.to_string(),
                 wave_number: w.wave_number.clone(),
@@ -112,7 +112,7 @@ async fn get_tf_level(
                 time_end: w.time_end,
                 structural_score: w.structural_score,
                 state: w.state.clone(),
-                child_count: children.len(),
+                child_count,
             });
         }
 
@@ -152,9 +152,9 @@ async fn get_wave_children(
 
     let mut result = Vec::new();
     for c in &children {
-        let grandchildren = wave_chain::list_children(&st.pool, c.id)
+        let gc_count = wave_chain::count_children(&st.pool, c.id)
             .await
-            .unwrap_or_default();
+            .unwrap_or(0) as usize;
         result.push(WaveSegmentWire {
             id: c.id.to_string(),
             wave_number: c.wave_number.clone(),
@@ -165,7 +165,7 @@ async fn get_wave_children(
             time_end: c.time_end,
             structural_score: c.structural_score,
             state: c.state.clone(),
-            child_count: grandchildren.len(),
+            child_count: gc_count,
         });
     }
 

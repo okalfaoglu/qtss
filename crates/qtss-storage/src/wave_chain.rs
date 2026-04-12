@@ -150,6 +150,17 @@ pub async fn adopt_children(
     Ok(res.rows_affected())
 }
 
+/// Count direct children of a wave.
+pub async fn count_children(pool: &PgPool, parent_id: Uuid) -> Result<i64, sqlx::Error> {
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM wave_chain WHERE parent_id = $1",
+    )
+    .bind(parent_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
 /// List children of a parent wave, ordered by wave_number.
 pub async fn list_children(pool: &PgPool, parent_id: Uuid) -> Result<Vec<WaveChainRow>, sqlx::Error> {
     sqlx::query_as::<_, WaveChainRow>(
