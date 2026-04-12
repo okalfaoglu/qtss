@@ -52,7 +52,7 @@ use qtss_regime::{RegimeConfig, RegimeEngine};
 use qtss_storage::{
     list_enabled_engine_symbols, list_recent_bars, resolve_system_f64, resolve_system_string,
     resolve_system_u64, resolve_worker_enabled_flag, DetectionFilter, EngineSymbolRow,
-    NewDetection, V2DetectionRepository,
+    MarketBarRow, NewDetection, V2DetectionRepository,
     max_cached_bar_index, upsert_pivot_cache_batch, PivotCacheRow,
 };
 use qtss_wyckoff::{WyckoffConfig, WyckoffDetector};
@@ -1203,6 +1203,24 @@ async fn process_symbol(
                 warn!(symbol = %sym.symbol, %e, "wyckoff structure upsert failed");
             }
         }
+
+        // Elliott Deep: link detection to wave_chain hierarchy.
+        if family == "elliott" {
+            if let Err(e) = link_elliott_to_wave_chain(
+                pool,
+                &sym.exchange,
+                &sym.symbol,
+                &sym.interval,
+                timeframe,
+                &detection,
+                inserted_id,
+                &chronological,
+            )
+            .await
+            {
+                warn!(symbol = %sym.symbol, %e, "wave_chain link failed");
+            }
+        }
         }
     }
 
@@ -1353,6 +1371,159 @@ async fn upsert_wyckoff_structure_from_detection(
     Ok(())
 }
 
+/// Elliott Deep: insert wave segments into `wave_chain` and link the
+/// cross-TF matryoshka hierarchy (parent ↔ children).
+async fn link_elliott_to_wave_chain(
+    pool: &PgPool,
+    exchange: &str,
+    symbol: &str,
+    interval: &str,
+    timeframe: Timeframe,
+    detection: &Detection,
+    detection_id: Uuid,
+    chronological: &[MarketBarRow],
+) -> anyhow::Result<()> {
+    use qtss_domain::v2::detection::WaveDegree;
+    use qtss_storage::wave_chain::{
+        adopt_children, find_parent_wave, insert_wave_chain, WaveChainInsert,
+    };
+
+    let degree = WaveDegree::from_timeframe(timeframe);
+    let subkind = match &detection.kind {
+        PatternKind::Elliott(s) => s.clone(),
+        _ => return Ok(()),
+    };
+    let is_impulse = subkind.contains("impulse") || subkind.contains("diagonal");
+    let kind = if is_impulse { "impulse" } else { "corrective" };
+    let notation = if is_impulse {
+        degree.impulse_notation().as_slice()
+    } else {
+        degree.corrective_notation().as_slice()
+    };
+
+    // Direction from anchor movement: first→last
+    let _direction = match (detection.anchors.first(), detection.anchors.last()) {
+        (Some(first), Some(last)) if last.price >= first.price => "bullish",
+        _ => "bearish",
+    };
+
+    // Full detection time range
+    let det_time_start = detection
+        .anchors
+        .first()
+        .and_then(|a| chronological.get(a.bar_index as usize))
+        .map(|r| r.open_time);
+    let det_time_end = detection
+        .anchors
+        .last()
+        .and_then(|a| chronological.get(a.bar_index as usize))
+        .map(|r| r.open_time);
+
+    // Try to find a parent wave on the parent TF whose range contains this detection
+    let parent_id = if let (Some(ts), Some(te)) = (det_time_start, det_time_end) {
+        if let Some(parent_tf) = degree.parent_timeframe() {
+            if let Some(parent_deg) = degree.parent() {
+                find_parent_wave(
+                    pool,
+                    exchange,
+                    symbol,
+                    timeframe_to_interval(parent_tf),
+                    parent_deg.label(),
+                    ts,
+                    te,
+                )
+                .await
+                .ok()
+                .flatten()
+                .map(|row| row.id)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Insert one wave segment per consecutive anchor pair
+    let anchors = &detection.anchors;
+    let mut inserted_ids: Vec<Uuid> = Vec::new();
+    for (i, pair) in anchors.windows(2).enumerate() {
+        let a = &pair[0];
+        let b = &pair[1];
+        let wave_label = if i < notation.len() {
+            Some(notation[i].to_string())
+        } else {
+            a.label.clone().or_else(|| Some(format!("{}", i + 1)))
+        };
+
+        let time_start = chronological.get(a.bar_index as usize).map(|r| r.open_time);
+        let time_end = chronological.get(b.bar_index as usize).map(|r| r.open_time);
+
+        let seg_direction = if b.price >= a.price { "bullish" } else { "bearish" };
+
+        let row = WaveChainInsert {
+            parent_id,
+            exchange: exchange.to_string(),
+            symbol: symbol.to_string(),
+            timeframe: interval.to_string(),
+            degree: degree.label().to_string(),
+            kind: kind.to_string(),
+            direction: seg_direction.to_string(),
+            wave_number: wave_label,
+            bar_start: a.bar_index as i64,
+            bar_end: b.bar_index as i64,
+            price_start: a.price,
+            price_end: b.price,
+            structural_score: detection.structural_score,
+            state: "active".to_string(),
+            detection_id: if i == 0 { Some(detection_id) } else { None },
+            time_start,
+            time_end,
+        };
+
+        match insert_wave_chain(pool, &row).await {
+            Ok(id) => inserted_ids.push(id),
+            Err(e) => {
+                tracing::warn!(%e, "wave_chain insert failed for segment {i}");
+            }
+        }
+    }
+
+    // Adopt orphan children on child TF that fall within this detection's range
+    if let (Some(ts), Some(te)) = (det_time_start, det_time_end) {
+        if let Some(child_tf) = degree.child_timeframe() {
+            if let Some(child_deg) = degree.child() {
+                for &seg_id in &inserted_ids {
+                    let _ = adopt_children(
+                        pool,
+                        seg_id,
+                        exchange,
+                        symbol,
+                        timeframe_to_interval(child_tf),
+                        child_deg.label(),
+                        ts,
+                        te,
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+
+    tracing::info!(
+        symbol,
+        interval,
+        degree = degree.label(),
+        segments = inserted_ids.len(),
+        parent = ?parent_id,
+        "wave_chain linked"
+    );
+
+    Ok(())
+}
+
 /// Look up the most recent open detection for this (symbol, tf, family,
 /// subkind) and return its id if its last anchor matches — meaning the
 /// new detection is the same structure. The caller can then update the
@@ -1395,6 +1566,28 @@ async fn dedup_open(
 // ---------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------
+
+/// Convert a Timeframe back to TradingView-style interval string
+/// (inverse of parse_timeframe).
+fn timeframe_to_interval(tf: Timeframe) -> &'static str {
+    match tf {
+        Timeframe::M1 => "1m",
+        Timeframe::M3 => "3m",
+        Timeframe::M5 => "5m",
+        Timeframe::M15 => "15m",
+        Timeframe::M30 => "30m",
+        Timeframe::H1 => "1h",
+        Timeframe::H2 => "2h",
+        Timeframe::H4 => "4h",
+        Timeframe::H6 => "6h",
+        Timeframe::H8 => "8h",
+        Timeframe::H12 => "12h",
+        Timeframe::D1 => "1d",
+        Timeframe::D3 => "3d",
+        Timeframe::W1 => "1w",
+        Timeframe::Mn1 => "1mo",
+    }
+}
 
 pub(crate) fn parse_timeframe(interval: &str) -> Option<Timeframe> {
     // engine_symbols stores TradingView-ish strings ("1m", "1h", "1d");
