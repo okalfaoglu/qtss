@@ -998,15 +998,66 @@ async fn process_symbol(
                     })
                 })
                 .collect::<Vec<_>>());
+            // ── Projection accuracy check ──────────────────────────
+            // Compare projected anchor prices with actual bar closes.
+            // If a projected anchor's bar_index has been reached, measure
+            // the deviation. Large deviations decay the structural_score;
+            // accurate projections boost it (capped at 1.0).
+            let mut accuracy_score = detection.structural_score;
+            let mut projection_hits = 0u32;
+            let mut projection_misses = 0u32;
+            let current_bar_count = chronological.len() as u64;
+            let _last_close = chronological
+                .last()
+                .map(|r| r.close)
+                .unwrap_or_default();
+
+            for pa in &detection.projected_anchors {
+                if pa.bar_index >= current_bar_count {
+                    continue; // not yet reached
+                }
+                // Find the actual bar at projected index
+                if let Some(actual_bar) = chronological.get(pa.bar_index as usize) {
+                    let actual_close = actual_bar.close;
+                    let projected_price = pa.price;
+                    let deviation = if projected_price != Decimal::ZERO {
+                        ((actual_close - projected_price).abs() / projected_price)
+                            .to_f32()
+                            .unwrap_or(1.0)
+                    } else {
+                        1.0
+                    };
+                    // <5% deviation = hit, >15% = miss
+                    if deviation < 0.05 {
+                        projection_hits += 1;
+                        accuracy_score = (accuracy_score + 0.02).min(1.0);
+                    } else if deviation > 0.15 {
+                        projection_misses += 1;
+                        accuracy_score = (accuracy_score - 0.05).max(0.0);
+                    }
+                }
+            }
+
+            // If too many misses, invalidate the projection
+            if projection_misses >= 2 && projection_hits == 0 {
+                if let Err(e) = repo.update_state(existing_id, "invalidated").await {
+                    warn!(%existing_id, %e, "projection-accuracy invalidate failed");
+                }
+                stats.deduped += 1;
+                continue;
+            }
+
             let updated_meta = json!({
                 "detection_id": detection.id,
                 "last_anchor_idx": last_anchor_idx,
-                "structural_score": detection.structural_score,
+                "structural_score": accuracy_score,
                 "projected_anchors": projected_json,
+                "projection_hits": projection_hits,
+                "projection_misses": projection_misses,
             });
             if let Err(e) = repo.update_projection(
                 existing_id,
-                detection.structural_score,
+                accuracy_score,
                 updated_meta,
             ).await {
                 warn!(symbol = %sym.symbol, %e, "update_projection on dedup failed");

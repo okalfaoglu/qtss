@@ -521,6 +521,9 @@ export function Chart() {
     }
     overlayLinesRef.current = [];
 
+    // Collect all markers (labels, TP/SL, zigzag) then apply once at the end.
+    const allMarkers: SeriesMarker<Time>[] = [];
+
     // ── Detection overlays ──
     // For each detection, draw line series for the formation + projections
     for (const d of visibleDetections) {
@@ -628,15 +631,18 @@ export function Chart() {
       const showDetail = (familyModes[d.family] ?? "on") === "detail" || isHov;
       if (showDetail && d.anchors.length > 0) {
         const { entry, tp1, tp2, sl } = computeTargets(d);
+        const conf = Number(d.confidence) || 0;
+        const confStr = conf > 0 ? ` (${(conf * 100).toFixed(0)}%)` : "";
         const lastTime = isoToUnix(d.anchors[d.anchors.length - 1].time);
-        // Find a time 20 bars into the future
         const barInterval = merged.candles.length >= 2
           ? (new Date(merged.candles[merged.candles.length - 1].open_time).getTime() -
              new Date(merged.candles[merged.candles.length - 2].open_time).getTime()) / 1000
           : 3600;
         const futureTime = (lastTime as number + barInterval * 20) as Time;
+        // midpoint time for label positioning
+        const midTime = (lastTime as number + barInterval * 10) as Time;
 
-        const drawLevel = (price: number | null, col: string, style: LineStyle) => {
+        const drawLevel = (price: number | null, col: string, style: LineStyle, label: string) => {
           if (!price || !Number.isFinite(price)) return;
           const lvl = chart.addSeries(LineSeries, {
             color: col,
@@ -651,12 +657,21 @@ export function Chart() {
             { time: futureTime, value: price },
           ]));
           overlayLinesRef.current.push(lvl);
+          // Label marker at line midpoint
+          allMarkers.push({
+            time: midTime,
+            position: "inBar" as const,
+            color: col,
+            shape: "square" as const,
+            text: `${label}: ${price.toFixed(2)}`,
+            price: price,
+          } as SeriesMarker<Time>);
         };
 
-        drawLevel(sl, "#ef4444", LineStyle.Dashed);
-        drawLevel(entry, "#d4d4d8", LineStyle.Dotted);
-        drawLevel(tp1, "#34d399", LineStyle.Dashed);
-        drawLevel(tp2, "#34d39980", LineStyle.Dotted);
+        drawLevel(sl, "#ef4444", LineStyle.Dashed, "SL");
+        drawLevel(entry, "#d4d4d8", LineStyle.Dotted, `Entry${confStr}`);
+        drawLevel(tp1, "#34d399", LineStyle.Dashed, "TP1");
+        drawLevel(tp2, "#22c55e80", LineStyle.Dotted, "TP2");
       }
     }
 
@@ -680,7 +695,6 @@ export function Chart() {
     }
 
     // ── Markers: detection anchor labels + zigzag swing labels ──
-    const allMarkers: SeriesMarker<Time>[] = [];
 
     // Detection anchor labels (e.g. "1", "2", "3", "W-A", "W-B", etc.)
     if (showLabels) {
@@ -703,15 +717,17 @@ export function Chart() {
             text: a.label,
           });
         }
-        // Subkind label at last anchor
+        // Subkind + confidence label at last anchor
         const lastAnchor = d.anchors[d.anchors.length - 1];
         if (lastAnchor) {
+          const conf = Number(d.confidence) || 0;
+          const confPct = conf > 0 ? ` ${(conf * 100).toFixed(0)}%` : "";
           allMarkers.push({
             time: isoToUnix(lastAnchor.time),
             position: "aboveBar" as const,
             color,
             shape: "square" as const,
-            text: d.subkind,
+            text: `${d.subkind}${confPct}`,
           });
         }
       }
