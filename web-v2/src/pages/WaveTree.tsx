@@ -174,15 +174,15 @@ function ProjectionBlock({
 
   return (
     <div className="mb-1" style={{ paddingLeft: pLeft }}>
-      <div className="flex items-center gap-2 py-1 px-2">
-        <span className="text-[10px]" title="Projeksiyonlar">🔮</span>
-        <span className="text-[10px] text-purple-400 font-medium">
+      <div className="flex items-center gap-2 py-1.5 px-3">
+        <span className="text-sm" title="Projeksiyonlar">🔮</span>
+        <span className="text-xs text-purple-400 font-medium">
           {projections.length} projeksiyon
         </span>
         {projections.length > 1 && (
           <button
             onClick={() => setShowAll(!showAll)}
-            className="text-[9px] px-1.5 py-0.5 rounded bg-purple-900/30 text-purple-300 hover:bg-purple-800/40"
+            className="text-[11px] px-2 py-0.5 rounded bg-purple-900/30 text-purple-300 hover:bg-purple-800/40"
           >
             {showAll ? "Sadece En Olasi" : `Tum Alternatifleri Goster (${projections.length})`}
           </button>
@@ -197,36 +197,34 @@ function ProjectionBlock({
         return (
           <div
             key={p.id}
-            className={`flex items-center gap-2 py-1.5 px-3 text-[10px] font-mono border-l-2 ml-4 mb-0.5 rounded-r ${
+            className={`flex flex-wrap items-center gap-x-3 gap-y-1 py-2 px-4 text-xs font-mono border-l-2 ml-4 mb-1 rounded-r ${
               isEliminated
-                ? "border-zinc-700 opacity-40 line-through"
+                ? "border-zinc-700 opacity-40"
                 : isLeading
                 ? "border-purple-500 bg-purple-950/20"
                 : "border-zinc-700 bg-zinc-900/30"
             }`}
           >
-            {/* Rank */}
-            <span className={`w-5 text-center font-bold ${isLeading ? "text-purple-400" : "text-zinc-600"}`}>
+            {/* Rank + Probability */}
+            <span className={`font-bold ${isLeading ? "text-purple-400" : "text-zinc-500"}`}>
               #{p.rank}
             </span>
-
-            {/* Probability */}
-            <span className={`w-10 font-bold ${probColor}`}>
+            <span className={`font-bold ${probColor}`}>
               {(p.probability * 100).toFixed(0)}%
             </span>
 
             {/* Direction */}
-            <span className={`text-xs ${dirColor}`}>
+            <span className={dirColor}>
               {p.direction === "bullish" ? "▲" : "▼"}
             </span>
 
             {/* Label */}
-            <span className={isEliminated ? "text-zinc-600" : "text-zinc-200"}>
+            <span className={`font-semibold ${isEliminated ? "text-zinc-600 line-through" : "text-zinc-100"}`}>
               {p.projected_label}
             </span>
 
             {/* Kind badge */}
-            <span className="text-[9px] px-1 py-0.5 rounded bg-zinc-800 text-zinc-500">
+            <span className="text-[11px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">
               {fmtSubkind(p.projected_kind)}
             </span>
 
@@ -234,34 +232,34 @@ function ProjectionBlock({
 
             {/* Price targets */}
             {p.price_target_min && p.price_target_max && (
-              <span className="text-zinc-500">
+              <span className="text-zinc-300">
                 {fmtP(p.price_target_min)} — {fmtP(p.price_target_max)}
               </span>
             )}
 
             {/* Invalidation */}
             {p.invalidation_price && (
-              <span className="text-red-400/50 text-[9px]" title="Invalidation seviyesi">
+              <span className="text-red-400/60" title="Invalidation seviyesi">
                 ✕ {fmtP(p.invalidation_price)}
               </span>
             )}
 
             {/* Fib basis */}
             {p.fib_basis && (
-              <span className="text-zinc-600 text-[9px]" title="Fibonacci temeli">
+              <span className="text-zinc-500" title="Fibonacci temeli">
                 {p.fib_basis}
               </span>
             )}
 
             {/* Elimination reason */}
             {isEliminated && p.elimination_reason && (
-              <span className="text-red-400/40 text-[9px]">
+              <span className="text-red-400/50">
                 ({p.elimination_reason})
               </span>
             )}
 
             {/* Legs count */}
-            <span className="text-zinc-600 text-[9px]">
+            <span className="text-zinc-500">
               {p.projected_legs?.length ?? 0} bacak
             </span>
           </div>

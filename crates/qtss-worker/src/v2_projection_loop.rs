@@ -58,19 +58,19 @@ pub async fn generate_projections_for_wave(
     let mut count = 0;
 
     for (rank, alt) in alternatives.iter().enumerate() {
+        let bar_secs = estimate_bar_seconds(timeframe);
+        let mut cursor = last_time; // cumulative time cursor
         let legs_json: Vec<ProjectedLeg> = alt.legs.iter().map(|leg| {
-            // Estimate time from bar duration
-            let time_est = last_time.map(|t| {
-                let bar_secs = estimate_bar_seconds(timeframe);
-                t + Duration::seconds(leg.bar_duration as i64 * bar_secs)
-            });
+            let leg_start = cursor;
+            let leg_end = cursor.map(|t| t + Duration::seconds(leg.bar_duration as i64 * bar_secs));
+            cursor = leg_end; // advance cursor for next leg
 
             ProjectedLeg {
                 label: leg.label.clone(),
                 price_start: leg.price_start,
                 price_end: leg.price_end,
-                time_start_est: last_time.map(|t| t.to_rfc3339()),
-                time_end_est: time_est.map(|t| t.to_rfc3339()),
+                time_start_est: leg_start.map(|t| t.to_rfc3339()),
+                time_end_est: leg_end.map(|t| t.to_rfc3339()),
                 fib_level: leg.fib_level.clone(),
                 direction: leg.direction.to_string(),
             }

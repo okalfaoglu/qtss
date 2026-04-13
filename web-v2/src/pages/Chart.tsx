@@ -400,6 +400,7 @@ export function Chart() {
   const [familyModes, setFamilyModes] = useState<Record<string, FamilyMode>>({});
   const [detailLayers, setDetailLayers] = useState<Record<string, Set<string>>>({});
   const [showLabels, setShowLabels] = useState(true);
+  const [showProjections, setShowProjections] = useState(true);
   const [activeTool, setActiveTool] = useState<ToolId>("crosshair");
 
   const fetchingOlderRef = useRef(false);
@@ -459,6 +460,40 @@ export function Chart() {
     queryFn: () =>
       apiFetch<{ overlay: WyckoffOverlayData | null }>(
         `/v2/wyckoff/overlay/${debounced.symbol}/${debounced.timeframe}`,
+      ),
+    refetchInterval: 30_000,
+  });
+
+  // ─── Projections query ──────────────────────────────────────────
+  interface ProjLeg {
+    label: string;
+    price_start: number;
+    price_end: number;
+    time_start_est: string | null;
+    time_end_est: string | null;
+    fib_level: string | null;
+    direction: string;
+  }
+  interface ChartProjection {
+    id: string;
+    source_wave_id: string;
+    alt_group: string;
+    projected_kind: string;
+    projected_label: string;
+    direction: string;
+    degree: string;
+    fib_basis: string | null;
+    projected_legs: ProjLeg[];
+    probability: number;
+    rank: number;
+    state: string;
+    invalidation_price: string | null;
+  }
+  const projectionsQuery = useQuery({
+    queryKey: ["v2", "projections", debounced.venue, debounced.symbol, debounced.timeframe],
+    queryFn: () =>
+      apiFetch<ChartProjection[]>(
+        `/v2/wave-projections/${debounced.venue}/${debounced.symbol}/${debounced.timeframe}`,
       ),
     refetchInterval: 30_000,
   });
@@ -853,6 +888,75 @@ export function Chart() {
       }
     }
 
+    // ── Projection overlays ──
+    if (showProjections && projectionsQuery.data) {
+      // Group by alt_group, show only rank=1 (leading) per group
+      const projs = projectionsQuery.data.filter(
+        (p) => p.state !== "eliminated" && p.rank === 1
+      );
+
+      // Probability-based color intensity
+      const projColor = (prob: number, dir: string) => {
+        if (dir === "bullish") return prob >= 0.4 ? "#a78bfa" : "#7c3aed80";
+        return prob >= 0.4 ? "#c084fc" : "#9333ea80";
+      };
+
+      for (const proj of projs) {
+        const legs: ProjLeg[] = Array.isArray(proj.projected_legs)
+          ? proj.projected_legs
+          : [];
+        if (legs.length === 0) continue;
+
+        // Build polyline from legs: start → end of each leg
+        const points: { time: Time; value: number }[] = [];
+        for (const leg of legs) {
+          if (leg.time_start_est && points.length === 0) {
+            points.push({ time: isoToUnix(leg.time_start_est), value: leg.price_start });
+          }
+          if (leg.time_end_est) {
+            points.push({ time: isoToUnix(leg.time_end_est), value: leg.price_end });
+          }
+        }
+        if (points.length < 2) continue;
+
+        const color = projColor(proj.probability, proj.direction);
+        const projLine = chart.addSeries(LineSeries, {
+          color,
+          lineWidth: 2,
+          lineStyle: LineStyle.Dotted,
+          crosshairMarkerVisible: false,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          pointMarkersVisible: true,
+          pointMarkersRadius: 3,
+        });
+        projLine.setData(dedupeLineData(points));
+        overlayLinesRef.current.push(projLine);
+
+        // Invalidation level — red dashed horizontal
+        if (proj.invalidation_price) {
+          const invPrice = Number(proj.invalidation_price);
+          if (Number.isFinite(invPrice)) {
+            const invLine = chart.addSeries(LineSeries, {
+              color: "#ef444480",
+              lineWidth: 1,
+              lineStyle: LineStyle.Dashed,
+              crosshairMarkerVisible: false,
+              lastValueVisible: false,
+              priceLineVisible: false,
+            });
+            const t0 = points[0].time as number;
+            const t1 = points[points.length - 1].time as number;
+            invLine.setData([
+              { time: t0 as Time, value: invPrice },
+              { time: t1 as Time, value: invPrice },
+            ]);
+            overlayLinesRef.current.push(invLine);
+          }
+        }
+      }
+    }
+
     // ── Zigzag overlay ──
     if (showZigzag && merged.candles.length > 2) {
       const pts = computeZigzag(merged.candles, ZIGZAG_PCT);
@@ -932,6 +1036,28 @@ export function Chart() {
           shape: "circle" as const,
           text: p.swing,
         });
+      }
+    }
+
+    // Projection leg labels
+    if (showProjections && showLabels && projectionsQuery.data) {
+      const projs = projectionsQuery.data.filter(
+        (p) => p.state !== "eliminated" && p.rank === 1
+      );
+      for (const proj of projs) {
+        const legs: ProjLeg[] = Array.isArray(proj.projected_legs) ? proj.projected_legs : [];
+        for (const leg of legs) {
+          if (!leg.time_end_est) continue;
+          const t = isoToUnix(leg.time_end_est);
+          const isBull = leg.direction === "bullish";
+          allMarkers.push({
+            time: t,
+            position: isBull ? "belowBar" : "aboveBar",
+            color: "#a78bfa",
+            shape: "circle",
+            text: `${leg.label} (${(proj.probability * 100).toFixed(0)}%)`,
+          });
+        }
       }
     }
 
@@ -1019,7 +1145,7 @@ export function Chart() {
       }
     }
 
-  }, [merged, showVolume, showZigzag, showLabels, visibleDetections, familyModes, detailLayers, wyckoffQuery.data]);
+  }, [merged, showVolume, showZigzag, showLabels, showProjections, visibleDetections, familyModes, detailLayers, wyckoffQuery.data, projectionsQuery.data]);
 
   // ═══════════════════════════════════════════════════════════════
   // RENDER
@@ -1083,6 +1209,19 @@ export function Chart() {
           }`}
         >
           Aa
+        </button>
+        {/* Projections toggle */}
+        <button
+          type="button"
+          onClick={() => setShowProjections((v) => !v)}
+          title={showProjections ? "Projeksiyonları gizle" : "Projeksiyonları göster"}
+          className={`flex h-8 w-8 items-center justify-center rounded text-[10px] transition ${
+            showProjections
+              ? "bg-purple-500/20 text-purple-300"
+              : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+          }`}
+        >
+          🔮
         </button>
       </div>
 
