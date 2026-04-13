@@ -99,11 +99,11 @@ fn dir_str(bullish: bool) -> &'static str {
     if bullish { "bullish" } else { "bearish" }
 }
 
-/// Clamp price to sane range: [ref × 0.05, ref × 5.0].
-/// Prevents projections going to 0 or absurdly high/low values.
+/// Clamp price to sane range: [ref × 0.20, ref × 3.0].
+/// Prevents projections going to absurdly low/high values.
 fn clamp_price(price: f64, reference: f64) -> f64 {
-    let floor = reference * 0.05;
-    let ceil = reference * 5.0;
+    let floor = reference * 0.20;
+    let ceil = reference * 3.0;
     price.max(floor).min(ceil)
 }
 
