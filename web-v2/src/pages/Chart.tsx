@@ -888,18 +888,8 @@ export function Chart() {
       }
     }
 
-    // ── Projection overlays (only future legs) ──
-    if (showProjections && projectionsQuery.data && merged.candles.length > 0) {
-      const lastCandle = merged.candles[merged.candles.length - 1];
-      const lastCandleT = isoToUnix(lastCandle.open_time) as number;
-      const lastPrice = Number(lastCandle.close);
-
-      // Estimate bar interval in seconds
-      const barSecs = merged.candles.length >= 2
-        ? (new Date(merged.candles[merged.candles.length - 1].open_time).getTime() -
-           new Date(merged.candles[merged.candles.length - 2].open_time).getTime()) / 1000
-        : 3600;
-
+    // ── Projection overlays — draw from source wave endpoint ──
+    if (showProjections && projectionsQuery.data) {
       // Show only rank=1 (leading) per alt_group, not eliminated
       const projs = projectionsQuery.data.filter(
         (p) => p.state !== "eliminated" && p.rank === 1
@@ -916,41 +906,27 @@ export function Chart() {
           : [];
         if (legs.length === 0) continue;
 
-        // Filter: only legs whose time_end_est is in the future
-        const futureLegs = legs.filter((leg) => {
-          if (!leg.time_end_est) return false;
-          return isoToUnix(leg.time_end_est) as number > lastCandleT;
-        });
-        if (futureLegs.length === 0) continue;
-
-        // Build polyline: anchor from last candle close, then each future leg
-        // Scale prices relative to last candle (projected movement from current price)
-        const firstLeg = futureLegs[0];
-        const origStart = firstLeg.price_start;
-
+        // Build polyline using original prices and times from projection engine.
+        // First point = first leg's start (= source wave endpoint).
+        // Each subsequent point = leg end.
         const points: { time: Time; value: number }[] = [];
 
-        // Start from current candle close
-        points.push({ time: (lastCandleT + barSecs) as Time, value: lastPrice });
-
-        // Add each future leg end, offset so projection starts from current price
-        let tCursor = lastCandleT + barSecs;
-        for (const leg of futureLegs) {
-          // How many bars for this leg (from original time estimates)
-          let legBars = 1;
-          if (leg.time_start_est && leg.time_end_est) {
-            const dt = (isoToUnix(leg.time_end_est) as number) - (isoToUnix(leg.time_start_est) as number);
-            legBars = Math.max(1, Math.round(dt / barSecs));
+        for (const leg of legs) {
+          // Add start of first leg (source wave endpoint)
+          if (points.length === 0 && leg.time_start_est) {
+            points.push({
+              time: isoToUnix(leg.time_start_est),
+              value: leg.price_start,
+            });
           }
-          tCursor += legBars * barSecs;
-
-          // Price offset: shift entire projection so it starts at current price
-          const priceOffset = lastPrice - origStart;
-          const adjPrice = leg.price_end + priceOffset;
-
-          points.push({ time: tCursor as Time, value: adjPrice });
+          // Add end of each leg
+          if (leg.time_end_est) {
+            points.push({
+              time: isoToUnix(leg.time_end_est),
+              value: leg.price_end,
+            });
+          }
         }
-
         if (points.length < 2) continue;
 
         const color = projColor(proj.probability, proj.direction);
@@ -967,11 +943,9 @@ export function Chart() {
         projLine.setData(dedupeLineData(points));
         overlayLinesRef.current.push(projLine);
 
-        // Invalidation level — red dashed horizontal (also offset)
+        // Invalidation level — red dashed horizontal
         if (proj.invalidation_price) {
-          const invRaw = Number(proj.invalidation_price);
-          const priceOffset = lastPrice - origStart;
-          const invPrice = invRaw + priceOffset;
+          const invPrice = Number(proj.invalidation_price);
           if (Number.isFinite(invPrice)) {
             const invLine = chart.addSeries(LineSeries, {
               color: "#ef444480",
