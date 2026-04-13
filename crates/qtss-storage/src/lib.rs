@@ -28,6 +28,7 @@ pub mod paper;
 pub mod pivot_cache;
 pub mod pnl;
 pub mod wave_chain;
+pub mod wave_projections;
 pub mod q_radar_portfolio;
 pub mod range_signal_execution;
 pub mod migration_checksum_sync;

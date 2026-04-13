@@ -47,6 +47,7 @@ mod v2_events_stream;
 mod v2_q_radar;
 mod v2_setups;
 mod v2_users;
+mod v2_wave_projections;
 mod v2_wave_tree;
 mod v2_wyckoff;
 
@@ -73,6 +74,7 @@ pub use v2_events_stream::v2_events_stream_router;
 pub use v2_q_radar::v2_q_radar_router;
 pub use v2_setups::v2_setups_router;
 pub use v2_users::v2_users_router;
+pub use v2_wave_projections::v2_wave_projections_router;
 pub use v2_wave_tree::v2_wave_tree_router;
 pub use v2_wyckoff::v2_wyckoff_router;
 
@@ -130,6 +132,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_montecarlo_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_risk_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_wave_tree_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_wave_projections_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_wyckoff_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_reconcile_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_blotter_router().layer(from_fn(require_dashboard_roles)))

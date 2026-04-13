@@ -691,6 +691,17 @@ pub async fn v2_detection_orchestrator_loop(pool: PgPool) {
             Err(e) => warn!(%e, "v2 detection orchestrator pass failed"),
         }
 
+        // Projection backfill: generate projections for wave_chain entries
+        // that don't have any projections yet.
+        if let Err(e) = backfill_projections(&pool).await {
+            warn!(%e, "projection backfill failed");
+        }
+
+        // Projection validation: check active projections against latest prices.
+        if let Err(e) = validate_active_projections(&pool).await {
+            warn!(%e, "projection validation failed");
+        }
+
         tokio::time::sleep(Duration::from_secs(tick_secs)).await;
     }
 }
@@ -1526,33 +1537,36 @@ async fn link_elliott_to_wave_chain(
         return Ok(());
     }
 
-    // Insert segments and link parents per-segment (dynamic TF search)
+    // Per-segment parent lookup: each segment finds its own parent wave
+    // on higher TFs. This is correct because a wide detection (e.g., WXY
+    // combination spanning months) may have segments falling under different
+    // parent waves on the higher TF.
+
+    let parent_tfs = [
+        (Timeframe::Mn1, WaveDegree::Supercycle),
+        (Timeframe::W1,  WaveDegree::Cycle),
+        (Timeframe::D1,  WaveDegree::Primary),
+        (Timeframe::H4,  WaveDegree::Intermediate),
+        (Timeframe::H1,  WaveDegree::Minor),
+        (Timeframe::M30, WaveDegree::Minute),
+        (Timeframe::M15, WaveDegree::Minute),
+        (Timeframe::M5,  WaveDegree::Minuette),
+    ];
+    let cur_rank = degree.rank();
 
     let mut inserted_ids: Vec<(Uuid, Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>)> = Vec::new();
 
     for (i, seg) in segments.iter().enumerate() {
-        // Per-segment parent lookup: search ALL higher TFs for a parent wave
-        // whose time range contains this segment. Not limited to fixed parent TF.
+        // Each segment independently finds its parent
         let parent_id = if let (Some(ts), Some(te)) = (seg.time_start, seg.time_end) {
-            let parent_tfs = [
-                (Timeframe::Mn1, WaveDegree::Supercycle),
-                (Timeframe::W1,  WaveDegree::Cycle),
-                (Timeframe::D1,  WaveDegree::Primary),
-                (Timeframe::H4,  WaveDegree::Intermediate),
-                (Timeframe::H1,  WaveDegree::Minor),
-                (Timeframe::M30, WaveDegree::Minute),
-                (Timeframe::M15, WaveDegree::Minute),
-                (Timeframe::M5,  WaveDegree::Minuette),
-            ];
-            let cur_rank = degree.rank();
             let mut found = None;
             for (ptf, pdeg) in &parent_tfs {
-                if pdeg.rank() <= cur_rank { continue; } // must be higher degree
+                if pdeg.rank() <= cur_rank { continue; }
                 let ptf_str = timeframe_to_interval(*ptf);
                 let pdeg_str = pdeg.label();
                 if let Ok(Some(row)) = find_parent_wave(pool, exchange, symbol, &ptf_str, pdeg_str, ts, te).await {
                     found = Some(row.id);
-                    break; // use closest parent
+                    break;
                 }
             }
             found
@@ -1625,6 +1639,34 @@ async fn link_elliott_to_wave_chain(
         segments = inserted_ids.len(),
         "wave_chain linked ({linked_parents} segments)"
     );
+
+    // ── Projection generation ──
+    // Use the last segment as the source wave for projections.
+    if let Some(&(last_seg_id, last_ts, _last_te)) = inserted_ids.last() {
+        let prices: Vec<f64> = detection.anchors.iter()
+            .map(|a| a.price.to_f64().unwrap_or(0.0))
+            .collect();
+        let avg_spacing = if detection.anchors.len() >= 2 {
+            let span = detection.anchors.last().unwrap().bar_index
+                     - detection.anchors.first().unwrap().bar_index;
+            (span / (detection.anchors.len() as u64 - 1).max(1)).max(1)
+        } else { 1 };
+
+        let _ = crate::v2_projection_loop::generate_projections_for_wave(
+            pool,
+            last_seg_id,
+            exchange,
+            symbol,
+            interval,
+            degree.label(),
+            &subkind,
+            &prices,
+            avg_spacing,
+            segments.last().and_then(|s| s.label.as_deref()),
+            None, // TODO: fetch sibling W2 kind for alternation
+            last_ts,
+        ).await;
+    }
 
     Ok(())
 }
@@ -1815,4 +1857,125 @@ fn split_pattern_kind(kind: &PatternKind) -> (&'static str, &str) {
         PatternKind::Range(s) => ("range", s.as_str()),
         PatternKind::Custom(s) => ("custom", s.as_str()),
     }
+}
+
+/// Backfill projections for wave_chain entries missing projections.
+/// Runs once per tick, processes a limited batch to avoid overload.
+async fn backfill_projections(pool: &PgPool) -> anyhow::Result<()> {
+    use qtss_storage::wave_chain::WaveChainRow;
+
+    // Find last segments of each detection that have no projections yet.
+    let candidates: Vec<WaveChainRow> = sqlx::query_as(
+        r#"SELECT wc.* FROM wave_chain wc
+           INNER JOIN (
+             SELECT detection_id, MAX(time_end) AS max_te
+             FROM wave_chain
+             WHERE detection_id IS NOT NULL AND state != 'invalidated'
+             GROUP BY detection_id
+           ) last ON wc.detection_id = last.detection_id AND wc.time_end = last.max_te
+           LEFT JOIN wave_projections wp ON wp.source_wave_id = wc.id
+           WHERE wp.id IS NULL
+           LIMIT 50"#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    let mut generated = 0usize;
+    for wc in &candidates {
+        let detection_id = match wc.detection_id {
+            Some(d) => d,
+            None => continue,
+        };
+
+        // Fetch all segments of this detection to reconstruct anchor prices
+        let segs: Vec<WaveChainRow> = sqlx::query_as(
+            r#"SELECT * FROM wave_chain
+               WHERE detection_id = $1 ORDER BY time_start ASC"#,
+        ).bind(detection_id).fetch_all(pool).await?;
+
+        if segs.is_empty() { continue; }
+
+        // Reconstruct: [first.price_start, first.price_end, second.price_end, ...]
+        let mut prices = vec![segs[0].price_start.to_f64().unwrap_or(0.0)];
+        for s in &segs {
+            prices.push(s.price_end.to_f64().unwrap_or(0.0));
+        }
+
+        let total_bars = segs.last().map(|s| s.bar_end).unwrap_or(0)
+                       - segs.first().map(|s| s.bar_start).unwrap_or(0);
+        let avg_spacing = if segs.len() > 1 {
+            (total_bars as u64 / segs.len() as u64).max(1)
+        } else { 1 };
+
+        let count = crate::v2_projection_loop::generate_projections_for_wave(
+            pool,
+            wc.id,
+            &wc.exchange,
+            &wc.symbol,
+            &wc.timeframe,
+            &wc.degree,
+            &wc.subkind,
+            &prices,
+            avg_spacing,
+            None,
+            None,
+            wc.time_end,
+        ).await?;
+        generated += count;
+    }
+
+    if generated > 0 {
+        info!(generated, "projection backfill completed");
+    }
+
+    Ok(())
+}
+
+/// Validate active projections: fetch distinct (exchange, symbol, tf) combos
+/// from active projections, get latest price for each, and run validation.
+async fn validate_active_projections(pool: &PgPool) -> anyhow::Result<()> {
+    // Get unique series with active projections
+    let series: Vec<(String, String, String)> = sqlx::query_as(
+        r#"SELECT DISTINCT exchange, symbol, timeframe
+           FROM wave_projections
+           WHERE state IN ('active', 'leading')
+           LIMIT 100"#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    if series.is_empty() {
+        return Ok(());
+    }
+
+    for (exchange, symbol, timeframe) in &series {
+        // Get latest close price from market_bars
+        let latest: Option<(Decimal, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+            r#"SELECT close, open_time FROM market_bars
+               WHERE LOWER(BTRIM(exchange)) = LOWER(BTRIM($1))
+                 AND BTRIM(symbol) = BTRIM($2)
+                 AND BTRIM(interval) = BTRIM($3)
+               ORDER BY open_time DESC LIMIT 1"#,
+        )
+        .bind(exchange)
+        .bind(symbol)
+        .bind(timeframe)
+        .fetch_optional(pool)
+        .await?;
+
+        if let Some((price, time)) = latest {
+            let price_f = price.to_f64().unwrap_or(0.0);
+            if let Err(e) = crate::v2_projection_loop::validate_projections(
+                pool, exchange, symbol, timeframe, price_f, time,
+            ).await {
+                warn!(%e, symbol, timeframe, "projection validation error");
+            }
+        }
+    }
+
+    Ok(())
 }

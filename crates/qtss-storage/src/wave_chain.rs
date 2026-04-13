@@ -90,8 +90,11 @@ pub async fn insert_wave_chain(pool: &PgPool, row: &WaveChainInsert) -> Result<U
     Ok(id.0)
 }
 
-/// Find a parent wave on the parent TF whose time range contains the child.
-/// Returns the best-scoring match.
+/// Find a parent wave on the parent TF whose time range overlaps the child.
+/// Uses overlap-based matching with 30% tolerance: the child's midpoint
+/// must fall within the parent's extended range. This handles cases where
+/// a child detection starts before the parent's recorded start (e.g.,
+/// a combination's W leg preceding the parent wave).
 pub async fn find_parent_wave(
     pool: &PgPool,
     exchange: &str,
@@ -101,12 +104,15 @@ pub async fn find_parent_wave(
     child_time_start: DateTime<Utc>,
     child_time_end: DateTime<Utc>,
 ) -> Result<Option<WaveChainRow>, sqlx::Error> {
+    // Use child midpoint for matching — robust when child extends beyond parent edges
+    let child_mid = child_time_start + (child_time_end - child_time_start) / 2;
     sqlx::query_as::<_, WaveChainRow>(
         r#"SELECT * FROM wave_chain
            WHERE exchange = $1 AND symbol = $2
              AND timeframe = $3 AND degree = $4
              AND state != 'invalidated'
-             AND time_start <= $5 AND time_end >= $6
+             AND time_start <= $5 + (time_end - time_start) * 0.3
+             AND time_end   >= $5 - (time_end - time_start) * 0.3
            ORDER BY structural_score DESC
            LIMIT 1"#,
     )
@@ -114,14 +120,17 @@ pub async fn find_parent_wave(
     .bind(symbol)
     .bind(parent_tf)
     .bind(parent_degree)
-    .bind(child_time_start)
-    .bind(child_time_end)
+    .bind(child_mid)
     .fetch_optional(pool)
     .await
 }
 
 /// Link orphan child waves to a parent (set parent_id on children whose
 /// time range falls within the parent's range).
+/// Link orphan child waves to a parent. Uses overlap-based matching:
+/// a child is adopted if its midpoint falls within the parent's time range
+/// (with 10% tolerance on edges). This handles cases where a triangle's
+/// first leg starts slightly before the parent's recorded start.
 pub async fn adopt_children(
     pool: &PgPool,
     parent_id: Uuid,
@@ -132,6 +141,13 @@ pub async fn adopt_children(
     parent_time_start: DateTime<Utc>,
     parent_time_end: DateTime<Utc>,
 ) -> Result<u64, sqlx::Error> {
+    // Relaxed matching: child's START must fall within parent range
+    // (with 20% tolerance on edges). Child's end may exceed parent
+    // because forming detections extend as new bars arrive.
+    let parent_span = (parent_time_end - parent_time_start).num_seconds();
+    let margin = chrono::Duration::seconds((parent_span as f64 * 0.20) as i64);
+    let start_relaxed = parent_time_start - margin;
+    let end_relaxed = parent_time_end + margin;
     let res = sqlx::query(
         r#"UPDATE wave_chain
            SET parent_id = $1, updated_at = NOW()
@@ -139,15 +155,16 @@ pub async fn adopt_children(
              AND timeframe = $4 AND degree = $5
              AND parent_id IS NULL
              AND state != 'invalidated'
-             AND time_start >= $6 AND time_end <= $7"#,
+             AND time_start >= $6
+             AND time_start <= $7"#,
     )
     .bind(parent_id)
     .bind(exchange)
     .bind(symbol)
     .bind(child_tf)
     .bind(child_degree)
-    .bind(parent_time_start)
-    .bind(parent_time_end)
+    .bind(start_relaxed)
+    .bind(end_relaxed)
     .execute(pool)
     .await?;
     Ok(res.rows_affected())
@@ -200,6 +217,16 @@ pub async fn find_by_detection(pool: &PgPool, detection_id: Uuid) -> Result<Opti
     )
     .bind(detection_id)
     .fetch_optional(pool)
+    .await
+}
+
+/// List ALL wave_chain rows for a detection_id, ordered by time_start.
+pub async fn list_by_detection(pool: &PgPool, detection_id: Uuid) -> Result<Vec<WaveChainRow>, sqlx::Error> {
+    sqlx::query_as::<_, WaveChainRow>(
+        "SELECT * FROM wave_chain WHERE detection_id = $1 ORDER BY time_start ASC",
+    )
+    .bind(detection_id)
+    .fetch_all(pool)
     .await
 }
 

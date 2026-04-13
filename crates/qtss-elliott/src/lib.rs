@@ -39,6 +39,7 @@ mod fibs;
 mod flat;
 mod formation;
 mod projection;
+pub mod projection_engine;
 mod rules;
 mod triangle;
 mod truncated_fifth;

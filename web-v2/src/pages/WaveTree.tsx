@@ -37,6 +37,36 @@ interface TfLevelResponse {
   formations: Formation[];
 }
 
+// ─── Projection Types ──────────────────────────────────────────────
+interface ProjectedLeg {
+  label: string;
+  price_start: number;
+  price_end: number;
+  time_start_est: string | null;
+  time_end_est: string | null;
+  fib_level: string | null;
+  direction: string;
+}
+
+interface Projection {
+  id: string;
+  source_wave_id: string;
+  alt_group: string;
+  projected_kind: string;
+  projected_label: string;
+  direction: string;
+  degree: string;
+  fib_basis: string | null;
+  projected_legs: ProjectedLeg[];
+  probability: number;
+  rank: number;
+  state: string;
+  elimination_reason: string | null;
+  invalidation_price: string | null;
+  price_target_min: string | null;
+  price_target_max: string | null;
+}
+
 // ─── Constants ──────────────────────────────────────────────────────
 const TF_CHAIN = ["1mo", "1w", "1d", "4h", "1h", "15m", "5m", "1m"];
 const TF_LABEL: Record<string, string> = {
@@ -108,6 +138,137 @@ function stateColor(state: string, kind: string) {
   if (state !== "active") return { text: "#71717a", bg: "#18181b", border: "#27272a" };
   if (kind === "impulse") return { text: "#22c55e", bg: "#052e16", border: "#166534" };
   return { text: "#ef4444", bg: "#450a0a", border: "#991b1b" };
+}
+
+// ─── Projection block for a wave segment ────────────────────────────
+function ProjectionBlock({
+  waveId,
+  depth,
+}: {
+  waveId: string;
+  depth: number;
+}) {
+  const [projections, setProjections] = useState<Projection[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [showAll, setShowAll] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await apiFetch<Projection[]>(
+          `/v2/wave-projections/source/${waveId}`
+        );
+        setProjections(data.length > 0 ? data : null);
+      } catch {
+        setProjections(null);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [waveId]);
+
+  if (loading || !projections) return null;
+
+  const pLeft = depth * 32;
+  const visible = showAll ? projections : projections.filter((p) => p.rank === 1);
+
+  return (
+    <div className="mb-1" style={{ paddingLeft: pLeft }}>
+      <div className="flex items-center gap-2 py-1 px-2">
+        <span className="text-[10px]" title="Projeksiyonlar">🔮</span>
+        <span className="text-[10px] text-purple-400 font-medium">
+          {projections.length} projeksiyon
+        </span>
+        {projections.length > 1 && (
+          <button
+            onClick={() => setShowAll(!showAll)}
+            className="text-[9px] px-1.5 py-0.5 rounded bg-purple-900/30 text-purple-300 hover:bg-purple-800/40"
+          >
+            {showAll ? "Sadece En Olasi" : `Tum Alternatifleri Goster (${projections.length})`}
+          </button>
+        )}
+      </div>
+      {visible.map((p) => {
+        const isEliminated = p.state === "eliminated";
+        const isLeading = p.state === "leading" || p.rank === 1;
+        const probColor = p.probability >= 0.5 ? "text-emerald-400" : p.probability >= 0.3 ? "text-yellow-400" : "text-zinc-500";
+        const dirColor = p.direction === "bullish" ? "text-emerald-400" : "text-red-400";
+
+        return (
+          <div
+            key={p.id}
+            className={`flex items-center gap-2 py-1.5 px-3 text-[10px] font-mono border-l-2 ml-4 mb-0.5 rounded-r ${
+              isEliminated
+                ? "border-zinc-700 opacity-40 line-through"
+                : isLeading
+                ? "border-purple-500 bg-purple-950/20"
+                : "border-zinc-700 bg-zinc-900/30"
+            }`}
+          >
+            {/* Rank */}
+            <span className={`w-5 text-center font-bold ${isLeading ? "text-purple-400" : "text-zinc-600"}`}>
+              #{p.rank}
+            </span>
+
+            {/* Probability */}
+            <span className={`w-10 font-bold ${probColor}`}>
+              {(p.probability * 100).toFixed(0)}%
+            </span>
+
+            {/* Direction */}
+            <span className={`text-xs ${dirColor}`}>
+              {p.direction === "bullish" ? "▲" : "▼"}
+            </span>
+
+            {/* Label */}
+            <span className={isEliminated ? "text-zinc-600" : "text-zinc-200"}>
+              {p.projected_label}
+            </span>
+
+            {/* Kind badge */}
+            <span className="text-[9px] px-1 py-0.5 rounded bg-zinc-800 text-zinc-500">
+              {fmtSubkind(p.projected_kind)}
+            </span>
+
+            <span className="flex-1" />
+
+            {/* Price targets */}
+            {p.price_target_min && p.price_target_max && (
+              <span className="text-zinc-500">
+                {fmtP(p.price_target_min)} — {fmtP(p.price_target_max)}
+              </span>
+            )}
+
+            {/* Invalidation */}
+            {p.invalidation_price && (
+              <span className="text-red-400/50 text-[9px]" title="Invalidation seviyesi">
+                ✕ {fmtP(p.invalidation_price)}
+              </span>
+            )}
+
+            {/* Fib basis */}
+            {p.fib_basis && (
+              <span className="text-zinc-600 text-[9px]" title="Fibonacci temeli">
+                {p.fib_basis}
+              </span>
+            )}
+
+            {/* Elimination reason */}
+            {isEliminated && p.elimination_reason && (
+              <span className="text-red-400/40 text-[9px]">
+                ({p.elimination_reason})
+              </span>
+            )}
+
+            {/* Legs count */}
+            <span className="text-zinc-600 text-[9px]">
+              {p.projected_legs?.length ?? 0} bacak
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 // ─── Inline sub-tree for a single wave segment's children ───────────
@@ -348,8 +509,14 @@ function FormationBlock({
       {/* Wave segments */}
       {expanded && (
         <div style={{ borderLeft: `3px solid ${sc.border}40` }}>
-          {f.waves.map((w) => (
-            <WaveRow key={w.id} w={w} tf={tf} venue={venue} symbol={symbol} depth={depth + 1} />
+          {f.waves.map((w, idx) => (
+            <div key={w.id}>
+              <WaveRow w={w} tf={tf} venue={venue} symbol={symbol} depth={depth + 1} />
+              {/* Show projections under the LAST wave segment */}
+              {idx === f.waves.length - 1 && (
+                <ProjectionBlock waveId={w.id} depth={depth + 2} />
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -520,6 +687,9 @@ export function WaveTree() {
         </span>
         <span className="flex items-center gap-1">
           <span className="w-2 h-2 rounded-full bg-zinc-500" /> Completed
+        </span>
+        <span className="flex items-center gap-1">
+          <span>🔮</span> Projeksiyon
         </span>
         <span className="text-zinc-600 ml-2">Tiklayarak alt periyoda in</span>
       </div>

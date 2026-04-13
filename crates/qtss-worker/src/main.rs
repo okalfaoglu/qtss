@@ -38,6 +38,7 @@ mod nansen_symbol_lifecycle;
 mod position_status_notify;
 mod v2_detection_orchestrator;
 mod v2_detection_sweeper;
+mod v2_projection_loop;
 mod v2_detection_validator;
 mod v2_pattern_strategy_bridge;
 mod v2_risk_bridge;
