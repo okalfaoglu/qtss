@@ -1101,6 +1101,51 @@ export function Chart() {
     // Projection leg labels — only for future legs (markers can't go beyond last candle,
     // so we skip projection markers; labels are shown on the line series via pointMarkers)
 
+    // ── Wyckoff event markers ──
+    const wyckOverlay = wyckoffQuery.data?.overlay ?? null;
+    if (wyckOverlay && (familyModes["wyckoff"] ?? "on") !== "off" && merged.candles?.length) {
+      const wEvts = wyckOverlay.events ?? [];
+      const eventMeta: Record<string, { label: string; color: string; pos: "aboveBar" | "belowBar" }> = {
+        p_s: { label: "PS", color: "#f97316", pos: "belowBar" },
+        s_c: { label: "SC", color: "#ef4444", pos: "belowBar" },
+        b_c: { label: "BC", color: "#ef4444", pos: "aboveBar" },
+        a_r: { label: "AR", color: "#22c55e", pos: "aboveBar" },
+        s_t: { label: "ST", color: "#f59e0b", pos: "belowBar" },
+        st_b: { label: "STB", color: "#f59e0b", pos: "belowBar" },
+        spring: { label: "Spring", color: "#10b981", pos: "belowBar" },
+        u_a: { label: "UA", color: "#8b5cf6", pos: "aboveBar" },
+        utad: { label: "UTAD", color: "#ef4444", pos: "aboveBar" },
+        shakeout: { label: "Shake", color: "#ef4444", pos: "belowBar" },
+        s_o_s: { label: "SOS", color: "#22c55e", pos: "aboveBar" },
+        s_o_w: { label: "SOW", color: "#ef4444", pos: "belowBar" },
+        l_p_s: { label: "LPS", color: "#10b981", pos: "belowBar" },
+        lpsy: { label: "LPSY", color: "#ef4444", pos: "belowBar" },
+        j_a_c: { label: "JAC", color: "#22c55e", pos: "aboveBar" },
+        break_of_ice: { label: "BoI", color: "#ef4444", pos: "belowBar" },
+        buec: { label: "BUEC", color: "#3b82f6", pos: "belowBar" },
+        s_o_t: { label: "SOT", color: "#6366f1", pos: "aboveBar" },
+        markup: { label: "MU", color: "#22c55e", pos: "aboveBar" },
+        markdown: { label: "MD", color: "#ef4444", pos: "belowBar" },
+      };
+      const seen = new Set<string>();
+      for (const ev of wEvts) {
+        const idx = ev.bar_index;
+        if (idx < 0 || idx >= merged.candles.length) continue;
+        const key = `${ev.event}_${idx}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const candleTime = isoToUnix(merged.candles[idx].open_time);
+        const meta = eventMeta[ev.event] ?? { label: ev.event.toUpperCase(), color: "#9ca3af", pos: "aboveBar" as const };
+        allMarkers.push({
+          time: candleTime,
+          position: meta.pos,
+          color: meta.color,
+          shape: meta.pos === "aboveBar" ? "arrowDown" : "arrowUp",
+          text: meta.label,
+        });
+      }
+    }
+
     // Sort markers by time (TV requires ascending) and apply
     allMarkers.sort((a, b) => (a.time as number) - (b.time as number));
     if (markersRef.current) {
@@ -1114,17 +1159,18 @@ export function Chart() {
     // ── Wyckoff overlay ──
     const wyckoffOverlay = wyckoffQuery.data?.overlay ?? null;
     if (wyckoffOverlay && (familyModes["wyckoff"] ?? "on") !== "off" && merged.candles?.length) {
-      const { range: wRange, creek, ice } = wyckoffOverlay;
+      const { range: wRange, creek, ice, events: wEvents } = wyckoffOverlay;
       const isAccum = wyckoffOverlay.schematic === "accumulation" || wyckoffOverlay.schematic === "reaccumulation";
       const wColor = isAccum ? "#22c55e60" : "#ef444460";
+      const wSolidColor = isAccum ? "#22c55e" : "#ef4444";
       const firstT = isoToUnix(merged.candles[0].open_time);
       const lastT = isoToUnix(merged.candles[merged.candles.length - 1].open_time);
 
-      // Range top/bottom lines
+      // ── Range top/bottom — solid lines with label ──
       if (wRange.top != null) {
         const topLine = chart.addSeries(LineSeries, {
           color: wColor,
-          lineWidth: 1,
+          lineWidth: 2,
           lineStyle: LineStyle.LargeDashed,
           crosshairMarkerVisible: false,
           lastValueVisible: false,
@@ -1139,7 +1185,7 @@ export function Chart() {
       if (wRange.bottom != null) {
         const botLine = chart.addSeries(LineSeries, {
           color: wColor,
-          lineWidth: 1,
+          lineWidth: 2,
           lineStyle: LineStyle.LargeDashed,
           crosshairMarkerVisible: false,
           lastValueVisible: false,
@@ -1151,7 +1197,7 @@ export function Chart() {
         ]));
         overlayLinesRef.current.push(botLine);
       }
-      // Creek line
+      // ── Creek line (resistance within range) ──
       if (creek != null) {
         const creekLine = chart.addSeries(LineSeries, {
           color: "#3b82f680",
@@ -1167,7 +1213,7 @@ export function Chart() {
         ]));
         overlayLinesRef.current.push(creekLine);
       }
-      // Ice line
+      // ── Ice line (support within range) ──
       if (ice != null) {
         const iceLine = chart.addSeries(LineSeries, {
           color: "#ef444480",
@@ -1183,6 +1229,8 @@ export function Chart() {
         ]));
         overlayLinesRef.current.push(iceLine);
       }
+
+      // Wyckoff event markers are added to allMarkers above (before marker sort)
     }
 
   }, [merged, showVolume, showZigzag, showLabels, showProjections, visibleDetections, familyModes, detailLayers, wyckoffQuery.data, projectionsQuery.data]);
