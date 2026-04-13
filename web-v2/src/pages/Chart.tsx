@@ -888,14 +888,23 @@ export function Chart() {
       }
     }
 
-    // ── Projection overlays ──
-    if (showProjections && projectionsQuery.data) {
-      // Group by alt_group, show only rank=1 (leading) per group
+    // ── Projection overlays (only future legs) ──
+    if (showProjections && projectionsQuery.data && merged.candles.length > 0) {
+      const lastCandle = merged.candles[merged.candles.length - 1];
+      const lastCandleT = isoToUnix(lastCandle.open_time) as number;
+      const lastPrice = Number(lastCandle.close);
+
+      // Estimate bar interval in seconds
+      const barSecs = merged.candles.length >= 2
+        ? (new Date(merged.candles[merged.candles.length - 1].open_time).getTime() -
+           new Date(merged.candles[merged.candles.length - 2].open_time).getTime()) / 1000
+        : 3600;
+
+      // Show only rank=1 (leading) per alt_group, not eliminated
       const projs = projectionsQuery.data.filter(
         (p) => p.state !== "eliminated" && p.rank === 1
       );
 
-      // Probability-based color intensity
       const projColor = (prob: number, dir: string) => {
         if (dir === "bullish") return prob >= 0.4 ? "#a78bfa" : "#7c3aed80";
         return prob >= 0.4 ? "#c084fc" : "#9333ea80";
@@ -907,16 +916,41 @@ export function Chart() {
           : [];
         if (legs.length === 0) continue;
 
-        // Build polyline from legs: start → end of each leg
+        // Filter: only legs whose time_end_est is in the future
+        const futureLegs = legs.filter((leg) => {
+          if (!leg.time_end_est) return false;
+          return isoToUnix(leg.time_end_est) as number > lastCandleT;
+        });
+        if (futureLegs.length === 0) continue;
+
+        // Build polyline: anchor from last candle close, then each future leg
+        // Scale prices relative to last candle (projected movement from current price)
+        const firstLeg = futureLegs[0];
+        const origStart = firstLeg.price_start;
+
         const points: { time: Time; value: number }[] = [];
-        for (const leg of legs) {
-          if (leg.time_start_est && points.length === 0) {
-            points.push({ time: isoToUnix(leg.time_start_est), value: leg.price_start });
+
+        // Start from current candle close
+        points.push({ time: (lastCandleT + barSecs) as Time, value: lastPrice });
+
+        // Add each future leg end, offset so projection starts from current price
+        let tCursor = lastCandleT + barSecs;
+        for (const leg of futureLegs) {
+          // How many bars for this leg (from original time estimates)
+          let legBars = 1;
+          if (leg.time_start_est && leg.time_end_est) {
+            const dt = (isoToUnix(leg.time_end_est) as number) - (isoToUnix(leg.time_start_est) as number);
+            legBars = Math.max(1, Math.round(dt / barSecs));
           }
-          if (leg.time_end_est) {
-            points.push({ time: isoToUnix(leg.time_end_est), value: leg.price_end });
-          }
+          tCursor += legBars * barSecs;
+
+          // Price offset: shift entire projection so it starts at current price
+          const priceOffset = lastPrice - origStart;
+          const adjPrice = leg.price_end + priceOffset;
+
+          points.push({ time: tCursor as Time, value: adjPrice });
         }
+
         if (points.length < 2) continue;
 
         const color = projColor(proj.probability, proj.direction);
@@ -933,9 +967,11 @@ export function Chart() {
         projLine.setData(dedupeLineData(points));
         overlayLinesRef.current.push(projLine);
 
-        // Invalidation level — red dashed horizontal
+        // Invalidation level — red dashed horizontal (also offset)
         if (proj.invalidation_price) {
-          const invPrice = Number(proj.invalidation_price);
+          const invRaw = Number(proj.invalidation_price);
+          const priceOffset = lastPrice - origStart;
+          const invPrice = invRaw + priceOffset;
           if (Number.isFinite(invPrice)) {
             const invLine = chart.addSeries(LineSeries, {
               color: "#ef444480",
@@ -1039,27 +1075,8 @@ export function Chart() {
       }
     }
 
-    // Projection leg labels
-    if (showProjections && showLabels && projectionsQuery.data) {
-      const projs = projectionsQuery.data.filter(
-        (p) => p.state !== "eliminated" && p.rank === 1
-      );
-      for (const proj of projs) {
-        const legs: ProjLeg[] = Array.isArray(proj.projected_legs) ? proj.projected_legs : [];
-        for (const leg of legs) {
-          if (!leg.time_end_est) continue;
-          const t = isoToUnix(leg.time_end_est);
-          const isBull = leg.direction === "bullish";
-          allMarkers.push({
-            time: t,
-            position: isBull ? "belowBar" : "aboveBar",
-            color: "#a78bfa",
-            shape: "circle",
-            text: `${leg.label} (${(proj.probability * 100).toFixed(0)}%)`,
-          });
-        }
-      }
-    }
+    // Projection leg labels — only for future legs (markers can't go beyond last candle,
+    // so we skip projection markers; labels are shown on the line series via pointMarkers)
 
     // Sort markers by time (TV requires ascending) and apply
     allMarkers.sort((a, b) => (a.time as number) - (b.time as number));
