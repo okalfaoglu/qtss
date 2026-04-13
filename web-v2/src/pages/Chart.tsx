@@ -903,15 +903,31 @@ export function Chart() {
       const lastCandleT = isoToUnix(merged.candles[merged.candles.length - 1].open_time) as number;
 
       // Show only rank=1 (leading) per alt_group, not eliminated,
-      // and whose last leg extends beyond the last visible candle
-      const projs = projectionsQuery.data.filter((p) => {
-        if (p.state === "eliminated" || p.rank !== 1) return false;
-        // At least one leg must end after the last candle (future projection)
-        const legs: ProjLeg[] = Array.isArray(p.projected_legs) ? p.projected_legs : [];
-        const lastLeg = legs[legs.length - 1];
-        if (!lastLeg?.time_end_est) return false;
-        return (isoToUnix(lastLeg.time_end_est) as number) > lastCandleT;
-      });
+      // whose last leg extends beyond the last visible candle,
+      // and whose prices stay within ±60% of current price
+      const currentPrice = Number(merged.candles[merged.candles.length - 1].close);
+      const projs = projectionsQuery.data
+        .filter((p) => {
+          if (p.state === "eliminated" || p.rank !== 1) return false;
+          const legs: ProjLeg[] = Array.isArray(p.projected_legs) ? p.projected_legs : [];
+          const lastLeg = legs[legs.length - 1];
+          if (!lastLeg?.time_end_est) return false;
+          if ((isoToUnix(lastLeg.time_end_est) as number) <= lastCandleT) return false;
+          return true;
+        })
+        // Sort by max deviation of future-visible points from current price
+        .sort((a, b) => {
+          const futDev = (legs: ProjLeg[]) => {
+            const fp = legs
+              .filter((l) => l.time_end_est && (isoToUnix(l.time_end_est) as number) > lastCandleT)
+              .flatMap((l) => [l.price_start, l.price_end]);
+            if (fp.length === 0) return 999;
+            return fp.reduce((mx, pr) => Math.max(mx, Math.abs(pr - currentPrice) / currentPrice), 0);
+          };
+          return futDev(Array.isArray(a.projected_legs) ? a.projected_legs : [])
+               - futDev(Array.isArray(b.projected_legs) ? b.projected_legs : []);
+        })
+        .slice(0, 2);
 
       const projColor = (prob: number, dir: string) => {
         if (dir === "bullish") return prob >= 0.4 ? "#a78bfa" : "#7c3aed80";
@@ -970,6 +986,7 @@ export function Chart() {
           priceLineVisible: false,
           pointMarkersVisible: true,
           pointMarkersRadius: 3,
+          priceScaleId: "", // overlay — don't affect main Y axis scale
         });
         projLine.setData(dedupeLineData(points));
         overlayLinesRef.current.push(projLine);
@@ -985,6 +1002,7 @@ export function Chart() {
               crosshairMarkerVisible: false,
               lastValueVisible: false,
               priceLineVisible: false,
+              priceScaleId: "",
             });
             const t0 = points[0].time as number;
             const t1 = points[points.length - 1].time as number;
