@@ -187,9 +187,10 @@ pub async fn validate_projections(
                 }
             }
 
-            // Check time exceeded (2× estimated duration = too slow)
+            // Check time exceeded (3× estimated duration past end_est)
             if let Some(end_est) = proj.time_end_est {
-                let max_time = end_est + (end_est - proj.created_at);
+                let duration = end_est - proj.time_start_est.unwrap_or(proj.created_at);
+                let max_time = end_est + duration * 2;
                 if current_time > max_time {
                     wave_projections::eliminate_projection(
                         pool, proj.id, "time_exceeded",

@@ -417,7 +417,17 @@ export function Chart() {
   const cycleFamily = useCallback((family: string) => {
     setFamilyModes((prev) => {
       const cur = prev[family] ?? "on";
-      const next: FamilyMode = cur === "off" ? "on" : cur === "on" ? "detail" : "off";
+      // Simple toggle: on ↔ off (detail via long-press / right-click)
+      const next: FamilyMode = cur === "off" ? "on" : "off";
+      return { ...prev, [family]: next };
+    });
+  }, []);
+
+  // Long-press or right-click → detail mode
+  const detailFamily = useCallback((family: string) => {
+    setFamilyModes((prev) => {
+      const cur = prev[family] ?? "on";
+      const next: FamilyMode = cur === "detail" ? "on" : "detail";
       if (next === "detail") {
         setDetailLayers((dl) => ({ ...dl, [family]: new Set(["entry_tp_sl", "labels"]) }));
       }
@@ -1273,6 +1283,7 @@ export function Chart() {
                     key={family}
                     type="button"
                     onClick={() => cycleFamily(family)}
+                    onContextMenu={(e) => { e.preventDefault(); detailFamily(family); }}
                     className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide transition"
                     style={{
                       borderWidth: 1,
@@ -1280,7 +1291,7 @@ export function Chart() {
                       background: isOff ? "transparent" : isDetail ? `${color}33` : `${color}18`,
                       color: isOff ? "#71717a" : color,
                     }}
-                    title={isOff ? "Gizli" : isDetail ? "Detay" : "Görünür"}
+                    title={isOff ? "Gizli (sağ tık: detay)" : isDetail ? "Detay (sağ tık: kapat)" : "Görünür (sağ tık: detay)"}
                   >
                     <span
                       className="inline-block h-1.5 w-2.5 rounded-sm"

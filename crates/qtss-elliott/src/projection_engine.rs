@@ -80,9 +80,10 @@ const SUCCESSORS: &[(&str, Successor)] = &[
 /// Main entry point: given a completed formation, produce ranked alternatives.
 pub fn project_alternatives(ctx: &ProjectionContext) -> Vec<ProjectionAlternative> {
     let base = ctx.subkind.replace("_bull", "").replace("_bear", "");
+    let ref_price = ctx.prices.last().copied().unwrap_or(1.0).max(1.0);
     for (prefix, func) in SUCCESSORS {
         if base.starts_with(prefix) {
-            let mut alts = func(ctx);
+            let mut alts = sanitize_alternatives(func(ctx), ref_price);
             // Sort by probability descending, assign stable order
             alts.sort_by(|a, b| b.probability.partial_cmp(&a.probability).unwrap_or(std::cmp::Ordering::Equal));
             return alts;
@@ -95,6 +96,28 @@ pub fn project_alternatives(ctx: &ProjectionContext) -> Vec<ProjectionAlternativ
 
 fn dir_str(bullish: bool) -> &'static str {
     if bullish { "bullish" } else { "bearish" }
+}
+
+/// Clamp price to sane range: [ref × 0.05, ref × 5.0].
+/// Prevents projections going to 0 or absurdly high/low values.
+fn clamp_price(price: f64, reference: f64) -> f64 {
+    let floor = reference * 0.05;
+    let ceil = reference * 5.0;
+    price.max(floor).min(ceil)
+}
+
+/// Sanitize all leg prices in alternatives.
+fn sanitize_alternatives(mut alts: Vec<ProjectionAlternative>, ref_price: f64) -> Vec<ProjectionAlternative> {
+    for alt in &mut alts {
+        for leg in &mut alt.legs {
+            leg.price_start = clamp_price(leg.price_start, ref_price);
+            leg.price_end = clamp_price(leg.price_end, ref_price);
+        }
+        if let Some(inv) = &mut alt.invalidation_price {
+            *inv = clamp_price(*inv, ref_price);
+        }
+    }
+    alts
 }
 
 /// Build an ABC correction alternative.
