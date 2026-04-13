@@ -1472,7 +1472,14 @@ async fn link_elliott_to_wave_chain(
     };
     let is_impulse = subkind.contains("impulse") || subkind.contains("diagonal");
     let kind = if is_impulse { "impulse" } else { "corrective" };
-    let notation = if is_impulse {
+    // Combination and triangle already carry correct labels (W-A, W-B, X/Y,
+    // Y-A, etc. or A, B, C, D, E). Only apply degree notation to simple
+    // impulse/zigzag/flat where anchors use raw numbers or A/B/C.
+    let use_own_labels = subkind.contains("combination")
+        || subkind.contains("triangle");
+    let notation: &[&str] = if use_own_labels {
+        &[] // empty → always fall through to anchor's own label
+    } else if is_impulse {
         degree.impulse_notation().as_slice()
     } else {
         degree.corrective_notation().as_slice()
