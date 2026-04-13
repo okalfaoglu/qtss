@@ -924,25 +924,38 @@ export function Chart() {
           : [];
         if (legs.length === 0) continue;
 
-        // Build polyline using original prices and times from projection engine.
-        // First point = first leg's start (= source wave endpoint).
-        // Each subsequent point = leg end.
-        const points: { time: Time; value: number }[] = [];
-
+        // Build full polyline first, then clip to future-only
+        const allPts: { time: number; value: number }[] = [];
         for (const leg of legs) {
-          // Add start of first leg (source wave endpoint)
-          if (points.length === 0 && leg.time_start_est) {
-            points.push({
-              time: isoToUnix(leg.time_start_est),
-              value: leg.price_start,
-            });
+          if (allPts.length === 0 && leg.time_start_est) {
+            allPts.push({ time: isoToUnix(leg.time_start_est) as number, value: leg.price_start });
           }
-          // Add end of each leg
           if (leg.time_end_est) {
-            points.push({
-              time: isoToUnix(leg.time_end_est),
-              value: leg.price_end,
-            });
+            allPts.push({ time: isoToUnix(leg.time_end_est) as number, value: leg.price_end });
+          }
+        }
+        if (allPts.length < 2) continue;
+
+        // Clip: only keep points after lastCandleT.
+        // If a segment crosses lastCandleT, interpolate the crossing price.
+        const points: { time: Time; value: number }[] = [];
+        for (let i = 0; i < allPts.length; i++) {
+          const pt = allPts[i];
+          if (pt.time > lastCandleT) {
+            // If this is the first future point, interpolate from previous
+            if (points.length === 0 && i > 0) {
+              const prev = allPts[i - 1];
+              const frac = (lastCandleT - prev.time) / (pt.time - prev.time);
+              const interpPrice = prev.value + frac * (pt.value - prev.value);
+              points.push({ time: lastCandleT as Time, value: interpPrice });
+            }
+            points.push({ time: pt.time as Time, value: pt.value });
+          }
+        }
+        // If all points are in the future, use them all
+        if (points.length === 0 && allPts.length > 0 && allPts[0].time > lastCandleT) {
+          for (const pt of allPts) {
+            points.push({ time: pt.time as Time, value: pt.value });
           }
         }
         if (points.length < 2) continue;
