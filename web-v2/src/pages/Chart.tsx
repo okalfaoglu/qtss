@@ -1258,14 +1258,27 @@ export function Chart() {
                     onDoubleClick={() => {
                       // Drill-down: double-click Elliott detection → jump to child TF
                       if (d.family === "elliott") {
-                        const CHILD_TF: Record<string, string> = {
-                          "1M": "1w", "1w": "1d", "1d": "4h", "4h": "1h",
-                          "1h": "30m", "30m": "15m", "15m": "5m", "5m": "1m",
+                        // Dynamic child TF based on wave DURATION, not fixed mapping
+                        // Short waves → skip to lower TF, long waves → use next TF
+                        const TF_ORDER = ["1M","1w","1d","4h","1h","30m","15m","5m","3m","1m"];
+                        const TF_SECONDS: Record<string,number> = {
+                          "1M":2592000,"1w":604800,"1d":86400,"4h":14400,
+                          "1h":3600,"30m":1800,"15m":900,"5m":300,"3m":180,"1m":60,
                         };
-                        const childTf = CHILD_TF[debounced.timeframe];
-                        if (childTf) {
-                          setForm((f) => ({ ...f, timeframe: childTf }));
-                          setDebounced((f) => ({ ...f, timeframe: childTf }));
+                        const curIdx = TF_ORDER.indexOf(debounced.timeframe);
+                        if (curIdx >= 0 && d.anchors.length >= 2) {
+                          const waveStart = new Date(d.anchors[0].time).getTime() / 1000;
+                          const waveEnd = new Date(d.anchors[d.anchors.length-1].time).getTime() / 1000;
+                          const duration = waveEnd - waveStart;
+                          // Pick child TF: want ~20-80 bars within the wave duration
+                          let bestTf = TF_ORDER[Math.min(curIdx+1, TF_ORDER.length-1)];
+                          for (let i = curIdx+1; i < TF_ORDER.length; i++) {
+                            const bars = duration / TF_SECONDS[TF_ORDER[i]];
+                            if (bars >= 20 && bars <= 200) { bestTf = TF_ORDER[i]; break; }
+                            if (bars < 20) { bestTf = TF_ORDER[Math.max(i-1, curIdx+1)]; break; }
+                          }
+                          setForm((f) => ({ ...f, timeframe: bestTf }));
+                          setDebounced((f) => ({ ...f, timeframe: bestTf }));
                         }
                       }
                     }}

@@ -1519,25 +1519,38 @@ async fn link_elliott_to_wave_chain(
         return Ok(());
     }
 
-    // Insert segments and link parents per-segment
-    let parent_tf_interval = degree.parent_timeframe().map(timeframe_to_interval);
-    let parent_deg_label = degree.parent().map(|d| d.label());
-    let child_tf_interval = degree.child_timeframe().map(timeframe_to_interval);
-    let child_deg_label = degree.child().map(|d| d.label());
+    // Insert segments and link parents per-segment (dynamic TF search)
 
     let mut inserted_ids: Vec<(Uuid, Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>)> = Vec::new();
 
     for (i, seg) in segments.iter().enumerate() {
-        // Per-segment parent lookup: find a parent wave whose range contains THIS segment
-        let parent_id = match (seg.time_start, seg.time_end, &parent_tf_interval, &parent_deg_label) {
-            (Some(ts), Some(te), Some(ptf), Some(pdeg)) => {
-                find_parent_wave(pool, exchange, symbol, ptf, pdeg, ts, te)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|row| row.id)
+        // Per-segment parent lookup: search ALL higher TFs for a parent wave
+        // whose time range contains this segment. Not limited to fixed parent TF.
+        let parent_id = if let (Some(ts), Some(te)) = (seg.time_start, seg.time_end) {
+            let parent_tfs = [
+                (Timeframe::Mn1, WaveDegree::Supercycle),
+                (Timeframe::W1,  WaveDegree::Cycle),
+                (Timeframe::D1,  WaveDegree::Primary),
+                (Timeframe::H4,  WaveDegree::Intermediate),
+                (Timeframe::H1,  WaveDegree::Minor),
+                (Timeframe::M30, WaveDegree::Minute),
+                (Timeframe::M15, WaveDegree::Minute),
+                (Timeframe::M5,  WaveDegree::Minuette),
+            ];
+            let cur_rank = degree.rank();
+            let mut found = None;
+            for (ptf, pdeg) in &parent_tfs {
+                if pdeg.rank() <= cur_rank { continue; } // must be higher degree
+                let ptf_str = timeframe_to_interval(*ptf);
+                let pdeg_str = pdeg.label();
+                if let Ok(Some(row)) = find_parent_wave(pool, exchange, symbol, &ptf_str, pdeg_str, ts, te).await {
+                    found = Some(row.id);
+                    break; // use closest parent
+                }
             }
-            _ => None,
+            found
+        } else {
+            None
         };
 
         let row = WaveChainInsert {
@@ -1569,11 +1582,30 @@ async fn link_elliott_to_wave_chain(
         }
     }
 
-    // Adopt orphan children: per-segment, using each segment's own time range
-    if let (Some(ctf), Some(cdeg)) = (&child_tf_interval, &child_deg_label) {
-        for &(seg_id, ts, te) in &inserted_ids {
-            if let (Some(ts), Some(te)) = (ts, te) {
-                let _ = adopt_children(pool, seg_id, exchange, symbol, ctf, cdeg, ts, te).await;
+    // Adopt orphan children: search ALL lower TFs, not just the fixed child.
+    // A wave on 1W might have sub-waves on 1D, 4H, or even 1H depending on
+    // its duration. We try each lower TF+degree pair.
+    {
+        let all_tfs = [
+            (Timeframe::W1,  WaveDegree::Cycle),
+            (Timeframe::D1,  WaveDegree::Primary),
+            (Timeframe::H4,  WaveDegree::Intermediate),
+            (Timeframe::H1,  WaveDegree::Minor),
+            (Timeframe::M30, WaveDegree::Minute),
+            (Timeframe::M15, WaveDegree::Minute),
+            (Timeframe::M5,  WaveDegree::Minuette),
+            (Timeframe::M1,  WaveDegree::Subminuette),
+        ];
+        // Only adopt from TFs strictly lower than current
+        let cur_rank = degree.rank();
+        for (child_tf, child_deg) in &all_tfs {
+            if child_deg.rank() >= cur_rank { continue; }
+            let ctf_str = timeframe_to_interval(*child_tf);
+            let cdeg_str = child_deg.label();
+            for &(seg_id, ts, te) in &inserted_ids {
+                if let (Some(ts), Some(te)) = (ts, te) {
+                    let _ = adopt_children(pool, seg_id, exchange, symbol, &ctf_str, cdeg_str, ts, te).await;
+                }
             }
         }
     }
