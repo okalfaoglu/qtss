@@ -80,7 +80,8 @@ const SUCCESSORS: &[(&str, Successor)] = &[
 /// Main entry point: given a completed formation, produce ranked alternatives.
 pub fn project_alternatives(ctx: &ProjectionContext) -> Vec<ProjectionAlternative> {
     let base = ctx.subkind.replace("_bull", "").replace("_bear", "");
-    let ref_price = ctx.prices.last().copied().unwrap_or(1.0).max(1.0);
+    // Use the MAX price across all anchors as reference for clamping
+    let ref_price = ctx.prices.iter().cloned().fold(1.0_f64, f64::max);
     for (prefix, func) in SUCCESSORS {
         if base.starts_with(prefix) {
             let mut alts = sanitize_alternatives(func(ctx), ref_price);
