@@ -53,6 +53,38 @@ const DEGREE_COLOR: Record<string, string> = {
   Minuette: "#a855f7", Subminuette: "#6b7280",
 };
 
+// Elliott subkind → human-readable label
+function fmtSubkind(raw: string): string {
+  // Strip trailing _bull/_bear — direction shown separately
+  const s = raw.replace(/_(bull|bear)$/, "");
+  const MAP: Record<string, string> = {
+    // Impulse
+    impulse_5: "Impulse (5-wave)",
+    impulse_w1_extended: "Impulse W1 Extended",
+    impulse_w3_extended: "Impulse W3 Extended",
+    impulse_w5_extended: "Impulse W5 Extended",
+    impulse_truncated_5: "Truncated 5th",
+    // Corrective — simple
+    zigzag_abc: "Zigzag (A-B-C)",
+    flat_regular: "Flat (Regular)",
+    flat_expanded: "Flat (Expanded)",
+    flat_running: "Flat (Running)",
+    // Triangles
+    triangle_contracting: "Triangle (Contracting)",
+    triangle_expanding: "Triangle (Expanding)",
+    triangle_barrier: "Triangle (Barrier)",
+    // Diagonals
+    leading_diagonal_5_3_5: "Leading Diagonal",
+    ending_diagonal_3_3_3: "Ending Diagonal",
+    // Combinations W-X-Y
+    combination_wxy_zigzag_zigzag: "WXY Combination (Zigzag–Zigzag)",
+    combination_wxy_zigzag_flat: "WXY Combination (Zigzag–Flat)",
+    combination_wxy_flat_zigzag: "WXY Combination (Flat–Zigzag)",
+    combination_wxy_flat_flat: "WXY Combination (Flat–Flat)",
+  };
+  return MAP[s] ?? s.replace(/_/g, " ");
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────
 function fmtP(p: string) {
   const n = Number(p);
@@ -92,8 +124,7 @@ function WaveChildren({
   waveTf: string;
   depth: number;
 }) {
-  const [children, setChildren] = useState<WaveSegment[] | null>(null);
-  const [subFormations, setSubFormations] = useState<TfLevelResponse | null>(null);
+  const [childFormations, setChildFormations] = useState<Formation[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
@@ -104,18 +135,12 @@ function WaveChildren({
     if (!childTf) { setLoading(false); return; }
     (async () => {
       try {
-        // First try: get direct children of this wave
-        const kids = await apiFetch<WaveSegment[]>(
+        // Children endpoint now returns Formation[] (grouped by detection_id)
+        const formations = await apiFetch<Formation[]>(
           `/v2/wave-tree/${venue}/${symbol}/${waveId}/children`
         );
-        if (kids.length > 0) {
-          setChildren(kids);
-        } else {
-          // Fallback: query by TF
-          const res = await apiFetch<TfLevelResponse>(
-            `/v2/wave-tree/${venue}/${symbol}/tf/${childTf}`
-          );
-          if (res.formations.length > 0) setSubFormations(res);
+        if (formations.length > 0) {
+          setChildFormations(formations);
         }
       } catch (e: any) {
         setErr(e?.message ?? "Hata");
@@ -125,28 +150,14 @@ function WaveChildren({
     })();
   }, [venue, symbol, childTf, waveId]);
 
-  // Render direct children as wave rows
-  const data = subFormations;
-
   if (loading) return <div className="py-1 text-zinc-600 text-[10px]" style={{ paddingLeft: depth * 32 }}>Yukleniyor...</div>;
   if (err) return <div className="py-1 text-red-400/60 text-[10px]" style={{ paddingLeft: depth * 32 }}>{err}</div>;
 
-  // Direct children of this wave (same formation, lower TF segments)
-  if (children && children.length > 0 && childTf) {
+  // Show child formations (Wave → Formation → Waves)
+  if (childFormations && childFormations.length > 0 && childTf) {
     return (
       <>
-        {children.map((w) => (
-          <WaveRow key={w.id} w={w} tf={childTf} venue={venue} symbol={symbol} depth={depth} />
-        ))}
-      </>
-    );
-  }
-
-  // Sub-formations at child TF
-  if (data && data.formations.length > 0 && childTf) {
-    return (
-      <>
-        {data.formations.map((f) => (
+        {childFormations.map((f) => (
           <FormationBlock key={f.id} f={f} tf={childTf} venue={venue} symbol={symbol} depth={depth} />
         ))}
       </>
@@ -190,8 +201,10 @@ function WaveRow({
         onClick={() => hasChildren && setExpanded(!expanded)}
       >
         {/* Expand indicator */}
-        <span className="w-4 text-center text-zinc-600 text-[10px] select-none">
-          {hasChildren ? (expanded ? "▾" : "▸") : "·"}
+        <span className={`w-5 text-center text-sm select-none ${
+          hasChildren ? "text-yellow-400 font-bold" : "text-zinc-700"
+        }`}>
+          {hasChildren ? (expanded ? "▼" : "▶") : "·"}
         </span>
 
         {/* Wave number */}
@@ -200,7 +213,7 @@ function WaveRow({
         </span>
 
         {/* Direction arrow */}
-        <span className={`text-[10px] ${w.direction === "bullish" ? "text-emerald-400/60" : "text-red-400/60"}`}>
+        <span className={`text-sm ${w.direction === "bullish" ? "text-emerald-400" : "text-red-400"}`}>
           {w.direction === "bullish" ? "▲" : "▼"}
         </span>
 
@@ -229,7 +242,7 @@ function WaveRow({
 
         {/* Child count badge */}
         {hasChildren && (
-          <span className="text-[9px] px-1 rounded bg-sky-900/30 text-sky-400/60">
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-900/40 text-yellow-400 font-bold">
             {w.child_count}
           </span>
         )}
@@ -295,7 +308,7 @@ function FormationBlock({
         </span>
         {f.subkind && (
           <span className="text-[10px] text-zinc-400 italic">
-            {f.subkind.replace(/_/g, " ")}
+            {fmtSubkind(f.subkind)}
           </span>
         )}
 

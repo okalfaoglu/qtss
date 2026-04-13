@@ -221,17 +221,18 @@ impl WaveDegree {
     }
 
     /// Conventional corrective notation — unique per degree.
-    pub fn corrective_notation(self) -> &'static [&'static str; 3] {
+    /// 5 entries: A-B-C for zigzag/flat, A-B-C-D-E for triangles.
+    pub fn corrective_notation(self) -> &'static [&'static str; 5] {
         match self {
-            WaveDegree::GrandSupercycle => &["[a]", "[b]", "[c]"],
-            WaveDegree::Supercycle      => &["(a)", "(b)", "(c)"],
-            WaveDegree::Cycle           => &["a", "b", "c"],
-            WaveDegree::Primary         => &["[A]", "[B]", "[C]"],
-            WaveDegree::Intermediate    => &["(A)", "(B)", "(C)"],
-            WaveDegree::Minor           => &["A", "B", "C"],
-            WaveDegree::Minute          => &["[a]", "[b]", "[c]"],
-            WaveDegree::Minuette        => &["(a)", "(b)", "(c)"],
-            WaveDegree::Subminuette     => &["a", "b", "c"],
+            WaveDegree::GrandSupercycle => &["[a]", "[b]", "[c]", "[d]", "[e]"],
+            WaveDegree::Supercycle      => &["(a)", "(b)", "(c)", "(d)", "(e)"],
+            WaveDegree::Cycle           => &["a", "b", "c", "d", "e"],
+            WaveDegree::Primary         => &["[A]", "[B]", "[C]", "[D]", "[E]"],
+            WaveDegree::Intermediate    => &["(A)", "(B)", "(C)", "(D)", "(E)"],
+            WaveDegree::Minor           => &["A", "B", "C", "D", "E"],
+            WaveDegree::Minute          => &["[a]", "[b]", "[c]", "[d]", "[e]"],
+            WaveDegree::Minuette        => &["(a)", "(b)", "(c)", "(d)", "(e)"],
+            WaveDegree::Subminuette     => &["a", "b", "c", "d", "e"],
         }
     }
 

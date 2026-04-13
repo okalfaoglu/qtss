@@ -161,16 +161,17 @@ const WAVE_DEGREE_COLORS: Record<WaveDegree, string> = {
   subminuette:      "#9ca3af", // gri
 };
 
+// Corrective has 5 entries for triangles (A-B-C-D-E). Zigzag/flat use first 3.
 const WAVE_DEGREE_LABELS: Record<WaveDegree, { motive: string[]; corrective: string[] }> = {
-  grand_supercycle: { motive: ["[1]","[2]","[3]","[4]","[5]"], corrective: ["[a]","[b]","[c]"] },
-  supercycle:       { motive: ["(I)","(II)","(III)","(IV)","(V)"], corrective: ["(a)","(b)","(c)"] },
-  cycle:            { motive: ["I","II","III","IV","V"], corrective: ["a","b","c"] },
-  primary:          { motive: ["[1]","[2]","[3]","[4]","[5]"], corrective: ["[A]","[B]","[C]"] },
-  intermediate:     { motive: ["(1)","(2)","(3)","(4)","(5)"], corrective: ["(A)","(B)","(C)"] },
-  minor:            { motive: ["1","2","3","4","5"], corrective: ["A","B","C"] },
-  minute:           { motive: ["[i]","[ii]","[iii]","[iv]","[v]"], corrective: ["[a]","[b]","[c]"] },
-  minuette:         { motive: ["(i)","(ii)","(iii)","(iv)","(v)"], corrective: ["(a)","(b)","(c)"] },
-  subminuette:      { motive: ["i","ii","iii","iv","v"], corrective: ["a","b","c"] },
+  grand_supercycle: { motive: ["[1]","[2]","[3]","[4]","[5]"], corrective: ["[a]","[b]","[c]","[d]","[e]"] },
+  supercycle:       { motive: ["(I)","(II)","(III)","(IV)","(V)"], corrective: ["(a)","(b)","(c)","(d)","(e)"] },
+  cycle:            { motive: ["I","II","III","IV","V"], corrective: ["a","b","c","d","e"] },
+  primary:          { motive: ["[1]","[2]","[3]","[4]","[5]"], corrective: ["[A]","[B]","[C]","[D]","[E]"] },
+  intermediate:     { motive: ["(1)","(2)","(3)","(4)","(5)"], corrective: ["(A)","(B)","(C)","(D)","(E)"] },
+  minor:            { motive: ["1","2","3","4","5"], corrective: ["A","B","C","D","E"] },
+  minute:           { motive: ["[i]","[ii]","[iii]","[iv]","[v]"], corrective: ["[a]","[b]","[c]","[d]","[e]"] },
+  minuette:         { motive: ["(i)","(ii)","(iii)","(iv)","(v)"], corrective: ["(a)","(b)","(c)","(d)","(e)"] },
+  subminuette:      { motive: ["i","ii","iii","iv","v"], corrective: ["a","b","c","d","e"] },
 };
 
 // Timeframe → base degree eşlemesi (L1 pivot level baz alınır)
@@ -213,12 +214,10 @@ function elliottLabel(
     const idx = parseInt(anchorLabel, 10);
     if (!isNaN(idx) && idx >= 0 && idx < labels.length) return labels[idx];
   } else {
-    // Corrective: map A/B/C and triangle D/E
-    const map: Record<string, number> = { "0": -1, A: 0, B: 1, C: 2, D: 0, E: 1 };
+    // Corrective: map A/B/C/D/E to degree notation
+    const map: Record<string, number> = { "0": -1, A: 0, B: 1, C: 2, D: 3, E: 4 };
     const i = map[anchorLabel];
     if (i !== undefined && i >= 0 && i < labels.length) {
-      // Triangle D/E: use same notation but lowercase for sub-legs
-      if (anchorLabel === "D" || anchorLabel === "E") return anchorLabel;
       return labels[i];
     }
     // Combination W-X-Y labels: pass through
