@@ -899,11 +899,19 @@ export function Chart() {
     }
 
     // ── Projection overlays — draw from source wave endpoint ──
-    if (showProjections && projectionsQuery.data) {
-      // Show only rank=1 (leading) per alt_group, not eliminated
-      const projs = projectionsQuery.data.filter(
-        (p) => p.state !== "eliminated" && p.rank === 1
-      );
+    if (showProjections && projectionsQuery.data && merged.candles.length > 0) {
+      const lastCandleT = isoToUnix(merged.candles[merged.candles.length - 1].open_time) as number;
+
+      // Show only rank=1 (leading) per alt_group, not eliminated,
+      // and whose last leg extends beyond the last visible candle
+      const projs = projectionsQuery.data.filter((p) => {
+        if (p.state === "eliminated" || p.rank !== 1) return false;
+        // At least one leg must end after the last candle (future projection)
+        const legs: ProjLeg[] = Array.isArray(p.projected_legs) ? p.projected_legs : [];
+        const lastLeg = legs[legs.length - 1];
+        if (!lastLeg?.time_end_est) return false;
+        return (isoToUnix(lastLeg.time_end_est) as number) > lastCandleT;
+      });
 
       const projColor = (prob: number, dir: string) => {
         if (dir === "bullish") return prob >= 0.4 ? "#a78bfa" : "#7c3aed80";
