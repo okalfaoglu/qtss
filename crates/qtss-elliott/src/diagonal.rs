@@ -50,6 +50,7 @@ use qtss_domain::v2::instrument::Instrument;
 use qtss_domain::v2::pivot::PivotTree;
 use qtss_domain::v2::regime::RegimeSnapshot;
 use qtss_domain::v2::timeframe::Timeframe;
+use rust_decimal::prelude::ToPrimitive;
 
 const W2_REFS: &[f64] = &[0.5, 0.618, 0.786];
 const ANCHOR_LABELS: &[&str] = &["0", "1", "2", "3", "4", "5"];
@@ -99,95 +100,75 @@ impl FormationDetector for DiagonalDetector {
         if pivots.len() < 6 {
             return Vec::new();
         }
-        let tail = &pivots[pivots.len() - 6..];
-        if !alternation_ok(tail) {
-            return Vec::new();
-        }
-        let dir = Direction::from_first(tail[0].kind);
-        let p = normalize(tail, dir);
 
-        // Bullish-frame impulse leg checks (each leg has the right sign).
-        let w1 = p[1] - p[0];
-        let w2 = p[1] - p[2];
-        let w3 = p[3] - p[2];
-        let w4 = p[3] - p[4];
-        let w5 = p[5] - p[4];
-        if w1 <= 0.0 || w2 <= 0.0 || w3 <= 0.0 || w4 <= 0.0 || w5 <= 0.0 {
-            return Vec::new();
-        }
-        // Wave 2 may not retrace past start of wave 1 — same hard rule
-        // as impulse.
-        if p[2] <= p[0] {
-            return Vec::new();
-        }
-        // Wedge contraction: each odd wave shorter than the previous odd.
-        if w3 >= w1 || w5 >= w3 {
-            return Vec::new();
-        }
+        let mut results = Vec::new();
+        for start in 0..=(pivots.len() - 6) {
+            let tail = &pivots[start..start + 6];
+            if !alternation_ok(tail) { continue; }
+            let dir = Direction::from_first(tail[0].kind);
+            let p = normalize(tail, dir);
 
-        // Score the structure:
-        //   * `tight` rewards tight contraction (w5/w3 close to 0.6, w3/w1
-        //     close to 0.6 — typical wedge).
-        //   * `s_w2` rewards a clean fib retrace on wave 2.
-        //   * `overlap_bonus` rewards w4 entering w1 territory, the
-        //     diagnostic of a diagonal.
-        let tight_w3 = nearest_fib_score(w3 / w1, &[0.5, 0.618, 0.786]);
-        let tight_w5 = nearest_fib_score(w5 / w3, &[0.5, 0.618, 0.786]);
-        let s_w2 = nearest_fib_score(w2 / w1, W2_REFS);
-        let overlap_bonus = if p[4] <= p[1] { 1.0 } else { 0.85 };
-        let score = mean_score(&[tight_w3, tight_w5, s_w2, overlap_bonus]);
+            let w1 = p[1] - p[0];
+            let w2 = p[1] - p[2];
+            let w3 = p[3] - p[2];
+            let w4 = p[3] - p[4];
+            let w5 = p[5] - p[4];
+            if w1 <= 0.0 || w2 <= 0.0 || w3 <= 0.0 || w4 <= 0.0 || w5 <= 0.0 { continue; }
+            if p[2] <= p[0] { continue; }
+            if w3 >= w1 || w5 >= w3 { continue; }
 
-        if (score as f32) < self.config.min_structural_score {
-            return Vec::new();
-        }
+            let tight_w3 = nearest_fib_score(w3 / w1, &[0.5, 0.618, 0.786]);
+            let tight_w5 = nearest_fib_score(w5 / w3, &[0.5, 0.618, 0.786]);
+            let s_w2 = nearest_fib_score(w2 / w1, W2_REFS);
+            let overlap_bonus = if p[4] <= p[1] { 1.0 } else { 0.85 };
+            let score = mean_score(&[tight_w3, tight_w5, s_w2, overlap_bonus]);
+            if (score as f32) < self.config.min_structural_score { continue; }
 
-        // ── Position check: leading vs ending ──────────────────────
-        // Leading diagonal = start of a new move (wave 1 or wave A).
-        //   → The wedge should appear AFTER a retracement / reversal.
-        //   → Pivots BEFORE the wedge should be in the opposite direction.
-        // Ending diagonal = climax of an existing move (wave 5 or wave C).
-        //   → The wedge should EXTEND a prior move in the same direction.
-        //   → Pivots BEFORE the wedge should trend in the same direction.
-        let actual_flavor = {
-            let all_pivots = tree.at_level(self.config.pivot_level);
-            if all_pivots.len() >= 9 {
-                // Look at the 3 pivots before our 6-pivot wedge.
-                let pre = &all_pivots[all_pivots.len() - 9..all_pivots.len() - 6];
-                let pre_p = normalize(pre, dir);
-                // If pre-context trends in the SAME direction as the wedge
-                // (i.e., prior high > prior low in bullish frame), this is
-                // an ending diagonal (extends the prior move).
-                let prior_net = pre_p.last().copied().unwrap_or(0.0)
-                    - pre_p.first().copied().unwrap_or(0.0);
-                if prior_net > 0.0 {
-                    DiagonalKind::Ending // extends prior trend → ending
+            // Determine leading vs ending by prior context:
+            // - Leading: appears at START of a move (wave 1 or wave A).
+            //   Prior move is OPPOSITE direction (price was falling before
+            //   a bullish diagonal, or rising before a bearish one).
+            // - Ending: appears at END of a move (wave 5 or wave C).
+            //   Prior move is SAME direction (price was already rising
+            //   before a bullish diagonal — it's the climax).
+            let actual_flavor = {
+                if start >= 2 {
+                    // Look at the net move of ALL prior pivots (not just 3)
+                    let prior_start_price = pivots[0].price.to_f64().unwrap_or(0.0);
+                    let prior_end_price = pivots[start].price.to_f64().unwrap_or(0.0);
+                    let prior_move = prior_end_price - prior_start_price;
+                    let diag_move = p[5] - p[0]; // diagonal's net direction
+                    // Same direction = ending (climax), opposite = leading (start)
+                    if prior_move * diag_move > 0.0 {
+                        DiagonalKind::Ending
+                    } else {
+                        DiagonalKind::Leading
+                    }
                 } else {
-                    DiagonalKind::Leading // reverses prior trend → leading
+                    // No prior context — assume leading (start of data)
+                    DiagonalKind::Leading
                 }
-            } else {
-                // Not enough context — assume the configured flavor.
-                self.flavor
-            }
-        };
+            };
 
-        let subkind = format!("{}_{}", actual_flavor.subkind_prefix(), dir.suffix());
-        let anchors = label_anchors(tail, self.config.pivot_level, ANCHOR_LABELS);
-        let projected =
-            projection::project(&subkind, &anchors, self.config.pivot_level);
-        let sub_waves = decomposition::decompose(tree, &anchors, self.config.pivot_level);
-        let invalidation_price = tail[0].price;
+            let subkind = format!("{}_{}", actual_flavor.subkind_prefix(), dir.suffix());
+            let anchors = label_anchors(tail, self.config.pivot_level, ANCHOR_LABELS);
+            let projected = projection::project(&subkind, &anchors, self.config.pivot_level);
+            let sub_waves = decomposition::decompose(tree, &anchors, self.config.pivot_level);
+            let invalidation_price = tail[0].price;
 
-        vec![Detection::new(
-            instrument.clone(),
-            timeframe,
-            PatternKind::Elliott(subkind),
-            PatternState::Forming,
-            anchors,
-            score as f32,
-            invalidation_price,
-            regime.clone(),
-        )
-        .with_projection(projected)
-        .with_sub_waves(sub_waves)]
+            results.push(Detection::new(
+                instrument.clone(),
+                timeframe,
+                PatternKind::Elliott(subkind),
+                PatternState::Forming,
+                anchors,
+                score as f32,
+                invalidation_price,
+                regime.clone(),
+            )
+            .with_projection(projected)
+            .with_sub_waves(sub_waves));
+        }
+        results
     }
 }

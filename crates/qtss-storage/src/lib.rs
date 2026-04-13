@@ -1,6 +1,7 @@
 pub mod account_drawdown;
 pub mod ai_approval;
 pub mod audit_log;
+pub mod backfill_progress;
 pub mod catalog;
 pub mod config;
 pub mod config_tick;
@@ -54,7 +55,7 @@ pub mod wyckoff_structures;
 pub use account_drawdown::{AccountDrawdownRepository, DrawdownSnapshotRow};
 pub use v2_detection_outcomes::{DetectionOutcomeRepository, DetectionOutcomeRow, OutcomeHitRate};
 pub use v2_detections::{
-    DetectionFilter, DetectionRow, HistoricalOutcomeRow, NewDetection, V2DetectionRepository,
+    DetectionFilter, DetectionRow, FormingRow, HistoricalOutcomeRow, NewDetection, V2DetectionRepository,
 };
 pub use v2_correlation_groups::{
     count_open_setups_in_group, list_groups_for_symbol, CorrelationGroupRow,
@@ -143,6 +144,11 @@ pub use external_fetch::{
     upsert_external_source, ExternalDataSourceRow,
 };
 pub use fill_long_estimate::{symbols_with_open_positions_from_fills, symbols_with_positive_long_from_fills, FillPositionKey};
+pub use backfill_progress::{
+    get_or_create_backfill_progress, is_backfill_ready, mark_backfill_started,
+    update_backfill_cursor, mark_backfill_finished, update_verification, mark_live,
+    record_backfill_error, BackfillProgressRow,
+};
 pub use ingestion_state::{
     count_market_bars_series, list_engine_symbols_with_ingestion,
     list_recent_bar_open_times_desc, upsert_engine_symbol_ingestion_state,

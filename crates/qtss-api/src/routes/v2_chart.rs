@@ -64,7 +64,7 @@ async fn get_chart(
     Path((venue, symbol, tf)): Path<(String, String, String)>,
     Query(q): Query<ChartQuery>,
 ) -> Result<Json<ChartWorkspace>, ApiError> {
-    let segment = q.segment.unwrap_or_else(|| "spot".to_string());
+    let segment = q.segment.unwrap_or_else(|| "futures".to_string());
     let limit = q.limit.unwrap_or(500).clamp(1, 5_000);
 
     let rows = match q.before {
@@ -166,11 +166,15 @@ async fn detections_for(
     };
     let mut overlays: Vec<DetectionOverlay> = rows.into_iter().map(detection_row_to_overlay).collect();
 
-    // Enrich elliott detections with wave_chain ancestor breadcrumb
+    // Enrich elliott detections with wave_chain ancestor breadcrumb + has_children
     for overlay in &mut overlays {
         if overlay.family == "elliott" {
             if let Ok(det_id) = uuid::Uuid::parse_str(&overlay.id) {
                 if let Ok(Some(wave)) = wave_chain::find_by_detection(&st.pool, det_id).await {
+                    // Check if this wave has children (sub-waves on lower TF)
+                    if let Ok(count) = wave_chain::count_children(&st.pool, wave.id).await {
+                        overlay.has_children = count > 0;
+                    }
                     if let Ok(chain) = wave_chain::get_ancestor_chain(&st.pool, wave.id).await {
                         let breadcrumb = chain
                             .iter()
@@ -233,6 +237,7 @@ fn detection_row_to_overlay(row: DetectionRow) -> DetectionOverlay {
         projected_anchors,
         sub_wave_anchors,
         wave_context: None,
+        has_children: false,
     }
 }
 

@@ -200,6 +200,8 @@ export interface DetectionOverlay {
   sub_wave_anchors?: DetectionAnchor[][];
   /** Elliott Deep: degree breadcrumb e.g. "Cycle III › Primary [3] › Intermediate (3)" */
   wave_context?: string;
+  /** True when sub-waves exist on a lower timeframe — enables drill-down */
+  has_children?: boolean;
 }
 
 export interface OpenOrderOverlay {

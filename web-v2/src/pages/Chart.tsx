@@ -106,6 +106,10 @@ function isoToUnix(iso: string): Time {
 /** Sort + deduplicate line data for TV strict-ascending requirement */
 function sortLineData<T extends { time: Time }>(data: T[]): T[] {
   const sorted = [...data].sort((a, b) => (a.time as number) - (b.time as number));
+  // Deduplicate: when two points share the same timestamp, keep only the LAST
+  // one (lightweight-charts requires strictly ascending time). For wave overlays
+  // where order matters, callers should avoid sortLineData and use
+  // dedupeLineData instead.
   const out: T[] = [];
   let prev = -1;
   for (const d of sorted) {
@@ -117,9 +121,121 @@ function sortLineData<T extends { time: Time }>(data: T[]): T[] {
   return out;
 }
 
-function familyColor(family: string, subkind?: string): string {
+/** For wave polylines: preserve anchor order, only bump duplicate timestamps
+ *  by +1s so lightweight-charts accepts them. No re-sorting. */
+function dedupeLineData<T extends { time: Time }>(data: T[]): T[] {
+  const out: T[] = [];
+  let prev = -1;
+  for (const d of data) {
+    let t = d.time as number;
+    if (t <= prev) t = prev + 1;
+    prev = t;
+    out.push({ ...d, time: t as Time });
+  }
+  return out;
+}
+
+// ─── Elliott Wave Degree System ──────────────────────────────────────
+// Frost & Prechter dalga dereceleri — timeframe + pivot level → degree
+// Her derece kendi renk koduna sahip (profesyonel EW yazılımı standardı).
+type WaveDegree =
+  | "grand_supercycle"
+  | "supercycle"
+  | "cycle"
+  | "primary"
+  | "intermediate"
+  | "minor"
+  | "minute"
+  | "minuette"
+  | "subminuette";
+
+const WAVE_DEGREE_COLORS: Record<WaveDegree, string> = {
+  grand_supercycle: "#dc2626", // koyu kırmızı
+  supercycle:       "#ef4444", // kırmızı
+  cycle:            "#1d4ed8", // koyu mavi (navy)
+  primary:          "#3b82f6", // mavi
+  intermediate:     "#16a34a", // yeşil
+  minor:            "#f59e0b", // turuncu
+  minute:           "#8b5cf6", // mor
+  minuette:         "#06b6d4", // cyan
+  subminuette:      "#9ca3af", // gri
+};
+
+const WAVE_DEGREE_LABELS: Record<WaveDegree, { motive: string[]; corrective: string[] }> = {
+  grand_supercycle: { motive: ["[1]","[2]","[3]","[4]","[5]"], corrective: ["[a]","[b]","[c]"] },
+  supercycle:       { motive: ["(I)","(II)","(III)","(IV)","(V)"], corrective: ["(a)","(b)","(c)"] },
+  cycle:            { motive: ["I","II","III","IV","V"], corrective: ["a","b","c"] },
+  primary:          { motive: ["[1]","[2]","[3]","[4]","[5]"], corrective: ["[A]","[B]","[C]"] },
+  intermediate:     { motive: ["(1)","(2)","(3)","(4)","(5)"], corrective: ["(A)","(B)","(C)"] },
+  minor:            { motive: ["1","2","3","4","5"], corrective: ["A","B","C"] },
+  minute:           { motive: ["[i]","[ii]","[iii]","[iv]","[v]"], corrective: ["[a]","[b]","[c]"] },
+  minuette:         { motive: ["(i)","(ii)","(iii)","(iv)","(v)"], corrective: ["(a)","(b)","(c)"] },
+  subminuette:      { motive: ["i","ii","iii","iv","v"], corrective: ["a","b","c"] },
+};
+
+// Timeframe → base degree eşlemesi (L1 pivot level baz alınır)
+function waveDegreeForTimeframe(tf: string): WaveDegree {
+  switch (tf) {
+    case "1M":  return "cycle";
+    case "1w":  return "primary";
+    case "1d":  return "intermediate";
+    case "4h":  return "minor";
+    case "1h":  return "minute";
+    case "30m": return "minuette";
+    case "15m": case "5m": case "3m": case "1m":
+      return "subminuette";
+    default:    return "minor";
+  }
+}
+
+function isMotiveElliott(subkind: string): boolean {
+  return subkind.startsWith("impulse") || subkind.includes("diagonal");
+}
+
+function elliottColor(subkind: string, timeframe: string): string {
+  const degree = waveDegreeForTimeframe(timeframe);
+  return WAVE_DEGREE_COLORS[degree];
+}
+
+function elliottLabel(
+  anchorLabel: string,
+  subkind: string,
+  timeframe: string,
+): string {
+  const degree = waveDegreeForTimeframe(timeframe);
+  const isMotive = isMotiveElliott(subkind);
+  const labels = isMotive
+    ? WAVE_DEGREE_LABELS[degree].motive
+    : WAVE_DEGREE_LABELS[degree].corrective;
+
+  // Map anchor label (0,1,2,3,4,5 or 0,A,B,C) to degree notation
+  if (isMotive) {
+    const idx = parseInt(anchorLabel, 10);
+    if (!isNaN(idx) && idx >= 0 && idx < labels.length) return labels[idx];
+  } else {
+    // Corrective: map A/B/C and triangle D/E
+    const map: Record<string, number> = { "0": -1, A: 0, B: 1, C: 2, D: 0, E: 1 };
+    const i = map[anchorLabel];
+    if (i !== undefined && i >= 0 && i < labels.length) {
+      // Triangle D/E: use same notation but lowercase for sub-legs
+      if (anchorLabel === "D" || anchorLabel === "E") return anchorLabel;
+      return labels[i];
+    }
+    // Combination W-X-Y labels: pass through
+    if (anchorLabel.includes("-") || anchorLabel.includes("/")) return anchorLabel;
+    // For diagonal corrective (0-5 labels)
+    const idx = parseInt(anchorLabel, 10);
+    if (!isNaN(idx) && idx >= 0 && idx < labels.length) return labels[idx % labels.length];
+  }
+  return anchorLabel; // fallback
+}
+
+function familyColor(family: string, subkind?: string, timeframe?: string): string {
   if (family === "range" && subkind && RANGE_SUBKIND_COLORS[subkind]) {
     return RANGE_SUBKIND_COLORS[subkind];
+  }
+  if (family === "elliott" && subkind) {
+    return elliottColor(subkind, timeframe ?? "1d");
   }
   return FAMILY_COLORS[family] ?? FAMILY_COLORS.custom;
 }
@@ -241,13 +357,18 @@ function computeTargets(d: DetectionOverlay): {
       tp2 = neckline + dir * height * 1.618;
     }
   } else if (d.family === "harmonic" && anchors.length >= 5) {
+    // Harmonic entry = D (PRZ), targets = CD leg retrace
     const aP = Number(anchors[1].price);
+    const cP = Number(anchors[3].price);
     const dP = Number(anchors[4].price);
-    const adRange = Math.abs(aP - dP);
-    const dir = d.subkind.includes("bull") ? 1 : -1;
+    const cdRange = Math.abs(cP - dP);
+    // Direction: bull → price should rise from D, bear → fall from D
+    // For bull: D < C (D is a low), targets are ABOVE D
+    // For bear: D > C (D is a high), targets are BELOW D
+    const dir = dP < cP ? 1 : -1; // derive from geometry, not subkind name
     entry = dP;
-    tp1 = dP + dir * adRange * 0.382;
-    tp2 = dP + dir * adRange * 0.618;
+    tp1 = dP + dir * cdRange * 0.382;
+    tp2 = dP + dir * cdRange * 0.618;
   } else if (d.subkind.includes("impulse") && anchors.length >= 6) {
     const p0 = Number(anchors[0].price);
     const p1 = Number(anchors[1].price);
@@ -272,6 +393,9 @@ export function Chart() {
   const [debounced, setDebounced] = useState<ChartForm>(DEFAULTS);
   const [olderPages, setOlderPages] = useState<ChartWorkspace[]>([]);
   const [hovered, setHovered] = useState<string | null>(null);
+  const hoveredRef = useRef<string | null>(null);
+  // Keep ref in sync for use inside useEffect without triggering re-render
+  hoveredRef.current = hovered;
   const [showZigzag, setShowZigzag] = useState(false);
   const [showVolume, setShowVolume] = useState(true);
   const [familyModes, setFamilyModes] = useState<Record<string, FamilyMode>>({});
@@ -327,7 +451,8 @@ export function Chart() {
       apiFetch<ChartWorkspace>(
         `/v2/chart/${debounced.venue}/${debounced.symbol}/${debounced.timeframe}?limit=${PAGE_SIZE}`,
       ),
-    refetchInterval: 10_000,
+    refetchInterval: 30_000,
+    structuralSharing: true,
   });
 
   const wyckoffQuery = useQuery({
@@ -365,10 +490,55 @@ export function Chart() {
     return { ...query.data, candles, detections };
   }, [query.data, olderPages]);
 
-  const visibleDetections = useMemo(
-    () => merged ? merged.detections.filter((d) => (familyModes[d.family] ?? "on") !== "off") : [],
-    [merged, familyModes],
-  );
+  const MAX_DETECTIONS_PER_FAMILY = 5;
+  const visibleDetections = useMemo(() => {
+    if (!merged || !merged.candles?.length) return [];
+    // Only show detections whose anchors overlap with visible candle range
+    const firstTime = merged.candles[0].open_time;
+    const lastTime = merged.candles[merged.candles.length - 1].open_time;
+    const filtered = merged.detections.filter((d) => {
+      if ((familyModes[d.family] ?? "on") === "off") return false;
+      if (!d.anchors?.length) return false;
+      // Hide invalidated detections unless in detail mode
+      if (d.state === "invalidated" && (familyModes[d.family] ?? "on") !== "detail") return false;
+      // At least one anchor must be within the candle range
+      const lastAnchor = d.anchors[d.anchors.length - 1]?.time;
+      const firstAnchor = d.anchors[0]?.time;
+      return lastAnchor >= firstTime && firstAnchor <= lastTime;
+    });
+    // Sort by score descending
+    const sorted = [...filtered].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
+    // Remove overlapping detections within same family: if two detections
+    // share >50% of their time range, keep only the higher-scoring one.
+    // This eliminates degree mixing (e.g. impulse + diagonal on same swings).
+    const kept: typeof sorted = [];
+    for (const d of sorted) {
+      const dStart = new Date(d.anchors[0].time).getTime();
+      const dEnd = new Date(d.anchors[d.anchors.length - 1].time).getTime();
+      const dSpan = Math.max(dEnd - dStart, 1);
+      const dominated = kept.some((k) => {
+        if (k.family !== d.family) return false;
+        const kStart = new Date(k.anchors[0].time).getTime();
+        const kEnd = new Date(k.anchors[k.anchors.length - 1].time).getTime();
+        const kSpan = Math.max(kEnd - kStart, 1);
+        const overlapStart = Math.max(dStart, kStart);
+        const overlapEnd = Math.min(dEnd, kEnd);
+        if (overlapEnd <= overlapStart) return false;
+        const overlap = overlapEnd - overlapStart;
+        // Dominated if overlap covers >50% of EITHER detection's span
+        return overlap / dSpan > 0.5 || overlap / kSpan > 0.5;
+      });
+      if (!dominated) kept.push(d);
+    }
+
+    // Limit per family to avoid clutter
+    const countByFamily: Record<string, number> = {};
+    return kept.filter((d) => {
+      countByFamily[d.family] = (countByFamily[d.family] ?? 0) + 1;
+      return countByFamily[d.family] <= MAX_DETECTIONS_PER_FAMILY;
+    });
+  }, [merged, familyModes]);
 
   // ─── Prefetch older history ─────────────────────────────────────
   const fetchOlder = useCallback(async () => {
@@ -454,9 +624,10 @@ export function Chart() {
 
     // Responsive resize
     const ro = new ResizeObserver((entries) => {
+      if (!chartRef.current) return; // chart disposed
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
-        chart.applyOptions({ width, height });
+        try { chart.applyOptions({ width, height }); } catch (_) { /* disposed */ }
       }
     });
     ro.observe(chartContainerRef.current);
@@ -470,12 +641,14 @@ export function Chart() {
     });
 
     return () => {
+      // Don't manually detach/removeSeries — chart.remove() cleans everything.
+      markersRef.current = null;
+      overlayLinesRef.current = [];
       ro.disconnect();
-      chart.remove();
+      try { chart.remove(); } catch (_) { /* already disposed */ }
       chartRef.current = null;
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
-      overlayLinesRef.current = [];
     };
   }, [debounced.venue, debounced.symbol, debounced.timeframe]);
 
@@ -488,7 +661,7 @@ export function Chart() {
     const volumeSeries = volumeSeriesRef.current;
 
     // Convert candles — sort + deduplicate (TV requires strictly ascending time)
-    const sorted = [...merged.candles].sort(
+    const sorted = [...(merged.candles || [])].filter(c => c && c.open_time).sort(
       (a, b) => new Date(a.open_time).getTime() - new Date(b.open_time).getTime(),
     );
     const candleData: CandlestickData<Time>[] = [];
@@ -512,12 +685,14 @@ export function Chart() {
       });
     }
 
-    candleSeries.setData(candleData);
-    volumeSeries.setData(showVolume ? volData : []);
+    try {
+      candleSeries.setData(candleData);
+      volumeSeries.setData(showVolume ? volData : []);
+    } catch (_) { return; /* chart disposed between render cycles */ }
 
     // ── Remove old overlay lines ──
     for (const line of overlayLinesRef.current) {
-      chart.removeSeries(line);
+      try { chart.removeSeries(line); } catch (_) { /* chart disposed */ }
     }
     overlayLinesRef.current = [];
 
@@ -527,43 +702,52 @@ export function Chart() {
     // ── Detection overlays ──
     // For each detection, draw line series for the formation + projections
     for (const d of visibleDetections) {
-      const color = familyColor(d.family, d.subkind);
+      const color = familyColor(d.family, d.subkind, debounced.timeframe);
       const isZone = ZONE_BOX_SUBKINDS.has(d.subkind);
       const isDashed = d.state === "forming";
       const isInvalidated = d.state === "invalidated";
-      const isHov = hovered === d.id;
+      const isHov = hoveredRef.current === d.id;
+      const isDetailMode = (familyModes[d.family] ?? "on") === "detail";
+      const layers = detailLayers[d.family] ?? new Set(["entry_tp_sl", "labels"]);
+      // In detail mode, only show projections/TP/SL for the top-scoring detection per family
+      const isTopInFamily = (() => {
+        const sameFamily = visibleDetections.filter(x => x.family === d.family);
+        return sameFamily.length === 0 || sameFamily[0].id === d.id;
+      })();
+      const showDetail = (isDetailMode && isTopInFamily) || isHov;
 
       if (d.anchors.length >= 2 && !isZone) {
-        // Main formation polyline as line series
+        // Main formation polyline — solid, thick
         const formLine = chart.addSeries(LineSeries, {
           color: color,
-          lineWidth: isHov ? 3 : 2,
-          lineStyle: isDashed ? LineStyle.Dashed : isInvalidated ? LineStyle.Dotted : LineStyle.Solid,
+          lineWidth: isInvalidated ? 1 : 3,
+          lineStyle: isInvalidated ? LineStyle.Dotted : LineStyle.Solid,
           crosshairMarkerVisible: false,
           lastValueVisible: false,
           priceLineVisible: false,
           pointMarkersVisible: true,
-          pointMarkersRadius: isHov ? 4 : 3,
+          pointMarkersRadius: 3,
         });
 
         const lineData = d.anchors.map((a) => ({
           time: isoToUnix(a.time),
           value: Number(a.price),
         }));
-        formLine.setData(sortLineData(lineData));
+        formLine.setData(dedupeLineData(lineData));
         overlayLinesRef.current.push(formLine);
 
-        // Projected anchors (dashed continuation)
-        if (d.projected_anchors && d.projected_anchors.length > 0) {
+        // Projected anchors — only when measured_move layer enabled
+        if (showDetail && layers.has("measured_move") && d.projected_anchors && d.projected_anchors.length > 0) {
+          // Projection — dotted, medium width
           const projLine = chart.addSeries(LineSeries, {
             color: color,
-            lineWidth: isHov ? 3 : 2,
-            lineStyle: LineStyle.Dashed,
+            lineWidth: 2,
+            lineStyle: LineStyle.Dotted,
             crosshairMarkerVisible: false,
             lastValueVisible: false,
             priceLineVisible: false,
             pointMarkersVisible: true,
-            pointMarkersRadius: isHov ? 3 : 2,
+            pointMarkersRadius: 2,
           });
           const lastAnchor = d.anchors[d.anchors.length - 1];
           const projData = [
@@ -573,25 +757,26 @@ export function Chart() {
               value: Number(a.price),
             })),
           ];
-          projLine.setData(sortLineData(projData));
+          projLine.setData(dedupeLineData(projData));
           overlayLinesRef.current.push(projLine);
         }
 
-        // Sub-wave decomposition
-        if (d.sub_wave_anchors) {
+        // Sub-wave decomposition — only when fib_levels layer enabled
+        if (showDetail && layers.has("fib_levels") && d.sub_wave_anchors) {
           for (const seg of d.sub_wave_anchors) {
             if (seg.length < 2) continue;
+            // Sub-wave — solid, thin, distinct color
             const swLine = chart.addSeries(LineSeries, {
-              color: "#facc15",
+              color: "#93c5fd",
               lineWidth: 1,
-              lineStyle: LineStyle.Dashed,
+              lineStyle: LineStyle.Solid,
               crosshairMarkerVisible: false,
               lastValueVisible: false,
               priceLineVisible: false,
               pointMarkersVisible: true,
               pointMarkersRadius: 2,
             });
-            swLine.setData(sortLineData(seg.map((a) => ({
+            swLine.setData(dedupeLineData(seg.map((a) => ({
               time: isoToUnix(a.time),
               value: Number(a.price),
             }))));
@@ -618,7 +803,9 @@ export function Chart() {
           // Extend across the last N bars
           const endTime = isoToUnix(d.anchors[d.anchors.length - 1].time);
           const startIdx = Math.max(0, merged.candles.length - 30);
-          const startTime = isoToUnix(merged.candles[startIdx].open_time);
+          const startCandle = merged.candles[startIdx];
+          if (!startCandle?.open_time) continue;
+          const startTime = isoToUnix(startCandle.open_time);
           hl.setData(sortLineData([
             { time: startTime, value: price },
             { time: endTime, value: price },
@@ -627,9 +814,8 @@ export function Chart() {
         }
       }
 
-      // Entry / TP / SL price lines (detail mode or hover)
-      const showDetail = (familyModes[d.family] ?? "on") === "detail" || isHov;
-      if (showDetail && d.anchors.length > 0) {
+      // Entry / TP / SL price lines (only when layer enabled)
+      if (showDetail && layers.has("entry_tp_sl") && d.anchors.length > 0) {
         const { entry, tp1, tp2, sl } = computeTargets(d);
         const conf = Number(d.confidence) || 0;
         const confStr = conf > 0 ? ` (${(conf * 100).toFixed(0)}%)` : "";
@@ -649,23 +835,16 @@ export function Chart() {
             lineWidth: 1,
             lineStyle: style,
             crosshairMarkerVisible: false,
-            lastValueVisible: false,
+            // Show label on the price scale (right axis) at the correct price
+            lastValueVisible: true,
             priceLineVisible: false,
+            title: label,
           });
           lvl.setData(sortLineData([
             { time: lastTime, value: price },
             { time: futureTime, value: price },
           ]));
           overlayLinesRef.current.push(lvl);
-          // Label marker at line midpoint
-          allMarkers.push({
-            time: midTime,
-            position: "inBar" as const,
-            color: col,
-            shape: "square" as const,
-            text: `${label}: ${price.toFixed(2)}`,
-            price: price,
-          } as SeriesMarker<Time>);
         };
 
         drawLevel(sl, "#ef4444", LineStyle.Dashed, "SL");
@@ -689,7 +868,7 @@ export function Chart() {
           pointMarkersVisible: true,
           pointMarkersRadius: 3,
         });
-        zigLine.setData(sortLineData(pts.map((p) => ({ time: p.time, value: p.price }))));
+        zigLine.setData(dedupeLineData(pts.map((p) => ({ time: p.time, value: p.price }))));
         overlayLinesRef.current.push(zigLine);
       }
     }
@@ -700,7 +879,11 @@ export function Chart() {
     if (showLabels) {
       for (const d of visibleDetections) {
         if (ZONE_BOX_SUBKINDS.has(d.subkind)) continue;
-        const color = familyColor(d.family, d.subkind);
+        // In detail mode, respect the "labels" layer toggle
+        const dLayers = detailLayers[d.family] ?? new Set(["entry_tp_sl", "labels"]);
+        const isDetailMode = (familyModes[d.family] ?? "on") === "detail";
+        if (isDetailMode && !dLayers.has("labels")) continue;
+        const color = familyColor(d.family, d.subkind, debounced.timeframe);
         for (const a of d.anchors) {
           if (!a.label) continue;
           const price = Number(a.price);
@@ -714,7 +897,9 @@ export function Chart() {
             position: isTop ? "aboveBar" as const : "belowBar" as const,
             color,
             shape: "circle" as const,
-            text: a.label,
+            text: d.family === "elliott"
+              ? elliottLabel(a.label, d.subkind, debounced.timeframe)
+              : a.label,
           });
         }
         // Subkind + confidence label at last anchor
@@ -727,7 +912,7 @@ export function Chart() {
             position: "aboveBar" as const,
             color,
             shape: "square" as const,
-            text: `${d.subkind}${confPct}`,
+            text: `${d.has_children ? "＋ " : ""}${d.subkind}${confPct}`,
           });
         }
       }
@@ -753,17 +938,22 @@ export function Chart() {
 
     // Sort markers by time (TV requires ascending) and apply
     allMarkers.sort((a, b) => (a.time as number) - (b.time as number));
-    if (markersRef.current) { markersRef.current.detach(); markersRef.current = null; }
+    if (markersRef.current) {
+      try { markersRef.current.detach(); } catch (_) { /* disposed */ }
+      markersRef.current = null;
+    }
     if (allMarkers.length > 0) {
       markersRef.current = createSeriesMarkers(candleSeries, allMarkers);
     }
 
     // ── Wyckoff overlay ──
     const wyckoffOverlay = wyckoffQuery.data?.overlay ?? null;
-    if (wyckoffOverlay && (familyModes["wyckoff"] ?? "on") !== "off") {
+    if (wyckoffOverlay && (familyModes["wyckoff"] ?? "on") !== "off" && merged.candles?.length) {
       const { range: wRange, creek, ice } = wyckoffOverlay;
       const isAccum = wyckoffOverlay.schematic === "accumulation" || wyckoffOverlay.schematic === "reaccumulation";
       const wColor = isAccum ? "#22c55e60" : "#ef444460";
+      const firstT = isoToUnix(merged.candles[0].open_time);
+      const lastT = isoToUnix(merged.candles[merged.candles.length - 1].open_time);
 
       // Range top/bottom lines
       if (wRange.top != null) {
@@ -775,8 +965,6 @@ export function Chart() {
           lastValueVisible: false,
           priceLineVisible: false,
         });
-        const firstT = isoToUnix(merged.candles[0].open_time);
-        const lastT = isoToUnix(merged.candles[merged.candles.length - 1].open_time);
         topLine.setData(sortLineData([
           { time: firstT, value: wRange.top },
           { time: lastT, value: wRange.top },
@@ -792,8 +980,6 @@ export function Chart() {
           lastValueVisible: false,
           priceLineVisible: false,
         });
-        const firstT = isoToUnix(merged.candles[0].open_time);
-        const lastT = isoToUnix(merged.candles[merged.candles.length - 1].open_time);
         botLine.setData(sortLineData([
           { time: firstT, value: wRange.bottom },
           { time: lastT, value: wRange.bottom },
@@ -810,8 +996,6 @@ export function Chart() {
           lastValueVisible: false,
           priceLineVisible: false,
         });
-        const firstT = isoToUnix(merged.candles[0].open_time);
-        const lastT = isoToUnix(merged.candles[merged.candles.length - 1].open_time);
         creekLine.setData(sortLineData([
           { time: firstT, value: creek },
           { time: lastT, value: creek },
@@ -828,8 +1012,6 @@ export function Chart() {
           lastValueVisible: false,
           priceLineVisible: false,
         });
-        const firstT = isoToUnix(merged.candles[0].open_time);
-        const lastT = isoToUnix(merged.candles[merged.candles.length - 1].open_time);
         iceLine.setData(sortLineData([
           { time: firstT, value: ice },
           { time: lastT, value: ice },
@@ -838,7 +1020,7 @@ export function Chart() {
       }
     }
 
-  }, [merged, showVolume, showZigzag, showLabels, visibleDetections, hovered, familyModes, wyckoffQuery.data]);
+  }, [merged, showVolume, showZigzag, showLabels, visibleDetections, familyModes, detailLayers, wyckoffQuery.data]);
 
   // ═══════════════════════════════════════════════════════════════
   // RENDER
@@ -1073,8 +1255,24 @@ export function Chart() {
                     }`}
                     onMouseEnter={() => setHovered(d.id)}
                     onMouseLeave={() => setHovered(null)}
+                    onDoubleClick={() => {
+                      // Drill-down: double-click Elliott detection → jump to child TF
+                      if (d.family === "elliott") {
+                        const CHILD_TF: Record<string, string> = {
+                          "1M": "1w", "1w": "1d", "1d": "4h", "4h": "1h",
+                          "1h": "30m", "30m": "15m", "15m": "5m", "5m": "1m",
+                        };
+                        const childTf = CHILD_TF[debounced.timeframe];
+                        if (childTf) {
+                          setForm((f) => ({ ...f, timeframe: childTf }));
+                          setDebounced((f) => ({ ...f, timeframe: childTf }));
+                        }
+                      }
+                    }}
+                    title={d.family === "elliott" ? "Çift tıkla → alt TF'ye in" : ""}
                   >
-                    <td className="px-2 py-0.5" style={{ color: familyColor(d.family, d.subkind) }}>
+                    <td className="px-2 py-0.5" style={{ color: familyColor(d.family, d.subkind, debounced.timeframe) }}>
+                      {d.has_children && <span className="text-yellow-400 mr-1 cursor-pointer" title="Alt dalga var — çift tıkla">＋</span>}
                       {d.subkind}
                     </td>
                     <td className="px-2 py-0.5 text-zinc-400">{d.state}</td>
@@ -1086,7 +1284,7 @@ export function Chart() {
                   {d.wave_context && (
                     <tr className="border-t border-zinc-800/20">
                       <td colSpan={6} className="px-2 py-0.5 text-[10px] text-sky-400/70">
-                        {d.wave_context}
+                        📐 {d.wave_context}
                       </td>
                     </tr>
                   )}

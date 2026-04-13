@@ -81,6 +81,27 @@ pub struct HistoricalOutcomeRow {
     pub invalidated_count: i64,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+pub struct FormingRow {
+    pub id: Uuid,
+    pub family: String,
+    pub subkind: String,
+    pub invalidation_price: Decimal,
+    pub anchors: Json,
+}
+
+impl FormingRow {
+    /// Extract the last anchor's timestamp from the JSON anchors array.
+    pub fn last_anchor_time(&self) -> Option<DateTime<Utc>> {
+        self.anchors
+            .as_array()
+            .and_then(|arr| arr.last())
+            .and_then(|a| a.get("time"))
+            .and_then(|t| t.as_str())
+            .and_then(|s| s.parse::<DateTime<Utc>>().ok())
+    }
+}
+
 pub struct V2DetectionRepository {
     pool: PgPool,
 }
@@ -346,9 +367,9 @@ impl V2DetectionRepository {
         exchange: &str,
         symbol: &str,
         timeframe: &str,
-    ) -> Result<Vec<(Uuid, String, String, Decimal)>, StorageError> {
-        let rows = sqlx::query_as::<_, (Uuid, String, String, Decimal)>(
-            r#"SELECT id, family, subkind, invalidation_price
+    ) -> Result<Vec<FormingRow>, StorageError> {
+        let rows = sqlx::query_as::<_, FormingRow>(
+            r#"SELECT id, family, subkind, invalidation_price, anchors
                  FROM qtss_v2_detections
                 WHERE exchange = $1
                   AND symbol   = $2

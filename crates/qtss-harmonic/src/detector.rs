@@ -97,17 +97,17 @@ impl HarmonicDetector {
         let x_price = window[0].price;
         let is_extension = spec.ad.hi > 1.0; // butterfly, crab extend beyond X
         let invalidation_price = match (direction, is_extension) {
-            // Extension patterns: SL beyond D (D is already past X).
-            // Use XA distance × 10% buffer below/above D.
+            // Extension patterns: SL beyond D with tight buffer.
+            // Standard harmonic practice: 1-2% of XA beyond D.
             (Direction::Bullish, true) => {
                 let xa = (window[1].price - x_price).abs();
-                let buffer = Decimal::from_f64_retain(0.10)
+                let buffer = Decimal::from_f64_retain(0.02)
                     .unwrap_or(Decimal::ZERO) * xa;
                 d_price - buffer // SL below D
             }
             (Direction::Bearish, true) => {
                 let xa = (window[1].price - x_price).abs();
-                let buffer = Decimal::from_f64_retain(0.10)
+                let buffer = Decimal::from_f64_retain(0.02)
                     .unwrap_or(Decimal::ZERO) * xa;
                 d_price + buffer // SL above D
             }

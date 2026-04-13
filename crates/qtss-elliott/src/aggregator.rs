@@ -46,14 +46,14 @@ impl ElliottFormationToggles {
     pub fn defaults() -> Self {
         Self {
             impulse: true,
-            leading_diagonal: false,
-            ending_diagonal: false,
-            zigzag: false,
-            flat: false,
-            triangle: false,
-            extended_impulse: false,
-            truncated_fifth: false,
-            combination: false,
+            leading_diagonal: true,
+            ending_diagonal: true,
+            zigzag: true,
+            flat: true,
+            triangle: true,
+            extended_impulse: true,
+            truncated_fifth: true,
+            combination: true,
         }
     }
 }
@@ -73,10 +73,7 @@ impl FormationDetector for ImpulseAdapter {
         timeframe: Timeframe,
         regime: &RegimeSnapshot,
     ) -> Vec<Detection> {
-        self.0
-            .detect(tree, instrument, timeframe, regime)
-            .into_iter()
-            .collect()
+        self.0.detect_all(tree, instrument, timeframe, regime)
     }
 }
 

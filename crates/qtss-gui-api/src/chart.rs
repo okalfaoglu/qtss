@@ -84,6 +84,10 @@ pub struct DetectionOverlay {
     /// e.g. "Cycle III > Primary [3] > Intermediate (3)"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wave_context: Option<String>,
+    /// True when this detection has sub-waves on a lower timeframe
+    /// (wave_chain children exist). Enables drill-down UI.
+    #[serde(default)]
+    pub has_children: bool,
 }
 
 /// One resting/working order overlay.

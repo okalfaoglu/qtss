@@ -88,12 +88,20 @@ pub fn label_anchors(
 /// nearest of `refs`. Identical kernel width to `fibs::proximity_score`
 /// — kept here as a private helper so formations don't have to import
 /// the legacy module.
+/// Gaussian scoring: how close `observed` is to one of the `refs`.
+/// `width` controls tolerance — larger = more forgiving.
+/// Professional EW tools use ±5-8% tolerance bands (Frost & Prechter
+/// treat ratios as guidelines, not rules). A width of 0.12 gives:
+///   - ±5% deviation → score ~0.92
+///   - ±10% deviation → score ~0.71
+///   - ±15% deviation → score ~0.47
+/// Previous width=0.05 was too strict — ±5% deviation scored only 0.61.
 pub fn nearest_fib_score(observed: f64, refs: &[f64]) -> f64 {
     let nearest = refs
         .iter()
         .map(|r| (observed - r).abs())
         .fold(f64::INFINITY, f64::min);
-    let width = 0.05;
+    let width = 0.12;
     (-(nearest * nearest) / (2.0 * width * width)).exp()
 }
 

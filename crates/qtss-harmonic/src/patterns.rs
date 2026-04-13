@@ -48,4 +48,61 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         cd: RatioRange::new(2.24, 3.618),
         ad: RatioRange::new(1.55, 1.70),  // ~1.618 extension
     },
+    // ── Deep Crab (Scott Carney) ─────────────────────────────────────
+    // Like Crab but AB retraces deeper (0.886 of XA).
+    HarmonicSpec {
+        name: "deep_crab",
+        ab: RatioRange::new(0.84, 0.92),  // ~0.886
+        bc: RatioRange::new(0.382, 0.886),
+        cd: RatioRange::new(2.0, 3.618),
+        ad: RatioRange::new(1.55, 1.70),  // ~1.618
+    },
+    // ── Shark (Scott Carney, 2011) ───────────────────────────────────
+    // 0-X-A-B-C structure mapped to XABCD. Distinctive: AD > 1.0,
+    // uses 0.886 and 1.13 pivots. Also called "5-0 precursor".
+    HarmonicSpec {
+        name: "shark",
+        ab: RatioRange::new(0.382, 0.618),
+        bc: RatioRange::new(1.13, 1.618),
+        cd: RatioRange::new(1.618, 2.24),
+        ad: RatioRange::new(0.84, 1.13),  // 0.886–1.13
+    },
+    // ── Cypher (Darren Oglesbee) ─────────────────────────────────────
+    // BC extends beyond A (1.272–1.414 of XA), CD retraces to 0.786 of XC.
+    HarmonicSpec {
+        name: "cypher",
+        ab: RatioRange::new(0.382, 0.618),
+        bc: RatioRange::new(1.13, 1.414),
+        cd: RatioRange::new(1.272, 2.0),
+        ad: RatioRange::new(0.74, 0.82),  // ~0.786 of XC
+    },
+    // ── Alt Bat (Scott Carney) ───────────────────────────────────────
+    // Variation of Bat with deeper AB (0.382) and AD at 1.13.
+    HarmonicSpec {
+        name: "alt_bat",
+        ab: RatioRange::new(0.33, 0.44),  // ~0.382
+        bc: RatioRange::new(0.382, 0.886),
+        cd: RatioRange::new(2.0, 3.618),
+        ad: RatioRange::new(1.08, 1.18),  // ~1.13
+    },
+    // ── 5-0 (Scott Carney) ──────────────────────────────────────────
+    // Reversal pattern. BC extends 1.618–2.24 of AB, CD retraces 50% of BC.
+    HarmonicSpec {
+        name: "five_zero",
+        ab: RatioRange::new(1.13, 1.618),
+        bc: RatioRange::new(1.618, 2.24),
+        cd: RatioRange::new(0.45, 0.55),  // ~0.50 of BC
+        ad: RatioRange::new(0.84, 1.20),  // variable
+    },
+    // ── Three Drives ────────────────────────────────────────────────
+    // Mapped to XABCD: three successive drives with equal extensions.
+    // Drive 2 = 1.272–1.618 of correction 1, Drive 3 = 1.272–1.618 of
+    // correction 2. Corrections retrace 0.618–0.786.
+    HarmonicSpec {
+        name: "three_drives",
+        ab: RatioRange::new(0.55, 0.82),  // correction 1: 0.618–0.786
+        bc: RatioRange::new(1.13, 1.618), // drive 2 extension
+        cd: RatioRange::new(0.55, 0.82),  // correction 2: 0.618–0.786
+        ad: RatioRange::new(1.13, 1.80),  // drive 3 extension total
+    },
 ];

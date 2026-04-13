@@ -32,7 +32,7 @@ impl ElliottConfig {
             pivot_level: PivotLevel::L1,
             max_wave2_retracement: 0.99,
             strict_no_overlap: true,
-            min_structural_score: 0.40,
+            min_structural_score: 0.60,
         }
     }
 

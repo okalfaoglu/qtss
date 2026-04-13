@@ -558,9 +558,16 @@ async fn build_runners(pool: &PgPool) -> Vec<Box<dyn DetectorRunner>> {
     .await
     {
         let toggles = resolve_elliott_toggles(pool).await;
-        match ElliottDetectorSet::new(ElliottConfig::defaults(), &toggles) {
-            Ok(set) => runners.push(Box::new(ElliottRunner(set))),
-            Err(e) => warn!(?e, "elliott detector set init failed"),
+        // Run Elliott at both L0 (fine) and L1 (coarse) pivot levels.
+        // L0 catches more formations (like LuxAlgo's short zigzag),
+        // L1 catches larger structural moves.
+        for level in [PivotLevel::L0, PivotLevel::L1] {
+            let mut cfg = ElliottConfig::defaults();
+            cfg.pivot_level = level;
+            match ElliottDetectorSet::new(cfg, &toggles) {
+                Ok(set) => runners.push(Box::new(ElliottRunner(set))),
+                Err(e) => warn!(?e, ?level, "elliott detector set init failed"),
+            }
         }
     }
     if resolve_worker_enabled_flag(
@@ -735,6 +742,11 @@ async fn run_pass(
 
     let symbols = list_enabled_engine_symbols(pool).await?;
     for sym in symbols {
+        // Guard: never run detections on incomplete data
+        if !qtss_storage::is_backfill_ready(pool, sym.id).await {
+            debug!(symbol = %sym.symbol, interval = %sym.interval, "skip detection — backfill not complete");
+            continue;
+        }
         match process_symbol(pool, repo.clone(), &sym, history_bars, &runners, &mode).await {
             Ok(s) => {
                 stats.processed += 1;
@@ -793,7 +805,23 @@ async fn process_symbol(
     let mut chronological = raw_bars;
     chronological.reverse();
 
-    let mut pivot_engine = PivotEngine::new(PivotConfig::defaults())?;
+    // Adaptive ATR multipliers: fewer bars → lower thresholds to produce
+    // enough pivots for pattern detection (need ≥6 for impulse).
+    let pivot_cfg = if chronological.len() <= 120 {
+        // Low-bar TFs (e.g. 1M with ~80 bars): halve the multipliers
+        PivotConfig {
+            atr_period: 10,
+            atr_mult: [
+                Decimal::new(8, 1),   // 0.8
+                Decimal::new(16, 1),  // 1.6
+                Decimal::new(32, 1),  // 3.2
+                Decimal::new(64, 1),  // 6.4
+            ],
+        }
+    } else {
+        PivotConfig::defaults()
+    };
+    let mut pivot_engine = PivotEngine::new(pivot_cfg)?;
     let mut regime_engine = RegimeEngine::new(RegimeConfig::defaults())?;
 
     let mut latest_regime: Option<RegimeSnapshot> = None;
@@ -833,6 +861,18 @@ async fn process_symbol(
         return Ok(stats);
     };
     let tree = pivot_engine.snapshot();
+
+    // Debug: log pivot counts per level for diagnosis
+    info!(
+        symbol = %sym.symbol,
+        interval = %sym.interval,
+        bars = bars.len(),
+        L0 = tree.count(PivotLevel::L0),
+        L1 = tree.count(PivotLevel::L1),
+        L2 = tree.count(PivotLevel::L2),
+        L3 = tree.count(PivotLevel::L3),
+        "pivot tree built"
+    );
 
     // ── Pivot cache: write newly computed pivots ──────────────────────
     // For each level, find pivots with bar_index > max cached and batch-
@@ -925,15 +965,28 @@ async fn process_symbol(
             .await
         {
             Ok(open_rows) => {
-                for (id, family, subkind, invalidation_price) in open_rows {
-                    if let Some(dir) = infer_direction(&family, &subkind) {
+                let last_bar_time = last_bar.open_time;
+                for row in open_rows {
+                    // 1) Invalidation: price breached invalidation level
+                    if let Some(dir) = infer_direction(&row.family, &row.subkind) {
                         let breached = match dir {
-                            Direction::Long => last_close < invalidation_price,
-                            Direction::Short => last_close > invalidation_price,
+                            Direction::Long => last_close < row.invalidation_price,
+                            Direction::Short => last_close > row.invalidation_price,
                         };
                         if breached {
-                            if let Err(e) = repo.update_state(id, "invalidated").await {
-                                warn!(%id, %e, "price-breach invalidate failed");
+                            if let Err(e) = repo.update_state(row.id, "invalidated").await {
+                                warn!(id=%row.id, %e, "price-breach invalidate failed");
+                            }
+                            continue;
+                        }
+                    }
+                    // 2) Confirmation: last anchor is well in the past
+                    //    (at least 3 bars ago) and invalidation not breached
+                    //    → the formation completed successfully.
+                    if let Some(last_anchor_t) = row.last_anchor_time() {
+                        if last_anchor_t < last_bar_time {
+                            if let Err(e) = repo.update_state(row.id, "confirmed").await {
+                                warn!(id=%row.id, %e, "confirm detection failed");
                             }
                         }
                     }
