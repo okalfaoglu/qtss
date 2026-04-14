@@ -1154,6 +1154,9 @@ export function Chart() {
       // Sort events by score descending so highest confidence events get placed first
       const sortedEvts = [...wEvts].sort((a, b) => b.score - a.score);
 
+      // Event horizontal lines (like AlphaExtract's box.new for each event)
+      const eventLines: Array<{ idx: number; price: number; color: string; label: string }> = [];
+
       for (const ev of sortedEvts) {
         const idx = ev.bar_index;
         if (idx < 0 || idx >= merged.candles.length) continue;
@@ -1169,6 +1172,30 @@ export function Chart() {
           shape: meta.pos === "aboveBar" ? "arrowDown" : "arrowUp",
           text: meta.label,
         });
+        // Collect for horizontal event lines
+        eventLines.push({ idx, price: ev.price, color: meta.color, label: meta.label });
+      }
+
+      // Draw horizontal event lines (like AlphaExtract — short colored bar at event price)
+      for (const el of eventLines) {
+        const lineLen = 8; // bars to extend
+        const t1 = isoToUnix(merged.candles[el.idx].open_time);
+        const endIdx = Math.min(el.idx + lineLen, merged.candles.length - 1);
+        const t2 = isoToUnix(merged.candles[endIdx].open_time);
+        const evLine = chart.addSeries(LineSeries, {
+          color: el.color,
+          lineWidth: 2,
+          lineStyle: LineStyle.Solid,
+          crosshairMarkerVisible: false,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          priceScaleId: "",
+        });
+        evLine.setData(sortLineData([
+          { time: t1, value: el.price },
+          { time: t2, value: el.price },
+        ]));
+        overlayLinesRef.current.push(evLine);
       }
     }
 
@@ -1719,11 +1746,39 @@ export function Chart() {
           </div>
         )}
 
-        <div
-          ref={chartContainerRef}
-          className="flex-1 bg-zinc-950"
-          style={{ minHeight: 500 }}
-        />
+        <div className="relative flex-1 bg-zinc-950" style={{ minHeight: 500 }}>
+          <div
+            ref={chartContainerRef}
+            className="absolute inset-0"
+          />
+          {/* ── Market Phase Panel (AlphaExtract style) ── */}
+          {wyckoffQuery.data?.overlay && (familyModes["wyckoff"] ?? "on") !== "off" && (() => {
+            const wo = wyckoffQuery.data.overlay;
+            if (!wo) return null;
+            const isAcc = wo.schematic === "accumulation" || wo.schematic === "reaccumulation";
+            const phaseColor = isAcc ? "#22c55e" : wo.schematic === "distribution" || wo.schematic === "redistribution" ? "#ef4444" : "#9ca3af";
+            const phaseText = isAcc ? "ACCUMULATION" : wo.schematic === "distribution" || wo.schematic === "redistribution" ? "DISTRIBUTION" : "NEUTRAL";
+            const conf = wo.confidence ? (wo.confidence * 100).toFixed(0) : "?";
+            const strength = Number(conf) > 70 ? "STRONG" : Number(conf) > 40 ? "MODERATE" : "WEAK";
+            const rangeP = wo.range.top && wo.range.bottom
+              ? ((wo.range.top - wo.range.bottom) / wo.range.bottom * 100).toFixed(1) + "%"
+              : "—";
+            return (
+              <div className="pointer-events-none absolute right-2 top-2 z-10 rounded border border-zinc-700 bg-zinc-900/90 text-[10px] backdrop-blur-sm">
+                <div className="flex items-center gap-2 border-b border-zinc-700 px-3 py-1">
+                  <span className="text-[11px] font-bold text-zinc-300">MARKET PHASE</span>
+                  <span className="font-bold" style={{ color: phaseColor }}>{phaseText}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 px-3 py-1 text-zinc-400">
+                  <span>Phase</span><span className="text-right text-zinc-200">{wo.phase || "—"}</span>
+                  <span>Strength</span><span className="text-right text-zinc-200">{strength}</span>
+                  <span>Confidence</span><span className="text-right text-zinc-200">{conf}%</span>
+                  <span>Range</span><span className="text-right" style={{ color: phaseColor }}>{rangeP}</span>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
 
         {/* ── Detections Table ─────────────────────────────────── */}
         {merged && merged.detections.length > 0 && (
