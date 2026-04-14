@@ -1184,27 +1184,109 @@ export function Chart() {
         rectanglePrimitivesRef.current.push(prim);
       };
 
-      // ── Accumulation / Distribution range box ──
-      // Like PineScript: box.new(boxStartBar, boxHigh, boxEndBar, boxLow)
-      if (wRange.top != null && wRange.bottom != null) {
-        const schematicLabel = isAccum ? "Accumulation" : "Distribution";
-        const phaseLabel = wyckoffOverlay.phase ? ` — Phase ${wyckoffOverlay.phase}` : "";
-        const confLabel = wyckoffOverlay.confidence
-          ? ` (${(wyckoffOverlay.confidence * 100).toFixed(0)}%)`
-          : "";
+      // ── Multi-box consolidation ranges (PineScript style) ──
+      // Detect sideways periods using simple ATR-based range detection
+      // Each tight consolidation = separate box, colored by breakout direction
+      {
+        const rsiPeriod = 14;
+        const sensitivity = 20; // RSI band: 50 ± 20
+        const rsiUpper = 50 + sensitivity;
+        const rsiLower = 50 - sensitivity;
+        const minBoxBars = 5; // minimum bars for a valid consolidation
 
-        addRect({
-          time1: structStartT,
-          time2: lastT,
-          priceTop: wRange.top,
-          priceBottom: wRange.bottom,
-          fillColor: wFillColor,
-          borderColor: wBorderColor,
-          borderWidth: 1,
-          label: `${schematicLabel}${phaseLabel}${confLabel}`,
-          labelColor: isAccum ? "#22c55ecc" : "#ef4444cc",
-          labelSize: 11,
-        });
+        // Calculate RSI for each candle
+        const closes = merged.candles.map((c) => Number(c.close));
+        const rsiValues: number[] = [];
+        for (let i = 0; i < closes.length; i++) {
+          if (i < rsiPeriod) { rsiValues.push(50); continue; }
+          let avgGain = 0, avgLoss = 0;
+          for (let j = i - rsiPeriod + 1; j <= i; j++) {
+            const delta = closes[j] - closes[j - 1];
+            if (delta > 0) avgGain += delta; else avgLoss -= delta;
+          }
+          avgGain /= rsiPeriod;
+          avgLoss /= rsiPeriod;
+          const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+          rsiValues.push(100 - 100 / (1 + rs));
+        }
+
+        // Detect sideways zones (RSI between lower-upper)
+        interface ConsolidationBox {
+          startIdx: number;
+          endIdx: number;
+          high: number;
+          low: number;
+          breakoutDir: "bull" | "bear" | "none";
+        }
+        const boxes: ConsolidationBox[] = [];
+        let inSideways = false;
+        let swStart = 0;
+
+        for (let i = rsiPeriod; i < merged.candles.length; i++) {
+          const isSW = rsiValues[i] > rsiLower && rsiValues[i] < rsiUpper;
+          if (isSW && !inSideways) {
+            // Sideways started
+            inSideways = true;
+            swStart = i;
+          } else if (!isSW && inSideways) {
+            // Sideways ended — create box if long enough
+            inSideways = false;
+            const barCount = i - swStart;
+            if (barCount >= minBoxBars) {
+              let hi = 0, lo = Infinity;
+              for (let j = swStart; j < i; j++) {
+                const h = Number(merged.candles[j].high);
+                const l = Number(merged.candles[j].low);
+                if (h > hi) hi = h;
+                if (l < lo) lo = l;
+              }
+              // Determine breakout direction by RSI after sideways
+              const breakDir = rsiValues[i] > rsiUpper ? "bull" as const
+                : rsiValues[i] < rsiLower ? "bear" as const
+                : "none" as const;
+              boxes.push({ startIdx: swStart, endIdx: i - 1, high: hi, low: lo, breakoutDir: breakDir });
+            }
+          }
+        }
+        // Handle ongoing sideways at chart end
+        if (inSideways && (merged.candles.length - swStart) >= minBoxBars) {
+          let hi = 0, lo = Infinity;
+          for (let j = swStart; j < merged.candles.length; j++) {
+            const h = Number(merged.candles[j].high);
+            const l = Number(merged.candles[j].low);
+            if (h > hi) hi = h;
+            if (l < lo) lo = l;
+          }
+          boxes.push({ startIdx: swStart, endIdx: merged.candles.length - 1, high: hi, low: lo, breakoutDir: "none" });
+        }
+
+        // Draw consolidation boxes (last 10)
+        for (const bx of boxes.slice(-10)) {
+          const t1 = isoToUnix(merged.candles[bx.startIdx].open_time);
+          const t2 = isoToUnix(merged.candles[bx.endIdx].open_time);
+
+          let fill: string, border: string, lbl: string;
+          if (bx.breakoutDir === "bull") {
+            fill = "#22c55e12"; border = "#22c55e70"; lbl = "Accumulation";
+          } else if (bx.breakoutDir === "bear") {
+            fill = "#ef444412"; border = "#ef444470"; lbl = "Distribution";
+          } else {
+            fill = "#6b728012"; border = "#6b728050"; lbl = "Consolidation";
+          }
+
+          addRect({
+            time1: t1,
+            time2: t2,
+            priceTop: bx.high,
+            priceBottom: bx.low,
+            fillColor: fill,
+            borderColor: border,
+            borderWidth: 1,
+            label: lbl,
+            labelColor: border,
+            labelSize: 10,
+          });
+        }
       }
       // ── Creek line (resistance within range) ──
       if (creek != null) {
