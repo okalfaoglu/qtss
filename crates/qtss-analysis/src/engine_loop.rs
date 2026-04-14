@@ -23,6 +23,34 @@ use qtss_chart_patterns::{
     TradingRangeResult,
 };
 use qtss_ai::load_notify_config_merged;
+
+/// TF-aware zigzag parameters (length, max_pivots).
+///
+/// Short TFs (1m/5m) produce extreme price noise; a `zigzag_length=8`
+/// fractal captures too many tiny wiggles that never form a valid
+/// divergence pattern. Long TFs (4h/1d) have fewer bars total, so the
+/// lookback must shrink or we get zero pivots. Values are tuned so the
+/// resulting pivot count is ~15–40 across TFs.
+///
+/// TODO(config): move to `qtss_config` once engine_loop wires that crate.
+/// Keeping inline for now; every other TBM parameter is still hardcoded.
+fn zigzag_params_for_interval(interval: &str) -> (usize, usize) {
+    match interval {
+        "1m"  => (20, 80),
+        "3m"  => (18, 80),
+        "5m"  => (15, 70),
+        "15m" => (12, 60),
+        "30m" => (10, 60),
+        "1h"  => (8, 50),
+        "2h"  => (7, 50),
+        "4h"  => (6, 40),
+        "6h" | "8h" => (5, 40),
+        "12h" => (5, 40),
+        "1d"  => (5, 30),
+        "3d" | "1w" | "1M" => (4, 20),
+        _ => (8, 50),
+    }
+}
 use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
 use qtss_common::{log_business, QtssLogLevel};
 use qtss_storage::{
@@ -1305,6 +1333,9 @@ async fn run_engines_for_symbol(
     let light_pipeline_prefix_norm = light_pipeline_prefix.trim().to_lowercase();
 
     for t in targets {
+        if !qtss_storage::is_backfill_ready(pool, t.id).await {
+            continue;
+        }
         let light_pipeline = !light_pipeline_prefix_norm.is_empty()
             && t.label.as_deref().is_some_and(|l| {
                 l.trim_start()
@@ -1530,7 +1561,8 @@ async fn run_engines_for_symbol(
         } else {
             let bar_map: std::collections::BTreeMap<i64, OhlcBar> =
                 bars.iter().map(|b| (b.bar_index, *b)).collect();
-            let zz = zigzag_from_ohlc_bars(&bar_map, 8, 50, 0);
+            let (zz_len, zz_max) = zigzag_params_for_interval(&t.interval);
+            let zz = zigzag_from_ohlc_bars(&bar_map, zz_len, zz_max, 0);
             let chrono = pivots_chronological(&zz);
             let pivot_triples: Vec<(i64, f64, i32)> = chrono
                 .iter()
@@ -1632,7 +1664,8 @@ async fn run_engines_for_symbol(
             // Zigzag pivotlardan high/low pivot listesi oluştur
             let bar_map: std::collections::BTreeMap<i64, OhlcBar> =
                 bars.iter().map(|b| (b.bar_index, *b)).collect();
-            let zz = zigzag_from_ohlc_bars(&bar_map, 8, 50, 0);
+            let (zz_len, zz_max) = zigzag_params_for_interval(&t.interval);
+            let zz = zigzag_from_ohlc_bars(&bar_map, zz_len, zz_max, 0);
             let chrono = pivots_chronological(&zz);
             let (mut price_highs, mut price_lows): (Vec<(usize, f64)>, Vec<(usize, f64)>) = (vec![], vec![]);
             let (mut macd_highs, mut macd_lows): (Vec<(usize, f64)>, Vec<(usize, f64)>) = (vec![], vec![]);
@@ -1708,7 +1741,11 @@ async fn run_engines_for_symbol(
                     slope(&bundle.obv, 10),
                     slope(&bundle.cvd, 10),
                     volumes.get(last).copied().unwrap_or(0.0),
-                    get_val(&bundle.sma_20, last),
+                    // volume SMA20, NOT sma_20 (which is closes). Passing
+                    // the close SMA here made volume_last/volume_avg
+                    // collapse to ~0 so the spike sub-score never fired
+                    // and the Volume pillar pinned to 0 on every symbol.
+                    qtss_indicators::ema::sma(&volumes, 20).get(last).copied().unwrap_or(0.0),
                     true,
                 ),
                 qtss_tbm::structure::score_structure(
@@ -1740,7 +1777,7 @@ async fn run_engines_for_symbol(
                     slope(&bundle.obv, 10),
                     slope(&bundle.cvd, 10),
                     volumes.get(last).copied().unwrap_or(0.0),
-                    get_val(&bundle.sma_20, last),
+                    qtss_indicators::ema::sma(&volumes, 20).get(last).copied().unwrap_or(0.0),
                     false,
                 ),
                 qtss_tbm::structure::score_structure(
