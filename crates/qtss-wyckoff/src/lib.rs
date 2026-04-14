@@ -20,6 +20,7 @@ mod events;
 mod range;
 pub mod setup_builder;
 pub mod structure;
+pub mod trade_planner;
 
 #[cfg(test)]
 mod tests;

@@ -89,7 +89,7 @@ INSERT INTO system_config (module, config_key, value, description) VALUES
   ('setup', 'wyckoff.tp.score_boost_r', '"5.0"', 'R multiplier of the boosted runner TP'),
 
   -- Net-RR gate (after commission)
-  ('setup', 'wyckoff.tp.min_net_rr', '"2.0"', 'Reject setup if (TP1 - entry - 2*commission) / (entry - SL) < N'),
+  ('setup', 'wyckoff.tp.min_net_rr', '"1.0"', 'Reject setup if weighted expected net R (after 2x commission, qty-split-weighted) < N'),
 
   -- Signal lifecycle
   ('setup', 'wyckoff.signal.ttl_bars', '"24"', 'Pending signal expires if entry not triggered within N bars'),
