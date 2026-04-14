@@ -75,8 +75,14 @@ pub async fn insert_v2_setup(
             state, direction, confluence_id,
             entry_price, entry_sl, koruma, target_ref, risk_pct, raw_meta
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-        ON CONFLICT (exchange, symbol, timeframe, profile, direction)
-            WHERE state IN ('armed', 'open')
+        -- P14 — matches migration 0078 `uq_open_setup_key`:
+        -- one open setup per (exchange, symbol, timeframe, profile)
+        -- regardless of direction, using the real state value
+        -- `active` (the old predicate used `open`, which never
+        -- appeared in prod data — so ON CONFLICT never fired and
+        -- LONG+SHORT could both insert).
+        ON CONFLICT (exchange, symbol, timeframe, profile)
+            WHERE state IN ('armed', 'active')
         DO NOTHING
         RETURNING id
         "#,

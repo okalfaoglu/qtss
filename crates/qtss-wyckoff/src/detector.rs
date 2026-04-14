@@ -22,7 +22,7 @@
 
 use crate::config::WyckoffConfig;
 use crate::error::WyckoffResult;
-use crate::events::{EventMatch, EventSpec, EVENTS};
+use crate::events::EVENTS;
 use qtss_domain::v2::detection::{Detection, PatternKind, PatternState, PivotRef};
 use qtss_domain::v2::instrument::Instrument;
 use qtss_domain::v2::pivot::{Pivot, PivotLevel, PivotTree};

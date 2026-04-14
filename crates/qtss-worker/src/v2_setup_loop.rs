@@ -261,6 +261,9 @@ async fn run_pass(pool: &PgPool, cfg: &LoopConfig) -> Result<(), BoxErr> {
     }
 
     for sym in symbols {
+        if !qtss_storage::is_backfill_ready(pool, sym.id).await {
+            continue;
+        }
         let Some(venue) = venue_class_from_exchange(&sym.exchange) else {
             continue;
         };
@@ -710,6 +713,43 @@ async fn try_arm_new_setup(
     });
     if duplicate {
         return Ok(());
+    }
+
+    // P14 — opposite-direction guard. A single (exchange, symbol,
+    // timeframe, profile) must never have both LONG and SHORT armed
+    // or open at the same time. Operator caught the failure mode on
+    // 2026-04-14: TBM `detect_setups` returns Bottom *and* Top sets
+    // whenever each score clears the threshold independently, so
+    // without this gate we armed two mutually-destructive setups on
+    // the same candle at the same entry price (BTC 15m both sides
+    // armed at 74242.50). The broader Wyckoff stack treats direction
+    // as an *outcome of the active structure* — you cannot both
+    // accumulate and distribute the same bar. Hard-skip here; DB-side
+    // enforcement lives in migration 0078.
+    let opposite = match direction {
+        Direction::Long => Direction::Short,
+        Direction::Short => Direction::Long,
+        Direction::Neutral => Direction::Neutral,
+    };
+    if !matches!(opposite, Direction::Neutral) {
+        let conflict = already_open.iter().any(|r| {
+            r.exchange == sym.exchange
+                && r.symbol == sym.symbol
+                && r.timeframe == sym.interval
+                && r.profile == profile.as_str()
+                && direction_from_str(&r.direction) == opposite
+        });
+        if conflict {
+            tracing::info!(
+                symbol = %sym.symbol,
+                interval = %sym.interval,
+                profile = %profile.as_str(),
+                requested = ?direction,
+                blocked_by = ?opposite,
+                "setup arm rejected: opposite-direction already open"
+            );
+            return Ok(());
+        }
     }
 
     let pcfg = cfg.profiles[&profile].guard;
