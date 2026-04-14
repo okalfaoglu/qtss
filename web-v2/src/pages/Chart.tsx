@@ -1133,36 +1133,57 @@ export function Chart() {
         const isDetailMode = (familyModes[d.family] ?? "on") === "detail";
         if (isDetailMode && !dLayers.has("labels")) continue;
         const color = familyColor(d.family, d.subkind, debounced.timeframe);
-        for (const a of d.anchors) {
-          if (!a.label) continue;
-          const price = Number(a.price);
-          // Determine if anchor is a local high or low relative to neighbors
-          const anchorIdx = d.anchors.indexOf(a);
-          const prevPrice = anchorIdx > 0 ? Number(d.anchors[anchorIdx - 1].price) : price;
-          const nextPrice = anchorIdx < d.anchors.length - 1 ? Number(d.anchors[anchorIdx + 1].price) : price;
-          const isTop = price >= prevPrice && price >= nextPrice;
-          allMarkers.push({
-            time: isoToUnix(a.time),
-            position: isTop ? "aboveBar" as const : "belowBar" as const,
-            color,
-            shape: "circle" as const,
-            text: d.family === "elliott"
-              ? elliottLabel(a.label, d.subkind, debounced.timeframe)
-              : a.label,
-          });
-        }
-        // Subkind + confidence label at last anchor
-        const lastAnchor = d.anchors[d.anchors.length - 1];
-        if (lastAnchor) {
-          const conf = Number(d.confidence) || 0;
-          const confPct = conf > 0 ? ` ${(conf * 100).toFixed(0)}%` : "";
-          allMarkers.push({
-            time: isoToUnix(lastAnchor.time),
-            position: "aboveBar" as const,
-            color,
-            shape: "square" as const,
-            text: `${d.has_children ? "＋ " : ""}${d.subkind}${confPct}`,
-          });
+        // P21b — TBM detections have a single anchor + signal strength
+        // label. Drawing both a per-anchor circle ("Weak") and a
+        // summary square ("bottom_setup 42%") on the same bar doubled
+        // the glyph count for no added information. Collapse into one
+        // square whose text carries the signal strength.
+        if (d.family === "tbm") {
+          const a = d.anchors[0];
+          if (a) {
+            const conf = Number(d.confidence) || 0;
+            const confPct = conf > 0 ? ` ${(conf * 100).toFixed(0)}%` : "";
+            const sig = a.label ? ` · ${a.label}` : "";
+            allMarkers.push({
+              time: isoToUnix(a.time),
+              position: "belowBar" as const,
+              color,
+              shape: "square" as const,
+              text: `${d.subkind}${confPct}${sig}`,
+            });
+          }
+        } else {
+          for (const a of d.anchors) {
+            if (!a.label) continue;
+            const price = Number(a.price);
+            // Determine if anchor is a local high or low relative to neighbors
+            const anchorIdx = d.anchors.indexOf(a);
+            const prevPrice = anchorIdx > 0 ? Number(d.anchors[anchorIdx - 1].price) : price;
+            const nextPrice = anchorIdx < d.anchors.length - 1 ? Number(d.anchors[anchorIdx + 1].price) : price;
+            const isTop = price >= prevPrice && price >= nextPrice;
+            allMarkers.push({
+              time: isoToUnix(a.time),
+              position: isTop ? "aboveBar" as const : "belowBar" as const,
+              color,
+              shape: "circle" as const,
+              text: d.family === "elliott"
+                ? elliottLabel(a.label, d.subkind, debounced.timeframe)
+                : a.label,
+            });
+          }
+          // Subkind + confidence label at last anchor
+          const lastAnchor = d.anchors[d.anchors.length - 1];
+          if (lastAnchor) {
+            const conf = Number(d.confidence) || 0;
+            const confPct = conf > 0 ? ` ${(conf * 100).toFixed(0)}%` : "";
+            allMarkers.push({
+              time: isoToUnix(lastAnchor.time),
+              position: "aboveBar" as const,
+              color,
+              shape: "square" as const,
+              text: `${d.has_children ? "＋ " : ""}${d.subkind}${confPct}`,
+            });
+          }
         }
       }
     }
