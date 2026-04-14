@@ -280,19 +280,29 @@ impl WyckoffStructureTracker {
         // require the earlier phase's evidence to be present.
         self.try_advance_phase();
 
-        // Bootstrap guard: when a tracker is spawned mid-structure by
-        // the historical progressive scan, the first event recorded can
-        // easily be a Phase D (SOS/LPS/JAC) or Phase E (Markup) event
-        // with no prior climax/AR/ST visible. The sequential gate above
-        // would leave current_phase stuck at A even though the event's
-        // canonical phase is far more advanced. We promote to at least
-        // the event's own phase so the GUI and setup gates report an
-        // honest assessment instead of a misleading "Phase A" with a
-        // single SOS in the timeline. The stricter progression logic
-        // above still governs normal start-from-PS evolution.
-        if event.phase() > self.current_phase {
-            self.current_phase = event.phase();
-        }
+        // **Bootstrap promotion removed (P12).**
+        //
+        // Previously this method ended with:
+        //
+        //     if event.phase() > self.current_phase {
+        //         self.current_phase = event.phase();
+        //     }
+        //
+        // — which bypassed every sequential gate in `try_advance_phase`
+        // and let an isolated SOS (Phase D) or Markup (Phase E) bump
+        // `current_phase` straight from A to D/E. That produced rows
+        // like "current_phase=D with only a single SOS in events_json"
+        // and the canonical "6-year-long structure" where a 2019 AR
+        // sat in the same row as a 2026 Markup. Both shapes broke the
+        // A→B→C→D→E contract the GUI and setup gates rely on.
+        //
+        // The only legitimate way to advance a phase is now through
+        // `try_advance_phase`, which requires the canonical evidence
+        // (climax+AR+ST for A→B, Spring/UTAD+D-event for C→D, etc.).
+        // If the orchestrator starts mid-structure and prerequisite
+        // events are missing, the event is still recorded in
+        // `events_json` (audit trail) but `current_phase` stays put.
+        // That is honest; fake promotion was not.
     }
 
     /// Promote schematic when an event unambiguously belongs to the

@@ -1365,6 +1365,52 @@ pub(crate) async fn upsert_wyckoff_structure_from_detection(
     // Check if there's an active structure for this symbol/interval
     let existing = find_active_wyckoff_structure(pool, symbol, interval).await?;
 
+    // Structure TTL — a Wyckoff structure is a localised phenomenon
+    // (range + manipulation + resolution). If the last recorded event
+    // is more than `ttl_bars` bars behind the incoming event, the
+    // active row is *not* the same structure — it was a cycle we
+    // never closed. Fail it and fall through to the None branch so a
+    // fresh structure is seeded (iff this event is Phase A).
+    //
+    // Without this guard the orchestrator used to append 2019 climax
+    // events and a 2026 markup into the same `events_json`. Budgets
+    // are TF-scaled — roughly "a structure should complete within a
+    // few months on its own scale".
+    // TODO(config): move to qtss_config like zigzag params.
+    if let Some(ref row) = existing {
+        let ttl_bars: i64 = match interval {
+            "1m"  => 500,   // ~8h
+            "3m"  => 500,   // ~25h
+            "5m"  => 500,   // ~42h
+            "15m" => 400,   // ~4d
+            "30m" => 400,   // ~8d
+            "1h"  => 400,   // ~17d
+            "2h"  => 350,   // ~29d
+            "4h"  => 300,   // ~50d
+            "6h" | "8h" => 250,
+            "12h" => 200,
+            "1d"  => 120,   // ~4 months
+            "3d" | "1w" => 80,
+            "1M"  => 36,
+            _ => 300,
+        };
+        let events: Vec<qtss_wyckoff::RecordedEvent> =
+            serde_json::from_value(row.events_json.clone()).unwrap_or_default();
+        let last_idx = events.last().map(|e| e.bar_index as i64).unwrap_or(0);
+        let age = (bar_idx as i64) - last_idx;
+        if age > ttl_bars {
+            let reason = format!(
+                "structure TTL exceeded ({age} bars since last event; limit {ttl_bars} on {interval})"
+            );
+            qtss_storage::fail_wyckoff_structure(pool, row.id, &reason).await?;
+            // Treat as if no active structure existed — next block below
+            // will hit the `None` arm and seed iff Phase A.
+            return Box::pin(upsert_wyckoff_structure_from_detection(
+                pool, exchange, symbol, interval, subkind, detection, _detection_id, chronological,
+            )).await;
+        }
+    }
+
     match existing {
         Some(row) => {
             // Deserialize tracker state from events_json

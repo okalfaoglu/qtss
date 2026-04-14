@@ -204,6 +204,64 @@ async fn replay_group(
                 active = Some(Active { id, tracker, range_hi: hi, range_lo: lo });
             }
             Some(mut act) => {
+                // Structure TTL — matches orchestrator. Wyckoff cycles
+                // are localised; if the new event is many bars after
+                // the last one, this is a different cycle. Fail the
+                // active row and, if the new event is Phase A, reseed.
+                let ttl_bars: u64 = match timeframe {
+                    "1m" | "3m" | "5m" => 500,
+                    "15m" | "30m" | "1h" => 400,
+                    "2h" => 350,
+                    "4h" => 300,
+                    "6h" | "8h" => 250,
+                    "12h" => 200,
+                    "1d" => 120,
+                    "3d" | "1w" => 80,
+                    "1M" => 36,
+                    _ => 300,
+                };
+                let last_ev_idx = act.tracker.events.last().map(|e| e.bar_index).unwrap_or(0);
+                if bar_idx.saturating_sub(last_ev_idx) > ttl_bars {
+                    let reason = format!(
+                        "structure TTL exceeded ({} bars since last event; limit {ttl_bars} on {timeframe})",
+                        bar_idx.saturating_sub(last_ev_idx)
+                    );
+                    if !dry_run { fail_wyckoff_structure(pool, act.id, &reason).await?; }
+                    failed += 1;
+                    // Reseed only if this event is Phase A.
+                    if wy_event.phase() == WyckoffPhase::A {
+                        let schematic = schematic_for(variant, wy_event);
+                        let mut tracker = WyckoffStructureTracker::new(schematic, price, price);
+                        tracker.record_event_with_time(wy_event, bar_idx, price, det.structural_score as f64, time_ms);
+                        let events_json = serde_json::to_value(&tracker.events)?;
+                        let id = if dry_run {
+                            Uuid::new_v4()
+                        } else {
+                            insert_wyckoff_structure(
+                                pool,
+                                &WyckoffStructureInsert {
+                                    symbol,
+                                    interval: timeframe,
+                                    exchange,
+                                    segment: "futures",
+                                    schematic: schematic.as_str(),
+                                    current_phase: tracker.current_phase.as_str(),
+                                    range_top: tracker.range_top,
+                                    range_bottom: tracker.range_bottom,
+                                    creek_level: tracker.creek,
+                                    ice_level: tracker.ice,
+                                    events_json,
+                                    confidence: tracker.confidence(),
+                                },
+                            ).await?
+                        };
+                        active = Some(Active { id, tracker, range_hi: price, range_lo: price });
+                    } else {
+                        active = None;
+                    }
+                    continue;
+                }
+
                 let prior_schematic = act.tracker.schematic;
                 act.tracker.record_event_with_time(
                     wy_event, bar_idx, price, det.structural_score as f64, time_ms,
