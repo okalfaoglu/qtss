@@ -43,9 +43,17 @@ pub struct RangeDetectorConfig {
     pub equal_levels_enabled: bool,
     #[serde(default)]
     pub equal_levels: EqualLevelsConfig,
+
+    /// P18 — global quality floor applied after all sub-detectors run.
+    /// Zones with score below this are dropped before reaching the
+    /// chart/outbox. 0.5 keeps mid/high-quality zones, drops noise.
+    /// Config key: `range.min_score`.
+    #[serde(default = "default_min_score")]
+    pub min_score: f64,
 }
 
 fn default_true() -> bool { true }
+fn default_min_score() -> f64 { 0.5 }
 
 impl Default for RangeDetectorConfig {
     fn default() -> Self {
@@ -58,6 +66,7 @@ impl Default for RangeDetectorConfig {
             liquidity_pool: LiquidityPoolConfig::default(),
             equal_levels_enabled: true,
             equal_levels: EqualLevelsConfig::default(),
+            min_score: default_min_score(),
         }
     }
 }
@@ -140,6 +149,9 @@ pub fn detect_all(bars: &[OhlcBar], atr_value: f64, cfg: &RangeDetectorConfig) -
             });
         }
     }
+
+    // P18 — quality floor: drop zones below global min_score.
+    results.retain(|m| m.score >= cfg.min_score);
 
     // Sort by score descending
     results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));

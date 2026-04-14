@@ -38,7 +38,10 @@ pub struct OrderBlockConfig {
     pub volume_lookback: usize,
 }
 
-fn default_impulse_atr_mult() -> f64 { 1.5 }
+// P18 — bumped from 1.5. Weak 1.5-ATR impulses don't confirm a true
+// order block; 2.0 matches SMC literature (Inner Circle Trader /
+// Wyckoff modern adaptations).
+fn default_impulse_atr_mult() -> f64 { 2.0 }
 fn default_impulse_candles() -> usize { 3 }
 fn default_scan_lookback() -> usize { 50 }
 fn default_unmitigated_only() -> bool { true }

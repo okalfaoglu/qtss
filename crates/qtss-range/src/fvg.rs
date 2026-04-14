@@ -36,7 +36,9 @@ pub struct FvgConfig {
     pub volume_lookback: usize,
 }
 
-fn default_min_gap_atr_frac() -> f64 { 0.3 }
+// P18 — bumped from 0.3 (too noisy; accepted micro-gaps as FVGs on
+// choppy 4h BTC). 0.5 × ATR is a meaningful imbalance.
+fn default_min_gap_atr_frac() -> f64 { 0.5 }
 fn default_scan_lookback() -> usize { 50 }
 fn default_unfilled_only() -> bool { true }
 fn default_volume_spike_mult() -> f64 { 1.2 }

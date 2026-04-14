@@ -309,7 +309,7 @@ interface WyckoffOverlayData {
   creek: number | null;
   ice: number | null;
   slope_deg: number | null;
-  events: Array<{ event: string; bar_index: number; price: number; score: number }>;
+  events: Array<{ event: string; bar_index: number; price: number; score: number; time_ms?: number | null }>;
   started_at: string;
 }
 
@@ -851,12 +851,15 @@ export function Chart() {
             lastValueVisible: false,
             priceLineVisible: false,
           });
-          // Extend across the last N bars
-          const endTime = isoToUnix(d.anchors[d.anchors.length - 1].time);
-          const startIdx = Math.max(0, merged.candles.length - 30);
-          const startCandle = merged.candles[startIdx];
-          if (!startCandle?.open_time) continue;
-          const startTime = isoToUnix(startCandle.open_time);
+          // P18 — draw zone from formation bar → latest candle.
+          // SMC zones (FVG/OB/LP/EQ) remain valid until mitigated; the
+          // box should grow with time, not be locked to a stale 30-bar
+          // window. Fallback to detection time if formation anchor is
+          // missing.
+          const lastCandle = merged.candles[merged.candles.length - 1];
+          if (!lastCandle?.open_time) continue;
+          const startTime = isoToUnix(d.anchors[0].time);
+          const endTime = isoToUnix(lastCandle.open_time);
           hl.setData(sortLineData([
             { time: startTime, value: price },
             { time: endTime, value: price },
