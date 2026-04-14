@@ -1326,29 +1326,11 @@ export function Chart() {
         eventLines.push({ idx, price: pinnedPrice, color: meta.color, label: meta.label });
       }
 
-      // Horizontal "shelf" line: Pine draws it BACKWARD from the event bar
-      // (bar_index - i_lineLength → bar_index) pinned to the wick. Looks like
-      // a colored rail leading into the event candle.
-      const lineLen = 15; // Pine default: i_lineLength
-      for (const el of eventLines) {
-        const startIdx = Math.max(0, el.idx - lineLen);
-        const t1 = isoToUnix(merged.candles[startIdx].open_time);
-        const t2 = isoToUnix(merged.candles[el.idx].open_time);
-        const evLine = chart.addSeries(LineSeries, {
-          color: el.color,
-          lineWidth: 2,
-          lineStyle: LineStyle.Solid,
-          crosshairMarkerVisible: false,
-          lastValueVisible: false,
-          priceLineVisible: false,
-          priceScaleId: "",
-        });
-        evLine.setData(sortLineData([
-          { time: t1, value: el.price },
-          { time: t2, value: el.price },
-        ]));
-        overlayLinesRef.current.push(evLine);
-      }
+      // P19e — removed horizontal "shelf" lines that led into each
+      // Wyckoff event candle. They cluttered the chart (orphaned green
+      // rails near SPRING/SC labels) and duplicated what the arrow
+      // marker already conveys.
+      void eventLines;
     }
 
     // Sort markers by time (TV requires ascending) and apply
@@ -1393,7 +1375,24 @@ export function Chart() {
       // that approach violates the Wyckoff rule set (RSI 30–70 mis-flags
       // trends as sideways, wick-based bounds inflate the box with
       // Spring/UT spikes, no Phase-A anchor). Removed.
-      if (wRange.top != null && wRange.bottom != null) {
+      // P19f — guard against pathological overlays that caused the
+      // "ACCUMULATION floating in empty space" bug: a razor-thin box
+      // anchored to the last bar, or a vertically-oversized range
+      // polluted by a spike. If `started_at` lands within the final few
+      // bars, the box is meaningless — skip it. Likewise drop boxes
+      // whose height exceeds 25% of current price (not a trading range,
+      // that's the whole move).
+      const lastPrice = Number(merged.candles[merged.candles.length - 1].close);
+      const rangeHeight = (wRange.top ?? 0) - (wRange.bottom ?? 0);
+      const barsFromStart = merged.candles.findIndex(
+        (c) => isoToUnix(c.open_time) >= structStartT,
+      );
+      const barsSpan = barsFromStart >= 0 ? merged.candles.length - barsFromStart : 0;
+      const boxTooThin = barsSpan < 5;
+      const boxTooTall = lastPrice > 0 && rangeHeight / lastPrice > 0.25;
+      const boxValid = !boxTooThin && !boxTooTall;
+
+      if (wRange.top != null && wRange.bottom != null && boxValid) {
         const schematicColor: Record<string, { fill: string; border: string; label: string }> = {
           accumulation:    { fill: "#22c55e14", border: "#22c55e70", label: "ACCUMULATION" },
           reaccumulation:  { fill: "#22c55e10", border: "#22c55e50", label: "RE-ACCUMULATION" },
@@ -1506,111 +1505,11 @@ export function Chart() {
         }
       }
 
-      // ── FVG + IFVG detection & visualization ──
-      // FVG = 3-candle gap. IFVG = FVG violated by price → bias flips.
-      // Minimum gap size filter: ignore tiny gaps (noise)
-      if (merged.candles.length >= 3) {
-        interface FvgZone {
-          c1Idx: number;     // candle 1 index (box starts here)
-          c3Idx: number;     // candle 3 index
-          top: number;       // exact mum wicks (touches candle)
-          bottom: number;
-          bull: boolean;
-          inverted: boolean;
-          violatedAt: number;
-          filled: boolean;   // fully filled by price action
-        }
-        const fvgs: FvgZone[] = [];
-        const startIdx = Math.max(0, merged.candles.length - 200);
-        const currentPrice = Number(merged.candles[merged.candles.length - 1].close);
-        const minGap = currentPrice * 0.0005; // min 0.05% gap to filter noise
-
-        // Step 1: Detect all FVGs
-        for (let i = startIdx + 2; i < merged.candles.length; i++) {
-          const h1 = Number(merged.candles[i - 2].high);
-          const l1 = Number(merged.candles[i - 2].low);
-          const h3 = Number(merged.candles[i].high);
-          const l3 = Number(merged.candles[i].low);
-
-          // Bullish FVG: C3 low > C1 high (gap up — price jumped)
-          if (l3 > h1 && (l3 - h1) > minGap) {
-            fvgs.push({ c1Idx: i - 2, c3Idx: i, top: l3, bottom: h1, bull: true, inverted: false, violatedAt: -1, filled: false });
-          }
-          // Bearish FVG: C1 low > C3 high (gap down — price dropped)
-          if (l1 > h3 && (l1 - h3) > minGap) {
-            fvgs.push({ c1Idx: i - 2, c3Idx: i, top: l1, bottom: h3, bull: false, inverted: false, violatedAt: -1, filled: false });
-          }
-        }
-
-        // Step 2: Check fill & IFVG status
-        for (const fvg of fvgs) {
-          for (let j = fvg.c3Idx + 1; j < merged.candles.length; j++) {
-            const cLow = Number(merged.candles[j].low);
-            const cHigh = Number(merged.candles[j].high);
-
-            // Check if FVG is fully filled (price crossed through entire gap)
-            if (fvg.bull && cLow <= fvg.bottom) {
-              // Bullish FVG broken downward → Bearish IFVG
-              fvg.inverted = true;
-              fvg.violatedAt = j;
-              break;
-            }
-            if (!fvg.bull && cHigh >= fvg.top) {
-              // Bearish FVG broken upward → Bullish IFVG
-              fvg.inverted = true;
-              fvg.violatedAt = j;
-              break;
-            }
-            // Partial fill: price touched CE (50%) but didn't break through
-            const ce = (fvg.top + fvg.bottom) / 2;
-            if (fvg.bull && cLow <= ce) {
-              fvg.filled = true; // partially filled at CE
-            }
-            if (!fvg.bull && cHigh >= ce) {
-              fvg.filled = true;
-            }
-          }
-        }
-
-        // Step 3: Draw — only show unfilled FVGs and recent IFVGs (max 8)
-        const active = fvgs.filter((f) => !f.filled || f.inverted).slice(-8);
-        for (const fvg of active) {
-          // Box starts at C1 candle, extends right
-          const sT = isoToUnix(merged.candles[fvg.c1Idx].open_time);
-          // Extend to violation point or last candle (like TradingView indicators)
-          const endIdx = fvg.inverted && fvg.violatedAt > 0
-            ? Math.min(fvg.violatedAt, merged.candles.length - 1)
-            : merged.candles.length - 1;
-          const eT = isoToUnix(merged.candles[endIdx].open_time);
-
-          let fillColor: string;
-          let borderColor: string;
-          let label: string;
-          if (fvg.inverted) {
-            const ifvgBull = !fvg.bull;
-            fillColor = ifvgBull ? "#f59e0b18" : "#a855f718";
-            borderColor = ifvgBull ? "#f59e0b80" : "#a855f780";
-            label = ifvgBull ? "IFVG+" : "IFVG-";
-          } else {
-            fillColor = fvg.bull ? "#3b82f618" : "#ef444418";
-            borderColor = fvg.bull ? "#3b82f670" : "#ef444470";
-            label = fvg.bull ? "FVG+" : "FVG-";
-          }
-
-          addRect({
-            time1: sT,
-            time2: eT,
-            priceTop: fvg.top,
-            priceBottom: fvg.bottom,
-            fillColor,
-            borderColor,
-            borderWidth: 1,
-            label,
-            labelColor: borderColor,
-            labelSize: 9,
-          });
-        }
-      }
+      // P19e — removed duplicate frontend FVG/IFVG detection block.
+      // Backend qtss-range detector (rendered via ZONES family) already
+      // handles FVG + IFVG with tighter thresholds, price-band dedup,
+      // and close-based mitigation. Having a second frontend detector
+      // drew redundant boxes inside Wyckoff view.
     }
 
   }, [merged, showVolume, showZigzag, showLabels, showProjections, visibleDetections, familyModes, detailLayers, wyckoffQuery.data, projectionsQuery.data]);
