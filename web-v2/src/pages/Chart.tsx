@@ -194,7 +194,7 @@ function isMotiveElliott(subkind: string): boolean {
   return subkind.startsWith("impulse") || subkind.includes("diagonal");
 }
 
-function elliottColor(subkind: string, timeframe: string): string {
+function elliottColor(_subkind: string, timeframe: string): string {
   const degree = waveDegreeForTimeframe(timeframe);
   return WAVE_DEGREE_COLORS[degree];
 }
@@ -358,7 +358,6 @@ function computeTargets(d: DetectionOverlay): {
     }
   } else if (d.family === "harmonic" && anchors.length >= 5) {
     // Harmonic entry = D (PRZ), targets = CD leg retrace
-    const aP = Number(anchors[1].price);
     const cP = Number(anchors[3].price);
     const dP = Number(anchors[4].price);
     const cdRange = Math.abs(cP - dP);
@@ -553,7 +552,7 @@ export function Chart() {
       return lastAnchor >= firstTime && firstAnchor <= lastTime;
     });
     // Sort by score descending
-    const sorted = [...filtered].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    const sorted = [...filtered].sort((a, b) => ((b as any).score ?? 0) - ((a as any).score ?? 0));
 
     // Remove overlapping detections within same family: if two detections
     // share >50% of their time range, keep only the higher-scoring one.
@@ -755,7 +754,6 @@ export function Chart() {
     for (const d of visibleDetections) {
       const color = familyColor(d.family, d.subkind, debounced.timeframe);
       const isZone = ZONE_BOX_SUBKINDS.has(d.subkind);
-      const isDashed = d.state === "forming";
       const isInvalidated = d.state === "invalidated";
       const isHov = hoveredRef.current === d.id;
       const isDetailMode = (familyModes[d.family] ?? "on") === "detail";
@@ -877,7 +875,7 @@ export function Chart() {
           : 3600;
         const futureTime = (lastTime as number + barInterval * 20) as Time;
         // midpoint time for label positioning
-        const midTime = (lastTime as number + barInterval * 10) as Time;
+        void 0; // midTime reserved for future label positioning
 
         const drawLevel = (price: number | null, col: string, style: LineStyle, label: string) => {
           if (!price || !Number.isFinite(price)) return;
@@ -1151,8 +1149,74 @@ export function Chart() {
         return false;
       };
 
-      // Sort events by score descending so highest confidence events get placed first
-      const sortedEvts = [...wEvts].sort((a, b) => b.score - a.score);
+      // ── Frontend event detection (AlphaExtract logic) ──
+      // Supplements backend events with Spring, LPS, SOS, AR, SOW, LPSY
+      const candles = merged.candles;
+      const frontendEvts: typeof wEvts = [];
+      if (candles.length >= 25) {
+        const volLen = 20;
+        const priceLb = 20;
+        const trendStr = 3;
+        const volThresh = 2.0;
+        const volFilter = 1.5;
+
+        // Precompute helpers
+        const cl = candles.map((c) => Number(c.close));
+        const hi = candles.map((c) => Number(c.high));
+        const lo = candles.map((c) => Number(c.low));
+        const op = candles.map((c) => Number(c.open));
+        const vol = candles.map((c) => Number(c.volume ?? 0));
+
+        const sma = (arr: number[], len: number, i: number) => {
+          if (i < len - 1) return arr[i] || 1;
+          let s = 0; for (let j = i - len + 1; j <= i; j++) s += arr[j]; return s / len;
+        };
+        const highest = (arr: number[], len: number, i: number) => {
+          let mx = -Infinity; for (let j = Math.max(0, i - len + 1); j <= i; j++) if (arr[j] > mx) mx = arr[j]; return mx;
+        };
+        const lowest = (arr: number[], len: number, i: number) => {
+          let mn = Infinity; for (let j = Math.max(0, i - len + 1); j <= i; j++) if (arr[j] < mn) mn = arr[j]; return mn;
+        };
+        const falling = (i: number, n: number) => { for (let j = 1; j <= n && i - j >= 0; j++) if (cl[i - j] <= cl[i - j + 1] === false) return false; return true; };
+        const rising = (i: number, n: number) => { for (let j = 1; j <= n && i - j >= 0; j++) if (cl[i - j] >= cl[i - j + 1] === false) return false; return true; };
+
+        for (let i = priceLb + 1; i < candles.length; i++) {
+          const volMA = sma(vol, volLen, i);
+          const highestH = highest(hi, priceLb, i - 1);
+          const lowestL = lowest(lo, priceLb, i - 1);
+          const hv = vol[i] > volMA * volFilter;
+          const range = hi[i] - lo[i] || 0.01;
+
+          // Spring: break below support then close back above (hammer-like)
+          if (lo[i] < lowest(lo, 3, i - 1) && cl[i] > op[i] && cl[i] > lo[i] + range * 0.6 && hv) {
+            frontendEvts.push({ event: "spring", bar_index: i, price: lo[i], score: 0.8 });
+          }
+          // LPS: higher low + bullish close + low volume
+          if (lo[i] > lo[i - 1] && cl[i] > op[i] && vol[i] < volMA * volFilter && rising(i, trendStr)) {
+            frontendEvts.push({ event: "l_p_s", bar_index: i, price: lo[i], score: 0.6 });
+          }
+          // SOS: breakout above resistance + volume
+          if (cl[i] > op[i] && hi[i] > highestH && vol[i] > volMA * volThresh && rising(i, trendStr)) {
+            frontendEvts.push({ event: "s_o_s", bar_index: i, price: hi[i], score: 0.75 });
+          }
+          // SOW: breakdown below support + volume
+          if (cl[i] < op[i] && lo[i] < lowestL && vol[i] > volMA * volThresh && falling(i, trendStr)) {
+            frontendEvts.push({ event: "s_o_w", bar_index: i, price: lo[i], score: 0.75 });
+          }
+          // AR (Automatic Rally): strong bounce after SC
+          if (cl[i] > op[i] && hi[i] > highest(hi, trendStr, i - 1) && vol[i] < volMA * volFilter && rising(i, trendStr)) {
+            frontendEvts.push({ event: "a_r", bar_index: i, price: hi[i], score: 0.6 });
+          }
+          // LPSY: lower high + bearish + low volume
+          if (hi[i] > hi[i - 1] && cl[i] < op[i] && vol[i] < volMA * volFilter && falling(i, trendStr)) {
+            frontendEvts.push({ event: "lpsy", bar_index: i, price: hi[i], score: 0.6 });
+          }
+        }
+      }
+
+      // Merge backend + frontend events, sort by score
+      const allWyckEvts = [...wEvts, ...frontendEvts];
+      const sortedEvts = allWyckEvts.sort((a, b) => b.score - a.score);
 
       // Event horizontal lines (like AlphaExtract's box.new for each event)
       const eventLines: Array<{ idx: number; price: number; color: string; label: string }> = [];
@@ -1212,10 +1276,8 @@ export function Chart() {
     // ── Wyckoff overlay ──
     const wyckoffOverlay = wyckoffQuery.data?.overlay ?? null;
     if (wyckoffOverlay && (familyModes["wyckoff"] ?? "on") !== "off" && merged.candles?.length) {
-      const { range: wRange, creek, ice, events: wEvents } = wyckoffOverlay;
+      const { range: wRange, creek, ice } = wyckoffOverlay;
       const isAccum = wyckoffOverlay.schematic === "accumulation" || wyckoffOverlay.schematic === "reaccumulation";
-      const wFillColor = isAccum ? "#22c55e15" : "#ef444415";
-      const wBorderColor = isAccum ? "#22c55e90" : "#ef444490";
       const lastT = isoToUnix(merged.candles[merged.candles.length - 1].open_time);
 
       // Box starts at structure started_at (like PineScript boxStartBar)
