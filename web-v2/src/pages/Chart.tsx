@@ -1231,6 +1231,173 @@ export function Chart() {
       }
 
       // Wyckoff event markers are added to allMarkers above (before marker sort)
+
+      // ── Wyckoff Entry / SL / TP levels ──
+      if (wRange.top != null && wRange.bottom != null) {
+        const rangeH = wRange.top - wRange.bottom;
+        const drawLevel = (price: number, color: string, style: number, label: string) => {
+          const lvl = chart.addSeries(LineSeries, {
+            color,
+            lineWidth: 1,
+            lineStyle: style,
+            crosshairMarkerVisible: false,
+            lastValueVisible: true,
+            priceLineVisible: false,
+            title: label,
+          });
+          lvl.setData(sortLineData([
+            { time: firstT, value: price },
+            { time: lastT, value: price },
+          ]));
+          overlayLinesRef.current.push(lvl);
+        };
+
+        if (isAccum) {
+          // Accumulation: buy setup
+          // Entry: just above range bottom (Spring area) or at ice level
+          const entry = ice ?? (wRange.bottom + rangeH * 0.15);
+          const sl = wRange.bottom - rangeH * 0.05;
+          const tp1 = wRange.top;
+          const tp2 = wRange.top + rangeH * 0.618;
+          const tp3 = wRange.top + rangeH;
+
+          drawLevel(entry, "#3b82f6", LineStyle.Dotted, "Entry");
+          drawLevel(sl, "#ef4444", LineStyle.Dotted, "SL");
+          drawLevel(tp1, "#22c55e", LineStyle.Dotted, "TP1");
+          drawLevel(tp2, "#22c55e80", LineStyle.Dotted, "TP2");
+          drawLevel(tp3, "#22c55e60", LineStyle.Dotted, "TP3");
+        } else {
+          // Distribution: sell setup
+          const entry = creek ?? (wRange.top - rangeH * 0.15);
+          const sl = wRange.top + rangeH * 0.05;
+          const tp1 = wRange.bottom;
+          const tp2 = wRange.bottom - rangeH * 0.618;
+          const tp3 = wRange.bottom - rangeH;
+
+          drawLevel(entry, "#3b82f6", LineStyle.Dotted, "Entry");
+          drawLevel(sl, "#ef4444", LineStyle.Dotted, "SL");
+          drawLevel(tp1, "#22c55e", LineStyle.Dotted, "TP1");
+          drawLevel(tp2, "#22c55e80", LineStyle.Dotted, "TP2");
+          drawLevel(tp3, "#22c55e60", LineStyle.Dotted, "TP3");
+        }
+      }
+
+      // ── FVG + IFVG detection & visualization ──
+      // FVG = 3-candle gap. IFVG = FVG violated by price → bias flips.
+      if (merged.candles.length >= 3) {
+        interface FvgZone {
+          idx: number;       // candle index where FVG formed (middle candle)
+          top: number;
+          bottom: number;
+          bull: boolean;      // original direction
+          inverted: boolean;  // true if price broke through → IFVG
+          violatedAt: number; // candle index where violated
+        }
+        const fvgs: FvgZone[] = [];
+        const startIdx = Math.max(0, merged.candles.length - 150);
+
+        // Step 1: Detect all FVGs
+        for (let i = startIdx + 2; i < merged.candles.length; i++) {
+          const h1 = Number(merged.candles[i - 2].high);
+          const l1 = Number(merged.candles[i - 2].low);
+          const h3 = Number(merged.candles[i].high);
+          const l3 = Number(merged.candles[i].low);
+
+          // Bullish FVG: C3 low > C1 high (gap up)
+          if (l3 > h1 && (l3 - h1) > 0) {
+            fvgs.push({ idx: i - 1, top: l3, bottom: h1, bull: true, inverted: false, violatedAt: -1 });
+          }
+          // Bearish FVG: C1 low > C3 high (gap down)
+          if (l1 > h3 && (l1 - h3) > 0) {
+            fvgs.push({ idx: i - 1, top: l1, bottom: h3, bull: false, inverted: false, violatedAt: -1 });
+          }
+        }
+
+        // Step 2: Check if any FVG was violated → becomes IFVG
+        for (const fvg of fvgs) {
+          for (let j = fvg.idx + 2; j < merged.candles.length; j++) {
+            const cLow = Number(merged.candles[j].low);
+            const cHigh = Number(merged.candles[j].high);
+            if (fvg.bull && cLow < fvg.bottom) {
+              // Bullish FVG broken downward → Bearish IFVG (resistance on retest)
+              fvg.inverted = true;
+              fvg.violatedAt = j;
+              break;
+            }
+            if (!fvg.bull && cHigh > fvg.top) {
+              // Bearish FVG broken upward → Bullish IFVG (support on retest)
+              fvg.inverted = true;
+              fvg.violatedAt = j;
+              break;
+            }
+          }
+        }
+
+        // Step 3: Draw — show last 8 active zones (unfilled or IFVG)
+        const recent = fvgs.slice(-12);
+        for (const fvg of recent) {
+          const sT = isoToUnix(merged.candles[fvg.idx].open_time);
+          const extendTo = fvg.inverted && fvg.violatedAt > 0
+            ? Math.min(fvg.violatedAt + 20, merged.candles.length - 1)
+            : Math.min(fvg.idx + 15, merged.candles.length - 1);
+          const eT = isoToUnix(merged.candles[extendTo].open_time);
+
+          let borderColor: string;
+          let label: string;
+          if (fvg.inverted) {
+            // IFVG: flipped bias — bull FVG violated → bearish IFVG, and vice versa
+            const ifvgBull = !fvg.bull; // bias flips
+            borderColor = ifvgBull ? "#f59e0b" : "#a855f7"; // amber for bull IFVG, purple for bear IFVG
+            label = ifvgBull ? "IFVG+" : "IFVG-";
+          } else {
+            borderColor = fvg.bull ? "#3b82f6" : "#ef4444";
+            label = fvg.bull ? "FVG+" : "FVG-";
+          }
+
+          // CE line (Consequent Encroachment = 50% of gap)
+          const ce = (fvg.top + fvg.bottom) / 2;
+
+          // Top border
+          const topS = chart.addSeries(LineSeries, {
+            color: borderColor + "80",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dotted,
+            crosshairMarkerVisible: false,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            priceScaleId: "",
+          });
+          topS.setData(sortLineData([{ time: sT, value: fvg.top }, { time: eT, value: fvg.top }]));
+          overlayLinesRef.current.push(topS);
+
+          // Bottom border
+          const botS = chart.addSeries(LineSeries, {
+            color: borderColor + "80",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dotted,
+            crosshairMarkerVisible: false,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            priceScaleId: "",
+          });
+          botS.setData(sortLineData([{ time: sT, value: fvg.bottom }, { time: eT, value: fvg.bottom }]));
+          overlayLinesRef.current.push(botS);
+
+          // CE mid-line with label
+          const ceS = chart.addSeries(LineSeries, {
+            color: borderColor + "50",
+            lineWidth: 1,
+            lineStyle: LineStyle.SparseDotted,
+            crosshairMarkerVisible: false,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            title: label,
+            priceScaleId: "",
+          });
+          ceS.setData(sortLineData([{ time: sT, value: ce }, { time: eT, value: ce }]));
+          overlayLinesRef.current.push(ceS);
+        }
+      }
     }
 
   }, [merged, showVolume, showZigzag, showLabels, showProjections, visibleDetections, familyModes, detailLayers, wyckoffQuery.data, projectionsQuery.data]);
