@@ -765,7 +765,9 @@ export function Chart() {
       })();
       const showDetail = (isDetailMode && isTopInFamily) || isHov;
 
-      if (d.anchors.length >= 2 && !isZone) {
+      // Wyckoff has its own box + event overlay below — skip the generic
+      // anchor-connecting polyline (purple zigzag) that adds noise.
+      if (d.anchors.length >= 2 && !isZone && d.family !== "wyckoff") {
         // Main formation polyline — solid, thick
         const formLine = chart.addSeries(LineSeries, {
           color: color,
