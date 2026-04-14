@@ -1323,10 +1323,12 @@ async fn upsert_wyckoff_structure_from_detection(
     _detection_id: Uuid,
 ) -> anyhow::Result<()> {
     use qtss_storage::{
-        find_active_wyckoff_structure, insert_wyckoff_structure, update_wyckoff_structure,
-        WyckoffStructureInsert,
+        complete_wyckoff_structure, fail_wyckoff_structure, find_active_wyckoff_structure,
+        insert_wyckoff_structure, update_wyckoff_structure, WyckoffStructureInsert,
     };
-    use qtss_wyckoff::{WyckoffEvent, WyckoffSchematic, WyckoffStructureTracker};
+    use qtss_wyckoff::{
+        WyckoffEvent, WyckoffPhase, WyckoffSchematic, WyckoffStructureTracker,
+    };
 
     // Parse event from subkind (e.g. "selling_climax_accumulation" → "selling_climax")
     let event_name = subkind.rsplit('_').skip(1).collect::<Vec<_>>().into_iter().rev()
@@ -1381,7 +1383,27 @@ async fn upsert_wyckoff_structure_from_detection(
             }
 
             // Record new event
+            let prior_schematic = row.schematic.clone();
             tracker.record_event(wy_event, bar_idx, price, detection.structural_score as f64);
+
+            // Lifecycle: detect Phase E completion or directional flip (failure).
+            //
+            // #2 Phase E closure — terminal phase means markup/markdown confirmed;
+            //    mark structure complete so the next PS/SC can spawn a fresh tracker
+            //    (find_active filters by is_active).
+            //
+            // #3 Failed Spring/UTAD regression — auto_reclassify already flips the
+            //    schematic when an event of the opposite directional family fires
+            //    (e.g. Accumulation seeing UTAD/SOW/LPSY/BreakOfIce → ReDistribution).
+            //    A flip of the bull/bear family relative to the persisted schematic
+            //    is the canonical Wyckoff "failed structure" signal; flag it failed
+            //    rather than letting the tracker silently mutate.
+            let was_bull = matches!(prior_schematic.as_str(), "accumulation" | "reaccumulation");
+            let now_bull = matches!(
+                tracker.schematic,
+                WyckoffSchematic::Accumulation | WyckoffSchematic::ReAccumulation
+            );
+            let family_flipped = was_bull != now_bull;
 
             let events_json = serde_json::to_value(&tracker.events)?;
             update_wyckoff_structure(
@@ -1397,6 +1419,18 @@ async fn upsert_wyckoff_structure_from_detection(
                 tracker.confidence(),
             )
             .await?;
+
+            if tracker.current_phase == WyckoffPhase::E {
+                complete_wyckoff_structure(pool, row.id).await?;
+            } else if family_flipped {
+                let reason = format!(
+                    "schematic flipped {} → {} via {}",
+                    prior_schematic,
+                    tracker.schematic.as_str(),
+                    wy_event.as_str()
+                );
+                fail_wyckoff_structure(pool, row.id, &reason).await?;
+            }
         }
         None => {
             // Create new structure
