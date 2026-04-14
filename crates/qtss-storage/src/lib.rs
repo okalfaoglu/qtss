@@ -82,7 +82,8 @@ pub use wyckoff_signals::{
 pub use wyckoff_structures::{
     complete_wyckoff_structure, fail_wyckoff_structure, find_active_wyckoff_structure,
     get_wyckoff_structure, insert_wyckoff_structure, list_active_wyckoff_structures,
-    list_wyckoff_history, update_wyckoff_structure, WyckoffStructureInsert, WyckoffStructureRow,
+    list_recent_wyckoff_structures, list_wyckoff_history, update_wyckoff_structure,
+    WyckoffStructureInsert, WyckoffStructureRow,
 };
 
 pub use pivot_cache::{

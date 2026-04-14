@@ -16,7 +16,7 @@ use crate::error::ApiError;
 use crate::state::SharedState;
 use qtss_storage::{
     find_active_wyckoff_structure, get_wyckoff_structure, list_active_wyckoff_structures,
-    list_wyckoff_history,
+    list_recent_wyckoff_structures, list_wyckoff_history,
     v2_setups::{list_v2_setups_filtered, SetupFilter},
 };
 
@@ -28,6 +28,13 @@ pub struct ActiveQuery {
 
 #[derive(Debug, Deserialize)]
 pub struct HistoryQuery {
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RecentQuery {
+    /// `active` | `completed` | `failed` | `all` (default `all`).
+    pub status: Option<String>,
     pub limit: Option<i64>,
 }
 
@@ -45,6 +52,7 @@ pub struct WyckoffSetupsQuery {
 pub fn v2_wyckoff_router() -> Router<SharedState> {
     Router::new()
         .route("/v2/wyckoff/active", get(get_active))
+        .route("/v2/wyckoff/recent", get(get_recent))
         .route("/v2/wyckoff/structure/{id}", get(get_structure))
         .route("/v2/wyckoff/history/{symbol}", get(get_history))
         .route(
@@ -96,6 +104,20 @@ async fn get_active(
     )
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
+    Ok(Json(json!({ "structures": rows })))
+}
+
+/// Cross-symbol recent feed. `status=active|completed|failed|all`
+/// (default `all`). Ordered by lifecycle timestamp DESC so the most
+/// recently closed structures surface first.
+async fn get_recent(
+    State(st): State<SharedState>,
+    Query(q): Query<RecentQuery>,
+) -> Result<Json<JsonValue>, ApiError> {
+    let limit = q.limit.unwrap_or(100).clamp(1, 500);
+    let rows = list_recent_wyckoff_structures(&st.pool, q.status.as_deref(), limit)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!({ "structures": rows })))
 }
 

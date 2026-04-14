@@ -110,6 +110,19 @@ function EventTimeline({ events }: { events: WyckoffEventEntry[] }) {
   );
 }
 
+function StatusBadge({ s }: { s: WyckoffStructure }) {
+  if (s.is_active) {
+    return <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">ACTIVE</span>;
+  }
+  if (s.completed_at) {
+    return <span className="rounded border border-blue-500/40 bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-bold text-blue-300">COMPLETED</span>;
+  }
+  if (s.failed_at) {
+    return <span className="rounded border border-red-500/40 bg-red-500/10 px-1.5 py-0.5 text-[10px] font-bold text-red-300">FAILED</span>;
+  }
+  return <span className="rounded border border-zinc-600 bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-400">CLOSED</span>;
+}
+
 function StructureCard({
   s,
   onSelect,
@@ -126,6 +139,7 @@ function StructureCard({
         <div className="flex items-center gap-2">
           <span className="font-mono text-sm font-bold text-zinc-100">{s.symbol}</span>
           <span className="text-xs text-zinc-500">{s.interval}</span>
+          <StatusBadge s={s} />
         </div>
         <PhaseBadge phase={s.current_phase} />
       </div>
@@ -141,6 +155,11 @@ function StructureCard({
         {s.ice_level != null && <div>Ice: {s.ice_level.toFixed(2)}</div>}
         <div>Events: {Array.isArray(s.events_json) ? s.events_json.length : 0}</div>
       </div>
+      {s.failure_reason && (
+        <div className="mt-2 rounded border border-red-900/50 bg-red-900/20 p-1.5 text-[11px] text-red-300">
+          ⚠ {s.failure_reason}
+        </div>
+      )}
     </div>
   );
 }
@@ -238,29 +257,63 @@ Phase E: Markdown (trend out of range)`}
 // Main Page
 // =========================================================================
 
+type StatusFilter = "active" | "completed" | "failed" | "all";
+
+const STATUS_TABS: { key: StatusFilter; label: string }[] = [
+  { key: "active",    label: "Active" },
+  { key: "completed", label: "Completed" },
+  { key: "failed",    label: "Failed" },
+  { key: "all",       label: "All" },
+];
+
 export function Wyckoff() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [status, setStatus] = useState<StatusFilter>("active");
 
-  const activeQuery = useQuery({
-    queryKey: ["v2", "wyckoff", "active"],
-    queryFn: () => apiFetch<{ structures: WyckoffStructure[] }>("/v2/wyckoff/active"),
-    refetchInterval: 15_000,
+  // Active tab hits /v2/wyckoff/active (no-limit, auto-refresh faster);
+  // other tabs hit /v2/wyckoff/recent?status=... with higher cap.
+  const listQuery = useQuery({
+    queryKey: ["v2", "wyckoff", "list", status],
+    queryFn: () =>
+      status === "active"
+        ? apiFetch<{ structures: WyckoffStructure[] }>("/v2/wyckoff/active")
+        : apiFetch<{ structures: WyckoffStructure[] }>(
+            `/v2/wyckoff/recent?status=${status}&limit=200`,
+          ),
+    refetchInterval: status === "active" ? 15_000 : 60_000,
   });
 
-  const structures = activeQuery.data?.structures ?? [];
+  const structures = listQuery.data?.structures ?? [];
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-6">
       <h1 className="text-xl font-bold text-zinc-100">Wyckoff Structures</h1>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Left: active structures list */}
+        {/* Left: structures list with status tabs */}
         <div className="space-y-3 lg:col-span-1">
+          <div className="flex flex-wrap gap-1">
+            {STATUS_TABS.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setStatus(t.key)}
+                className={`rounded px-2 py-1 text-xs font-semibold transition ${
+                  status === t.key
+                    ? "bg-zinc-100 text-zinc-900"
+                    : "border border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
           <h2 className="text-sm font-bold uppercase text-zinc-500">
-            Active Structures ({structures.length})
+            {STATUS_TABS.find((t) => t.key === status)?.label} ({structures.length})
           </h2>
           {structures.length === 0 && (
-            <div className="text-sm text-zinc-600">No active Wyckoff structures detected.</div>
+            <div className="text-sm text-zinc-600">
+              No {status === "all" ? "" : status} Wyckoff structures.
+            </div>
           )}
           {structures.map((s) => (
             <StructureCard key={s.id} s={s} onSelect={setSelectedId} />

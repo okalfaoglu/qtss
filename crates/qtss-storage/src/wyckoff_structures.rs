@@ -220,6 +220,37 @@ pub async fn list_wyckoff_history(
     Ok(rows)
 }
 
+/// Cross-symbol recent structure feed. `status` filters by lifecycle:
+/// `"active"` (is_active=true), `"completed"` (completed_at NOT NULL),
+/// `"failed"` (failed_at NOT NULL), `"all"` / None → no filter.
+pub async fn list_recent_wyckoff_structures(
+    pool: &PgPool,
+    status: Option<&str>,
+    limit: i64,
+) -> Result<Vec<WyckoffStructureRow>, StorageError> {
+    let rows = sqlx::query_as::<_, WyckoffStructureRow>(
+        r#"SELECT id, symbol, interval, exchange, segment, schematic, current_phase,
+                  range_top, range_bottom, creek_level, ice_level, slope_deg,
+                  confidence, events_json, volume_profile, is_active,
+                  started_at, completed_at, failed_at, failure_reason,
+                  created_at, updated_at
+             FROM wyckoff_structures
+            WHERE CASE COALESCE($1, 'all')
+                    WHEN 'active'    THEN is_active = true
+                    WHEN 'completed' THEN completed_at IS NOT NULL
+                    WHEN 'failed'    THEN failed_at    IS NOT NULL
+                    ELSE TRUE
+                  END
+            ORDER BY COALESCE(completed_at, failed_at, started_at) DESC
+            LIMIT $2"#,
+    )
+    .bind(status)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Find the active structure for a given (symbol, interval) — at most one.
 pub async fn find_active_wyckoff_structure(
     pool: &PgPool,
