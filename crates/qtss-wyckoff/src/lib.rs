@@ -19,6 +19,7 @@ mod error;
 mod events;
 mod range;
 pub mod setup_builder;
+pub mod signal_emitter;
 pub mod structure;
 pub mod trade_planner;
 
