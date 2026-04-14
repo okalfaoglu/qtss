@@ -590,11 +590,49 @@ export function Chart() {
       if (!dominated) kept.push(d);
     }
 
-    // Limit per family to avoid clutter
+    // P19d — SMC zones overlap in TIME (all formation→now), so the
+    // time-based dedup above doesn't help. Add PRICE-overlap dedup
+    // for range/zones family: if two zones share >60% of their price
+    // band, keep only the higher-scoring one. Fixes the stacked
+    // "EQUAL LOWS + LIQUIDITY POOL LOW" visual clutter.
+    const zoneKept: typeof kept = [];
+    for (const d of kept) {
+      if (d.family !== "range" || d.anchors.length < 2) {
+        zoneKept.push(d);
+        continue;
+      }
+      const p1 = Number(d.anchors[0].price);
+      const p2 = Number(d.anchors[1].price);
+      const dTop = Math.max(p1, p2);
+      const dBot = Math.min(p1, p2);
+      const dBand = Math.max(dTop - dBot, 1e-9);
+      const priceDominated = zoneKept.some((k) => {
+        if (k.family !== "range" || k.anchors.length < 2) return false;
+        const kp1 = Number(k.anchors[0].price);
+        const kp2 = Number(k.anchors[1].price);
+        const kTop = Math.max(kp1, kp2);
+        const kBot = Math.min(kp1, kp2);
+        const kBand = Math.max(kTop - kBot, 1e-9);
+        const oTop = Math.min(dTop, kTop);
+        const oBot = Math.max(dBot, kBot);
+        if (oTop <= oBot) return false;
+        const overlap = oTop - oBot;
+        return overlap / dBand > 0.6 || overlap / kBand > 0.6;
+      });
+      if (!priceDominated) zoneKept.push(d);
+    }
+
+    // Limit per family to avoid clutter. Zones get a tighter cap
+    // than structural detections — even after price dedup, stacking
+    // 5 FVG/OB/LP boxes makes labels unreadable.
     const countByFamily: Record<string, number> = {};
-    return kept.filter((d) => {
+    const MAX_PER_FAMILY_ZONE = 3;
+    return zoneKept.filter((d) => {
       countByFamily[d.family] = (countByFamily[d.family] ?? 0) + 1;
-      return countByFamily[d.family] <= MAX_DETECTIONS_PER_FAMILY;
+      const cap = d.family === "range"
+        ? MAX_PER_FAMILY_ZONE
+        : MAX_DETECTIONS_PER_FAMILY;
+      return countByFamily[d.family] <= cap;
     });
   }, [merged, familyModes]);
 
