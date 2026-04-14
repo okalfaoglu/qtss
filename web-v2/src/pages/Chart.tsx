@@ -890,6 +890,9 @@ export function Chart() {
             lastValueVisible: true,
             priceLineVisible: false,
             title: label,
+            // Exclude from Y-axis autoscale: otherwise TPs/SL that sit far from
+            // the current price squash the candles into the top of the pane.
+            autoscaleInfoProvider: () => null,
           });
           lvl.setData(sortLineData([
             { time: lastTime, value: price },
@@ -1048,6 +1051,9 @@ export function Chart() {
     if (showLabels) {
       for (const d of visibleDetections) {
         if (ZONE_BOX_SUBKINDS.has(d.subkind)) continue;
+        // Wyckoff has its own dedicated event markers (PS/SC/Spring/LPS/…) drawn
+        // further below — skip the generic "Pn" anchor labels to avoid clutter.
+        if (d.family === "wyckoff") continue;
         // In detail mode, respect the "labels" layer toggle
         const dLayers = detailLayers[d.family] ?? new Set(["entry_tp_sl", "labels"]);
         const isDetailMode = (familyModes[d.family] ?? "on") === "detail";
@@ -1226,11 +1232,16 @@ export function Chart() {
       for (const ev of sortedEvts) {
         const idx = ev.bar_index;
         if (idx < 0 || idx >= merged.candles.length) continue;
-        if (hasNearbyLabel(idx, ev.price)) continue;
-
-        placed.push({ idx, price: ev.price });
-        const candleTime = isoToUnix(merged.candles[idx].open_time);
         const meta = eventMeta[ev.event] ?? { label: ev.event.toUpperCase(), color: "#9ca3af", pos: "aboveBar" as const };
+
+        // Pin price to the candle's wick tip (Pine: high for top events, low for bottom).
+        // Prevents the horizontal "shelf" from floating away from the candle body.
+        const candle = merged.candles[idx];
+        const pinnedPrice = meta.pos === "aboveBar" ? Number(candle.high) : Number(candle.low);
+        if (hasNearbyLabel(idx, pinnedPrice)) continue;
+        placed.push({ idx, price: pinnedPrice });
+
+        const candleTime = isoToUnix(candle.open_time);
         allMarkers.push({
           time: candleTime,
           position: meta.pos,
@@ -1238,16 +1249,17 @@ export function Chart() {
           shape: meta.pos === "aboveBar" ? "arrowDown" : "arrowUp",
           text: meta.label,
         });
-        // Collect for horizontal event lines
-        eventLines.push({ idx, price: ev.price, color: meta.color, label: meta.label });
+        eventLines.push({ idx, price: pinnedPrice, color: meta.color, label: meta.label });
       }
 
-      // Draw horizontal event lines (like AlphaExtract — short colored bar at event price)
+      // Horizontal "shelf" line: Pine draws it BACKWARD from the event bar
+      // (bar_index - i_lineLength → bar_index) pinned to the wick. Looks like
+      // a colored rail leading into the event candle.
+      const lineLen = 15; // Pine default: i_lineLength
       for (const el of eventLines) {
-        const lineLen = 8; // bars to extend
-        const t1 = isoToUnix(merged.candles[el.idx].open_time);
-        const endIdx = Math.min(el.idx + lineLen, merged.candles.length - 1);
-        const t2 = isoToUnix(merged.candles[endIdx].open_time);
+        const startIdx = Math.max(0, el.idx - lineLen);
+        const t1 = isoToUnix(merged.candles[startIdx].open_time);
+        const t2 = isoToUnix(merged.candles[el.idx].open_time);
         const evLine = chart.addSeries(LineSeries, {
           color: el.color,
           lineWidth: 2,
@@ -1294,109 +1306,43 @@ export function Chart() {
         rectanglePrimitivesRef.current.push(prim);
       };
 
-      // ── Multi-box consolidation ranges (PineScript style) ──
-      // Detect sideways periods using simple ATR-based range detection
-      // Each tight consolidation = separate box, colored by breakout direction
-      {
-        const rsiPeriod = 14;
-        const sensitivity = 20; // RSI band: 50 ± 20
-        const rsiUpper = 50 + sensitivity;
-        const rsiLower = 50 - sensitivity;
-        const minBoxBars = 5; // minimum bars for a valid consolidation
-
-        // Calculate RSI for each candle
-        const closes = merged.candles.map((c) => Number(c.close));
-        const rsiValues: number[] = [];
-        for (let i = 0; i < closes.length; i++) {
-          if (i < rsiPeriod) { rsiValues.push(50); continue; }
-          let avgGain = 0, avgLoss = 0;
-          for (let j = i - rsiPeriod + 1; j <= i; j++) {
-            const delta = closes[j] - closes[j - 1];
-            if (delta > 0) avgGain += delta; else avgLoss -= delta;
-          }
-          avgGain /= rsiPeriod;
-          avgLoss /= rsiPeriod;
-          const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-          rsiValues.push(100 - 100 / (1 + rs));
-        }
-
-        // Detect sideways zones (RSI between lower-upper)
-        interface ConsolidationBox {
-          startIdx: number;
-          endIdx: number;
-          high: number;
-          low: number;
-          breakoutDir: "bull" | "bear" | "none";
-        }
-        const boxes: ConsolidationBox[] = [];
-        let inSideways = false;
-        let swStart = 0;
-
-        for (let i = rsiPeriod; i < merged.candles.length; i++) {
-          const isSW = rsiValues[i] > rsiLower && rsiValues[i] < rsiUpper;
-          if (isSW && !inSideways) {
-            // Sideways started
-            inSideways = true;
-            swStart = i;
-          } else if (!isSW && inSideways) {
-            // Sideways ended — create box if long enough
-            inSideways = false;
-            const barCount = i - swStart;
-            if (barCount >= minBoxBars) {
-              let hi = 0, lo = Infinity;
-              for (let j = swStart; j < i; j++) {
-                const h = Number(merged.candles[j].high);
-                const l = Number(merged.candles[j].low);
-                if (h > hi) hi = h;
-                if (l < lo) lo = l;
-              }
-              // Determine breakout direction by RSI after sideways
-              const breakDir = rsiValues[i] > rsiUpper ? "bull" as const
-                : rsiValues[i] < rsiLower ? "bear" as const
-                : "none" as const;
-              boxes.push({ startIdx: swStart, endIdx: i - 1, high: hi, low: lo, breakoutDir: breakDir });
-            }
-          }
-        }
-        // Handle ongoing sideways at chart end
-        if (inSideways && (merged.candles.length - swStart) >= minBoxBars) {
-          let hi = 0, lo = Infinity;
-          for (let j = swStart; j < merged.candles.length; j++) {
-            const h = Number(merged.candles[j].high);
-            const l = Number(merged.candles[j].low);
-            if (h > hi) hi = h;
-            if (l < lo) lo = l;
-          }
-          boxes.push({ startIdx: swStart, endIdx: merged.candles.length - 1, high: hi, low: lo, breakoutDir: "none" });
-        }
-
-        // Draw consolidation boxes (last 10)
-        for (const bx of boxes.slice(-10)) {
-          const t1 = isoToUnix(merged.candles[bx.startIdx].open_time);
-          const t2 = isoToUnix(merged.candles[bx.endIdx].open_time);
-
-          let fill: string, border: string, lbl: string;
-          if (bx.breakoutDir === "bull") {
-            fill = "#22c55e12"; border = "#22c55e70"; lbl = "Accumulation";
-          } else if (bx.breakoutDir === "bear") {
-            fill = "#ef444412"; border = "#ef444470"; lbl = "Distribution";
-          } else {
-            fill = "#6b728012"; border = "#6b728050"; lbl = "Consolidation";
-          }
-
-          addRect({
-            time1: t1,
-            time2: t2,
-            priceTop: bx.high,
-            priceBottom: bx.low,
-            fillColor: fill,
-            borderColor: border,
-            borderWidth: 1,
-            label: lbl,
-            labelColor: border,
-            labelSize: 10,
-          });
-        }
+      // ── Authoritative Wyckoff range box ──
+      //
+      // The trading range (the "box") is defined by Phase A: AR sets the
+      // top, SC/ST sets the bottom. Once Phase A completes, the range is
+      // FROZEN — Springs and UTADs pierce it intentionally and must stay
+      // outside. So we draw ONE box from `wyckoffOverlay.range` (which the
+      // backend publishes from `WyckoffStructureTracker.range_top/bottom`),
+      // spanning from `started_at` → latest bar.
+      //
+      // Previous versions drew RSI-based independent consolidation boxes;
+      // that approach violates the Wyckoff rule set (RSI 30–70 mis-flags
+      // trends as sideways, wick-based bounds inflate the box with
+      // Spring/UT spikes, no Phase-A anchor). Removed.
+      if (wRange.top != null && wRange.bottom != null) {
+        const schematicColor: Record<string, { fill: string; border: string; label: string }> = {
+          accumulation:    { fill: "#22c55e14", border: "#22c55e70", label: "ACCUMULATION" },
+          reaccumulation:  { fill: "#22c55e10", border: "#22c55e50", label: "RE-ACCUMULATION" },
+          distribution:    { fill: "#ef444414", border: "#ef444470", label: "DISTRIBUTION" },
+          redistribution:  { fill: "#ef444410", border: "#ef444450", label: "RE-DISTRIBUTION" },
+        };
+        const style = schematicColor[wyckoffOverlay.schematic] ?? {
+          fill: "#6b728012",
+          border: "#6b728050",
+          label: "TRADING RANGE",
+        };
+        addRect({
+          time1: structStartT,
+          time2: lastT,
+          priceTop: wRange.top,
+          priceBottom: wRange.bottom,
+          fillColor: style.fill,
+          borderColor: style.border,
+          borderWidth: 1,
+          label: style.label,
+          labelColor: style.border,
+          labelSize: 10,
+        });
       }
       // ── Creek line (resistance within range) ──
       if (creek != null) {
@@ -1445,6 +1391,9 @@ export function Chart() {
             lastValueVisible: true,
             priceLineVisible: false,
             title: label,
+            // Keep the right-axis label but exclude from autoscale so distant
+            // TPs don't squash the candles.
+            autoscaleInfoProvider: () => null,
           });
           lvl.setData(sortLineData([
             { time: structStartT, value: price },

@@ -42,6 +42,15 @@ pub struct WyckoffConfig {
     pub shakeout_min_penetration: f64,
     /// Shakeout must recover within N bars.
     pub shakeout_recovery_bars: usize,
+    /// Spring/UTAD: minimum prior edge tests (lows near support, highs
+    /// near resistance) that must already exist in the context before a
+    /// Phase-C manipulation can fire. Stops every pullback from being
+    /// flagged as a Spring in trending markets.
+    pub manipulation_min_edge_tests: usize,
+    /// Spring/UTAD: minimum bar-index span between the first support /
+    /// resistance test and the manipulation candidate. Ensures the
+    /// range has existed long enough to be a real Wyckoff range.
+    pub manipulation_min_range_age_bars: u64,
 
     // --- Phase D ---
     /// SOS/SOW volume must be >= Nx average.
@@ -83,6 +92,8 @@ impl WyckoffConfig {
             // Phase C
             shakeout_min_penetration: 0.05,
             shakeout_recovery_bars: 3,
+            manipulation_min_edge_tests: 2,
+            manipulation_min_range_age_bars: 10,
             // Phase D
             sos_min_volume_ratio: 1.5,
             lps_max_retracement: 0.5,

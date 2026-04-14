@@ -98,11 +98,18 @@ impl Default for TradePlannerConfig {
                 AdaptiveBucket { atr_pct_max: 3.0,  r_multipliers: vec![1.0, 1.8, 3.0],      qty_split_pct: vec![33.0, 33.0, 34.0],       label: "mid_vol".into() },
                 AdaptiveBucket { atr_pct_max: 99.0, r_multipliers: vec![1.2, 2.5],           qty_split_pct: vec![50.0, 50.0],             label: "high_vol".into() },
             ],
-            range_cap_factor: 1.5,
+            // Literature-grade measured-move caps (Weis/Pruden).
+            // range_cap_factor = 2.0 → max TP = breakout ± 2 × range_height
+            // (canonical TP3 "extended" measured move). Was 1.5 — bumped
+            // to match literature while the classical P&F cap still
+            // provides the upper bound in low-TF ranges.
+            range_cap_factor: 2.0,
             classical_cap_enabled: true,
             score_boost_threshold: 75.0,
             score_boost_r: 5.0,
-            min_net_rr: 1.0,
+            // Literature minimum R:R for Wyckoff entries is 1.5 (Pruden);
+            // 1.0 was too permissive and let thin setups through the gate.
+            min_net_rr: 1.5,
             commission_bps: 7.5,
             sl_policy: SlPolicy::Tighter,
             d_entry_sl_atr_mult: 2.5,

@@ -50,6 +50,7 @@ mod v2_confluence_loop;
 mod setup_chart;
 mod v2_setup_loop;
 mod v2_setup_telegram_loop;
+mod wyckoff_setup_loop;
 mod regime_deep_loop;
 
 use std::collections::HashSet;
@@ -306,6 +307,8 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(v2_confluence_loop::v2_confluence_loop(v2_conf_pool));
         let v2_setup_pool = pool.clone();
         tokio::spawn(v2_setup_loop::v2_setup_loop(v2_setup_pool));
+        let wyckoff_setup_pool = pool.clone();
+        tokio::spawn(wyckoff_setup_loop::wyckoff_setup_loop(wyckoff_setup_pool));
         let v2_setup_tg_pool = pool.clone();
         tokio::spawn(v2_setup_telegram_loop::v2_setup_telegram_loop(
             v2_setup_tg_pool,

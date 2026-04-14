@@ -18,6 +18,7 @@ mod detector;
 mod error;
 mod events;
 mod range;
+pub mod persistence;
 pub mod setup_builder;
 pub mod signal_emitter;
 pub mod structure;

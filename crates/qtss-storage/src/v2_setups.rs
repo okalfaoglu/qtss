@@ -191,6 +191,11 @@ pub struct SetupFilter {
     /// states (e.g. `["closed"]`) to override.
     pub states: Vec<String>,
     pub profile: Option<String>,
+    /// SQL `LIKE` pattern matched against `alt_type` (e.g. `wyckoff_%`).
+    pub alt_type_like: Option<String>,
+    pub symbol: Option<String>,
+    pub timeframe: Option<String>,
+    pub mode: Option<String>,
 }
 
 pub async fn list_v2_setups_filtered(
@@ -223,6 +228,22 @@ pub async fn list_v2_setups_filtered(
     if let Some(p) = filter.profile.as_ref() {
         qb.push(" AND profile = ");
         qb.push_bind(p.clone());
+    }
+    if let Some(a) = filter.alt_type_like.as_ref() {
+        qb.push(" AND alt_type LIKE ");
+        qb.push_bind(a.clone());
+    }
+    if let Some(s) = filter.symbol.as_ref() {
+        qb.push(" AND symbol = ");
+        qb.push_bind(s.clone());
+    }
+    if let Some(tf) = filter.timeframe.as_ref() {
+        qb.push(" AND timeframe = ");
+        qb.push_bind(tf.clone());
+    }
+    if let Some(m) = filter.mode.as_ref() {
+        qb.push(" AND mode = ");
+        qb.push_bind(m.clone());
     }
 
     qb.push(" ORDER BY created_at DESC LIMIT ");

@@ -25,6 +25,11 @@ pub struct SetupsQuery {
     pub venue: Option<String>,
     pub state: Option<String>,
     pub profile: Option<String>,
+    /// `LIKE` pattern on `alt_type`. E.g. `wyckoff_%` for the Wyckoff feed.
+    pub alt_type_like: Option<String>,
+    pub symbol: Option<String>,
+    pub timeframe: Option<String>,
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,6 +104,10 @@ async fn get_setups(
         venue_class: q.venue,
         states,
         profile: q.profile,
+        alt_type_like: q.alt_type_like,
+        symbol: q.symbol,
+        timeframe: q.timeframe,
+        mode: q.mode,
     };
     let rows = list_v2_setups_filtered(&st.pool, &filter).await?;
     Ok(Json(SetupFeed {

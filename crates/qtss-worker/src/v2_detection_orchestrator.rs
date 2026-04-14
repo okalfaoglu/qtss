@@ -461,6 +461,8 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
     // Phase C
     let shake_pen = resolve_system_f64(pool, "detector", "wyckoff.shakeout_min_penetration", "", 0.05).await;
     let shake_bars = resolve_system_u64(pool, "detector", "wyckoff.shakeout_recovery_bars", "", 3, 1, 20).await as usize;
+    let manip_edge_tests = resolve_system_u64(pool, "detector", "wyckoff.manipulation_min_edge_tests", "", 2, 1, 10).await as usize;
+    let manip_age_bars = resolve_system_u64(pool, "detector", "wyckoff.manipulation_min_range_age_bars", "", 10, 1, 500).await;
     // Phase D
     let sos_vol = resolve_system_f64(pool, "detector", "wyckoff.sos_min_volume_ratio", "", 1.5).await;
     let lps_ret = resolve_system_f64(pool, "detector", "wyckoff.lps_max_retracement", "", 0.5).await;
@@ -486,6 +488,8 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
         stb_volume_decay_min: stb_decay,
         shakeout_min_penetration: shake_pen,
         shakeout_recovery_bars: shake_bars,
+        manipulation_min_edge_tests: manip_edge_tests,
+        manipulation_min_range_age_bars: manip_age_bars,
         sos_min_volume_ratio: sos_vol,
         lps_max_retracement: lps_ret,
         lps_max_volume_ratio: lps_vol,

@@ -51,6 +51,7 @@ pub mod v2_onchain_metrics;
 pub mod v2_setup_events;
 pub mod v2_setup_rejections;
 pub mod v2_setups;
+pub mod wyckoff_signals;
 pub mod wyckoff_structures;
 
 pub use account_drawdown::{AccountDrawdownRepository, DrawdownSnapshotRow};
@@ -72,6 +73,10 @@ pub use v2_setup_rejections::{
 pub use v2_setups::{
     fetch_v2_setup, insert_v2_setup, list_open_v2_setups, list_recent_v2_setups,
     update_v2_setup_state, V2SetupInsert, V2SetupRow,
+};
+
+pub use wyckoff_signals::{
+    list_open_wyckoff_setups, upsert_wyckoff_setup, WyckoffSetupUpsert,
 };
 
 pub use wyckoff_structures::{

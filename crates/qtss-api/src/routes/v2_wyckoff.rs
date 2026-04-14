@@ -17,6 +17,7 @@ use crate::state::SharedState;
 use qtss_storage::{
     find_active_wyckoff_structure, get_wyckoff_structure, list_active_wyckoff_structures,
     list_wyckoff_history,
+    v2_setups::{list_v2_setups_filtered, SetupFilter},
 };
 
 #[derive(Debug, Deserialize)]
@@ -30,6 +31,17 @@ pub struct HistoryQuery {
     pub limit: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct WyckoffSetupsQuery {
+    pub limit: Option<i64>,
+    pub mode: Option<String>,
+    pub state: Option<String>,
+    pub symbol: Option<String>,
+    pub timeframe: Option<String>,
+    pub profile: Option<String>,
+    pub venue: Option<String>,
+}
+
 pub fn v2_wyckoff_router() -> Router<SharedState> {
     Router::new()
         .route("/v2/wyckoff/active", get(get_active))
@@ -39,6 +51,38 @@ pub fn v2_wyckoff_router() -> Router<SharedState> {
             "/v2/wyckoff/overlay/{symbol}/{interval}",
             get(get_overlay),
         )
+        .route("/v2/wyckoff/setups", get(get_wyckoff_setups))
+}
+
+/// Wyckoff-scoped setup feed. Thin wrapper around
+/// `list_v2_setups_filtered` with `alt_type LIKE 'wyckoff_%'` pre-applied.
+/// Default `state` filter: armed+active. Pass `state=closed` for history.
+async fn get_wyckoff_setups(
+    State(st): State<SharedState>,
+    Query(q): Query<WyckoffSetupsQuery>,
+) -> Result<Json<JsonValue>, ApiError> {
+    let limit = q.limit.unwrap_or(200).clamp(1, 2_000);
+    let states = q
+        .state
+        .as_deref()
+        .map(|s| vec![s.to_string()])
+        .unwrap_or_default();
+    let filter = SetupFilter {
+        limit,
+        venue_class: q.venue,
+        states,
+        profile: q.profile,
+        alt_type_like: Some("wyckoff_%".to_string()),
+        symbol: q.symbol,
+        timeframe: q.timeframe,
+        mode: q.mode,
+    };
+    let rows = list_v2_setups_filtered(&st.pool, &filter).await?;
+    Ok(Json(json!({
+        "generated_at": chrono::Utc::now(),
+        "count": rows.len(),
+        "entries": rows,
+    })))
 }
 
 async fn get_active(

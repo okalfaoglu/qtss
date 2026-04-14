@@ -100,6 +100,60 @@ fn creek_level(range: &TradingRange, percentile: f64) -> f64 {
     range.support + range.height * percentile
 }
 
+/// True if `context` already shows a real range around `range.support`:
+/// at least `manipulation_min_edge_tests` prior low pivots sit within the
+/// edge-tolerance band of support, AND the earliest such test is at
+/// least `manipulation_min_range_age_bars` bars before `candidate_bar`.
+///
+/// This is the Wyckoff "established range" pre-condition for a Spring.
+/// Without it, any trend pullback whose low dips below a trimmed body
+/// support would be flagged Spring — noise, not Wyckoff.
+fn range_is_established_at_support(
+    context: &[Pivot],
+    range: &TradingRange,
+    cfg: &WyckoffConfig,
+    candidate_bar: u64,
+) -> bool {
+    let tol = range.height.max(1e-9) * cfg.range_edge_tolerance;
+    let mut tests: Vec<u64> = context
+        .iter()
+        .filter(|p| p.kind == PivotKind::Low)
+        .filter_map(|p| p.price.to_f64().map(|v| (p.bar_index, v)))
+        .filter(|(_, v)| (*v - range.support).abs() <= tol)
+        .map(|(b, _)| b)
+        .collect();
+    if tests.len() < cfg.manipulation_min_edge_tests {
+        return false;
+    }
+    tests.sort_unstable();
+    let age = candidate_bar.saturating_sub(tests[0]);
+    age >= cfg.manipulation_min_range_age_bars
+}
+
+/// Mirror of `range_is_established_at_support` for the resistance edge
+/// (UTAD precondition).
+fn range_is_established_at_resistance(
+    context: &[Pivot],
+    range: &TradingRange,
+    cfg: &WyckoffConfig,
+    candidate_bar: u64,
+) -> bool {
+    let tol = range.height.max(1e-9) * cfg.range_edge_tolerance;
+    let mut tests: Vec<u64> = context
+        .iter()
+        .filter(|p| p.kind == PivotKind::High)
+        .filter_map(|p| p.price.to_f64().map(|v| (p.bar_index, v)))
+        .filter(|(_, v)| (*v - range.resistance).abs() <= tol)
+        .map(|(b, _)| b)
+        .collect();
+    if tests.len() < cfg.manipulation_min_edge_tests {
+        return false;
+    }
+    tests.sort_unstable();
+    let age = candidate_bar.saturating_sub(tests[0]);
+    age >= cfg.manipulation_min_range_age_bars
+}
+
 fn ice_level(range: &TradingRange, percentile: f64) -> f64 {
     range.support + range.height * (1.0 - percentile)
 }
@@ -127,13 +181,29 @@ fn eval_trading_range(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatc
     })
 }
 
+/// Classify a trading range as accumulation vs distribution based on a
+/// climactic volume pivot pinned to the correct edge.
+///
+/// Wyckoff rule:
+///   * Accumulation starts with SC (Selling Climax) — a Low pivot on
+///     high volume **at or below the range support**.
+///   * Distribution starts with BC (Buying Climax) — a High pivot on
+///     high volume **at or above the range resistance**.
+///
+/// The earlier version accepted any volume-spike pivot whose price sat
+/// "closer to its matching edge than the opposite edge" — which in an
+/// uptrend wrongly classified a mid-range pullback high as a BC and
+/// tagged the range as distribution. We now require the climax pivot
+/// to be within `range_edge_tolerance` of the actual edge price.
 fn climactic_variant(
     pivots: &[Pivot],
     range: &TradingRange,
     cfg: &WyckoffConfig,
 ) -> Option<&'static str> {
     let avg = avg_vol_f64(pivots)?;
-    if avg <= 0.0 { return None; }
+    if avg <= 0.0 {
+        return None;
+    }
     let threshold = avg * cfg.climax_volume_mult;
     let mut best: Option<(&Pivot, f64)> = None;
     for p in pivots {
@@ -144,11 +214,12 @@ fn climactic_variant(
     }
     let (climax, _) = best?;
     let price = climax.price.to_f64()?;
-    let d_top = (range.resistance - price).abs();
-    let d_bot = (price - range.support).abs();
+    let edge_tol = range.height.max(1e-9) * cfg.range_edge_tolerance;
     match climax.kind {
-        PivotKind::Low if d_bot <= d_top => Some("accumulation"),
-        PivotKind::High if d_top <= d_bot => Some("distribution"),
+        // SC must sit AT or BELOW support (within edge tolerance).
+        PivotKind::Low if price <= range.support + edge_tol => Some("accumulation"),
+        // BC must sit AT or ABOVE resistance (within edge tolerance).
+        PivotKind::High if price >= range.resistance - edge_tol => Some("distribution"),
         _ => None,
     }
 }
@@ -173,6 +244,16 @@ fn eval_spring(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
     }
     let penetration = (range.support - price) / range.height.max(1e-9);
     if penetration < cfg.min_penetration || penetration > cfg.max_penetration {
+        return None;
+    }
+
+    // Wyckoff rule: a Spring pierces an ESTABLISHED range. An isolated
+    // pivot below some trimmed body is just a trend pullback, not a
+    // Spring. Require that the body support was actually tested by
+    // multiple prior lows AND that the range has existed for a
+    // meaningful time before the candidate. Without these guards the
+    // detector fires on every pullback in a trending market.
+    if !range_is_established_at_support(context, &range, cfg, candidate.bar_index) {
         return None;
     }
     let center = (cfg.min_penetration + cfg.max_penetration) / 2.0;
@@ -211,6 +292,11 @@ fn eval_upthrust(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
     }
     let penetration = (price - range.resistance) / range.height.max(1e-9);
     if penetration < cfg.min_penetration || penetration > cfg.max_penetration {
+        return None;
+    }
+    // Established-range gate, mirror of Spring. Without this any pullback
+    // high above a trimmed body is flagged UTAD in trending markets.
+    if !range_is_established_at_resistance(context, &range, cfg, candidate.bar_index) {
         return None;
     }
     let center = (cfg.min_penetration + cfg.max_penetration) / 2.0;

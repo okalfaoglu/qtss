@@ -56,28 +56,28 @@ impl WyckoffPhase {
 #[serde(rename_all = "snake_case")]
 pub enum WyckoffEvent {
     // Phase A
-    PS,
-    SC,
-    BC,
-    AR,
-    ST,
+    #[serde(rename = "p_s")]  PS,
+    #[serde(rename = "s_c")]  SC,
+    #[serde(rename = "b_c")]  BC,
+    #[serde(rename = "a_r")]  AR,
+    #[serde(rename = "s_t")]  ST,
     // Phase B
-    UA,
-    STB,
+    #[serde(rename = "u_a")]  UA,
+    #[serde(rename = "st_b")] STB,
     // Phase C
     Spring,
-    UTAD,
+    #[serde(rename = "utad")] UTAD,
     Shakeout,
     // Phase D
-    SOS,
-    SOW,
-    LPS,
-    LPSY,
-    JAC,
-    BreakOfIce,
-    BUEC,
+    #[serde(rename = "s_o_s")]        SOS,
+    #[serde(rename = "s_o_w")]        SOW,
+    #[serde(rename = "l_p_s")]        LPS,
+    #[serde(rename = "lpsy")]         LPSY,
+    #[serde(rename = "j_a_c")]        JAC,
+    #[serde(rename = "break_of_ice")] BreakOfIce,
+    #[serde(rename = "buec")]         BUEC,
     // Misc
-    SOT,
+    #[serde(rename = "s_o_t")] SOT,
     Markup,
     Markdown,
 }
@@ -197,26 +197,38 @@ impl WyckoffStructureTracker {
             score,
         });
 
-        // Update key levels
+        // Update key levels.
+        //
+        // Wyckoff rule: the range is defined ONCE in Phase A by the
+        // climax (SC/BC) + AR pair, and is then FROZEN. Phase B/C/D
+        // events (Spring, UTAD, UA, ST-B, LPS, LPSY…) **test** the
+        // range but do not redefine it — Springs intentionally pierce
+        // below support, UTADs above resistance; that is their defn.
+        //
+        // So we only mutate range_top/range_bottom while `current_phase
+        // == Phase::A`. After the phase-A transition runs at the end of
+        // this method, subsequent climax/AR-like events become purely
+        // informational (stored in `events` for audit).
+        let in_phase_a = self.current_phase == WyckoffPhase::A;
         match event {
-            WyckoffEvent::SC => {
-                self.range_bottom = self.range_bottom.min(price);
+            WyckoffEvent::SC if in_phase_a => {
+                self.range_bottom = price;
             }
-            WyckoffEvent::BC => {
-                self.range_top = self.range_top.max(price);
+            WyckoffEvent::BC if in_phase_a => {
+                self.range_top = price;
             }
-            WyckoffEvent::AR => {
-                match self.schematic {
-                    WyckoffSchematic::Accumulation | WyckoffSchematic::ReAccumulation => {
-                        self.range_top = self.range_top.max(price);
-                        self.creek = Some(price);
-                    }
-                    WyckoffSchematic::Distribution | WyckoffSchematic::ReDistribution => {
-                        self.range_bottom = self.range_bottom.min(price);
-                        self.ice = Some(price);
-                    }
+            WyckoffEvent::AR if in_phase_a => match self.schematic {
+                WyckoffSchematic::Accumulation | WyckoffSchematic::ReAccumulation => {
+                    self.range_top = price;
+                    self.creek = Some(price);
                 }
-            }
+                WyckoffSchematic::Distribution | WyckoffSchematic::ReDistribution => {
+                    self.range_bottom = price;
+                    self.ice = Some(price);
+                }
+            },
+            // Creek/Ice are allowed to move in Phase D — that's the point
+            // of the JAC (fresh creek above old) and BreakOfIce levels.
             WyckoffEvent::JAC => {
                 self.creek = Some(price);
             }
@@ -226,8 +238,39 @@ impl WyckoffStructureTracker {
             _ => {}
         }
 
+        // Auto-reclassify schematic when the event carries an
+        // unambiguous directional bias. Canonical Wyckoff:
+        //   Spring / SOS / LPS / JAC      → accumulation-family
+        //   UTAD  / SOW / LPSY / BreakOfIce → distribution-family
+        // Initial schematic (from first climactic pivot) is only a
+        // hypothesis; later manipulation / markup events override it.
+        // Preserves the Re-* prefix: a distribution that flips bullish
+        // becomes Re-Accumulation (it lives inside a broader uptrend),
+        // not a fresh Accumulation.
+        self.auto_reclassify(event);
+
         // Phase advancement
         self.try_advance_phase();
+    }
+
+    /// Promote schematic when an event unambiguously belongs to the
+    /// opposite directional family. Look-up table — no scattered if/else.
+    fn auto_reclassify(&mut self, event: WyckoffEvent) {
+        use WyckoffEvent::*;
+        use WyckoffSchematic::*;
+        let bullish = match event {
+            Spring | SOS | LPS | JAC => Some(true),
+            UTAD | SOW | LPSY | BreakOfIce => Some(false),
+            _ => None,
+        };
+        let Some(bull) = bullish else { return };
+        self.schematic = match (self.schematic, bull) {
+            (Distribution,   true)  => ReAccumulation,
+            (ReDistribution, true)  => Accumulation,
+            (Accumulation,   false) => ReDistribution,
+            (ReAccumulation, false) => Distribution,
+            (s, _) => s,
+        };
     }
 
     /// Try to advance phase based on accumulated events.

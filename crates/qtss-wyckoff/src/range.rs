@@ -21,6 +21,24 @@ impl TradingRange {
     /// Build a range from a slice of pivots. Returns `None` if the slice
     /// has fewer than two highs or two lows, or if the resulting box is
     /// degenerate.
+    /// Provisional range built from raw pivots. Used during Phase-A
+    /// **discovery**, before SC and AR are confirmed by the detector. Once
+    /// Phase A is complete, the authoritative bounds come from
+    /// `WyckoffStructureTracker::range_top/bottom` (set from SC+AR) and
+    /// this helper should not be called again.
+    ///
+    /// Wyckoff body rule: Springs and Upthrusts pierce the range
+    /// intentionally — they are NOT part of the body. So the extreme pivot
+    /// on each side (the one most likely to be a false break) is
+    /// **excluded** from the body estimate:
+    ///
+    ///   * `resistance` = mean of the top cluster **excluding the single
+    ///     highest pivot** (the UT candidate)
+    ///   * `support`    = mean of the bottom cluster **excluding the single
+    ///     lowest pivot** (the Spring candidate)
+    ///
+    /// This is the opposite of a naive "take the two extremes" — those
+    /// are precisely the bars we want to keep outside the box.
     pub fn from_pivots(pivots: &[Pivot]) -> Option<Self> {
         let mut highs: Vec<f64> = Vec::new();
         let mut lows: Vec<f64> = Vec::new();
@@ -34,14 +52,10 @@ impl TradingRange {
         if highs.len() < 2 || lows.len() < 2 {
             return None;
         }
-        // Use the median-ish bounds: mean of the two extremes on each side.
-        // This is robust to a single pivot poking out (which is exactly
-        // what a Spring / Upthrust looks like — and we want the *body* of
-        // the range, not the false break).
         highs.sort_by(|a, b| a.partial_cmp(b).unwrap());
         lows.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let resistance = mean_top(&highs);
-        let support = mean_bottom(&lows);
+        let resistance = body_top(&highs);
+        let support = body_bottom(&lows);
         if !(resistance > support) {
             return None;
         }
@@ -77,20 +91,33 @@ impl TradingRange {
     }
 }
 
-fn mean_top(sorted: &[f64]) -> f64 {
+/// Body resistance = mean of highs **excluding the single highest pivot**.
+/// That highest pivot is treated as a potential Upthrust; including it
+/// would pull the box's roof above the accumulation body.
+///
+/// * n=1 → that single pivot (degenerate; `from_pivots` guards with n≥2)
+/// * n=2 → the lower of the two (the likely body high, with the top one
+///         treated as an UT candidate)
+/// * n≥3 → mean of `sorted[..n-1]` (drop the extreme)
+fn body_top(sorted: &[f64]) -> f64 {
     let n = sorted.len();
-    if n >= 2 {
-        (sorted[n - 1] + sorted[n - 2]) / 2.0
-    } else {
-        sorted[n - 1]
+    match n {
+        0 => f64::NAN,
+        1 => sorted[0],
+        2 => sorted[0],
+        _ => sorted[..n - 1].iter().sum::<f64>() / (n - 1) as f64,
     }
 }
 
-fn mean_bottom(sorted: &[f64]) -> f64 {
-    if sorted.len() >= 2 {
-        (sorted[0] + sorted[1]) / 2.0
-    } else {
-        sorted[0]
+/// Body support = mean of lows **excluding the single lowest pivot** (the
+/// Spring candidate). Mirror of `body_top`.
+fn body_bottom(sorted: &[f64]) -> f64 {
+    let n = sorted.len();
+    match n {
+        0 => f64::NAN,
+        1 => sorted[0],
+        2 => sorted[1],
+        _ => sorted[1..].iter().sum::<f64>() / (n - 1) as f64,
     }
 }
 
