@@ -30,6 +30,7 @@ import {
 } from "lightweight-charts";
 
 import { apiFetch } from "../lib/api";
+import { RectanglePrimitive, type RectangleOptions } from "../lib/rectangle-primitive";
 import type { CandleBar, ChartWorkspace, DetectionOverlay } from "../lib/types";
 
 // ─── Constants ───────────────────────────────────────────────────────
@@ -409,6 +410,7 @@ export function Chart() {
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const overlayLinesRef = useRef<ISeriesApi<"Line">[]>([]);
+  const rectanglePrimitivesRef = useRef<RectanglePrimitive[]>([]);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const markersRef = useRef<any>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
@@ -739,6 +741,11 @@ export function Chart() {
       try { chart.removeSeries(line); } catch (_) { /* chart disposed */ }
     }
     overlayLinesRef.current = [];
+    // ── Remove old rectangle primitives ──
+    for (const prim of rectanglePrimitivesRef.current) {
+      try { candleSeries.detachPrimitive(prim); } catch (_) { /* disposed */ }
+    }
+    rectanglePrimitivesRef.current = [];
 
     // Collect all markers (labels, TP/SL, zigzag) then apply once at the end.
     const allMarkers: SeriesMarker<Time>[] = [];
@@ -1161,41 +1168,34 @@ export function Chart() {
     if (wyckoffOverlay && (familyModes["wyckoff"] ?? "on") !== "off" && merged.candles?.length) {
       const { range: wRange, creek, ice, events: wEvents } = wyckoffOverlay;
       const isAccum = wyckoffOverlay.schematic === "accumulation" || wyckoffOverlay.schematic === "reaccumulation";
-      const wColor = isAccum ? "#22c55e60" : "#ef444460";
-      const wSolidColor = isAccum ? "#22c55e" : "#ef4444";
+      const wFillColor = isAccum ? "#22c55e18" : "#ef444418";
+      const wBorderColor = isAccum ? "#22c55e80" : "#ef444480";
       const firstT = isoToUnix(merged.candles[0].open_time);
       const lastT = isoToUnix(merged.candles[merged.candles.length - 1].open_time);
 
-      // ── Range top/bottom — solid lines with label ──
-      if (wRange.top != null) {
-        const topLine = chart.addSeries(LineSeries, {
-          color: wColor,
-          lineWidth: 2,
-          lineStyle: LineStyle.LargeDashed,
-          crosshairMarkerVisible: false,
-          lastValueVisible: false,
-          priceLineVisible: false,
+      // Helper to attach rectangle primitive
+      const addRect = (opts: RectangleOptions) => {
+        const prim = new RectanglePrimitive(opts);
+        candleSeries.attachPrimitive(prim);
+        rectanglePrimitivesRef.current.push(prim);
+      };
+
+      // ── Accumulation / Distribution range box ──
+      if (wRange.top != null && wRange.bottom != null) {
+        addRect({
+          time1: firstT,
+          time2: lastT,
+          priceTop: wRange.top,
+          priceBottom: wRange.bottom,
+          fillColor: wFillColor,
+          borderColor: wBorderColor,
+          borderWidth: 2,
+          label: isAccum
+            ? `ACCUMULATION  Phase ${wyckoffOverlay.phase}`
+            : `DISTRIBUTION  Phase ${wyckoffOverlay.phase}`,
+          labelColor: isAccum ? "#22c55e" : "#ef4444",
+          labelSize: 12,
         });
-        topLine.setData(sortLineData([
-          { time: firstT, value: wRange.top },
-          { time: lastT, value: wRange.top },
-        ]));
-        overlayLinesRef.current.push(topLine);
-      }
-      if (wRange.bottom != null) {
-        const botLine = chart.addSeries(LineSeries, {
-          color: wColor,
-          lineWidth: 2,
-          lineStyle: LineStyle.LargeDashed,
-          crosshairMarkerVisible: false,
-          lastValueVisible: false,
-          priceLineVisible: false,
-        });
-        botLine.setData(sortLineData([
-          { time: firstT, value: wRange.bottom },
-          { time: lastT, value: wRange.bottom },
-        ]));
-        overlayLinesRef.current.push(botLine);
       }
       // ── Creek line (resistance within range) ──
       if (creek != null) {
@@ -1333,8 +1333,8 @@ export function Chart() {
           }
         }
 
-        // Step 3: Draw — show last 8 active zones (unfilled or IFVG)
-        const recent = fvgs.slice(-12);
+        // Step 3: Draw as filled rectangles — show last 10
+        const recent = fvgs.slice(-10);
         for (const fvg of recent) {
           const sT = isoToUnix(merged.candles[fvg.idx].open_time);
           const extendTo = fvg.inverted && fvg.violatedAt > 0
@@ -1342,60 +1342,32 @@ export function Chart() {
             : Math.min(fvg.idx + 15, merged.candles.length - 1);
           const eT = isoToUnix(merged.candles[extendTo].open_time);
 
+          let fillColor: string;
           let borderColor: string;
           let label: string;
           if (fvg.inverted) {
-            // IFVG: flipped bias — bull FVG violated → bearish IFVG, and vice versa
-            const ifvgBull = !fvg.bull; // bias flips
-            borderColor = ifvgBull ? "#f59e0b" : "#a855f7"; // amber for bull IFVG, purple for bear IFVG
+            const ifvgBull = !fvg.bull;
+            fillColor = ifvgBull ? "#f59e0b20" : "#a855f720";
+            borderColor = ifvgBull ? "#f59e0b90" : "#a855f790";
             label = ifvgBull ? "IFVG+" : "IFVG-";
           } else {
-            borderColor = fvg.bull ? "#3b82f6" : "#ef4444";
+            fillColor = fvg.bull ? "#3b82f620" : "#ef444420";
+            borderColor = fvg.bull ? "#3b82f680" : "#ef444480";
             label = fvg.bull ? "FVG+" : "FVG-";
           }
 
-          // CE line (Consequent Encroachment = 50% of gap)
-          const ce = (fvg.top + fvg.bottom) / 2;
-
-          // Top border
-          const topS = chart.addSeries(LineSeries, {
-            color: borderColor + "80",
-            lineWidth: 1,
-            lineStyle: LineStyle.Dotted,
-            crosshairMarkerVisible: false,
-            lastValueVisible: false,
-            priceLineVisible: false,
-            priceScaleId: "",
+          addRect({
+            time1: sT,
+            time2: eT,
+            priceTop: fvg.top,
+            priceBottom: fvg.bottom,
+            fillColor,
+            borderColor,
+            borderWidth: 1,
+            label,
+            labelColor: borderColor.replace(/\d\d$/, ""),
+            labelSize: 10,
           });
-          topS.setData(sortLineData([{ time: sT, value: fvg.top }, { time: eT, value: fvg.top }]));
-          overlayLinesRef.current.push(topS);
-
-          // Bottom border
-          const botS = chart.addSeries(LineSeries, {
-            color: borderColor + "80",
-            lineWidth: 1,
-            lineStyle: LineStyle.Dotted,
-            crosshairMarkerVisible: false,
-            lastValueVisible: false,
-            priceLineVisible: false,
-            priceScaleId: "",
-          });
-          botS.setData(sortLineData([{ time: sT, value: fvg.bottom }, { time: eT, value: fvg.bottom }]));
-          overlayLinesRef.current.push(botS);
-
-          // CE mid-line with label
-          const ceS = chart.addSeries(LineSeries, {
-            color: borderColor + "50",
-            lineWidth: 1,
-            lineStyle: LineStyle.SparseDotted,
-            crosshairMarkerVisible: false,
-            lastValueVisible: false,
-            priceLineVisible: false,
-            title: label,
-            priceScaleId: "",
-          });
-          ceS.setData(sortLineData([{ time: sT, value: ce }, { time: eT, value: ce }]));
-          overlayLinesRef.current.push(ceS);
         }
       }
     }
