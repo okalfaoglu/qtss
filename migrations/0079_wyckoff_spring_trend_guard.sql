@@ -6,20 +6,21 @@
 -- check that outright rejects Spring/UTAD when the edge pivot series
 -- is itself trending (see `same_kind_slope_frac` in events.rs).
 
-INSERT INTO system_config (scope, key, value, updated_at) VALUES
-  ('detector', 'wyckoff.manipulation_max_edge_slope', '"0.004"', NOW())
-ON CONFLICT (scope, key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();
+INSERT INTO system_config (module, config_key, value, description) VALUES
+  ('detector', 'wyckoff.manipulation_max_edge_slope', '"0.004"',
+   'P20 — reject Spring/UTAD when same-kind pivot slope exceeds this fraction-per-pivot (0.004 = 0.4%/pivot). Kills false positives in trending markets.')
+ON CONFLICT (module, config_key) DO NOTHING;
 
 -- Raise the two existing thresholds to their new defaults. Only update
 -- rows that still hold the old values so operator tuning is preserved.
 UPDATE system_config
-   SET value = '"3"', updated_at = NOW()
- WHERE scope = 'detector'
-   AND key = 'wyckoff.manipulation_min_edge_tests'
+   SET value = '"3"'
+ WHERE module = 'detector'
+   AND config_key = 'wyckoff.manipulation_min_edge_tests'
    AND value = '"2"';
 
 UPDATE system_config
-   SET value = '"20"', updated_at = NOW()
- WHERE scope = 'detector'
-   AND key = 'wyckoff.manipulation_min_range_age_bars'
+   SET value = '"20"'
+ WHERE module = 'detector'
+   AND config_key = 'wyckoff.manipulation_min_range_age_bars'
    AND value = '"10"';
