@@ -31,6 +31,7 @@ use std::time::Duration;
 use chrono::Utc;
 use qtss_indicators::{
     bollinger::bollinger,
+    cvd::cvd,
     ema::ema,
     macd::macd,
     mfi::mfi,
@@ -232,6 +233,9 @@ async fn run_pass(
     let symbols = list_enabled_engine_symbols(pool).await?;
 
     for sym in symbols {
+        if !qtss_storage::is_backfill_ready(pool, sym.id).await {
+            continue;
+        }
         match process_symbol(pool, repo.clone(), &sym, cfg, mode, onchain_provider.clone()).await {
             Ok(s) => {
                 stats.processed += 1;
@@ -302,6 +306,7 @@ async fn process_symbol(
     let bb = bollinger(&closes, 20, 2.0);
     let mfi_v = mfi(&highs, &lows, &closes, &vols, 14);
     let obv_v = obv(&closes, &vols);
+    let cvd_v = cvd(&highs, &lows, &closes, &vols);
     let _atr_v = atr(&highs, &lows, &closes, 14);
     let ema_fast = ema(&closes, 9);
     let ema_slow = ema(&closes, 21);
@@ -321,7 +326,12 @@ async fn process_symbol(
         .unwrap_or(false);
     let mfi_last = finite_or(mfi_v.get(last).copied(), 50.0);
     let obv_slope = slope_last_n(&obv_v, 20);
-    let cvd_slope = 0.0; // CVD slope hook reserved — fed by orchestrator buffer in next pass.
+    // CVD slope: bar-delta CVD'nin son 20 bar eğimi. Sıfır olarak
+    // hardcode'luydu — volume pillar'ın CVD ayağı hiç puan alamıyor,
+    // total skor her sembolde ~30'a kilitleniyordu. Canlı akışa bağlı
+    // trade-flow CVD'si gelene kadar bar-bazlı tahmin doğru yönde
+    // sinyal veriyor.
+    let cvd_slope = slope_last_n(&cvd_v, 20);
     let vol_last = vols[last];
     let vol_avg = window_mean(&vols, 20);
 
