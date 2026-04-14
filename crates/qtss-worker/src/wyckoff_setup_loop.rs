@@ -182,8 +182,27 @@ async fn process_symbol(
 
     // 3. Emit — range id = structure uuid so rescans hit the same key.
     let range_id = structure.id.to_string();
-    let signals = emit(&ctx, emit_cfg, symbol, timeframe, &range_id);
+    let raw_signals = emit(&ctx, emit_cfg, symbol, timeframe, &range_id);
+    if raw_signals.is_empty() {
+        return Ok(0);
+    }
+
+    // 3b. Multi-TF phase harmony gate (Faz 10 P5). If an active HTF
+    //     Wyckoff structure with an advanced phase (>=C) carries a bias
+    //     opposite to the LTF setup's direction, veto the signal. HTF
+    //     still in Phase A/B (or absent) means insufficient evidence —
+    //     the LTF setup is allowed through.
+    let htf_veto = resolve_htf_veto(pool, symbol, timeframe).await;
+    let signals: Vec<_> = raw_signals
+        .into_iter()
+        .filter(|s| match htf_veto {
+            Some(HtfVeto::BlockLong) => s.candidate.direction != qtss_wyckoff::setup_builder::SetupDirection::Long,
+            Some(HtfVeto::BlockShort) => s.candidate.direction != qtss_wyckoff::setup_builder::SetupDirection::Short,
+            None => true,
+        })
+        .collect();
     if signals.is_empty() {
+        debug!(symbol, timeframe, ?htf_veto, "wyckoff setups vetoed by HTF gate");
         return Ok(0);
     }
 
@@ -337,6 +356,67 @@ async fn load_modes(pool: &PgPool) -> Vec<String> {
     )
     .await;
     parse_json_string_array(&s).unwrap_or_else(|| vec!["dry".to_string()])
+}
+
+// =========================================================================
+// Multi-TF phase harmony — HTF gate (Faz 10 P5)
+// =========================================================================
+//
+// Rule: if the configured HTF counterpart for this LTF has an active
+// Wyckoff structure with phase >= C and a bias opposite to a candidate
+// LTF setup, veto that setup. HTF in Phase A/B (range not yet
+// confirmed) or missing altogether → no veto.
+//
+// Why phase C as the cutoff: phases A/B only establish the range and
+// are directionally ambiguous. By Phase C the Spring/UTAD/Shakeout has
+// declared the structure's true intent, and Phase D/E confirms it —
+// those are the phases that should override LTF counter-trades.
+
+#[derive(Debug, Clone, Copy)]
+enum HtfVeto {
+    BlockLong,
+    BlockShort,
+}
+
+async fn resolve_htf_veto(pool: &PgPool, symbol: &str, ltf: &str) -> Option<HtfVeto> {
+    let enabled = resolve_worker_enabled_flag(
+        pool, "setup", "wyckoff.htf_gate.enabled", "", true,
+    )
+    .await;
+    if !enabled { return None; }
+
+    let htf = match htf_for(pool, ltf).await {
+        Some(h) if h != ltf => h,
+        _ => return None,
+    };
+
+    let row = match find_active_wyckoff_structure(pool, symbol, &htf).await.ok()? {
+        Some(r) => r,
+        None => return None,
+    };
+    let phase = phase_from_str(&row.current_phase);
+    if phase < WyckoffPhase::C {
+        return None; // HTF range not yet committed directionally
+    }
+    match row.schematic.as_str() {
+        "distribution" | "redistribution" => Some(HtfVeto::BlockLong),
+        "accumulation" | "reaccumulation" => Some(HtfVeto::BlockShort),
+        _ => None,
+    }
+}
+
+async fn htf_for(pool: &PgPool, ltf: &str) -> Option<String> {
+    let raw = resolve_system_string(
+        pool,
+        "setup",
+        "wyckoff.htf_gate.mapping",
+        "",
+        r#"{"15m":"1h","1h":"4h","4h":"1d","1d":"1w"}"#,
+    )
+    .await;
+    let map: std::collections::HashMap<String, String> =
+        serde_json::from_str(&raw).unwrap_or_default();
+    map.get(ltf).cloned()
 }
 
 /// Accept both `["1h","4h"]` JSON array and a plain `1h,4h` csv fallback.
