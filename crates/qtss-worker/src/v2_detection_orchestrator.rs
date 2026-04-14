@@ -466,6 +466,7 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
     // TF guards — caller sets these per-TF (H1 tighter than D1).
     let max_range_h_pct = resolve_system_f64(pool, "detector", "wyckoff.max_range_height_pct", "", 0.15).await;
     let max_range_age = resolve_system_u64(pool, "detector", "wyckoff.max_range_age_bars", "", 500, 20, 5000).await;
+    let max_vol_expansion = resolve_system_f64(pool, "detector", "wyckoff.max_range_volume_expansion", "", 1.3).await;
     // Spring variant thresholds (Pruden)
     let spr_ns_vol = resolve_system_f64(pool, "detector", "wyckoff.spring_no_supply_vol_ratio", "", 0.8).await;
     let spr_term_vol = resolve_system_f64(pool, "detector", "wyckoff.spring_terminal_vol_ratio", "", 3.0).await;
@@ -499,6 +500,7 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
         manipulation_min_range_age_bars: manip_age_bars,
         max_range_height_pct: max_range_h_pct,
         max_range_age_bars: max_range_age,
+        max_range_volume_expansion: max_vol_expansion,
         spring_no_supply_vol_ratio: spr_ns_vol,
         spring_terminal_vol_ratio: spr_term_vol,
         skip_terminal_springs: skip_term,

@@ -79,6 +79,27 @@ fn avg_vol_f64(pivots: &[Pivot]) -> Option<f64> {
     average_volume(pivots)?.to_f64()
 }
 
+/// Late-half / early-half mean-volume ratio. Returns None if the
+/// window is too small to split meaningfully. < 1.0 means volume is
+/// drying up (canonical Wyckoff behaviour); > 1.0 means expanding
+/// volume (trending market). Used by `eval_trading_range` as a
+/// range-quality filter.
+fn pivot_volume_expansion(pivots: &[Pivot]) -> Option<f64> {
+    if pivots.len() < 4 { return None; }
+    let mid = pivots.len() / 2;
+    let mean = |slice: &[Pivot]| -> Option<f64> {
+        if slice.is_empty() { return None; }
+        let sum: f64 = slice.iter()
+            .filter_map(|p| p.volume_at_pivot.to_f64())
+            .sum();
+        Some(sum / slice.len() as f64)
+    };
+    let early = mean(&pivots[..mid])?;
+    let late  = mean(&pivots[mid..])?;
+    if early <= 1e-9 { return None; }
+    Some(late / early)
+}
+
 /// Bar range (high - low) approximated from pivot price and nearby pivots.
 fn pivot_bar_range(pivot: &Pivot, pivots: &[Pivot]) -> f64 {
     // Approximation: use the price difference between this pivot and the
@@ -184,6 +205,17 @@ fn eval_trading_range(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatc
     // valid active Wyckoff structure.
     if let (Some(first), Some(last)) = (pivots.first(), pivots.last()) {
         if last.bar_index.saturating_sub(first.bar_index) > cfg.max_range_age_bars {
+            return None;
+        }
+    }
+    // Volume-contraction guard (Wyckoff "drying up"). Compare mean
+    // volume of the latter half of the pivot window against the
+    // earlier half: a canonical range shows supply exhaustion, so
+    // late/early < 1.0 is ideal. Values above `max_range_volume_
+    // expansion` indicate a trending market with rising participation,
+    // not accumulation/distribution — reject.
+    if let Some(ratio) = pivot_volume_expansion(pivots) {
+        if ratio > cfg.max_range_volume_expansion {
             return None;
         }
     }

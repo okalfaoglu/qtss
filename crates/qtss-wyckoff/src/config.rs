@@ -62,6 +62,14 @@ pub struct WyckoffConfig {
     /// it produces stale setups. Set per-TF by caller.
     pub max_range_age_bars: u64,
 
+    /// Range-quality: max ratio of late-window to early-window pivot
+    /// volume. > 1.0 means volume is expanding through the range —
+    /// that's a trending market, not Wyckoff accumulation. Canonical
+    /// Wyckoff ranges exhibit VOLUME CONTRACTION ("drying up") as
+    /// the composite operator finishes absorbing supply. Reject the
+    /// range if late/early ratio exceeds this cap.
+    pub max_range_volume_expansion: f64,
+
     // --- Phase C: Spring variant (Pruden) ---
     /// A "No-Supply" Spring (#3): climax bar volume <= N x avg_vol.
     /// The hallmark of the highest-probability Spring — absence of
@@ -121,6 +129,9 @@ impl WyckoffConfig {
             // per-TF from config table.
             max_range_height_pct: 0.15,
             max_range_age_bars: 500,
+            // Canonical Wyckoff ranges exhibit volume contraction;
+            // 1.3 allows up to ~30% expansion (mild noise) before reject.
+            max_range_volume_expansion: 1.3,
             // Spring variant (Pruden): no-supply = low vol, terminal = very high vol
             spring_no_supply_vol_ratio: 0.8,
             spring_terminal_vol_ratio: 3.0,
