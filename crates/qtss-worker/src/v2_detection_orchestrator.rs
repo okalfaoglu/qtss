@@ -1430,6 +1430,26 @@ pub(crate) async fn upsert_wyckoff_structure_from_detection(
             )
             .await?;
 
+            // Phase E trigger: no detector emits Markup/Markdown
+            // directly, and JAC / BreakOfIce are rare on real data, so
+            // Phase D structures would never complete. Here we inject a
+            // synthetic Markup/Markdown event when the last ~30 bars
+            // show a sustained breakout beyond the established range,
+            // consistent with the tracker's directional bias.
+            if tracker.current_phase == WyckoffPhase::D {
+                maybe_inject_markup_markdown(&mut tracker, chronological, time_ms, bar_idx);
+                // record_event_with_time may have advanced to E.
+                let events_json = serde_json::to_value(&tracker.events)?;
+                let _ = update_wyckoff_structure(
+                    pool, row.id,
+                    tracker.current_phase.as_str(),
+                    tracker.schematic.as_str(),
+                    tracker.range_top, tracker.range_bottom,
+                    tracker.creek, tracker.ice,
+                    &events_json, tracker.confidence(),
+                ).await;
+            }
+
             if tracker.current_phase == WyckoffPhase::E {
                 complete_wyckoff_structure(pool, row.id).await?;
             } else if family_flipped {
@@ -1498,6 +1518,75 @@ pub(crate) async fn upsert_wyckoff_structure_from_detection(
         }
     }
     Ok(())
+}
+
+/// Synthetic Phase E trigger.
+///
+/// No detector emits Markup / Markdown and JAC / BreakOfIce are rare
+/// in real data, so Phase D structures never reach completion on their
+/// own. When the tracker is in Phase D we inspect the most recent
+/// window of the chronological feed: if a sustained breakout matching
+/// the schematic's directional bias is confirmed (>=60% of the last
+/// `N` closes beyond range ± 0.5%), inject a single synthetic
+/// Markup / Markdown event. The tracker's own phase derivation then
+/// promotes `current_phase` to E and the caller marks the row complete.
+///
+/// Source is tagged via score (0.55 — below detector norms) so analysts
+/// can filter these out if they want to audit only hard-detector events.
+fn maybe_inject_markup_markdown(
+    tracker: &mut qtss_wyckoff::WyckoffStructureTracker,
+    chronological: &[MarketBarRow],
+    time_ms: Option<i64>,
+    bar_idx: u64,
+) {
+    use qtss_wyckoff::{WyckoffEvent, WyckoffSchematic};
+
+    // Already have a terminal event — nothing to inject.
+    if tracker.events.iter().any(|e| {
+        matches!(e.event, WyckoffEvent::Markup | WyckoffEvent::Markdown)
+    }) {
+        return;
+    }
+
+    let bullish = matches!(
+        tracker.schematic,
+        WyckoffSchematic::Accumulation | WyckoffSchematic::ReAccumulation
+    );
+    let (top, bot) = (tracker.range_top, tracker.range_bottom);
+    if top <= 0.0 || bot <= 0.0 || top <= bot {
+        return;
+    }
+    let threshold = if bullish { top * 1.005 } else { bot * 0.995 };
+
+    // Window of up to 30 bars ending at bar_idx (inclusive).
+    let end = (bar_idx as usize + 1).min(chronological.len());
+    let start = end.saturating_sub(30);
+    let window = &chronological[start..end];
+    if window.len() < 10 {
+        return;
+    }
+
+    let confirmed = window
+        .iter()
+        .filter(|r| {
+            let c = r.close.to_f64().unwrap_or(0.0);
+            if bullish { c > threshold } else { c < threshold }
+        })
+        .count();
+    // Require >=60% of recent bars beyond the breakout threshold — one
+    // spike is not a markup.
+    if confirmed * 10 < window.len() * 6 {
+        return;
+    }
+
+    let last = match window.last() {
+        Some(r) => r,
+        None => return,
+    };
+    let price = last.close.to_f64().unwrap_or(0.0);
+    let event = if bullish { WyckoffEvent::Markup } else { WyckoffEvent::Markdown };
+    let ev_time_ms = time_ms.or_else(|| Some(last.open_time.timestamp_millis()));
+    tracker.record_event_with_time(event, bar_idx, price, 0.55, ev_time_ms);
 }
 
 /// Elliott Deep: insert wave segments into `wave_chain` and link the
