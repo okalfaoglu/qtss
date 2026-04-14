@@ -1168,10 +1168,14 @@ export function Chart() {
     if (wyckoffOverlay && (familyModes["wyckoff"] ?? "on") !== "off" && merged.candles?.length) {
       const { range: wRange, creek, ice, events: wEvents } = wyckoffOverlay;
       const isAccum = wyckoffOverlay.schematic === "accumulation" || wyckoffOverlay.schematic === "reaccumulation";
-      const wFillColor = isAccum ? "#22c55e18" : "#ef444418";
-      const wBorderColor = isAccum ? "#22c55e80" : "#ef444480";
-      const firstT = isoToUnix(merged.candles[0].open_time);
+      const wFillColor = isAccum ? "#22c55e15" : "#ef444415";
+      const wBorderColor = isAccum ? "#22c55e90" : "#ef444490";
       const lastT = isoToUnix(merged.candles[merged.candles.length - 1].open_time);
+
+      // Box starts at structure started_at (like PineScript boxStartBar)
+      const structStartT = wyckoffOverlay.started_at
+        ? isoToUnix(wyckoffOverlay.started_at)
+        : isoToUnix(merged.candles[0].open_time);
 
       // Helper to attach rectangle primitive
       const addRect = (opts: RectangleOptions) => {
@@ -1181,20 +1185,25 @@ export function Chart() {
       };
 
       // ── Accumulation / Distribution range box ──
+      // Like PineScript: box.new(boxStartBar, boxHigh, boxEndBar, boxLow)
       if (wRange.top != null && wRange.bottom != null) {
+        const schematicLabel = isAccum ? "Accumulation" : "Distribution";
+        const phaseLabel = wyckoffOverlay.phase ? ` — Phase ${wyckoffOverlay.phase}` : "";
+        const confLabel = wyckoffOverlay.confidence
+          ? ` (${(wyckoffOverlay.confidence * 100).toFixed(0)}%)`
+          : "";
+
         addRect({
-          time1: firstT,
+          time1: structStartT,
           time2: lastT,
           priceTop: wRange.top,
           priceBottom: wRange.bottom,
           fillColor: wFillColor,
           borderColor: wBorderColor,
-          borderWidth: 2,
-          label: isAccum
-            ? `ACCUMULATION  Phase ${wyckoffOverlay.phase}`
-            : `DISTRIBUTION  Phase ${wyckoffOverlay.phase}`,
-          labelColor: isAccum ? "#22c55e" : "#ef4444",
-          labelSize: 12,
+          borderWidth: 1,
+          label: `${schematicLabel}${phaseLabel}${confLabel}`,
+          labelColor: isAccum ? "#22c55ecc" : "#ef4444cc",
+          labelSize: 11,
         });
       }
       // ── Creek line (resistance within range) ──
@@ -1208,7 +1217,7 @@ export function Chart() {
           priceLineVisible: false,
         });
         creekLine.setData(sortLineData([
-          { time: firstT, value: creek },
+          { time: structStartT, value: creek },
           { time: lastT, value: creek },
         ]));
         overlayLinesRef.current.push(creekLine);
@@ -1224,7 +1233,7 @@ export function Chart() {
           priceLineVisible: false,
         });
         iceLine.setData(sortLineData([
-          { time: firstT, value: ice },
+          { time: structStartT, value: ice },
           { time: lastT, value: ice },
         ]));
         overlayLinesRef.current.push(iceLine);
@@ -1246,7 +1255,7 @@ export function Chart() {
             title: label,
           });
           lvl.setData(sortLineData([
-            { time: firstT, value: price },
+            { time: structStartT, value: price },
             { time: lastT, value: price },
           ]));
           overlayLinesRef.current.push(lvl);
