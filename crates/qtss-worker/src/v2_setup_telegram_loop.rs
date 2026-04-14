@@ -113,37 +113,146 @@ fn short_title(setup: &V2SetupRow, event_type: &str) -> String {
     )
 }
 
-fn fmt_opt(v: Option<f32>) -> String {
-    v.map(|x| format!("{:.6}", x)).unwrap_or_else(|| "-".to_string())
+/// Format price with natural precision — 2 decimals for > 100,
+/// 4 for > 1, 6 for anything smaller. Avoids "74242.500000" style.
+fn fmt_price(v: f32) -> String {
+    let a = v.abs();
+    if a >= 100.0 { format!("{v:.2}") }
+    else if a >= 1.0 { format!("{v:.4}") }
+    else { format!("{v:.6}") }
+}
+
+/// P&L % for the trader.
+///   long  TP: (tp-e)/e  — positive when tp > e
+///   long  SL: (sl-e)/e  — negative when sl < e
+///   short TP: (e-tp)/e  — positive when tp < e
+///   short SL: (e-sl)/e  — negative when sl > e
+fn pnl_pct(entry: f32, level: f32, direction: &str) -> f64 {
+    let e = entry as f64;
+    let l = level as f64;
+    if e.abs() < 1e-9 { return 0.0; }
+    match direction {
+        "short" => (e - l) / e * 100.0,
+        _ => (l - e) / e * 100.0,
+    }
+}
+
+fn fmt_level_with_pct(
+    label: &str,
+    entry: Option<f32>,
+    level: Option<f32>,
+    direction: &str,
+) -> String {
+    match (entry, level) {
+        (Some(e), Some(l)) => {
+            let pct = pnl_pct(e, l, direction);
+            let sign = if pct >= 0.0 { "+" } else { "" };
+            format!("{label} {}  ({sign}{:.2}%)", fmt_price(l), pct)
+        }
+        (_, Some(l)) => format!("{label} {}", fmt_price(l)),
+        _ => format!("{label} —"),
+    }
+}
+
+fn dir_emoji(direction: &str) -> &'static str {
+    match direction { "long" => "🟢", "short" => "🔴", _ => "⚪" }
+}
+
+fn event_emoji(event_type: &str) -> &'static str {
+    match event_type {
+        "opened" | "armed" => "📢",
+        "closed" => "🏁",
+        "stopped" => "🛑",
+        "target_hit" => "🎯",
+        _ => "•",
+    }
+}
+
+fn profile_emoji(profile: &str) -> &'static str {
+    match profile { "d" | "D" => "🟪", "t" | "T" => "🟧", "q" | "Q" => "🟦", _ => "⬜" }
 }
 
 fn build_body(setup: &V2SetupRow, ev: &V2SetupEventRow) -> String {
     let mut lines = Vec::<String>::new();
+    let dir_up = setup.direction.to_uppercase();
+    let prof_up = setup.profile.to_uppercase();
+
+    // Header
     lines.push(format!(
-        "{} {} {} — {}",
-        setup.symbol, setup.timeframe, setup.profile, setup.state
+        "{} {} {} {} {}  {} {}",
+        event_emoji(&ev.event_type),
+        dir_emoji(&setup.direction),
+        setup.symbol,
+        setup.timeframe,
+        profile_emoji(&setup.profile),
+        prof_up,
+        dir_up,
+    ));
+    lines.push(format!("state: {}", setup.state));
+    if let Some(alt) = &setup.alt_type {
+        if !alt.is_empty() && alt != "-" {
+            lines.push(format!("alt  : {alt}"));
+        }
+    }
+    lines.push("".into());
+
+    // Levels — entry always first, SL and TP with signed P&L %.
+    if let Some(e) = setup.entry_price {
+        lines.push(format!("🎯 entry : {}", fmt_price(e)));
+    } else {
+        lines.push("🎯 entry : —".into());
+    }
+    lines.push(format!(
+        "🛑 {}",
+        fmt_level_with_pct("stop  :", setup.entry_price, setup.entry_sl, &setup.direction)
     ));
     lines.push(format!(
-        "dir: {}  alt: {}",
-        setup.direction,
-        setup.alt_type.as_deref().unwrap_or("-")
+        "🎯 {}",
+        fmt_level_with_pct("tgt   :", setup.entry_price, setup.target_ref, &setup.direction)
     ));
-    lines.push(format!("entry: {}", fmt_opt(setup.entry_price)));
-    lines.push(format!("stop : {}", fmt_opt(setup.entry_sl)));
-    lines.push(format!("tgt  : {}", fmt_opt(setup.target_ref)));
-    lines.push(format!("trail: {}", fmt_opt(setup.koruma)));
+    if setup.koruma.is_some() {
+        lines.push(format!(
+            "🪜 {}",
+            fmt_level_with_pct("trail :", setup.entry_price, setup.koruma, &setup.direction)
+        ));
+    }
+
+    // Risk & R:R
+    let rr = match (setup.entry_price, setup.entry_sl, setup.target_ref) {
+        (Some(e), Some(sl), Some(tp)) => {
+            let risk = (e - sl).abs() as f64;
+            let reward = (tp - e).abs() as f64;
+            if risk > 1e-9 { Some(reward / risk) } else { None }
+        }
+        _ => None,
+    };
+    let mut meta = Vec::new();
     if let Some(risk) = setup.risk_pct {
-        lines.push(format!("risk%: {:.3}", risk));
+        meta.push(format!("risk {:.2}%", risk));
     }
+    if let Some(r) = rr {
+        meta.push(format!("R:R {r:.2}"));
+    }
+    if !meta.is_empty() {
+        lines.push("".into());
+        lines.push(meta.join("  •  "));
+    }
+
+    // Close details (only on close events)
     if ev.event_type == "closed" {
+        lines.push("".into());
         if let Some(r) = &setup.close_reason {
-            lines.push(format!("close: {}", r));
+            lines.push(format!("close: {r}"));
         }
-        if let Some(p) = setup.close_price {
-            lines.push(format!("close_px: {:.6}", p));
+        if let (Some(cp), Some(e)) = (setup.close_price, setup.entry_price) {
+            let pct = pnl_pct(e, cp, &setup.direction);
+            let sign = if pct >= 0.0 { "+" } else { "" };
+            lines.push(format!("exit : {}  ({sign}{:.2}%)", fmt_price(cp), pct));
+        } else if let Some(cp) = setup.close_price {
+            lines.push(format!("exit : {}", fmt_price(cp)));
         }
     }
-    lines.push(format!("event: {}", ev.event_type));
+
     lines.join("\n")
 }
 
