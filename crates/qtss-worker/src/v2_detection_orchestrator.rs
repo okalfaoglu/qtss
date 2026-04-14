@@ -465,8 +465,9 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
     // Phase C
     let shake_pen = resolve_system_f64(pool, "detector", "wyckoff.shakeout_min_penetration", "", 0.05).await;
     let shake_bars = resolve_system_u64(pool, "detector", "wyckoff.shakeout_recovery_bars", "", 3, 1, 20).await as usize;
-    let manip_edge_tests = resolve_system_u64(pool, "detector", "wyckoff.manipulation_min_edge_tests", "", 2, 1, 10).await as usize;
-    let manip_age_bars = resolve_system_u64(pool, "detector", "wyckoff.manipulation_min_range_age_bars", "", 10, 1, 500).await;
+    let manip_edge_tests = resolve_system_u64(pool, "detector", "wyckoff.manipulation_min_edge_tests", "", 3, 1, 10).await as usize;
+    let manip_age_bars = resolve_system_u64(pool, "detector", "wyckoff.manipulation_min_range_age_bars", "", 20, 1, 500).await;
+    let manip_edge_slope = resolve_system_f64(pool, "detector", "wyckoff.manipulation_max_edge_slope", "", 0.004).await;
     // TF guards — caller sets these per-TF (H1 tighter than D1).
     let max_range_h_pct = resolve_system_f64(pool, "detector", "wyckoff.max_range_height_pct", "", 0.15).await;
     let max_range_age = resolve_system_u64(pool, "detector", "wyckoff.max_range_age_bars", "", 500, 20, 5000).await;
@@ -502,6 +503,7 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
         shakeout_recovery_bars: shake_bars,
         manipulation_min_edge_tests: manip_edge_tests,
         manipulation_min_range_age_bars: manip_age_bars,
+        manipulation_max_edge_slope: manip_edge_slope,
         max_range_height_pct: max_range_h_pct,
         max_range_age_bars: max_range_age,
         max_range_volume_expansion: max_vol_expansion,

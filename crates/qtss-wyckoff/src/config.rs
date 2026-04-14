@@ -51,6 +51,15 @@ pub struct WyckoffConfig {
     /// resistance test and the manipulation candidate. Ensures the
     /// range has existed long enough to be a real Wyckoff range.
     pub manipulation_min_range_age_bars: u64,
+    /// P20 — maximum allowed slope of same-kind pivot prices over the
+    /// context window, expressed as fraction of mean price per pivot
+    /// step. A Spring/UTAD is a FALSE BREAK of a HORIZONTAL edge. If
+    /// the low-pivot series (for Spring) or high-pivot series (for
+    /// UTAD) is itself trending (slope > this cap), the "edge" is not
+    /// horizontal and any pierce is just a trend pullback, not a
+    /// Wyckoff manipulation. Default 0.004 = 0.4%/pivot — catches
+    /// higher-lows / lower-highs sequences in trending markets.
+    pub manipulation_max_edge_slope: f64,
     /// Reject ranges whose height (resistance - support) exceeds this
     /// fraction of the midpoint price. Prevents an H1 detector from
     /// surfacing a multi-month D1-scale range as "valid Wyckoff". The
@@ -123,8 +132,9 @@ impl WyckoffConfig {
             // Phase C
             shakeout_min_penetration: 0.05,
             shakeout_recovery_bars: 3,
-            manipulation_min_edge_tests: 2,
-            manipulation_min_range_age_bars: 10,
+            manipulation_min_edge_tests: 3,          // P20 — was 2, too permissive
+            manipulation_min_range_age_bars: 20,     // P20 — was 10, too permissive
+            manipulation_max_edge_slope: 0.004,      // P20 — 0.4%/pivot max slope
             // TF guards — defaults sized for crypto H4; caller overrides
             // per-TF from config table.
             max_range_height_pct: 0.15,

@@ -183,6 +183,37 @@ fn ice_level(range: &TradingRange, percentile: f64) -> f64 {
     range.support + range.height * (1.0 - percentile)
 }
 
+/// P20 — slope of same-kind pivot prices as fraction of mean price per
+/// pivot step. Positive for rising series, negative for falling. Used
+/// by Spring/UTAD as a trend filter: a Wyckoff manipulation pierces a
+/// HORIZONTAL edge. If the underlying pivot series is itself trending,
+/// each "pierce" is just a trend pullback, not a false break.
+///
+/// Linear regression on (index, price) pairs, slope normalized by mean
+/// price to produce a unitless fraction.
+fn same_kind_slope_frac(pivots: &[Pivot], kind: PivotKind) -> Option<f64> {
+    let prices: Vec<f64> = pivots
+        .iter()
+        .filter(|p| p.kind == kind)
+        .filter_map(|p| p.price.to_f64())
+        .collect();
+    let n = prices.len();
+    if n < 3 { return None; }
+    let xs: Vec<f64> = (0..n).map(|i| i as f64).collect();
+    let mean_x = xs.iter().sum::<f64>() / n as f64;
+    let mean_y = prices.iter().sum::<f64>() / n as f64;
+    if mean_y.abs() < 1e-9 { return None; }
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for i in 0..n {
+        let dx = xs[i] - mean_x;
+        num += dx * (prices[i] - mean_y);
+        den += dx * dx;
+    }
+    if den < 1e-9 { return None; }
+    Some((num / den) / mean_y)
+}
+
 // =========================================================================
 // Trading range (existing)
 // =========================================================================
@@ -308,6 +339,15 @@ fn eval_spring(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
     if !range_is_established_at_support(context, &range, cfg, candidate.bar_index) {
         return None;
     }
+    // P20 — trend filter. A Spring requires a HORIZONTAL support; if
+    // the low-pivot series is rising, every pullback's low is below
+    // the previous "trimmed body support" but that's trend, not a
+    // Wyckoff false break. Reject when slope exceeds the config cap.
+    if let Some(slope) = same_kind_slope_frac(context, PivotKind::Low) {
+        if slope.abs() > cfg.manipulation_max_edge_slope {
+            return None;
+        }
+    }
     // Pruden Spring variant classification by candidate-bar volume vs
     // average. #1 Terminal (very high vol) = weakest edge, optionally
     // skipped. #3 No-Supply (low vol) = strongest — rewarded with a
@@ -400,6 +440,14 @@ fn eval_upthrust(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
     // high above a trimmed body is flagged UTAD in trending markets.
     if !range_is_established_at_resistance(context, &range, cfg, candidate.bar_index) {
         return None;
+    }
+    // P20 — trend filter mirror of Spring guard. A UTAD requires a
+    // HORIZONTAL resistance; falling high-pivot series means downtrend,
+    // each candidate is a bounce not a false break. Reject.
+    if let Some(slope) = same_kind_slope_frac(context, PivotKind::High) {
+        if slope.abs() > cfg.manipulation_max_edge_slope {
+            return None;
+        }
     }
     let center = (cfg.min_penetration + cfg.max_penetration) / 2.0;
     let half = (cfg.max_penetration - cfg.min_penetration) / 2.0;
