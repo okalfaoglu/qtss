@@ -35,6 +35,12 @@ pub struct TbmSetupTuning {
     /// Per-pillar score threshold above which a pillar counts as
     /// "active" for the active-pillars rule.
     pub pillar_active_threshold: f64,
+    /// P22 — maximum age (in bars on the same TF) a `forming` TBM
+    /// detection may retain before it is auto-invalidated. Without
+    /// this, bottom/top setups from weeks ago linger on the chart
+    /// because no downstream process ever closes them out. Default
+    /// 12 bars — ~12h on H1, ~2 days on 4h, 12 days on 1d.
+    pub max_anchor_age_bars: usize,
 }
 
 impl Default for TbmSetupTuning {
@@ -43,6 +49,7 @@ impl Default for TbmSetupTuning {
             min_score: 50.0,
             min_active_pillars: 2,
             pillar_active_threshold: 20.0,
+            max_anchor_age_bars: 12,
         }
     }
 }

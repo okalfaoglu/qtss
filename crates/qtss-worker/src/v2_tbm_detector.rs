@@ -169,6 +169,16 @@ async fn load_config(pool: &PgPool) -> TbmConfig {
             20.0,
         )
         .await,
+        max_anchor_age_bars: resolve_system_u64(
+            pool,
+            "tbm",
+            "setup.max_anchor_age_bars",
+            "QTSS_TBM_MAX_ANCHOR_AGE_BARS",
+            12,
+            1,
+            500,
+        )
+        .await as usize,
     };
     let mtf = TbmMtfTuning {
         required_confirms: resolve_system_u64(
@@ -299,6 +309,21 @@ async fn process_symbol(
 
     let n = closes.len();
     let last = n - 1;
+
+    // P22 — invalidate stale/broken forming TBM detections BEFORE
+    // emitting new ones. Without this pass, a bottom_setup from weeks
+    // ago stays `forming` forever and the chart keeps rendering a label
+    // at a price zone the market has long since left. Two triggers:
+    //   1. Anchor bar is older than max_anchor_age_bars on this TF.
+    //   2. Invalidation price is breached (long: low <= invalidation;
+    //      short: high >= invalidation) — setup geometry is dead.
+    invalidate_stale_forming(
+        &repo,
+        sym,
+        &chronological,
+        cfg.setup.max_anchor_age_bars,
+    )
+    .await?;
 
     // ----- Indicator inputs ------------------------------------------
     let stoch = stochastic(&highs, &lows, &closes, 14, 3);
@@ -581,6 +606,87 @@ fn invalidation_for(swing_high: f64, swing_low: f64, last_close: f64) -> f64 {
     } else {
         swing_high * 1.01
     }
+}
+
+/// P22 — sweep forming TBM detections for this symbol/TF and
+/// invalidate any whose anchor bar is older than `max_age_bars`
+/// measured against the latest bar, or whose invalidation_price has
+/// been breached by price action since the anchor.
+async fn invalidate_stale_forming(
+    repo: &V2DetectionRepository,
+    sym: &EngineSymbolRow,
+    chronological: &[qtss_storage::MarketBarRow],
+    max_age_bars: usize,
+) -> anyhow::Result<()> {
+    use qtss_storage::DetectionFilter;
+    let rows = repo
+        .list_filtered(DetectionFilter {
+            exchange: Some(&sym.exchange),
+            symbol: Some(&sym.symbol),
+            timeframe: Some(&sym.interval),
+            family: Some("tbm"),
+            state: Some("forming"),
+            mode: None,
+            limit: 50,
+        })
+        .await?;
+    if rows.is_empty() { return Ok(()); }
+
+    let latest_time = chronological
+        .last()
+        .map(|b| b.open_time)
+        .unwrap_or_else(Utc::now);
+    // Precompute lookup: open_time → index
+    for row in rows {
+        // Extract anchor bar_time from first anchor entry.
+        let anchor_time: Option<chrono::DateTime<Utc>> = row
+            .anchors
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|a| a.get("time"))
+            .and_then(|t| t.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+        let anchor_idx = anchor_time.and_then(|t| {
+            chronological.iter().position(|b| b.open_time >= t)
+        });
+        let latest_idx = chronological.len().saturating_sub(1);
+        let age_bars = anchor_idx
+            .map(|i| latest_idx.saturating_sub(i))
+            .unwrap_or(usize::MAX);
+
+        // Age gate
+        let aged_out = age_bars > max_age_bars;
+
+        // Invalidation-price gate: scan bars since anchor for breach.
+        let inv_px = row.invalidation_price.to_string().parse::<f64>().ok();
+        let breached = match (anchor_idx, inv_px, row.subkind.as_str()) {
+            (Some(start), Some(inv), "bottom_setup") => {
+                chronological[start..].iter().any(|b| {
+                    b.low.to_string().parse::<f64>().unwrap_or(f64::INFINITY) <= inv
+                })
+            }
+            (Some(start), Some(inv), "top_setup") => {
+                chronological[start..].iter().any(|b| {
+                    b.high.to_string().parse::<f64>().unwrap_or(f64::NEG_INFINITY) >= inv
+                })
+            }
+            _ => false,
+        };
+
+        if aged_out || breached {
+            let _ = latest_time; // kept for potential future logging
+            repo.update_state(row.id, "invalidated").await?;
+            debug!(
+                id = %row.id,
+                subkind = %row.subkind,
+                age_bars,
+                breached,
+                "P22: tbm forming detection invalidated"
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn dedup_open(
