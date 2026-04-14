@@ -18,6 +18,7 @@ mod detector;
 mod error;
 mod events;
 mod range;
+pub mod setup_builder;
 pub mod structure;
 
 #[cfg(test)]
