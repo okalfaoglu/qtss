@@ -336,15 +336,41 @@ impl WyckoffStructureTracker {
         self.schematic = new_schematic;
     }
 
-    /// Confidence estimate based on **distinct** event types and their
-    /// best scores. Phase A with only BC → low confidence; Phase A
-    /// with BC + AR + ST → high confidence. Event *count* is
-    /// irrelevant — only diversity and quality matter.
+    /// Backwards-compatible confidence — uses [`ConfidenceWeights::default`].
     pub fn confidence(&self) -> f64 {
+        self.confidence_with(&ConfidenceWeights::default())
+    }
+
+    /// Multi-factor confidence (Faz 10 P6).
+    ///
+    /// Prior version was `avg_best_score × diversity_ratio + phase_bonus`.
+    /// That over-rewarded a handful of high-score events firing in quick
+    /// succession at the same bar and ignored whether the canonical
+    /// phase-specific events were actually present.
+    ///
+    /// New scoring combines four independent factors plus a phase bonus:
+    ///
+    /// 1. **diversity_quality** — existing behaviour: avg best-score per
+    ///    distinct event type × (distinct_count / expected).
+    /// 2. **critical_events** — fraction of phase-canonical events
+    ///    present. Phase A needs climax + AR + ST; Phase C needs a
+    ///    Spring/UTAD/Shakeout on top of that; and so on.
+    /// 3. **temporal_span** — bars between first and last event vs.
+    ///    expected structure duration. Penalises "five events at one
+    ///    bar" clusters that the old formula treated as a full phase A.
+    /// 4. **coherence** — 1 − (opposite-family-event-ratio × 0.5).
+    ///    Mixed bullish/bearish signals (UTAD inside Accumulation,
+    ///    Spring inside Distribution) cut the score up to 50%.
+    ///
+    /// All weights live in [`ConfidenceWeights`]; callers that read
+    /// config can build a custom instance (CLAUDE.md #2). The default
+    /// instance is the one used by existing callers.
+    pub fn confidence_with(&self, w: &ConfidenceWeights) -> f64 {
         if self.events.is_empty() {
             return 0.0;
         }
-        // Collect best score per distinct event type.
+
+        // --- factor 1: diversity × quality ---
         let mut best: std::collections::HashMap<WyckoffEvent, f64> =
             std::collections::HashMap::new();
         for e in &self.events {
@@ -355,27 +381,29 @@ impl WyckoffStructureTracker {
         }
         let distinct_count = best.len() as f64;
         let avg_best: f64 = best.values().sum::<f64>() / distinct_count;
-
-        // Expected event count per phase for normalization.
-        let expected = match self.current_phase {
-            WyckoffPhase::A => 3.0, // climax + AR + ST
-            WyckoffPhase::B => 5.0,
-            WyckoffPhase::C => 6.0,
-            WyckoffPhase::D => 8.0,
-            WyckoffPhase::E => 9.0,
-        };
-        // Diversity ratio: how many of expected events are present.
+        let expected = expected_event_count(self.current_phase);
         let diversity = (distinct_count / expected).min(1.0);
+        let dq = avg_best * diversity;
 
-        // Phase bonus for later phases (more confirmed).
-        let phase_bonus = match self.current_phase {
-            WyckoffPhase::A => 0.0,
-            WyckoffPhase::B => 0.05,
-            WyckoffPhase::C => 0.10,
-            WyckoffPhase::D => 0.15,
-            WyckoffPhase::E => 0.20,
-        };
-        (avg_best * diversity + phase_bonus).min(1.0)
+        // --- factor 2: critical-event coverage ---
+        let crit = critical_coverage(self.current_phase, &best);
+
+        // --- factor 3: temporal span ---
+        let span = temporal_span_ratio(&self.events, self.current_phase);
+
+        // --- factor 4: coherence (fewer opposing-family events = better) ---
+        let coh = coherence_ratio(self.schematic, &self.events);
+
+        // --- phase bonus ---
+        let bonus = phase_bonus(self.current_phase) * w.phase_bonus_scale;
+
+        let score = w.diversity_quality * dq
+            + w.critical_events * crit
+            + w.temporal_span * span
+            + w.coherence * coh
+            + bonus;
+
+        score.clamp(0.0, 1.0)
     }
 
     /// Map event name from detector to WyckoffEvent.
@@ -399,5 +427,219 @@ impl WyckoffStructureTracker {
             "shortening_of_thrust" => Some(WyckoffEvent::SOT),
             _ => None,
         }
+    }
+}
+
+// =========================================================================
+// Confidence scoring — multi-factor (Faz 10 P6)
+// =========================================================================
+
+/// Weights for [`WyckoffStructureTracker::confidence_with`]. Default
+/// values are algorithmic defaults; an operator can override by
+/// constructing a custom instance from config and passing it in.
+#[derive(Debug, Clone, Copy)]
+pub struct ConfidenceWeights {
+    pub diversity_quality: f64,
+    pub critical_events:   f64,
+    pub temporal_span:     f64,
+    pub coherence:         f64,
+    /// Multiplier on the per-phase bonus (A=0, B=0.05, C=0.10, D=0.15, E=0.20).
+    pub phase_bonus_scale: f64,
+}
+
+impl Default for ConfidenceWeights {
+    fn default() -> Self {
+        Self {
+            diversity_quality: 0.40,
+            critical_events:   0.25,
+            temporal_span:     0.15,
+            coherence:         0.20,
+            phase_bonus_scale: 1.0,
+        }
+    }
+}
+
+fn expected_event_count(phase: WyckoffPhase) -> f64 {
+    match phase {
+        WyckoffPhase::A => 3.0,
+        WyckoffPhase::B => 5.0,
+        WyckoffPhase::C => 6.0,
+        WyckoffPhase::D => 8.0,
+        WyckoffPhase::E => 9.0,
+    }
+}
+
+fn phase_bonus(phase: WyckoffPhase) -> f64 {
+    match phase {
+        WyckoffPhase::A => 0.00,
+        WyckoffPhase::B => 0.05,
+        WyckoffPhase::C => 0.10,
+        WyckoffPhase::D => 0.15,
+        WyckoffPhase::E => 0.20,
+    }
+}
+
+/// Bars expected between first and last event for each phase — used to
+/// normalize [`temporal_span_ratio`]. Values are conservative heuristics
+/// derived from canonical Wyckoff literature (Pruden / Schabacker):
+/// Phase A typically takes 20–40 bars, full A→E runs 150+.
+fn expected_span_bars(phase: WyckoffPhase) -> f64 {
+    match phase {
+        WyckoffPhase::A => 30.0,
+        WyckoffPhase::B => 60.0,
+        WyckoffPhase::C => 90.0,
+        WyckoffPhase::D => 120.0,
+        WyckoffPhase::E => 150.0,
+    }
+}
+
+/// Canonical events required for each phase. A subset is enough (e.g.
+/// SC OR BC satisfies the climax slot). Each tuple is "label" → list of
+/// events that count as satisfying that slot.
+fn critical_slots(phase: WyckoffPhase) -> &'static [&'static [WyckoffEvent]] {
+    use WyckoffEvent::*;
+    match phase {
+        WyckoffPhase::A => &[&[SC, BC], &[AR], &[ST]],
+        WyckoffPhase::B => &[&[SC, BC], &[AR], &[ST], &[UA, STB]],
+        WyckoffPhase::C => &[&[SC, BC], &[AR], &[ST], &[UA, STB], &[Spring, UTAD, Shakeout]],
+        WyckoffPhase::D => &[
+            &[SC, BC], &[AR], &[ST], &[UA, STB],
+            &[Spring, UTAD, Shakeout],
+            &[SOS, SOW, LPS, LPSY, JAC, BreakOfIce],
+        ],
+        WyckoffPhase::E => &[
+            &[SC, BC], &[AR], &[ST], &[UA, STB],
+            &[Spring, UTAD, Shakeout],
+            &[SOS, SOW, LPS, LPSY, JAC, BreakOfIce],
+            &[Markup, Markdown],
+        ],
+    }
+}
+
+fn critical_coverage(
+    phase: WyckoffPhase,
+    best: &std::collections::HashMap<WyckoffEvent, f64>,
+) -> f64 {
+    let slots = critical_slots(phase);
+    if slots.is_empty() { return 1.0; }
+    let filled = slots.iter()
+        .filter(|slot| slot.iter().any(|ev| best.contains_key(ev)))
+        .count();
+    filled as f64 / slots.len() as f64
+}
+
+fn temporal_span_ratio(events: &[RecordedEvent], phase: WyckoffPhase) -> f64 {
+    if events.len() < 2 { return 0.0; }
+    let first = events.iter().map(|e| e.bar_index).min().unwrap_or(0);
+    let last  = events.iter().map(|e| e.bar_index).max().unwrap_or(0);
+    let span = last.saturating_sub(first) as f64;
+    (span / expected_span_bars(phase)).min(1.0)
+}
+
+/// Returns a value in [0.5, 1.0]. Every opposing-family event chips at
+/// coherence proportionally to its share of total events. Pure-family
+/// structures score 1.0; a 50/50 mix bottoms out at 0.5.
+fn coherence_ratio(schematic: WyckoffSchematic, events: &[RecordedEvent]) -> f64 {
+    if events.is_empty() { return 1.0; }
+    use WyckoffEvent::*;
+    use WyckoffSchematic::*;
+    let is_bull_schematic = matches!(schematic, Accumulation | ReAccumulation);
+    let opposing = events.iter().filter(|e| {
+        let bullish_ev = matches!(e.event, Spring | SOS | LPS | JAC | Markup);
+        let bearish_ev = matches!(e.event, UTAD | SOW | LPSY | BreakOfIce | Markdown);
+        // neutral events (SC/BC/AR/ST/UA/STB/Shakeout/SOT) don't count
+        // either way — they are schematic-agnostic phase-A/B markers.
+        if is_bull_schematic { bearish_ev } else { bullish_ev }
+    }).count() as f64;
+    let ratio = opposing / events.len() as f64;
+    1.0 - (ratio * 0.5)
+}
+
+// =========================================================================
+// Tests
+// =========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tracker_with(events: &[(WyckoffEvent, u64, f64)]) -> WyckoffStructureTracker {
+        let mut t = WyckoffStructureTracker::new(WyckoffSchematic::Accumulation, 100.0, 90.0);
+        for (ev, bar, score) in events {
+            t.record_event(*ev, *bar, 95.0, *score);
+        }
+        t
+    }
+
+    #[test]
+    fn empty_events_zero_confidence() {
+        let t = WyckoffStructureTracker::new(WyckoffSchematic::Accumulation, 100.0, 90.0);
+        assert_eq!(t.confidence(), 0.0);
+    }
+
+    #[test]
+    fn phase_a_full_triad_beats_single_event() {
+        let partial = tracker_with(&[(WyckoffEvent::SC, 10, 0.8)]);
+        let full = tracker_with(&[
+            (WyckoffEvent::SC, 10, 0.8),
+            (WyckoffEvent::AR, 20, 0.8),
+            (WyckoffEvent::ST, 35, 0.8),
+        ]);
+        assert!(full.confidence() > partial.confidence());
+    }
+
+    #[test]
+    fn temporal_span_penalty_applies_to_clustered_events() {
+        // Same events, different bar spans.
+        let clustered = tracker_with(&[
+            (WyckoffEvent::SC, 10, 0.9),
+            (WyckoffEvent::AR, 10, 0.9),
+            (WyckoffEvent::ST, 10, 0.9),
+        ]);
+        let spread = tracker_with(&[
+            (WyckoffEvent::SC, 10, 0.9),
+            (WyckoffEvent::AR, 25, 0.9),
+            (WyckoffEvent::ST, 40, 0.9),
+        ]);
+        assert!(spread.confidence() > clustered.confidence());
+    }
+
+    #[test]
+    fn coherence_penalises_opposing_family() {
+        // Pure bullish accumulation events vs mixed bearish injection.
+        let pure = tracker_with(&[
+            (WyckoffEvent::SC, 10, 0.9),
+            (WyckoffEvent::AR, 25, 0.9),
+            (WyckoffEvent::ST, 40, 0.9),
+            (WyckoffEvent::Spring, 55, 0.9),
+        ]);
+        let pure_conf = pure.confidence();
+        // Reclassification will flip schematic on UTAD; rebuild fresh so
+        // the comparison isolates coherence, not schematic identity.
+        let mut mixed = WyckoffStructureTracker::new(
+            WyckoffSchematic::Accumulation, 100.0, 90.0);
+        mixed.record_event(WyckoffEvent::SC, 10, 95.0, 0.9);
+        mixed.record_event(WyckoffEvent::AR, 25, 95.0, 0.9);
+        mixed.record_event(WyckoffEvent::ST, 40, 95.0, 0.9);
+        // Inject an opposing-family event but force schematic back for
+        // the coherence comparison.
+        mixed.record_event(WyckoffEvent::UTAD, 55, 95.0, 0.9);
+        mixed.schematic = WyckoffSchematic::Accumulation;
+        assert!(pure_conf > mixed.confidence());
+    }
+
+    #[test]
+    fn confidence_is_bounded() {
+        let maxed = tracker_with(&[
+            (WyckoffEvent::SC, 10, 1.0),
+            (WyckoffEvent::AR, 30, 1.0),
+            (WyckoffEvent::ST, 60, 1.0),
+            (WyckoffEvent::Spring, 90, 1.0),
+            (WyckoffEvent::SOS, 120, 1.0),
+            (WyckoffEvent::JAC, 150, 1.0),
+            (WyckoffEvent::Markup, 180, 1.0),
+        ]);
+        let c = maxed.confidence();
+        assert!(c > 0.0 && c <= 1.0, "got {c}");
     }
 }
