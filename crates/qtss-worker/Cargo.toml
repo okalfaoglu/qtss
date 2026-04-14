@@ -2,6 +2,7 @@
 name = "qtss-worker"
 version = "0.1.0"
 edition.workspace = true
+default-run = "qtss-worker"
 license.workspace = true
 
 [features]
@@ -56,3 +57,11 @@ tempfile = "3"
 [[bin]]
 name = "qtss-worker"
 path = "src/main.rs"
+
+[[bin]]
+name = "qtss-reset"
+path = "src/bin/reset.rs"
+
+[[bin]]
+name = "qtss-wyckoff-replay"
+path = "src/bin/wyckoff_replay.rs"
