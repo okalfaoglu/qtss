@@ -858,9 +858,12 @@ export function Chart() {
         const p2 = Number(d.anchors[1].price);
         const top = Math.max(p1, p2);
         const bot = Math.min(p1, p2);
-        // P19 — mitigated-zone hide: if any bar AFTER formation had
-        // price enter the zone (low ≤ top AND high ≥ bot), the zone
-        // has been "tested" and is no longer actionable.
+        // P19b — mitigated-zone hide (SMC-correct): a wick touch is
+        // NOT mitigation; the zone is only "consumed" when a candle
+        // CLOSES inside it (or beyond). This matches ICT/Wyckoff
+        // literature: FVGs fill on close, OBs are considered active
+        // until the body breaks through. Wick-only tests keep the
+        // zone alive (they're the "test" that confirms the level).
         const formTime = isoToUnix(d.anchors[0].time) as number;
         let mitigated = false;
         for (let i = merged.candles.length - 1; i >= 0; i--) {
@@ -868,7 +871,8 @@ export function Chart() {
           if (!c?.open_time) continue;
           const t = isoToUnix(c.open_time) as number;
           if (t <= formTime) break;
-          if (Number(c.low) <= top && Number(c.high) >= bot) {
+          const cl = Number(c.close);
+          if (cl >= bot && cl <= top) {
             mitigated = true;
             break;
           }
