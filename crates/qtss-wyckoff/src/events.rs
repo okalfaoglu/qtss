@@ -171,6 +171,22 @@ fn eval_trading_range(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatc
     if tightness < 0.4 {
         return None;
     }
+    // TF guard #1: reject ranges whose height / midpoint ratio exceeds
+    // `max_range_height_pct`. An H1 detector with a 0.08 cap will refuse
+    // to surface a 15%-wide range as a Wyckoff range — that geometry
+    // belongs to a higher TF.
+    let mid = (range.resistance + range.support) * 0.5;
+    if mid > 0.0 && (range.height / mid) > cfg.max_range_height_pct {
+        return None;
+    }
+    // TF guard #2: reject ranges whose pivot span exceeds `max_range_
+    // age_bars`. A very old range on a fast TF is stale data, not a
+    // valid active Wyckoff structure.
+    if let (Some(first), Some(last)) = (pivots.first(), pivots.last()) {
+        if last.bar_index.saturating_sub(first.bar_index) > cfg.max_range_age_bars {
+            return None;
+        }
+    }
     let variant = climactic_variant(pivots, &range, cfg).unwrap_or("neutral");
     let labels: Vec<&'static str> = (0..pivots.len()).map(label_for).collect();
     Some(EventMatch {
@@ -256,10 +272,19 @@ fn eval_spring(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
     if !range_is_established_at_support(context, &range, cfg, candidate.bar_index) {
         return None;
     }
+    // Pruden Spring variant classification by candidate-bar volume vs
+    // average. #1 Terminal (very high vol) = weakest edge, optionally
+    // skipped. #3 No-Supply (low vol) = strongest — rewarded with a
+    // score bonus. #2 Ordinary = baseline.
+    let variant = classify_spring_variant(candidate, pivots, cfg);
+    if variant == SpringVariant::Terminal && cfg.skip_terminal_springs {
+        return None;
+    }
     let center = (cfg.min_penetration + cfg.max_penetration) / 2.0;
     let half = (cfg.max_penetration - cfg.min_penetration) / 2.0;
     let z = (penetration - center) / half.max(1e-9);
-    let score = (-(z * z) / 2.0).exp();
+    let base = (-(z * z) / 2.0).exp();
+    let score = base * variant.score_multiplier();
     let labels: Vec<&'static str> = (0..context.len())
         .map(label_for)
         .chain(std::iter::once("Spring"))
@@ -267,9 +292,50 @@ fn eval_spring(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
     Some(EventMatch {
         score,
         invalidation: candidate.price,
-        variant: "bull",
+        variant: variant.as_str(),
         anchor_labels: labels,
     })
+}
+
+/// Pruden's three Spring variants, classified by the Spring bar's
+/// volume vs the pivot-window average. See `WyckoffConfig::spring_*`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpringVariant { Terminal, Ordinary, NoSupply }
+
+impl SpringVariant {
+    fn as_str(self) -> &'static str {
+        // Single-token variants so the orchestrator's subkind parser
+        // (rsplit on '_' to separate event_name / variant) keeps
+        // working: "spring_bull" / "spring_nosupply" / "spring_terminal".
+        match self {
+            Self::Terminal  => "terminal",
+            Self::Ordinary  => "bull",
+            Self::NoSupply  => "nosupply",
+        }
+    }
+    /// Score bonus/penalty relative to an Ordinary Spring.
+    fn score_multiplier(self) -> f64 {
+        match self {
+            Self::Terminal  => 0.7,   // still fires (if not skipped) but discounted
+            Self::Ordinary  => 1.0,
+            Self::NoSupply  => 1.25,  // highest-probability variant
+        }
+    }
+}
+
+fn classify_spring_variant(
+    candidate: &Pivot,
+    pivots: &[Pivot],
+    cfg: &WyckoffConfig,
+) -> SpringVariant {
+    let avg = avg_vol_f64(pivots).unwrap_or(0.0).max(1e-9);
+    let v = candidate.volume_at_pivot.to_f64().unwrap_or(0.0);
+    let ratio = v / avg;
+    match ratio {
+        r if r >= cfg.spring_terminal_vol_ratio   => SpringVariant::Terminal,
+        r if r <= cfg.spring_no_supply_vol_ratio  => SpringVariant::NoSupply,
+        _                                          => SpringVariant::Ordinary,
+    }
 }
 
 // =========================================================================

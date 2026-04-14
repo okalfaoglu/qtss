@@ -51,6 +51,29 @@ pub struct WyckoffConfig {
     /// resistance test and the manipulation candidate. Ensures the
     /// range has existed long enough to be a real Wyckoff range.
     pub manipulation_min_range_age_bars: u64,
+    /// Reject ranges whose height (resistance - support) exceeds this
+    /// fraction of the midpoint price. Prevents an H1 detector from
+    /// surfacing a multi-month D1-scale range as "valid Wyckoff". The
+    /// caller sets this per-TF via config (H1: 0.08, H4: 0.15, D1: 0.30).
+    pub max_range_height_pct: f64,
+    /// Reject ranges whose first-to-last pivot span exceeds this bar
+    /// count. Another TF guard: a "range" older than N bars on a given
+    /// TF has almost certainly already resolved — continuing to evaluate
+    /// it produces stale setups. Set per-TF by caller.
+    pub max_range_age_bars: u64,
+
+    // --- Phase C: Spring variant (Pruden) ---
+    /// A "No-Supply" Spring (#3): climax bar volume <= N x avg_vol.
+    /// The hallmark of the highest-probability Spring — absence of
+    /// supply at the break confirms sellers are exhausted.
+    pub spring_no_supply_vol_ratio: f64,
+    /// A "Terminal" Spring (#1): climax bar volume >= N x avg_vol.
+    /// Ultra-high volume break = composite operator still absorbing;
+    /// statistically the weakest of the three variants for entry.
+    pub spring_terminal_vol_ratio: f64,
+    /// Skip #1 Terminal Springs (aggressive / weakest). Default: true.
+    /// Ordinary (#2) and No-Supply (#3) are always kept.
+    pub skip_terminal_springs: bool,
 
     // --- Phase D ---
     /// SOS/SOW volume must be >= Nx average.
@@ -94,6 +117,14 @@ impl WyckoffConfig {
             shakeout_recovery_bars: 3,
             manipulation_min_edge_tests: 2,
             manipulation_min_range_age_bars: 10,
+            // TF guards — defaults sized for crypto H4; caller overrides
+            // per-TF from config table.
+            max_range_height_pct: 0.15,
+            max_range_age_bars: 500,
+            // Spring variant (Pruden): no-supply = low vol, terminal = very high vol
+            spring_no_supply_vol_ratio: 0.8,
+            spring_terminal_vol_ratio: 3.0,
+            skip_terminal_springs: true,
             // Phase D
             sos_min_volume_ratio: 1.5,
             lps_max_retracement: 0.5,
@@ -130,6 +161,16 @@ impl WyckoffConfig {
         if !(0.0..=1.0).contains(&(self.min_structural_score as f64)) {
             return Err(WyckoffError::InvalidConfig(
                 "min_structural_score must be in 0..=1".into(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.max_range_height_pct) {
+            return Err(WyckoffError::InvalidConfig(
+                "max_range_height_pct must be in 0..=1".into(),
+            ));
+        }
+        if self.spring_no_supply_vol_ratio >= self.spring_terminal_vol_ratio {
+            return Err(WyckoffError::InvalidConfig(
+                "spring_no_supply_vol_ratio must be < spring_terminal_vol_ratio".into(),
             ));
         }
         Ok(())

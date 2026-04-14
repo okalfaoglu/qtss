@@ -463,6 +463,13 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
     let shake_bars = resolve_system_u64(pool, "detector", "wyckoff.shakeout_recovery_bars", "", 3, 1, 20).await as usize;
     let manip_edge_tests = resolve_system_u64(pool, "detector", "wyckoff.manipulation_min_edge_tests", "", 2, 1, 10).await as usize;
     let manip_age_bars = resolve_system_u64(pool, "detector", "wyckoff.manipulation_min_range_age_bars", "", 10, 1, 500).await;
+    // TF guards — caller sets these per-TF (H1 tighter than D1).
+    let max_range_h_pct = resolve_system_f64(pool, "detector", "wyckoff.max_range_height_pct", "", 0.15).await;
+    let max_range_age = resolve_system_u64(pool, "detector", "wyckoff.max_range_age_bars", "", 500, 20, 5000).await;
+    // Spring variant thresholds (Pruden)
+    let spr_ns_vol = resolve_system_f64(pool, "detector", "wyckoff.spring_no_supply_vol_ratio", "", 0.8).await;
+    let spr_term_vol = resolve_system_f64(pool, "detector", "wyckoff.spring_terminal_vol_ratio", "", 3.0).await;
+    let skip_term = resolve_worker_enabled_flag(pool, "detector", "wyckoff.skip_terminal_springs", "", true).await;
     // Phase D
     let sos_vol = resolve_system_f64(pool, "detector", "wyckoff.sos_min_volume_ratio", "", 1.5).await;
     let lps_ret = resolve_system_f64(pool, "detector", "wyckoff.lps_max_retracement", "", 0.5).await;
@@ -490,6 +497,11 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
         shakeout_recovery_bars: shake_bars,
         manipulation_min_edge_tests: manip_edge_tests,
         manipulation_min_range_age_bars: manip_age_bars,
+        max_range_height_pct: max_range_h_pct,
+        max_range_age_bars: max_range_age,
+        spring_no_supply_vol_ratio: spr_ns_vol,
+        spring_terminal_vol_ratio: spr_term_vol,
+        skip_terminal_springs: skip_term,
         sos_min_volume_ratio: sos_vol,
         lps_max_retracement: lps_ret,
         lps_max_volume_ratio: lps_vol,
