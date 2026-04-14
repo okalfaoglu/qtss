@@ -150,6 +150,43 @@ pub async fn list_recent_bars_before(
     Ok(rows)
 }
 
+/// Forward chronological pagination for historical replay.
+///
+/// Returns bars with `open_time > after` ordered ASC. Designed for the
+/// pivot / Wyckoff historical backfill workers: feed a chunk, advance
+/// the cursor to the last row's `open_time`, fetch the next chunk,
+/// until fewer than `limit` rows come back. `after = UNIX EPOCH` starts
+/// at the very first stored bar.
+pub async fn list_bars_after_asc(
+    pool: &PgPool,
+    exchange: &str,
+    segment: &str,
+    symbol: &str,
+    interval: &str,
+    after: DateTime<Utc>,
+    limit: i64,
+) -> Result<Vec<MarketBarRow>, StorageError> {
+    let rows = sqlx::query_as::<_, MarketBarRow>(
+        r#"SELECT id, exchange, segment, symbol, interval, open_time,
+                  open, high, low, close, volume, quote_volume, trade_count,
+                  instrument_id, bar_interval_id, created_at, updated_at
+           FROM market_bars
+           WHERE exchange = $1 AND segment = $2 AND symbol = $3 AND interval = $4
+             AND open_time > $5
+           ORDER BY open_time ASC
+           LIMIT $6"#,
+    )
+    .bind(exchange)
+    .bind(segment)
+    .bind(symbol)
+    .bind(interval)
+    .bind(after)
+    .bind(limit.clamp(1, 200_000))
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn list_bars_in_range(
     pool: &PgPool,
     exchange: &str,

@@ -86,8 +86,9 @@ pub use wyckoff_structures::{
 };
 
 pub use pivot_cache::{
-    count_pivot_cache, list_pivot_cache, max_cached_bar_index,
-    upsert_pivot_cache, upsert_pivot_cache_batch, PivotCacheRow,
+    count_pivot_cache, delete_pivot_cache_for_series, get_pivot_backfill_state,
+    list_pivot_cache, max_cached_bar_index, upsert_pivot_backfill_state,
+    upsert_pivot_cache, upsert_pivot_cache_batch, PivotBackfillState, PivotCacheRow,
 };
 
 pub use regime_snapshots::{
@@ -169,8 +170,8 @@ pub use intake_playbook::{
     IntakePlaybookRunRow,
 };
 pub use market_bars::{
-    fetch_recent_bars_stats, list_bars_in_range, list_recent_bars, list_recent_bars_before,
-    upsert_market_bar, MarketBarRow,
+    fetch_recent_bars_stats, list_bars_after_asc, list_bars_in_range, list_recent_bars,
+    list_recent_bars_before, upsert_market_bar, MarketBarRow,
     MarketBarUpsert, RecentBarsStats,
 };
 pub use market_confluence_snapshots::{

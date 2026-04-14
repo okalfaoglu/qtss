@@ -177,6 +177,95 @@ pub async fn max_cached_bar_index(
     Ok(row.0)
 }
 
+/// Delete all cached pivots for a series across every level. Used by the
+/// historical backfill worker before a clean rebuild — prior rows were
+/// written by the live orchestrator under rolling-window bar_index
+/// semantics and are inconsistent with the GLOBAL bar_index assigned
+/// during a full replay.
+pub async fn delete_pivot_cache_for_series(
+    pool: &PgPool,
+    exchange: &str,
+    symbol: &str,
+    timeframe: &str,
+) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query(
+        r#"DELETE FROM pivot_cache
+           WHERE exchange = $1 AND symbol = $2 AND timeframe = $3"#,
+    )
+    .bind(exchange)
+    .bind(symbol)
+    .bind(timeframe)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+/// Cursor row for the pivot historical backfill worker.
+#[derive(Debug, Clone)]
+pub struct PivotBackfillState {
+    pub exchange: String,
+    pub segment: String,
+    pub symbol: String,
+    pub timeframe: String,
+    pub last_open_time: DateTime<Utc>,
+    pub bars_processed: i64,
+    pub pivots_written: i64,
+}
+
+pub async fn get_pivot_backfill_state(
+    pool: &PgPool,
+    exchange: &str,
+    segment: &str,
+    symbol: &str,
+    timeframe: &str,
+) -> Result<Option<PivotBackfillState>, sqlx::Error> {
+    let row: Option<(String, String, String, String, DateTime<Utc>, i64, i64)> = sqlx::query_as(
+        r#"SELECT exchange, segment, symbol, timeframe,
+                  last_open_time, bars_processed, pivots_written
+           FROM pivot_backfill_state
+           WHERE exchange = $1 AND segment = $2 AND symbol = $3 AND timeframe = $4"#,
+    )
+    .bind(exchange)
+    .bind(segment)
+    .bind(symbol)
+    .bind(timeframe)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(exchange, segment, symbol, timeframe, last_open_time, bars_processed, pivots_written)| {
+        PivotBackfillState {
+            exchange, segment, symbol, timeframe,
+            last_open_time, bars_processed, pivots_written,
+        }
+    }))
+}
+
+pub async fn upsert_pivot_backfill_state(
+    pool: &PgPool,
+    s: &PivotBackfillState,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"INSERT INTO pivot_backfill_state
+               (exchange, segment, symbol, timeframe,
+                last_open_time, bars_processed, pivots_written, completed_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+           ON CONFLICT (exchange, segment, symbol, timeframe) DO UPDATE SET
+               last_open_time  = EXCLUDED.last_open_time,
+               bars_processed  = EXCLUDED.bars_processed,
+               pivots_written  = EXCLUDED.pivots_written,
+               completed_at    = now()"#,
+    )
+    .bind(&s.exchange)
+    .bind(&s.segment)
+    .bind(&s.symbol)
+    .bind(&s.timeframe)
+    .bind(s.last_open_time)
+    .bind(s.bars_processed)
+    .bind(s.pivots_written)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Count cached pivots for a series/level.
 pub async fn count_pivot_cache(
     pool: &PgPool,
