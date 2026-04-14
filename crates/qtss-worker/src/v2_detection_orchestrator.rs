@@ -31,7 +31,10 @@
 //! no-op until an operator flips it on from the Config panel.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+
+use futures_util::stream::{self, StreamExt};
 
 use chrono::Utc;
 use qtss_chart_patterns::{analyze_trading_range, OhlcBar, TradingRangeParams};
@@ -765,28 +768,64 @@ async fn run_pass(
         _ => "live".to_string(),
     };
 
-    let runners = build_runners(pool).await;
+    let runners = Arc::new(build_runners(pool).await);
     if runners.is_empty() {
         return Ok(stats);
     }
 
+    // P16 — parallelize per-symbol detection. Each symbol pulls its own
+    // bars, runs the detector bank, inserts results. Bounded by
+    // `detection.orchestrator.parallelism` (config-driven per CLAUDE.md
+    // rule #2). Default 8 saturates typical 4-core worker without
+    // overwhelming Postgres pool.
+    let parallelism = resolve_system_u64(
+        pool,
+        "detection",
+        "orchestrator.parallelism",
+        "QTSS_DETECTION_ORCHESTRATOR_PARALLELISM",
+        8,
+        1,
+        32,
+    )
+    .await as usize;
+
     let symbols = list_enabled_engine_symbols(pool).await?;
-    for sym in symbols {
-        // Guard: never run detections on incomplete data
-        if !qtss_storage::is_backfill_ready(pool, sym.id).await {
-            debug!(symbol = %sym.symbol, interval = %sym.interval, "skip detection — backfill not complete");
-            continue;
-        }
-        match process_symbol(pool, repo.clone(), &sym, history_bars, &runners, &mode).await {
-            Ok(s) => {
-                stats.processed += 1;
-                stats.emitted += s.emitted;
-                stats.deduped += s.deduped;
-                stats.inserted += s.inserted;
+
+    let processed = AtomicUsize::new(0);
+    let emitted = AtomicUsize::new(0);
+    let deduped = AtomicUsize::new(0);
+    let inserted = AtomicUsize::new(0);
+
+    let mode_ref = &mode;
+    let runners_ref = &runners;
+    let repo_ref = &repo;
+    let processed_ref = &processed;
+    let emitted_ref = &emitted;
+    let deduped_ref = &deduped;
+    let inserted_ref = &inserted;
+
+    stream::iter(symbols)
+        .for_each_concurrent(parallelism, |sym| async move {
+            if !qtss_storage::is_backfill_ready(pool, sym.id).await {
+                debug!(symbol = %sym.symbol, interval = %sym.interval, "skip detection — backfill not complete");
+                return;
             }
-            Err(e) => warn!(symbol = %sym.symbol, interval = %sym.interval, %e, "process_symbol failed"),
-        }
-    }
+            match process_symbol(pool, repo_ref.clone(), &sym, history_bars, runners_ref, mode_ref).await {
+                Ok(s) => {
+                    processed_ref.fetch_add(1, Ordering::Relaxed);
+                    emitted_ref.fetch_add(s.emitted, Ordering::Relaxed);
+                    deduped_ref.fetch_add(s.deduped, Ordering::Relaxed);
+                    inserted_ref.fetch_add(s.inserted, Ordering::Relaxed);
+                }
+                Err(e) => warn!(symbol = %sym.symbol, interval = %sym.interval, %e, "process_symbol failed"),
+            }
+        })
+        .await;
+
+    stats.processed = processed.load(Ordering::Relaxed);
+    stats.emitted = emitted.load(Ordering::Relaxed);
+    stats.deduped = deduped.load(Ordering::Relaxed);
+    stats.inserted = inserted.load(Ordering::Relaxed);
 
     Ok(stats)
 }
@@ -803,7 +842,7 @@ async fn process_symbol(
     repo: Arc<V2DetectionRepository>,
     sym: &EngineSymbolRow,
     history_bars: i64,
-    runners: &[Box<dyn DetectorRunner>],
+    runners: &Arc<Vec<Box<dyn DetectorRunner>>>,
     mode: &str,
 ) -> anyhow::Result<SymbolStats> {
     let mut stats = SymbolStats::default();
@@ -1026,7 +1065,7 @@ async fn process_symbol(
         }
     }
 
-    for runner in runners {
+    for runner in runners.iter() {
         let detections = runner.detect(&tree, &bars, &instrument, timeframe, &regime);
         if detections.is_empty() {
             debug!(
