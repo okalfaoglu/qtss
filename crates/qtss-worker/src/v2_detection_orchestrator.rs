@@ -1281,7 +1281,7 @@ async fn process_symbol(
         if family == "wyckoff" {
             if let Err(e) = upsert_wyckoff_structure_from_detection(
                 pool, &sym.exchange, &sym.symbol, &sym.interval, subkind,
-                &detection, inserted_id,
+                &detection, inserted_id, &chronological,
             ).await {
                 warn!(symbol = %sym.symbol, %e, "wyckoff structure upsert failed");
             }
@@ -1313,7 +1313,7 @@ async fn process_symbol(
 /// Feed a Wyckoff detection into the persistent structure tracker.
 /// Creates a new structure if none exists, or updates the existing one
 /// with the new event.
-async fn upsert_wyckoff_structure_from_detection(
+pub(crate) async fn upsert_wyckoff_structure_from_detection(
     pool: &PgPool,
     exchange: &str,
     symbol: &str,
@@ -1321,6 +1321,7 @@ async fn upsert_wyckoff_structure_from_detection(
     subkind: &str,
     detection: &Detection,
     _detection_id: Uuid,
+    chronological: &[MarketBarRow],
 ) -> anyhow::Result<()> {
     use qtss_storage::{
         complete_wyckoff_structure, fail_wyckoff_structure, find_active_wyckoff_structure,
@@ -1353,6 +1354,13 @@ async fn upsert_wyckoff_structure_from_detection(
         .map(|a| a.price.to_f64().unwrap_or(0.0))
         .unwrap_or(0.0);
     let bar_idx = last_anchor.map(|a| a.bar_index).unwrap_or(0);
+    // Resolve the anchor bar's open time from the chronological window
+    // the orchestrator fed to the detectors. Enables the chart overlay
+    // to pin the event to the exact candle regardless of bar_index
+    // origin (rolling-window vs global post-P2a).
+    let time_ms = chronological
+        .get(bar_idx as usize)
+        .map(|r| r.open_time.timestamp_millis());
 
     // Check if there's an active structure for this symbol/interval
     let existing = find_active_wyckoff_structure(pool, symbol, interval).await?;
@@ -1384,7 +1392,9 @@ async fn upsert_wyckoff_structure_from_detection(
 
             // Record new event
             let prior_schematic = row.schematic.clone();
-            tracker.record_event(wy_event, bar_idx, price, detection.structural_score as f64);
+            tracker.record_event_with_time(
+                wy_event, bar_idx, price, detection.structural_score as f64, time_ms,
+            );
 
             // Lifecycle: detect Phase E completion or directional flip (failure).
             //
@@ -1448,7 +1458,9 @@ async fn upsert_wyckoff_structure_from_detection(
             };
 
             let mut tracker = WyckoffStructureTracker::new(schematic, price, price);
-            tracker.record_event(wy_event, bar_idx, price, detection.structural_score as f64);
+            tracker.record_event_with_time(
+                wy_event, bar_idx, price, detection.structural_score as f64, time_ms,
+            );
 
             // Use detection anchors to estimate range
             let mut hi = f64::MIN;

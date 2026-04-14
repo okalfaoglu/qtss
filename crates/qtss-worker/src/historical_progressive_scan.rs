@@ -324,11 +324,33 @@ async fn scan_symbol(
                     raw_meta,
                     mode,
                 };
+                let new_id = new_row.id;
                 if let Err(e) = repo.insert(new_row).await {
                     warn!(symbol = %sym.symbol, family, subkind, %e, "progressive insert failed");
                     continue;
                 }
                 inserted += 1;
+
+                // Feed the Wyckoff family detections into the persistent
+                // structure tracker. Without this wiring the tracker only
+                // ever sees what the live orchestrator catches in its 3000-
+                // bar window — so a multi-year series would never see a
+                // single structure advance to Phase E (operator reported
+                // "no completed structures since 2022"). Progressive scan
+                // replays detections along the whole history with global
+                // bar_index aligned to `raw`, so passing `raw` gives the
+                // tracker correct time_ms lookups.
+                if family == "wyckoff" {
+                    if let Err(e) = crate::v2_detection_orchestrator::
+                        upsert_wyckoff_structure_from_detection(
+                            pool, &sym.exchange, &sym.symbol, &sym.interval,
+                            subkind, &detection, new_id, &raw,
+                        ).await
+                    {
+                        warn!(symbol = %sym.symbol, %e,
+                              "progressive wyckoff structure upsert failed");
+                    }
+                }
             }
         }
     }
