@@ -68,6 +68,12 @@ pub struct TradePlannerConfig {
     pub sl_policy: SlPolicy,
     pub d_entry_sl_atr_mult: f64,              // L2 SL distance for D profile
     pub q_entry_sl_atr_mult: f64,              // L2 SL distance for Q profile
+    /// P17 — minimum risk as a fraction of entry price. Guards against
+    /// near-zero ATR (Gemini review #3) producing microscopic `risk =
+    /// |entry - sl|` that then makes `comm_r = 2*comm/risk` explode and
+    /// TP ladder rungs collapse onto entry. Default 0.001 (= 0.1% of
+    /// entry). Config key: `wyckoff.plan.min_risk_frac`.
+    pub min_risk_frac: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +120,7 @@ impl Default for TradePlannerConfig {
             sl_policy: SlPolicy::Tighter,
             d_entry_sl_atr_mult: 2.5,
             q_entry_sl_atr_mult: 1.5,
+            min_risk_frac: 0.001,
         }
     }
 }
@@ -209,7 +216,11 @@ pub fn plan(
     };
 
     let risk = (cand.entry - final_sl).abs();
-    if risk <= 0.0 {
+    // P17 — risk floor: reject not just risk == 0 but risk < floor% of
+    // entry. Zero-ATR / stablecoin / weekend low-vol instruments
+    // otherwise produce absurd position sizes and infinite RR.
+    let min_risk = cand.entry.abs() * cfg.min_risk_frac;
+    if risk <= 0.0 || risk < min_risk {
         return reject(cand, profile, final_sl, classical_sl, adaptive_sl, atr_pct,
                       cfg.commission_bps, RejectReason::InvalidGeometry);
     }

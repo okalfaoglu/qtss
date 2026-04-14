@@ -145,6 +145,40 @@ pub struct RecordedEvent {
 // Structure Tracker
 // =========================================================================
 
+/// P17 — hysteresis policy for `auto_reclassify` and dedup windowing.
+/// Exposed as a struct so callers can load from `qtss_config`
+/// (CLAUDE.md rule #2). Defaults are safe for all TFs; worker should
+/// override via `wyckoff.structure.*` config keys.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ReclassifyPolicy {
+    /// Max times a structure's schematic can flip via `auto_reclassify`
+    /// in its lifetime. Prevents ping-pong between Re-Accum/Re-Dist on
+    /// choppy bars (Gemini P17 review #1).
+    pub max_flips: u32,
+    /// Minimum bar gap between two flips. A Spring 3 bars after a UTAD
+    /// is noise, not a genuine character change.
+    pub min_gap_bars: u64,
+    /// Dedup window (bars) for `record_event_with_time`. Gemini review
+    /// #4 — 3 was too narrow on LTF (1m/5m) where the same SC can ring
+    /// 4-5 bars apart. TF-aware value provided by caller.
+    pub dedup_window_bars: u64,
+    /// Dedup price-equality tolerance as pct of price. Two SC at
+    /// different prices but within window are still the same event if
+    /// |Δp|/p < eps_pct.
+    pub dedup_price_eps_pct: f64,
+}
+
+impl Default for ReclassifyPolicy {
+    fn default() -> Self {
+        Self {
+            max_flips: 2,
+            min_gap_bars: 20,
+            dedup_window_bars: 3,
+            dedup_price_eps_pct: 0.5,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WyckoffStructureTracker {
     pub schematic: WyckoffSchematic,
@@ -157,6 +191,15 @@ pub struct WyckoffStructureTracker {
     pub slope_deg: f64,
     pub is_active: bool,
     pub failure_reason: Option<String>,
+    /// P17 — count of `auto_reclassify`-triggered schematic flips.
+    #[serde(default)]
+    pub reclassify_count: u32,
+    /// P17 — bar_index of the most recent flip (for cooldown gating).
+    #[serde(default)]
+    pub last_reclassify_bar: Option<u64>,
+    /// P17 — hysteresis + dedup policy (config-driven per CLAUDE.md #2).
+    #[serde(default)]
+    pub policy: ReclassifyPolicy,
 }
 
 impl WyckoffStructureTracker {
@@ -173,7 +216,16 @@ impl WyckoffStructureTracker {
             slope_deg: 0.0,
             is_active: true,
             failure_reason: None,
+            reclassify_count: 0,
+            last_reclassify_bar: None,
+            policy: ReclassifyPolicy::default(),
         }
+    }
+
+    /// Set hysteresis + dedup policy (caller loads from qtss_config).
+    pub fn with_policy(mut self, policy: ReclassifyPolicy) -> Self {
+        self.policy = policy;
+        self
     }
 
     /// Back-compat shim — record without a timestamp. New callers
@@ -197,14 +249,24 @@ impl WyckoffStructureTracker {
         score: f64,
         time_ms: Option<i64>,
     ) {
-        let dominated = self.events.iter().any(|e| {
-            e.event == event && bar_index.abs_diff(e.bar_index) <= 3
-        });
-        if dominated {
-            // Update score if the new one is better, but don't append.
-            if let Some(existing) = self.events.iter_mut().find(|e| {
-                e.event == event && bar_index.abs_diff(e.bar_index) <= 3
-            }) {
+        // P17 — TF-aware dedup: same event type within `dedup_window_bars`
+        // AND (price is within eps OR either price is NaN). The price
+        // check prevents two *semantically distinct* SCs at far-apart
+        // prices from collapsing just because they land in the same
+        // 20-bar window; the window check prevents the 3200-dup bug.
+        let win = self.policy.dedup_window_bars;
+        let eps_pct = self.policy.dedup_price_eps_pct;
+        let price_close = |a: f64, b: f64| -> bool {
+            let base = a.abs().max(b.abs()).max(1e-9);
+            ((a - b).abs() / base) * 100.0 <= eps_pct
+        };
+        let dup_match = |e: &RecordedEvent| -> bool {
+            e.event == event
+                && bar_index.abs_diff(e.bar_index) <= win
+                && price_close(e.price, price)
+        };
+        if self.events.iter().any(&dup_match) {
+            if let Some(existing) = self.events.iter_mut().find(|e| dup_match(e)) {
                 if score > existing.score {
                     existing.score = score;
                     existing.price = price;
@@ -274,7 +336,7 @@ impl WyckoffStructureTracker {
         // Preserves the Re-* prefix: a distribution that flips bullish
         // becomes Re-Accumulation (it lives inside a broader uptrend),
         // not a fresh Accumulation.
-        self.auto_reclassify(event);
+        self.auto_reclassify(event, bar_index);
 
         // Phase advancement — canonical sequential gates (A→B→C→D→E)
         // require the earlier phase's evidence to be present.
@@ -307,7 +369,7 @@ impl WyckoffStructureTracker {
 
     /// Promote schematic when an event unambiguously belongs to the
     /// opposite directional family. Look-up table — no scattered if/else.
-    fn auto_reclassify(&mut self, event: WyckoffEvent) {
+    fn auto_reclassify(&mut self, event: WyckoffEvent, bar_index: u64) {
         use WyckoffEvent::*;
         use WyckoffSchematic::*;
         let bullish = match event {
@@ -316,13 +378,31 @@ impl WyckoffStructureTracker {
             _ => None,
         };
         let Some(bull) = bullish else { return };
-        self.schematic = match (self.schematic, bull) {
+
+        // P17 — hysteresis guards (Gemini review #1). Prevents the
+        // Distribution ↔ ReAccumulation ↔ ReDistribution ping-pong on
+        // choppy bars where UTAD and Spring fire in quick succession.
+        if self.reclassify_count >= self.policy.max_flips {
+            return;
+        }
+        if let Some(last) = self.last_reclassify_bar {
+            if bar_index.saturating_sub(last) < self.policy.min_gap_bars {
+                return;
+            }
+        }
+
+        let next = match (self.schematic, bull) {
             (Distribution,   true)  => ReAccumulation,
             (ReDistribution, true)  => Accumulation,
             (Accumulation,   false) => ReDistribution,
             (ReAccumulation, false) => Distribution,
             (s, _) => s,
         };
+        if next != self.schematic {
+            self.schematic = next;
+            self.reclassify_count += 1;
+            self.last_reclassify_bar = Some(bar_index);
+        }
     }
 
     /// Try to advance phase based on accumulated events.
