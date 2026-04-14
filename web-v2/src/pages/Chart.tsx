@@ -1293,17 +1293,22 @@ export function Chart() {
 
       // ── FVG + IFVG detection & visualization ──
       // FVG = 3-candle gap. IFVG = FVG violated by price → bias flips.
+      // Minimum gap size filter: ignore tiny gaps (noise)
       if (merged.candles.length >= 3) {
         interface FvgZone {
-          idx: number;       // candle index where FVG formed (middle candle)
-          top: number;
+          c1Idx: number;     // candle 1 index (box starts here)
+          c3Idx: number;     // candle 3 index
+          top: number;       // exact mum wicks (touches candle)
           bottom: number;
-          bull: boolean;      // original direction
-          inverted: boolean;  // true if price broke through → IFVG
-          violatedAt: number; // candle index where violated
+          bull: boolean;
+          inverted: boolean;
+          violatedAt: number;
+          filled: boolean;   // fully filled by price action
         }
         const fvgs: FvgZone[] = [];
-        const startIdx = Math.max(0, merged.candles.length - 150);
+        const startIdx = Math.max(0, merged.candles.length - 200);
+        const currentPrice = Number(merged.candles[merged.candles.length - 1].close);
+        const minGap = currentPrice * 0.0005; // min 0.05% gap to filter noise
 
         // Step 1: Detect all FVGs
         for (let i = startIdx + 2; i < merged.candles.length; i++) {
@@ -1312,56 +1317,68 @@ export function Chart() {
           const h3 = Number(merged.candles[i].high);
           const l3 = Number(merged.candles[i].low);
 
-          // Bullish FVG: C3 low > C1 high (gap up)
-          if (l3 > h1 && (l3 - h1) > 0) {
-            fvgs.push({ idx: i - 1, top: l3, bottom: h1, bull: true, inverted: false, violatedAt: -1 });
+          // Bullish FVG: C3 low > C1 high (gap up — price jumped)
+          if (l3 > h1 && (l3 - h1) > minGap) {
+            fvgs.push({ c1Idx: i - 2, c3Idx: i, top: l3, bottom: h1, bull: true, inverted: false, violatedAt: -1, filled: false });
           }
-          // Bearish FVG: C1 low > C3 high (gap down)
-          if (l1 > h3 && (l1 - h3) > 0) {
-            fvgs.push({ idx: i - 1, top: l1, bottom: h3, bull: false, inverted: false, violatedAt: -1 });
+          // Bearish FVG: C1 low > C3 high (gap down — price dropped)
+          if (l1 > h3 && (l1 - h3) > minGap) {
+            fvgs.push({ c1Idx: i - 2, c3Idx: i, top: l1, bottom: h3, bull: false, inverted: false, violatedAt: -1, filled: false });
           }
         }
 
-        // Step 2: Check if any FVG was violated → becomes IFVG
+        // Step 2: Check fill & IFVG status
         for (const fvg of fvgs) {
-          for (let j = fvg.idx + 2; j < merged.candles.length; j++) {
+          for (let j = fvg.c3Idx + 1; j < merged.candles.length; j++) {
             const cLow = Number(merged.candles[j].low);
             const cHigh = Number(merged.candles[j].high);
-            if (fvg.bull && cLow < fvg.bottom) {
-              // Bullish FVG broken downward → Bearish IFVG (resistance on retest)
+
+            // Check if FVG is fully filled (price crossed through entire gap)
+            if (fvg.bull && cLow <= fvg.bottom) {
+              // Bullish FVG broken downward → Bearish IFVG
               fvg.inverted = true;
               fvg.violatedAt = j;
               break;
             }
-            if (!fvg.bull && cHigh > fvg.top) {
-              // Bearish FVG broken upward → Bullish IFVG (support on retest)
+            if (!fvg.bull && cHigh >= fvg.top) {
+              // Bearish FVG broken upward → Bullish IFVG
               fvg.inverted = true;
               fvg.violatedAt = j;
               break;
+            }
+            // Partial fill: price touched CE (50%) but didn't break through
+            const ce = (fvg.top + fvg.bottom) / 2;
+            if (fvg.bull && cLow <= ce) {
+              fvg.filled = true; // partially filled at CE
+            }
+            if (!fvg.bull && cHigh >= ce) {
+              fvg.filled = true;
             }
           }
         }
 
-        // Step 3: Draw as filled rectangles — show last 10
-        const recent = fvgs.slice(-10);
-        for (const fvg of recent) {
-          const sT = isoToUnix(merged.candles[fvg.idx].open_time);
-          const extendTo = fvg.inverted && fvg.violatedAt > 0
-            ? Math.min(fvg.violatedAt + 20, merged.candles.length - 1)
-            : Math.min(fvg.idx + 15, merged.candles.length - 1);
-          const eT = isoToUnix(merged.candles[extendTo].open_time);
+        // Step 3: Draw — only show unfilled FVGs and recent IFVGs (max 8)
+        const active = fvgs.filter((f) => !f.filled || f.inverted).slice(-8);
+        for (const fvg of active) {
+          // Box starts at C1 candle, extends right
+          const sT = isoToUnix(merged.candles[fvg.c1Idx].open_time);
+          // Extend to violation point or last candle (like TradingView indicators)
+          const endIdx = fvg.inverted && fvg.violatedAt > 0
+            ? Math.min(fvg.violatedAt, merged.candles.length - 1)
+            : merged.candles.length - 1;
+          const eT = isoToUnix(merged.candles[endIdx].open_time);
 
           let fillColor: string;
           let borderColor: string;
           let label: string;
           if (fvg.inverted) {
             const ifvgBull = !fvg.bull;
-            fillColor = ifvgBull ? "#f59e0b20" : "#a855f720";
-            borderColor = ifvgBull ? "#f59e0b90" : "#a855f790";
+            fillColor = ifvgBull ? "#f59e0b18" : "#a855f718";
+            borderColor = ifvgBull ? "#f59e0b80" : "#a855f780";
             label = ifvgBull ? "IFVG+" : "IFVG-";
           } else {
-            fillColor = fvg.bull ? "#3b82f620" : "#ef444420";
-            borderColor = fvg.bull ? "#3b82f680" : "#ef444480";
+            fillColor = fvg.bull ? "#3b82f618" : "#ef444418";
+            borderColor = fvg.bull ? "#3b82f670" : "#ef444470";
             label = fvg.bull ? "FVG+" : "FVG-";
           }
 
@@ -1374,8 +1391,8 @@ export function Chart() {
             borderColor,
             borderWidth: 1,
             label,
-            labelColor: borderColor.replace(/\d\d$/, ""),
-            labelSize: 10,
+            labelColor: borderColor,
+            labelSize: 9,
           });
         }
       }
