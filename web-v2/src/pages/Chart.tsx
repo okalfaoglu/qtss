@@ -849,7 +849,10 @@ export function Chart() {
         }
       }
 
-      // Zone box detections: render as two horizontal price lines
+      // Zone box detections — render as RectanglePrimitive (same lib
+      // Wyckoff box uses). Two-line rendering is deprecated: rectangles
+      // give proper fill + border, auto-extend with chart, and match the
+      // visual language of the Wyckoff trading-range box.
       if (isZone && d.anchors.length >= 2) {
         const p1 = Number(d.anchors[0].price);
         const p2 = Number(d.anchors[1].price);
@@ -857,10 +860,7 @@ export function Chart() {
         const bot = Math.min(p1, p2);
         // P19 — mitigated-zone hide: if any bar AFTER formation had
         // price enter the zone (low ≤ top AND high ≥ bot), the zone
-        // has been "tested" and is no longer actionable. Detector-level
-        // `unfilled_only`/`unmitigated_only` flags are evaluated at
-        // emit time; this catches zones that got mitigated after the
-        // detection was persisted.
+        // has been "tested" and is no longer actionable.
         const formTime = isoToUnix(d.anchors[0].time) as number;
         let mitigated = false;
         for (let i = merged.candles.length - 1; i >= 0; i--) {
@@ -874,30 +874,27 @@ export function Chart() {
           }
         }
         if (mitigated) continue;
-        for (const price of [top, bot]) {
-          const hl = chart.addSeries(LineSeries, {
-            color: color,
-            lineWidth: 1,
-            lineStyle: LineStyle.Dotted,
-            crosshairMarkerVisible: false,
-            lastValueVisible: false,
-            priceLineVisible: false,
-          });
-          // P18 — draw zone from formation bar → latest candle.
-          // SMC zones (FVG/OB/LP/EQ) remain valid until mitigated; the
-          // box should grow with time, not be locked to a stale 30-bar
-          // window. Fallback to detection time if formation anchor is
-          // missing.
-          const lastCandle = merged.candles[merged.candles.length - 1];
-          if (!lastCandle?.open_time) continue;
-          const startTime = isoToUnix(d.anchors[0].time);
-          const endTime = isoToUnix(lastCandle.open_time);
-          hl.setData(sortLineData([
-            { time: startTime, value: price },
-            { time: endTime, value: price },
-          ]));
-          overlayLinesRef.current.push(hl);
-        }
+        const lastCandle = merged.candles[merged.candles.length - 1];
+        if (!lastCandle?.open_time) continue;
+        const startTime = isoToUnix(d.anchors[0].time);
+        const endTime = isoToUnix(lastCandle.open_time);
+        // Derive fill from subkind color with low alpha, border with
+        // higher alpha. Hex color from familyColor() is already set
+        // per-subkind (FVG=green/red, OB=blue/orange, LP/EQ=yellow/purple).
+        const prim = new RectanglePrimitive({
+          time1: startTime,
+          time2: endTime,
+          priceTop: top,
+          priceBottom: bot,
+          fillColor: `${color}1a`,      // ~10% alpha
+          borderColor: `${color}80`,    // ~50% alpha
+          borderWidth: 1,
+          label: (d.subkind ?? "zone").replace(/_/g, " ").toUpperCase(),
+          labelColor: color,
+          labelSize: 9,
+        });
+        candleSeries.attachPrimitive(prim);
+        rectanglePrimitivesRef.current.push(prim);
       }
 
       // Entry / TP / SL price lines (only when layer enabled)
