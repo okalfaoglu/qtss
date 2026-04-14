@@ -249,8 +249,23 @@ impl WyckoffStructureTracker {
         // not a fresh Accumulation.
         self.auto_reclassify(event);
 
-        // Phase advancement
+        // Phase advancement — canonical sequential gates (A→B→C→D→E)
+        // require the earlier phase's evidence to be present.
         self.try_advance_phase();
+
+        // Bootstrap guard: when a tracker is spawned mid-structure by
+        // the historical progressive scan, the first event recorded can
+        // easily be a Phase D (SOS/LPS/JAC) or Phase E (Markup) event
+        // with no prior climax/AR/ST visible. The sequential gate above
+        // would leave current_phase stuck at A even though the event's
+        // canonical phase is far more advanced. We promote to at least
+        // the event's own phase so the GUI and setup gates report an
+        // honest assessment instead of a misleading "Phase A" with a
+        // single SOS in the timeline. The stricter progression logic
+        // above still governs normal start-from-PS evolution.
+        if event.phase() > self.current_phase {
+            self.current_phase = event.phase();
+        }
     }
 
     /// Promote schematic when an event unambiguously belongs to the
@@ -626,6 +641,20 @@ mod tests {
         mixed.record_event(WyckoffEvent::UTAD, 55, 95.0, 0.9);
         mixed.schematic = WyckoffSchematic::Accumulation;
         assert!(pure_conf > mixed.confidence());
+    }
+
+    #[test]
+    fn mid_structure_event_promotes_phase() {
+        // Historical scan spawns a tracker and the first event seen is
+        // an SOS (canonical Phase D). Without the bootstrap guard the
+        // tracker stayed at Phase A because try_advance_phase needs
+        // SC/BC + AR + ST first. After the guard it reports Phase D.
+        let t = tracker_with(&[(WyckoffEvent::SOS, 100, 0.9)]);
+        assert_eq!(t.current_phase, WyckoffPhase::D);
+
+        // And a Markup alone lands in Phase E.
+        let e = tracker_with(&[(WyckoffEvent::Markup, 200, 0.9)]);
+        assert_eq!(e.current_phase, WyckoffPhase::E);
     }
 
     #[test]

@@ -232,23 +232,46 @@ function StructureDetail({ id }: { id: string }) {
         </div>
       )}
 
-      {/* Schematic reference */}
+      {/* Schematic reference — highlight current phase row */}
       <div className="rounded border border-zinc-800 bg-zinc-900/30 p-3">
         <div className="mb-1 text-xs font-bold uppercase text-zinc-500">Schematic Reference</div>
-        <div className="font-mono text-xs text-zinc-400 leading-relaxed whitespace-pre">
-          {s.schematic === "accumulation" || s.schematic === "reaccumulation"
-            ? `Phase A: PS → SC → AR → ST
-Phase B: ST-B (range testing, volume declines)
-Phase C: Spring / Shakeout (false break below support)
-Phase D: SOS → LPS → JAC → BUEC
-Phase E: Markup (trend out of range)`
-            : `Phase A: PS → BC → AR → ST
-Phase B: UA (upthrust action, volume declines)
-Phase C: UTAD (false break above resistance)
-Phase D: SOW → LPSY → Break of Ice
-Phase E: Markdown (trend out of range)`}
-        </div>
+        <SchematicReference schematic={s.schematic} current={s.current_phase} />
       </div>
+    </div>
+  );
+}
+
+function SchematicReference({ schematic, current }: { schematic: string; current: string }) {
+  const bullish = schematic === "accumulation" || schematic === "reaccumulation";
+  const rows: { phase: string; text: string }[] = bullish
+    ? [
+        { phase: "A", text: "Phase A: PS → SC → AR → ST" },
+        { phase: "B", text: "Phase B: ST-B (range testing, volume declines)" },
+        { phase: "C", text: "Phase C: Spring / Shakeout (false break below support)" },
+        { phase: "D", text: "Phase D: SOS → LPS → JAC → BUEC" },
+        { phase: "E", text: "Phase E: Markup (trend out of range)" },
+      ]
+    : [
+        { phase: "A", text: "Phase A: PS → BC → AR → ST" },
+        { phase: "B", text: "Phase B: UA (upthrust action, volume declines)" },
+        { phase: "C", text: "Phase C: UTAD (false break above resistance)" },
+        { phase: "D", text: "Phase D: SOW → LPSY → Break of Ice" },
+        { phase: "E", text: "Phase E: Markdown (trend out of range)" },
+      ];
+  return (
+    <div className="font-mono text-xs leading-relaxed">
+      {rows.map((r) => {
+        const isCurrent = r.phase === current;
+        const cls = isCurrent
+          ? "text-zinc-100 font-bold bg-zinc-800/80 rounded px-1"
+          : "text-zinc-500";
+        return (
+          <div key={r.phase} className={cls}>
+            {isCurrent ? "▶ " : "  "}
+            {r.text}
+          </div>
+        );
+      })}
     </div>
   );
 }
