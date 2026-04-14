@@ -389,13 +389,44 @@ async fn process_symbol(
         }
 
         let subkind = subkind_for(setup.direction);
-        let anchor_price = Decimal::from_f64(last_close).unwrap_or(Decimal::ZERO);
+
+        // P21 — anchor the label to the STRUCTURAL extremum in the
+        // lookback window, not the latest bar. A `bottom_setup` drawn
+        // on the last bar while price is mid-spike looks like the
+        // label is pinned to the wrong bar (user report: "bottom_setup
+        // 42% Weak" floating on top of a rally mum). The structural
+        // low/high inside the same 50-bar window that feeds swing_high/
+        // swing_low is the correct anchor.
+        let (anchor_idx, anchor_px_f64) = match setup.direction {
+            SetupDirection::Bottom => {
+                let slice = &lows[win_start..n];
+                let (rel_i, &px) = slice
+                    .iter()
+                    .enumerate()
+                    .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|(i, v)| (i, v))
+                    .unwrap_or((slice.len().saturating_sub(1), &last_close));
+                (win_start + rel_i, px)
+            }
+            SetupDirection::Top => {
+                let slice = &highs[win_start..n];
+                let (rel_i, &px) = slice
+                    .iter()
+                    .enumerate()
+                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|(i, v)| (i, v))
+                    .unwrap_or((slice.len().saturating_sub(1), &last_close));
+                (win_start + rel_i, px)
+            }
+        };
+        let anchor_bar_time = chronological[anchor_idx].open_time;
+        let anchor_price = Decimal::from_f64(anchor_px_f64).unwrap_or(Decimal::ZERO);
         let invalidation_price = Decimal::from_f64(invalidation).unwrap_or(Decimal::ZERO);
 
         let anchors = json!([
             {
-                "bar_index": last,
-                "time": last_bar_time.to_rfc3339(),
+                "bar_index": anchor_idx,
+                "time": anchor_bar_time.to_rfc3339(),
                 "price": anchor_price.to_string(),
                 "level": "Setup",
                 "label": format!("{:?}", setup.signal),
