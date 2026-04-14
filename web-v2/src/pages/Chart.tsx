@@ -1108,39 +1108,58 @@ export function Chart() {
     // Projection leg labels — only for future legs (markers can't go beyond last candle,
     // so we skip projection markers; labels are shown on the line series via pointMarkers)
 
-    // ── Wyckoff event markers ──
+    // ── Wyckoff event markers (AlphaExtract-style with overlap prevention) ──
     const wyckOverlay = wyckoffQuery.data?.overlay ?? null;
     if (wyckOverlay && (familyModes["wyckoff"] ?? "on") !== "off" && merged.candles?.length) {
       const wEvts = wyckOverlay.events ?? [];
+      // Colors matching AlphaExtract indicator
       const eventMeta: Record<string, { label: string; color: string; pos: "aboveBar" | "belowBar" }> = {
-        p_s: { label: "PS", color: "#f97316", pos: "belowBar" },
-        s_c: { label: "SC", color: "#ef4444", pos: "belowBar" },
-        b_c: { label: "BC", color: "#ef4444", pos: "aboveBar" },
-        a_r: { label: "AR", color: "#22c55e", pos: "aboveBar" },
-        s_t: { label: "ST", color: "#f59e0b", pos: "belowBar" },
-        st_b: { label: "STB", color: "#f59e0b", pos: "belowBar" },
-        spring: { label: "Spring", color: "#10b981", pos: "belowBar" },
-        u_a: { label: "UA", color: "#8b5cf6", pos: "aboveBar" },
-        utad: { label: "UTAD", color: "#ef4444", pos: "aboveBar" },
-        shakeout: { label: "Shake", color: "#ef4444", pos: "belowBar" },
-        s_o_s: { label: "SOS", color: "#22c55e", pos: "aboveBar" },
-        s_o_w: { label: "SOW", color: "#ef4444", pos: "belowBar" },
-        l_p_s: { label: "LPS", color: "#10b981", pos: "belowBar" },
-        lpsy: { label: "LPSY", color: "#ef4444", pos: "belowBar" },
-        j_a_c: { label: "JAC", color: "#22c55e", pos: "aboveBar" },
-        break_of_ice: { label: "BoI", color: "#ef4444", pos: "belowBar" },
-        buec: { label: "BUEC", color: "#3b82f6", pos: "belowBar" },
-        s_o_t: { label: "SOT", color: "#6366f1", pos: "aboveBar" },
-        markup: { label: "MU", color: "#22c55e", pos: "aboveBar" },
-        markdown: { label: "MD", color: "#ef4444", pos: "belowBar" },
+        // Distribution (bearish) — reds/oranges
+        p_s:          { label: "PS",     color: "#4CAF50", pos: "belowBar" },  // Preliminary Support (green)
+        s_c:          { label: "SC",     color: "#45B39D", pos: "belowBar" },  // Selling Climax (turquoise)
+        b_c:          { label: "BC",     color: "#FF7F00", pos: "aboveBar" },  // Buying Climax (orange)
+        a_r:          { label: "AR",     color: "#2ECC71", pos: "aboveBar" },  // Automatic Rally (bright green)
+        s_t:          { label: "ST",     color: "#66CDAA", pos: "belowBar" },  // Secondary Test (aquamarine)
+        st_b:         { label: "ST-D",   color: "#FFA07A", pos: "aboveBar" },  // ST in Distribution (salmon)
+        spring:       { label: "SPRING", color: "#00FA9A", pos: "belowBar" },  // Spring (spring green)
+        u_a:          { label: "UT",     color: "#FFA500", pos: "aboveBar" },  // Upthrust (orange)
+        utad:         { label: "UTAD",   color: "#FFA500", pos: "aboveBar" },  // UTAD (orange)
+        shakeout:     { label: "TSO",    color: "#00FA9A", pos: "belowBar" },  // Terminal Shakeout (spring green)
+        s_o_s:        { label: "SOS",    color: "#27AE60", pos: "aboveBar" },  // Sign of Strength (dark green)
+        s_o_w:        { label: "SOW",    color: "#FF0000", pos: "belowBar" },  // Sign of Weakness (red)
+        l_p_s:        { label: "LPS",    color: "#229954", pos: "belowBar" },  // Last Point of Support (forest green)
+        lpsy:         { label: "LPSY",   color: "#FF4141", pos: "aboveBar" },  // Last Point of Supply (dark red)
+        j_a_c:        { label: "JAC",    color: "#32CD32", pos: "aboveBar" },  // Jump Across Creek (lime)
+        break_of_ice: { label: "BoI",    color: "#FF0000", pos: "belowBar" },  // Break of Ice (red)
+        buec:         { label: "BUEC",   color: "#FF6347", pos: "aboveBar" },  // Backup After UT (tomato)
+        s_o_t:        { label: "SOT",    color: "#008000", pos: "aboveBar" },  // (dark green)
+        markup:       { label: "MU",     color: "#27AE60", pos: "aboveBar" },
+        markdown:     { label: "MD",     color: "#FF0000", pos: "belowBar" },
       };
-      const seen = new Set<string>();
-      for (const ev of wEvts) {
+
+      // Overlap prevention (like AlphaExtract's hasNearbyLabel)
+      const minSpacing = 5; // minimum bars between labels
+      const placed: Array<{ idx: number; price: number }> = [];
+
+      const hasNearbyLabel = (idx: number, price: number): boolean => {
+        const cp = Number(merged!.candles[idx]?.close ?? 1);
+        for (const p of placed) {
+          if (Math.abs(idx - p.idx) < minSpacing && Math.abs(price - p.price) / cp < 0.005) {
+            return true;
+          }
+        }
+        return false;
+      };
+
+      // Sort events by score descending so highest confidence events get placed first
+      const sortedEvts = [...wEvts].sort((a, b) => b.score - a.score);
+
+      for (const ev of sortedEvts) {
         const idx = ev.bar_index;
         if (idx < 0 || idx >= merged.candles.length) continue;
-        const key = `${ev.event}_${idx}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
+        if (hasNearbyLabel(idx, ev.price)) continue;
+
+        placed.push({ idx, price: ev.price });
         const candleTime = isoToUnix(merged.candles[idx].open_time);
         const meta = eventMeta[ev.event] ?? { label: ev.event.toUpperCase(), color: "#9ca3af", pos: "aboveBar" as const };
         allMarkers.push({
