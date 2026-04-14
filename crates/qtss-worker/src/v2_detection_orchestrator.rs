@@ -1463,6 +1463,17 @@ pub(crate) async fn upsert_wyckoff_structure_from_detection(
             }
         }
         None => {
+            // A new structure must seed with a Phase A event (PS/SC/BC/AR/ST).
+            // A bare Phase C/D/E event with no active parent means we
+            // missed the earlier structure — spawning a fresh row from
+            // it produces a misleading "Phase D without A/B/C" record
+            // (operator caught this in production). Skip instead; the
+            // event will be re-picked up once a Phase A event seeds
+            // a proper structure, or it belongs to history we've
+            // already closed.
+            if wy_event.phase() != WyckoffPhase::A {
+                return Ok(());
+            }
             // Create new structure
             let schematic = match variant {
                 "accumulation" => WyckoffSchematic::Accumulation,

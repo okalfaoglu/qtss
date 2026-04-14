@@ -289,28 +289,256 @@ const STATUS_TABS: { key: StatusFilter; label: string }[] = [
   { key: "all",       label: "All" },
 ];
 
+interface PhaseGroup {
+  exchange: string;
+  symbol: string;
+  interval: string;
+  current_phase: string;
+  total: number;
+  active: number;
+  completed: number;
+  failed: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+const PHASE_ORDER = ["A", "B", "C", "D", "E"] as const;
+
+/// Collapse raw per-phase rows into one row per (exchange, symbol, interval)
+/// with a phase-keyed counts map. Drives the timeframe-grouped summary
+/// requested by the operator ("ilk kayıttan bu güne kadar olan fazları
+/// kendi timeframe içerisinde grupla").
+function aggregateByTimeframe(groups: PhaseGroup[]) {
+  const map = new Map<
+    string,
+    {
+      exchange: string;
+      symbol: string;
+      interval: string;
+      total: number;
+      active: number;
+      completed: number;
+      failed: number;
+      first_seen: string;
+      last_seen: string;
+      phases: Record<string, number>;
+    }
+  >();
+  for (const g of groups) {
+    const key = `${g.exchange}|${g.symbol}|${g.interval}`;
+    const prev = map.get(key);
+    if (!prev) {
+      map.set(key, {
+        exchange: g.exchange,
+        symbol: g.symbol,
+        interval: g.interval,
+        total: g.total,
+        active: g.active,
+        completed: g.completed,
+        failed: g.failed,
+        first_seen: g.first_seen,
+        last_seen: g.last_seen,
+        phases: { [g.current_phase]: g.total },
+      });
+    } else {
+      prev.total += g.total;
+      prev.active += g.active;
+      prev.completed += g.completed;
+      prev.failed += g.failed;
+      if (g.first_seen < prev.first_seen) prev.first_seen = g.first_seen;
+      if (g.last_seen > prev.last_seen) prev.last_seen = g.last_seen;
+      prev.phases[g.current_phase] = (prev.phases[g.current_phase] ?? 0) + g.total;
+    }
+  }
+  return Array.from(map.values()).sort((a, b) =>
+    a.symbol.localeCompare(b.symbol) || a.interval.localeCompare(b.interval),
+  );
+}
+
+function PhaseGroupTable({
+  rows,
+  onPick,
+}: {
+  rows: ReturnType<typeof aggregateByTimeframe>;
+  onPick: (symbol: string, interval: string) => void;
+}) {
+  if (rows.length === 0) {
+    return <div className="text-sm text-zinc-600">No structures recorded yet.</div>;
+  }
+  return (
+    <div className="overflow-x-auto rounded border border-zinc-800">
+      <table className="w-full text-xs">
+        <thead className="bg-zinc-900/60 text-zinc-400">
+          <tr>
+            <th className="px-2 py-1.5 text-left">Symbol</th>
+            <th className="px-2 py-1.5 text-left">TF</th>
+            {PHASE_ORDER.map((p) => (
+              <th key={p} className="px-2 py-1.5 text-center">Phase {p}</th>
+            ))}
+            <th className="px-2 py-1.5 text-center">Active</th>
+            <th className="px-2 py-1.5 text-center">Completed</th>
+            <th className="px-2 py-1.5 text-center">Failed</th>
+            <th className="px-2 py-1.5 text-center">Total</th>
+            <th className="px-2 py-1.5 text-left">First</th>
+            <th className="px-2 py-1.5 text-left">Last</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr
+              key={`${r.exchange}-${r.symbol}-${r.interval}`}
+              onClick={() => onPick(r.symbol, r.interval)}
+              className="cursor-pointer border-t border-zinc-800 hover:bg-zinc-900/60"
+            >
+              <td className="px-2 py-1 font-mono font-semibold text-zinc-200">{r.symbol}</td>
+              <td className="px-2 py-1 font-mono text-zinc-400">{r.interval}</td>
+              {PHASE_ORDER.map((p) => {
+                const n = r.phases[p] ?? 0;
+                return (
+                  <td key={p} className="px-2 py-1 text-center">
+                    {n > 0 ? (
+                      <span className={`rounded px-1.5 py-0.5 ${PHASE_COLORS[p] ?? ""}`}>{n}</span>
+                    ) : (
+                      <span className="text-zinc-700">0</span>
+                    )}
+                  </td>
+                );
+              })}
+              <td className="px-2 py-1 text-center text-emerald-400">{r.active}</td>
+              <td className="px-2 py-1 text-center text-blue-400">{r.completed}</td>
+              <td className="px-2 py-1 text-center text-red-400">{r.failed}</td>
+              <td className="px-2 py-1 text-center font-semibold text-zinc-200">{r.total}</td>
+              <td className="px-2 py-1 text-zinc-500">{new Date(r.first_seen).toLocaleDateString()}</td>
+              <td className="px-2 py-1 text-zinc-500">{new Date(r.last_seen).toLocaleDateString()}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function Wyckoff() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [status, setStatus] = useState<StatusFilter>("active");
 
-  // Active tab hits /v2/wyckoff/active (no-limit, auto-refresh faster);
-  // other tabs hit /v2/wyckoff/recent?status=... with higher cap.
+  // Exchange / symbol / timeframe filters — applied to both the
+  // list feed and the phase-group summary.
+  const [exchange, setExchange] = useState<string>("");
+  const [symbol, setSymbol] = useState<string>("");
+  const [interval, setIntervalF] = useState<string>("");
+
+  const queryString = (() => {
+    const params = new URLSearchParams();
+    params.set("limit", "200");
+    if (exchange) params.set("exchange", exchange);
+    if (symbol) params.set("symbol", symbol);
+    if (interval) params.set("interval", interval);
+    return params.toString();
+  })();
+
+  // Active tab still hits /v2/wyckoff/active but we forward symbol/interval
+  // so the two paths converge on filtered results.
+  const activeParams = (() => {
+    const p = new URLSearchParams();
+    if (symbol) p.set("symbol", symbol);
+    if (interval) p.set("interval", interval);
+    return p.toString();
+  })();
+
   const listQuery = useQuery({
-    queryKey: ["v2", "wyckoff", "list", status],
+    queryKey: ["v2", "wyckoff", "list", status, exchange, symbol, interval],
     queryFn: () =>
       status === "active"
-        ? apiFetch<{ structures: WyckoffStructure[] }>("/v2/wyckoff/active")
+        ? apiFetch<{ structures: WyckoffStructure[] }>(
+            `/v2/wyckoff/active${activeParams ? `?${activeParams}` : ""}`,
+          )
         : apiFetch<{ structures: WyckoffStructure[] }>(
-            `/v2/wyckoff/recent?status=${status}&limit=200`,
+            `/v2/wyckoff/recent?status=${status}&${queryString}`,
           ),
     refetchInterval: status === "active" ? 15_000 : 60_000,
   });
 
+  const groupsQuery = useQuery({
+    queryKey: ["v2", "wyckoff", "phase-groups", exchange, symbol, interval],
+    queryFn: () => {
+      const p = new URLSearchParams();
+      if (exchange) p.set("exchange", exchange);
+      if (symbol) p.set("symbol", symbol);
+      if (interval) p.set("interval", interval);
+      const qs = p.toString();
+      return apiFetch<{ groups: PhaseGroup[] }>(
+        `/v2/wyckoff/phase-groups${qs ? `?${qs}` : ""}`,
+      );
+    },
+    refetchInterval: 60_000,
+  });
+
   const structures = listQuery.data?.structures ?? [];
+  const aggregated = aggregateByTimeframe(groupsQuery.data?.groups ?? []);
+
+  // Derive option lists from whatever groups the backend returned so we
+  // don't need a separate catalog endpoint; as new symbols/intervals
+  // enter the table they appear automatically.
+  const allGroups = groupsQuery.data?.groups ?? [];
+  const exchanges = Array.from(new Set(allGroups.map((g) => g.exchange))).sort();
+  const symbols = Array.from(new Set(allGroups.map((g) => g.symbol))).sort();
+  const intervals = Array.from(new Set(allGroups.map((g) => g.interval))).sort();
+
+  const filtersActive = exchange || symbol || interval;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 p-6">
+    <div className="mx-auto max-w-7xl space-y-6 p-6">
       <h1 className="text-xl font-bold text-zinc-100">Wyckoff Structures</h1>
+
+      {/* Filters row: exchange / symbol / timeframe. */}
+      <div className="flex flex-wrap items-center gap-2 rounded border border-zinc-800 bg-zinc-900/40 p-3">
+        <span className="text-xs font-semibold uppercase text-zinc-500">Filters</span>
+        <select
+          value={exchange}
+          onChange={(e) => setExchange(e.target.value)}
+          className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200"
+        >
+          <option value="">All Exchanges</option>
+          {exchanges.map((x) => <option key={x} value={x}>{x}</option>)}
+        </select>
+        <select
+          value={symbol}
+          onChange={(e) => setSymbol(e.target.value)}
+          className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200"
+        >
+          <option value="">All Symbols</option>
+          {symbols.map((x) => <option key={x} value={x}>{x}</option>)}
+        </select>
+        <select
+          value={interval}
+          onChange={(e) => setIntervalF(e.target.value)}
+          className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200"
+        >
+          <option value="">All Timeframes</option>
+          {intervals.map((x) => <option key={x} value={x}>{x}</option>)}
+        </select>
+        {filtersActive && (
+          <button
+            onClick={() => { setExchange(""); setSymbol(""); setIntervalF(""); }}
+            className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:border-zinc-500"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+
+      {/* Per-timeframe phase distribution. Historical summary: counts
+         from the first stored structure for each (symbol, interval). */}
+      <div className="space-y-2">
+        <h2 className="text-sm font-bold uppercase text-zinc-500">
+          Phases by Timeframe
+        </h2>
+        <PhaseGroupTable
+          rows={aggregated}
+          onPick={(sym, itv) => { setSymbol(sym); setIntervalF(itv); }}
+        />
+      </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Left: structures list with status tabs */}

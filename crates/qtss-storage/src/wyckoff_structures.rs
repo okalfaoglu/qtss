@@ -226,6 +226,9 @@ pub async fn list_wyckoff_history(
 pub async fn list_recent_wyckoff_structures(
     pool: &PgPool,
     status: Option<&str>,
+    exchange: Option<&str>,
+    symbol: Option<&str>,
+    interval: Option<&str>,
     limit: i64,
 ) -> Result<Vec<WyckoffStructureRow>, StorageError> {
     let rows = sqlx::query_as::<_, WyckoffStructureRow>(
@@ -241,14 +244,69 @@ pub async fn list_recent_wyckoff_structures(
                     WHEN 'failed'    THEN failed_at    IS NOT NULL
                     ELSE TRUE
                   END
+              AND ($2::text IS NULL OR exchange = $2)
+              AND ($3::text IS NULL OR symbol   = $3)
+              AND ($4::text IS NULL OR interval = $4)
             ORDER BY COALESCE(completed_at, failed_at, started_at) DESC
-            LIMIT $2"#,
+            LIMIT $5"#,
     )
     .bind(status)
+    .bind(exchange)
+    .bind(symbol)
+    .bind(interval)
     .bind(limit)
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Per-(exchange, symbol, interval) phase distribution across the
+/// entire recorded history (since the first row). Powers the GUI's
+/// "phases grouped by timeframe" summary.
+pub async fn list_phase_groups_by_timeframe(
+    pool: &PgPool,
+    exchange: Option<&str>,
+    symbol: Option<&str>,
+    interval: Option<&str>,
+) -> Result<Vec<PhaseGroupRow>, StorageError> {
+    let rows = sqlx::query_as::<_, PhaseGroupRow>(
+        r#"SELECT exchange,
+                  symbol,
+                  interval,
+                  current_phase,
+                  COUNT(*)::bigint                   AS total,
+                  COUNT(*) FILTER (WHERE is_active)::bigint     AS active,
+                  COUNT(*) FILTER (WHERE completed_at IS NOT NULL)::bigint AS completed,
+                  COUNT(*) FILTER (WHERE failed_at    IS NOT NULL)::bigint AS failed,
+                  MIN(started_at) AS first_seen,
+                  MAX(COALESCE(completed_at, failed_at, started_at)) AS last_seen
+             FROM wyckoff_structures
+            WHERE ($1::text IS NULL OR exchange = $1)
+              AND ($2::text IS NULL OR symbol   = $2)
+              AND ($3::text IS NULL OR interval = $3)
+            GROUP BY exchange, symbol, interval, current_phase
+            ORDER BY exchange, symbol, interval, current_phase"#,
+    )
+    .bind(exchange)
+    .bind(symbol)
+    .bind(interval)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct PhaseGroupRow {
+    pub exchange: String,
+    pub symbol: String,
+    pub interval: String,
+    pub current_phase: String,
+    pub total: i64,
+    pub active: i64,
+    pub completed: i64,
+    pub failed: i64,
+    pub first_seen: chrono::DateTime<chrono::Utc>,
+    pub last_seen: chrono::DateTime<chrono::Utc>,
 }
 
 /// Find the active structure for a given (symbol, interval) — at most one.

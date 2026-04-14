@@ -16,7 +16,7 @@ use crate::error::ApiError;
 use crate::state::SharedState;
 use qtss_storage::{
     find_active_wyckoff_structure, get_wyckoff_structure, list_active_wyckoff_structures,
-    list_recent_wyckoff_structures, list_wyckoff_history,
+    list_phase_groups_by_timeframe, list_recent_wyckoff_structures, list_wyckoff_history,
     v2_setups::{list_v2_setups_filtered, SetupFilter},
 };
 
@@ -35,7 +35,17 @@ pub struct HistoryQuery {
 pub struct RecentQuery {
     /// `active` | `completed` | `failed` | `all` (default `all`).
     pub status: Option<String>,
+    pub exchange: Option<String>,
+    pub symbol: Option<String>,
+    pub interval: Option<String>,
     pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PhaseGroupsQuery {
+    pub exchange: Option<String>,
+    pub symbol: Option<String>,
+    pub interval: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,6 +70,7 @@ pub fn v2_wyckoff_router() -> Router<SharedState> {
             get(get_overlay),
         )
         .route("/v2/wyckoff/setups", get(get_wyckoff_setups))
+        .route("/v2/wyckoff/phase-groups", get(get_phase_groups))
 }
 
 /// Wyckoff-scoped setup feed. Thin wrapper around
@@ -115,10 +126,35 @@ async fn get_recent(
     Query(q): Query<RecentQuery>,
 ) -> Result<Json<JsonValue>, ApiError> {
     let limit = q.limit.unwrap_or(100).clamp(1, 500);
-    let rows = list_recent_wyckoff_structures(&st.pool, q.status.as_deref(), limit)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let rows = list_recent_wyckoff_structures(
+        &st.pool,
+        q.status.as_deref(),
+        q.exchange.as_deref(),
+        q.symbol.as_deref(),
+        q.interval.as_deref(),
+        limit,
+    )
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!({ "structures": rows })))
+}
+
+/// Phase counts grouped per (exchange, symbol, interval). Backs the
+/// "phases grouped by timeframe" summary in the GUI — aggregates the
+/// entire history since the first stored structure.
+async fn get_phase_groups(
+    State(st): State<SharedState>,
+    Query(q): Query<PhaseGroupsQuery>,
+) -> Result<Json<JsonValue>, ApiError> {
+    let rows = list_phase_groups_by_timeframe(
+        &st.pool,
+        q.exchange.as_deref(),
+        q.symbol.as_deref(),
+        q.interval.as_deref(),
+    )
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+    Ok(Json(json!({ "groups": rows })))
 }
 
 async fn get_structure(
