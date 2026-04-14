@@ -48,6 +48,19 @@ const FAMILY_COLORS: Record<string, string> = {
   custom: "#d4d4d8",
 };
 
+// P19 — user-facing display names. The `range` family is actually SMC
+// zones (FVG / OB / Liquidity Pool / Equal Levels); "RANGE" was
+// misleading (user expected trading-range channels).
+const FAMILY_DISPLAY: Record<string, string> = {
+  elliott: "elliott",
+  harmonic: "harmonic",
+  classical: "classical",
+  wyckoff: "wyckoff",
+  range: "zones",
+  tbm: "tbm",
+  custom: "custom",
+};
+
 const RANGE_SUBKIND_COLORS: Record<string, string> = {
   bullish_fvg: "#34d399",
   bearish_fvg: "#f87171",
@@ -842,6 +855,25 @@ export function Chart() {
         const p2 = Number(d.anchors[1].price);
         const top = Math.max(p1, p2);
         const bot = Math.min(p1, p2);
+        // P19 — mitigated-zone hide: if any bar AFTER formation had
+        // price enter the zone (low ≤ top AND high ≥ bot), the zone
+        // has been "tested" and is no longer actionable. Detector-level
+        // `unfilled_only`/`unmitigated_only` flags are evaluated at
+        // emit time; this catches zones that got mitigated after the
+        // detection was persisted.
+        const formTime = isoToUnix(d.anchors[0].time) as number;
+        let mitigated = false;
+        for (let i = merged.candles.length - 1; i >= 0; i--) {
+          const c = merged.candles[i];
+          if (!c?.open_time) continue;
+          const t = isoToUnix(c.open_time) as number;
+          if (t <= formTime) break;
+          if (Number(c.low) <= top && Number(c.high) >= bot) {
+            mitigated = true;
+            break;
+          }
+        }
+        if (mitigated) continue;
         for (const price of [top, bot]) {
           const hl = chart.addSeries(LineSeries, {
             color: color,
@@ -1693,7 +1725,7 @@ export function Chart() {
                       className="inline-block h-1.5 w-2.5 rounded-sm"
                       style={{ background: isOff ? "#3f3f46" : color }}
                     />
-                    {family}
+                    {FAMILY_DISPLAY[family] ?? family}
                   </button>
                 );
               })}
