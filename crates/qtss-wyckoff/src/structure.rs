@@ -131,6 +131,14 @@ pub struct RecordedEvent {
     pub bar_index: u64,
     pub price: f64,
     pub score: f64,
+    /// Unix epoch milliseconds of the anchor bar's open time. Added
+    /// post-P2a because `bar_index` became global (relative to the
+    /// symbol's full history) while the chart overlay only holds the
+    /// recent visible window — indexing by bar_index misaligns events.
+    /// `None` for rows written before this field existed; the chart
+    /// falls back to bar_index in that case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_ms: Option<i64>,
 }
 
 // =========================================================================
@@ -168,12 +176,27 @@ impl WyckoffStructureTracker {
         }
     }
 
+    /// Back-compat shim — record without a timestamp. New callers
+    /// should prefer [`record_event_with_time`] so the chart overlay
+    /// can pin events to the exact candle regardless of bar_index
+    /// origin (rolling-window vs global).
+    pub fn record_event(&mut self, event: WyckoffEvent, bar_index: u64, price: f64, score: f64) {
+        self.record_event_with_time(event, bar_index, price, score, None);
+    }
+
     /// Record a new event and advance phase if warranted.
     ///
     /// Dedup: skip if the same event type was already recorded at the
     /// same bar_index, or within a 3-bar tolerance window with the
     /// same price (prevents 3200-duplicate bugs seen in production).
-    pub fn record_event(&mut self, event: WyckoffEvent, bar_index: u64, price: f64, score: f64) {
+    pub fn record_event_with_time(
+        &mut self,
+        event: WyckoffEvent,
+        bar_index: u64,
+        price: f64,
+        score: f64,
+        time_ms: Option<i64>,
+    ) {
         let dominated = self.events.iter().any(|e| {
             e.event == event && bar_index.abs_diff(e.bar_index) <= 3
         });
@@ -186,6 +209,9 @@ impl WyckoffStructureTracker {
                     existing.score = score;
                     existing.price = price;
                     existing.bar_index = bar_index;
+                    if time_ms.is_some() {
+                        existing.time_ms = time_ms;
+                    }
                 }
             }
             return;
@@ -195,6 +221,7 @@ impl WyckoffStructureTracker {
             bar_index,
             price,
             score,
+            time_ms,
         });
 
         // Update key levels.
