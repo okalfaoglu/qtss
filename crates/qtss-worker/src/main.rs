@@ -53,6 +53,7 @@ mod v2_setup_telegram_loop;
 mod wyckoff_setup_loop;
 mod regime_deep_loop;
 mod pivot_historical_backfill;
+mod historical_progressive_scan;
 
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -355,6 +356,10 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(pivot_historical_backfill::pivot_historical_backfill_loop(
             pivot_bf_pool,
         ));
+        let hps_pool = pool.clone();
+        tokio::spawn(
+            historical_progressive_scan::historical_progressive_scan_loop(hps_pool),
+        );
         binance_user_stream::spawn_binance_user_stream_tasks(&pool).await;
         Some(pool)
     } else {

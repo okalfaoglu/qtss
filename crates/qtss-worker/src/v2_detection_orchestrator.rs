@@ -76,7 +76,7 @@ use uuid::Uuid;
 /// into the pivot/regime engines. Tree-only detectors (Elliott,
 /// Harmonic, Classical, Wyckoff) ignore it; bar-driven detectors
 /// (Range / future TBM-shaped families) read from it directly.
-trait DetectorRunner: Send + Sync {
+pub(crate) trait DetectorRunner: Send + Sync {
     /// Stable family key: "elliott" / "harmonic" / "classical" / "wyckoff" / "range".
     /// Reserved for richer dispatch / metrics in Adım 3 (validator wiring).
     #[allow(dead_code)]
@@ -91,6 +91,7 @@ trait DetectorRunner: Send + Sync {
         regime: &RegimeSnapshot,
     ) -> Vec<Detection>;
 }
+
 
 struct ElliottRunner(ElliottDetectorSet);
 impl DetectorRunner for ElliottRunner {
@@ -563,7 +564,7 @@ async fn resolve_elliott_toggles(pool: &PgPool) -> ElliottFormationToggles {
 /// Build the active detector list from config. Each family is gated by
 /// its own `detection.<family>.enabled` toggle so an operator can
 /// disable noisy ones without restarting the worker.
-async fn build_runners(pool: &PgPool) -> Vec<Box<dyn DetectorRunner>> {
+pub(crate) async fn build_runners(pool: &PgPool) -> Vec<Box<dyn DetectorRunner>> {
     let mut runners: Vec<Box<dyn DetectorRunner>> = Vec::new();
 
     if resolve_worker_enabled_flag(
@@ -1866,7 +1867,7 @@ fn infer_direction(_family: &str, subkind: &str) -> Option<Direction> {
     None
 }
 
-fn split_pattern_kind(kind: &PatternKind) -> (&'static str, &str) {
+pub(crate) fn split_pattern_kind(kind: &PatternKind) -> (&'static str, &str) {
     match kind {
         PatternKind::Elliott(s) => ("elliott", s.as_str()),
         PatternKind::Harmonic(s) => ("harmonic", s.as_str()),
