@@ -1,8 +1,24 @@
 //! WyckoffDetector — runs every event spec through the same loop and
-//! emits the highest-scoring detection (if any). Specs that need extra
-//! pivots beyond the configured `min_range_pivots` (e.g. Spring, which
-//! consumes the trailing range *plus* one false-break pivot) are sized
-//! by each `eval` itself; the detector just hands them the full tail.
+//! emits **every** detection whose score clears the
+//! `min_structural_score` gate (P13).
+//!
+//! **Why not a single "best" detection anymore?** Wyckoff phases require
+//! a *vocabulary* of distinct events (PS, SC, AR, ST, UA, STB, Spring,
+//! SOS, LPS, JAC, BUEC …) to advance A→B→C→D→E through the sequential
+//! gates in `WyckoffStructureTracker::try_advance_phase`. When this
+//! detector returned only the top-scoring match per call, the SC event
+//! almost always shadowed UA / SOS / LPS on the same pivot window — so
+//! downstream the tracker saw nothing but a wall of SC detections and
+//! could never collect the evidence needed to transition out of Phase A.
+//! That is the root cause of the "0 A→B→C→D→E cycles in 4 years"
+//! finding on BTC 1d. We now return every qualifying match; the
+//! orchestrator dedups per (symbol, TF, subkind, anchor) via
+//! `anchor_already_seen`.
+//!
+//! Specs that need extra pivots beyond the configured
+//! `min_range_pivots` (e.g. Spring, which consumes the trailing range
+//! *plus* one false-break pivot) are sized by each `eval` itself; the
+//! detector just hands them the full tail.
 
 use crate::config::WyckoffConfig;
 use crate::error::WyckoffResult;
@@ -33,37 +49,32 @@ impl WyckoffDetector {
         instrument: &Instrument,
         timeframe: Timeframe,
         regime: &RegimeSnapshot,
-    ) -> Option<Detection> {
+    ) -> Vec<Detection> {
         let pivots = tree.at_level(self.config.pivot_level);
         if pivots.len() < self.config.min_range_pivots {
-            return None;
+            return Vec::new();
         }
 
-        let mut best: Option<(&EventSpec, EventMatch)> = None;
+        let mut out = Vec::new();
         for spec in EVENTS {
-            if let Some(m) = (spec.eval)(pivots, &self.config) {
-                if best.as_ref().map(|(_, b)| m.score > b.score).unwrap_or(true) {
-                    best = Some((spec, m));
-                }
+            let Some(m) = (spec.eval)(pivots, &self.config) else { continue };
+            if (m.score as f32) < self.config.min_structural_score {
+                continue;
             }
+            let kind = PatternKind::Wyckoff(format!("{}_{}", spec.name, m.variant));
+            let anchors = label_anchors(pivots, &m.anchor_labels, self.config.pivot_level);
+            out.push(Detection::new(
+                instrument.clone(),
+                timeframe,
+                kind,
+                PatternState::Forming,
+                anchors,
+                m.score as f32,
+                m.invalidation,
+                regime.clone(),
+            ));
         }
-        let (spec, m) = best?;
-        if (m.score as f32) < self.config.min_structural_score {
-            return None;
-        }
-
-        let kind = PatternKind::Wyckoff(format!("{}_{}", spec.name, m.variant));
-        let anchors = label_anchors(pivots, &m.anchor_labels, self.config.pivot_level);
-        Some(Detection::new(
-            instrument.clone(),
-            timeframe,
-            kind,
-            PatternState::Forming,
-            anchors,
-            m.score as f32,
-            m.invalidation,
-            regime.clone(),
-        ))
+        out
     }
 }
 

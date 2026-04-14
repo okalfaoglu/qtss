@@ -48,6 +48,10 @@ pub const EVENTS: &[EventSpec] = &[
     EventSpec { name: "break_of_ice",          eval: eval_break_of_ice },
     // SOT
     EventSpec { name: "shortening_of_thrust",  eval: eval_shortening_of_thrust },
+    // P13 additions — completes the 16-event vocabulary.
+    EventSpec { name: "preliminary_supply",   eval: eval_preliminary_supply },
+    EventSpec { name: "secondary_test_b",     eval: eval_secondary_test_b },
+    EventSpec { name: "back_up_edge_creek",   eval: eval_back_up_edge_creek },
 ];
 
 // =========================================================================
@@ -1145,6 +1149,188 @@ fn eval_shortening_of_thrust(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<Ev
         .collect();
 
     check_sot_sequence(&lows, cfg.sot_thrust_decay_ratio, pivots, &range, "accumulation")
+}
+
+// =========================================================================
+// Phase A: Preliminary Supply (PS)
+// =========================================================================
+// First high-volume warning in an uptrend that supply is entering. A PS
+// precedes the BC by one or more pivots — think of it as the market
+// stepping back for the first time in a long markup. Canonical rule:
+//   - A High pivot with elevated (but not yet climactic) volume.
+//   - Followed by a higher High that IS the climactic BC.
+// This is the mirror of how SC does *not* need a predecessor; PS is the
+// predecessor. Variant: distribution (PS only precedes distribution).
+fn eval_preliminary_supply(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
+    if pivots.len() < 4 {
+        return None;
+    }
+    let avg = avg_vol_f64(pivots)?;
+    let climax_thresh = avg * cfg.climax_volume_mult;
+    // PS volume band: elevated but sub-climactic. Use half of climactic
+    // as the floor (the pivot must stand out vs noise) and full climax
+    // as the ceiling (anything above belongs to the BC, not the PS).
+    let ps_lo = avg * (cfg.climax_volume_mult * 0.5).max(1.2);
+    let ps_hi = climax_thresh;
+
+    // Walk highs, find PS candidate, then require a subsequent higher-
+    // High with >= climactic volume (= the BC). Return the PS match.
+    for (ps_i, ps) in pivots.iter().enumerate() {
+        if ps.kind != PivotKind::High { continue; }
+        let ps_vol = ps.volume_at_pivot.to_f64().unwrap_or(0.0);
+        if ps_vol < ps_lo || ps_vol >= ps_hi { continue; }
+        let ps_price = ps.price.to_f64().unwrap_or(0.0);
+
+        for bc in pivots.iter().skip(ps_i + 1) {
+            if bc.kind != PivotKind::High { continue; }
+            let bc_vol = bc.volume_at_pivot.to_f64().unwrap_or(0.0);
+            let bc_price = bc.price.to_f64().unwrap_or(0.0);
+            if bc_price <= ps_price { continue; }
+            if bc_vol < climax_thresh { continue; }
+
+            // Score by how cleanly PS sits in the "elevated but not
+            // climactic" band, plus how much higher the BC is.
+            let vol_fit = ((ps_vol - ps_lo) / (ps_hi - ps_lo).max(1e-9)).clamp(0.0, 1.0);
+            let bc_lift = ((bc_price - ps_price) / ps_price.max(1e-9)).clamp(0.0, 0.1) / 0.1;
+            let score = (vol_fit * 0.5 + bc_lift * 0.5).clamp(0.0, 1.0);
+
+            let mut labels: Vec<&'static str> = (0..pivots.len()).map(label_for).collect();
+            if ps_i < labels.len() { labels[ps_i] = "PS"; }
+            return Some(EventMatch {
+                score,
+                invalidation: ps.price,
+                variant: "distribution",
+                anchor_labels: labels,
+            });
+        }
+    }
+    None
+}
+
+// =========================================================================
+// Phase B: Secondary Test in Phase B (ST-B)
+// =========================================================================
+// Subsequent tests of the range edges *after* Phase A has completed.
+// Distinguished from ST by coming after ≥1 UA/ST/other Phase-B activity
+// and by generally showing further volume diminishment. We don't have
+// direct phase context at detection time, so we approximate: a low/high
+// that tests an edge, with even lower volume than a canonical ST would
+// accept, AND preceded by at least one earlier edge test.
+fn eval_secondary_test_b(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
+    if pivots.len() < 6 {
+        return None;
+    }
+    let range = TradingRange::from_pivots(pivots)?;
+    let _avg = avg_vol_f64(pivots)?; // gate: must have at least some volume data
+    let tol = 0.12_f64; // a bit tighter than ST
+    let max_vol_ratio = cfg.st_max_volume_ratio * 0.75; // stricter volume decay
+
+    // Collect edge-touching pivots (near support or resistance).
+    #[derive(Clone, Copy)]
+    struct Touch { i: usize, #[allow(dead_code)] price: f64, vol: f64, is_low: bool }
+    let mut touches: Vec<Touch> = Vec::new();
+    for (i, p) in pivots.iter().enumerate() {
+        let price = p.price.to_f64().unwrap_or(0.0);
+        let vol = p.volume_at_pivot.to_f64().unwrap_or(0.0);
+        let d_low = (price - range.support).abs() / range.height.max(1e-9);
+        let d_high = (price - range.resistance).abs() / range.height.max(1e-9);
+        if p.kind == PivotKind::Low && d_low < tol {
+            touches.push(Touch { i, price, vol, is_low: true });
+        } else if p.kind == PivotKind::High && d_high < tol {
+            touches.push(Touch { i, price, vol, is_low: false });
+        }
+    }
+    if touches.len() < 2 { return None; }
+
+    // Best ST-B = latest touch with the largest volume decay vs any earlier
+    // same-side touch.
+    let last = touches.last().copied()?;
+    let mut best_decay = 0.0_f64;
+    let mut anchor_prev: Option<usize> = None;
+    for prev in &touches[..touches.len() - 1] {
+        if prev.is_low != last.is_low { continue; }
+        if prev.vol <= 0.0 { continue; }
+        let ratio = last.vol / prev.vol;
+        if ratio > max_vol_ratio { continue; }
+        let decay = 1.0 - ratio;
+        if decay > best_decay {
+            best_decay = decay;
+            anchor_prev = Some(prev.i);
+        }
+    }
+    if best_decay < 0.1 { return None; }
+    let _ = anchor_prev; // anchor label below marks only the STB pivot
+
+    let variant = if last.is_low { "accumulation" } else { "distribution" };
+    let mut labels: Vec<&'static str> = (0..pivots.len()).map(label_for).collect();
+    if last.i < labels.len() { labels[last.i] = "STB"; }
+
+    Some(EventMatch {
+        score: best_decay.clamp(0.0, 1.0),
+        invalidation: last.is_low
+            .then(|| Decimal::try_from(range.support).ok().unwrap_or(Decimal::ZERO))
+            .unwrap_or_else(|| Decimal::try_from(range.resistance).ok().unwrap_or(Decimal::ZERO)),
+        variant,
+        anchor_labels: labels,
+    })
+}
+
+// =========================================================================
+// Phase D: Back Up to Edge of Creek (BUEC)
+// =========================================================================
+// After JAC (jump above creek = range resistance), price pulls back to
+// test the creek from above. The creek used to be resistance and should
+// now act as support. Canonical test: a High (JAC) above creek, followed
+// by a Low that lands *at* the creek (±tol) with low volume, above the
+// creek (did not re-enter the range).
+fn eval_back_up_edge_creek(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
+    if pivots.len() < 4 {
+        return None;
+    }
+    let range = TradingRange::from_pivots(pivots)?;
+    let creek = range.resistance;
+    let avg = avg_vol_f64(pivots)?;
+    let tol = 0.08_f64;
+
+    // Find a JAC-like high (above creek) then a subsequent low at creek.
+    for (jac_i, jac) in pivots.iter().enumerate() {
+        if jac.kind != PivotKind::High { continue; }
+        let jac_price = jac.price.to_f64().unwrap_or(0.0);
+        if jac_price <= creek { continue; }
+        // JAC confidence: clearance above creek relative to range height.
+        let clearance = (jac_price - creek) / range.height.max(1e-9);
+        if clearance < 0.05 { continue; }
+
+        for (buec_i, buec) in pivots.iter().enumerate().skip(jac_i + 1) {
+            if buec.kind != PivotKind::Low { continue; }
+            let buec_price = buec.price.to_f64().unwrap_or(0.0);
+            let buec_vol = buec.volume_at_pivot.to_f64().unwrap_or(0.0);
+            // Must land at creek ±tol and stay above it.
+            if buec_price < creek { continue; }
+            let dist = (buec_price - creek).abs() / range.height.max(1e-9);
+            if dist > tol { continue; }
+            // Volume decay vs average — BUEC is low-effort test.
+            let vol_ratio = if avg > 0.0 { buec_vol / avg } else { 1.0 };
+            if vol_ratio > (cfg.st_max_volume_ratio.max(0.8)) { continue; }
+
+            let precision = 1.0 - (dist / tol).min(1.0);
+            let volume_score = (1.0 - vol_ratio).clamp(0.0, 1.0);
+            let score = (precision * 0.55 + volume_score * 0.25 + clearance.min(0.2) / 0.2 * 0.2)
+                .clamp(0.0, 1.0);
+
+            let mut labels: Vec<&'static str> = (0..pivots.len()).map(label_for).collect();
+            if jac_i < labels.len() { labels[jac_i] = "JAC"; }
+            if buec_i < labels.len() { labels[buec_i] = "BUEC"; }
+
+            return Some(EventMatch {
+                score,
+                invalidation: Decimal::try_from(creek).ok().unwrap_or(Decimal::ZERO),
+                variant: "accumulation",
+                anchor_labels: labels,
+            });
+        }
+    }
+    None
 }
 
 fn check_sot_sequence(

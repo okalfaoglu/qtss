@@ -477,6 +477,11 @@ impl WyckoffStructureTracker {
             "jump_across_creek" => Some(WyckoffEvent::JAC),
             "break_of_ice" => Some(WyckoffEvent::BreakOfIce),
             "shortening_of_thrust" => Some(WyckoffEvent::SOT),
+            // P13 additions — completes the 16-event vocabulary so the
+            // sequential phase gates can actually fire.
+            "preliminary_supply" => Some(WyckoffEvent::PS),
+            "secondary_test_b" => Some(WyckoffEvent::STB),
+            "back_up_edge_creek" => Some(WyckoffEvent::BUEC),
             _ => None,
         }
     }
