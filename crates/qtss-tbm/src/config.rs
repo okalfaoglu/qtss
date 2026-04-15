@@ -99,6 +99,12 @@ pub struct TbmAnchorTuning {
     /// Volume climax bonus kicks in when bar volume ≥ this × 20-bar
     /// average. 1.0 = "average or above".
     pub vol_min_ratio: f64,
+    /// When true, a candidate MUST take out a prior window extreme
+    /// (fake breakdown / fake breakout) to be considered — pure
+    /// Wyckoff-style gating. Default false: sweep remains a weighted
+    /// bonus term so V-bottom reversals without a liquidity grab are
+    /// still picked up.
+    pub sweep_required: bool,
 }
 
 impl Default for TbmAnchorTuning {
@@ -108,6 +114,41 @@ impl Default for TbmAnchorTuning {
             min_right_bars: 3,
             wick_min_ratio: 0.25,
             vol_min_ratio: 1.0,
+            sweep_required: false,
+        }
+    }
+}
+
+/// P23 — confirmation state machine. A forming TBM detection doesn't
+/// become `confirmed` until the market proves the reversal: price must
+/// break the structural level that stood on the opposite side of the
+/// anchor (BoS — break of structure) AND sustain that break with a
+/// follow-through bar of at least `followthrough_atr_mult × ATR(14)`
+/// counter-trend close within `followthrough_bars` bars of the break.
+/// Without both legs a forming row ages out to `invalidated(timeout)`
+/// after `window_bars` bars.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TbmConfirmTuning {
+    /// Master switch — when false, forming rows never auto-promote
+    /// and the old pipeline (validator-driven confirm) is used.
+    pub bos_required: bool,
+    /// Bars to wait after the anchor for BoS to print before we
+    /// time the detection out.
+    pub window_bars: usize,
+    /// Follow-through multiplier on ATR(14) — required closing move
+    /// in the reversal direction after the BoS bar.
+    pub followthrough_atr_mult: f64,
+    /// Bars after BoS to look for the follow-through close.
+    pub followthrough_bars: usize,
+}
+
+impl Default for TbmConfirmTuning {
+    fn default() -> Self {
+        Self {
+            bos_required: true,
+            window_bars: 8,
+            followthrough_atr_mult: 1.0,
+            followthrough_bars: 3,
         }
     }
 }
@@ -124,6 +165,7 @@ pub struct TbmConfig {
     pub setup: TbmSetupTuning,
     pub mtf: TbmMtfTuning,
     pub anchor: TbmAnchorTuning,
+    pub confirm: TbmConfirmTuning,
     pub onchain_enabled: bool,
 }
 
@@ -137,6 +179,7 @@ impl Default for TbmConfig {
             setup: TbmSetupTuning::default(),
             mtf: TbmMtfTuning::default(),
             anchor: TbmAnchorTuning::default(),
+            confirm: TbmConfirmTuning::default(),
             onchain_enabled: false,
         }
     }

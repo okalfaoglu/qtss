@@ -45,7 +45,7 @@ use qtss_storage::{
     V2DetectionRepository,
 };
 use qtss_tbm::{
-    config::{TbmAnchorTuning, TbmConfig, TbmMtfTuning, TbmPillarWeights, TbmSetupTuning},
+    config::{TbmAnchorTuning, TbmConfig, TbmConfirmTuning, TbmMtfTuning, TbmPillarWeights, TbmSetupTuning},
     momentum::score_momentum,
     onchain::{score_onchain, OnchainMetrics, OnchainMetricsProvider},
     pillar::{PillarKind, PillarScore},
@@ -201,6 +201,21 @@ async fn load_config(pool: &PgPool) -> TbmConfig {
         .await,
     };
 
+    let confirm = TbmConfirmTuning {
+        bos_required: resolve_system_u64(
+            pool, "tbm", "confirm.bos_required", "QTSS_TBM_CONFIRM_BOS", 1, 0, 1,
+        ).await != 0,
+        window_bars: resolve_system_u64(
+            pool, "tbm", "confirm.window_bars", "QTSS_TBM_CONFIRM_WINDOW", 8, 1, 100,
+        ).await as usize,
+        followthrough_atr_mult: resolve_system_f64(
+            pool, "tbm", "confirm.followthrough_atr_mult", "QTSS_TBM_CONFIRM_FT_ATR", 1.0,
+        ).await,
+        followthrough_bars: resolve_system_u64(
+            pool, "tbm", "confirm.followthrough_bars", "QTSS_TBM_CONFIRM_FT_BARS", 3, 1, 20,
+        ).await as usize,
+    };
+
     let anchor = TbmAnchorTuning {
         pivot_radius: resolve_system_u64(
             pool, "tbm", "anchor.pivot_radius", "QTSS_TBM_ANCHOR_PIV_RADIUS", 3, 1, 20,
@@ -214,6 +229,9 @@ async fn load_config(pool: &PgPool) -> TbmConfig {
         vol_min_ratio: resolve_system_f64(
             pool, "tbm", "anchor.vol_min_ratio", "QTSS_TBM_ANCHOR_VOL_MIN", 1.0,
         ).await,
+        sweep_required: resolve_system_u64(
+            pool, "tbm", "anchor.sweep_required", "QTSS_TBM_ANCHOR_SWEEP_REQ", 0, 0, 1,
+        ).await != 0,
     };
 
     TbmConfig {
@@ -224,6 +242,7 @@ async fn load_config(pool: &PgPool) -> TbmConfig {
         setup,
         mtf,
         anchor,
+        confirm,
         onchain_enabled,
     }
 }
@@ -393,6 +412,23 @@ async fn process_symbol(
         &repo, sym, &chronological, &lows, &highs, bottom_anchor, top_anchor,
     )
     .await?;
+
+    // P23a+b — confirmation state machine. For every forming row:
+    //   BoS?  yes → follow-through? yes → confirmed; no  → stay forming.
+    //   age > window_bars AND no BoS → invalidated(timeout).
+    // BoS = close breaks the structural level on the opposite side of
+    // the anchor (for a bottom: pre-anchor swing high; for a top:
+    // pre-anchor swing low). Follow-through = >= atr_mult * ATR(14)
+    // close in the reversal direction within followthrough_bars of
+    // the BoS bar. Keeps detections from sitting on "forming" forever
+    // without ever proving the reversal.
+    if cfg.confirm.bos_required {
+        confirm_forming_or_timeout(
+            &repo, sym, &chronological, &highs, &lows, &closes,
+            &cfg.confirm,
+        )
+        .await?;
+    }
 
     let empty: Vec<(usize, f64)> = Vec::new();
 
@@ -874,6 +910,182 @@ async fn supersede_outdated_forming(
     Ok(())
 }
 
+/// P23a+b — walk open forming rows, promote to `confirmed` if BoS +
+/// follow-through have printed, or invalidate with reason=timeout if
+/// the confirmation window has passed without a break.
+async fn confirm_forming_or_timeout(
+    repo: &V2DetectionRepository,
+    sym: &EngineSymbolRow,
+    chronological: &[qtss_storage::MarketBarRow],
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    cfg: &TbmConfirmTuning,
+) -> anyhow::Result<()> {
+    use qtss_storage::DetectionFilter;
+    let rows = repo
+        .list_filtered(DetectionFilter {
+            exchange: Some(&sym.exchange),
+            symbol: Some(&sym.symbol),
+            timeframe: Some(&sym.interval),
+            family: Some("tbm"),
+            state: Some("forming"),
+            mode: None,
+            limit: 50,
+        })
+        .await?;
+    if rows.is_empty() { return Ok(()); }
+
+    let n = chronological.len();
+    if n < 20 { return Ok(()); }
+    let latest_idx = n - 1;
+    // Reusable ATR(14) at the last bar — BoS + follow-through is
+    // measured against *current* volatility, not a stale anchor-era
+    // reading, so we can share one value across rows.
+    let atr_v = qtss_indicators::volatility::atr(highs, lows, closes, 14);
+    let atr_last = atr_v.get(latest_idx).copied().unwrap_or(0.0);
+    if !atr_last.is_finite() || atr_last <= 0.0 { return Ok(()); }
+
+    for row in rows {
+        let anchor_time: Option<chrono::DateTime<Utc>> = row
+            .anchors
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|a| a.get("time"))
+            .and_then(|t| t.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+        let Some(anchor_time) = anchor_time else { continue; };
+        let Some(anchor_idx) = chronological.iter().position(|b| b.open_time == anchor_time)
+        else { continue; };
+        if anchor_idx + 1 >= n { continue; }
+
+        let (confirmed, timeout, bos_idx, ft_idx) = match row.subkind.as_str() {
+            "bottom_setup" => evaluate_bottom_confirm(
+                anchor_idx, latest_idx, highs, lows, closes, atr_last, cfg,
+            ),
+            "top_setup" => evaluate_top_confirm(
+                anchor_idx, latest_idx, highs, lows, closes, atr_last, cfg,
+            ),
+            _ => continue,
+        };
+
+        if confirmed {
+            // structural_score already captures pillar weight; we log
+            // BoS + follow-through bar indices into raw_meta so the
+            // chart can render them and the validator can reuse them.
+            let mut meta: serde_json::Value = row.raw_meta.clone();
+            if let Some(obj) = meta.as_object_mut() {
+                obj.insert("bos_bar_index".into(), json!(bos_idx));
+                obj.insert("followthrough_bar_index".into(), json!(ft_idx));
+                obj.insert("confirm_reason".into(), json!("bos+followthrough"));
+            }
+            let confidence = (row.structural_score as f32).clamp(0.0, 1.0);
+            let channel_scores = json!({
+                "structural": row.structural_score,
+                "bos": 1.0,
+                "followthrough": 1.0,
+            });
+            // mark_validated writes state='confirmed' + validated_at.
+            repo.mark_validated(row.id, confidence, channel_scores, Utc::now())
+                .await?;
+            // Persist BoS/FT bar indices into raw_meta.
+            let _ = repo.update_projection(row.id, row.structural_score, meta).await;
+            debug!(id = %row.id, subkind = %row.subkind, bos_idx, ft_idx, "P23: tbm confirmed");
+        } else if timeout {
+            repo.update_state(row.id, "invalidated").await?;
+            debug!(id = %row.id, subkind = %row.subkind, "P23: tbm invalidated (timeout, no BoS)");
+        }
+    }
+    Ok(())
+}
+
+/// Returns (confirmed, timeout, bos_idx_or_zero, ft_idx_or_zero).
+fn evaluate_bottom_confirm(
+    anchor_idx: usize,
+    latest_idx: usize,
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    atr_last: f64,
+    cfg: &TbmConfirmTuning,
+) -> (bool, bool, usize, usize) {
+    // BoS target = highest swing high in the window BEFORE the anchor
+    // (what the bottom setup needs to break to prove reversal).
+    let pre_start = anchor_idx.saturating_sub(50);
+    let pre_hi = highs[pre_start..anchor_idx]
+        .iter()
+        .cloned()
+        .fold(f64::NEG_INFINITY, f64::max);
+    if !pre_hi.is_finite() {
+        return (false, false, 0, 0);
+    }
+    // Scan post-anchor bars for close > pre_hi (BoS).
+    let scan_end = latest_idx.min(anchor_idx + cfg.window_bars);
+    let mut bos_idx: Option<usize> = None;
+    for i in (anchor_idx + 1)..=scan_end {
+        if closes[i] > pre_hi {
+            bos_idx = Some(i);
+            break;
+        }
+    }
+    let Some(bos) = bos_idx else {
+        let timeout = (latest_idx.saturating_sub(anchor_idx)) > cfg.window_bars;
+        return (false, timeout, 0, 0);
+    };
+    // Follow-through: any bar in [bos, bos+ft_bars] whose close is
+    // at least atr_mult * ATR above the anchor low.
+    let anchor_low = lows[anchor_idx];
+    let trigger = anchor_low + cfg.followthrough_atr_mult * atr_last;
+    let ft_end = latest_idx.min(bos + cfg.followthrough_bars);
+    for i in bos..=ft_end {
+        if closes[i] >= trigger {
+            return (true, false, bos, i);
+        }
+    }
+    (false, false, bos, 0)
+}
+
+fn evaluate_top_confirm(
+    anchor_idx: usize,
+    latest_idx: usize,
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    atr_last: f64,
+    cfg: &TbmConfirmTuning,
+) -> (bool, bool, usize, usize) {
+    let pre_start = anchor_idx.saturating_sub(50);
+    let pre_lo = lows[pre_start..anchor_idx]
+        .iter()
+        .cloned()
+        .fold(f64::INFINITY, f64::min);
+    if !pre_lo.is_finite() {
+        return (false, false, 0, 0);
+    }
+    let scan_end = latest_idx.min(anchor_idx + cfg.window_bars);
+    let mut bos_idx: Option<usize> = None;
+    for i in (anchor_idx + 1)..=scan_end {
+        if closes[i] < pre_lo {
+            bos_idx = Some(i);
+            break;
+        }
+    }
+    let Some(bos) = bos_idx else {
+        let timeout = (latest_idx.saturating_sub(anchor_idx)) > cfg.window_bars;
+        return (false, timeout, 0, 0);
+    };
+    let anchor_high = highs[anchor_idx];
+    let trigger = anchor_high - cfg.followthrough_atr_mult * atr_last;
+    let ft_end = latest_idx.min(bos + cfg.followthrough_bars);
+    for i in bos..=ft_end {
+        if closes[i] <= trigger {
+            return (true, false, bos, i);
+        }
+    }
+    (false, false, bos, 0)
+}
+
 // ---------------------------------------------------------------------
 // Math helpers
 // ---------------------------------------------------------------------
@@ -1056,6 +1268,8 @@ fn pick_anchor(
             let prior_hi = highs[win_start..i].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
             if prior_hi.is_finite() && highs[i] > prior_hi * 1.0005 { 1.0 } else { 0.0 }
         };
+        // Hard gate when `sweep_required` is on — pure-Wyckoff mode.
+        if cfg.sweep_required && sweep < 0.5 { continue; }
 
         // Composite. Depth is the dominant term so we still prefer the
         // actual window extreme when multiple pivots qualify; wick and
