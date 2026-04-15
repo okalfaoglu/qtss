@@ -66,10 +66,22 @@ impl WyckoffDetector {
         timeframe: Timeframe,
         regime: &RegimeSnapshot,
     ) -> Vec<Detection> {
-        let pivots = tree.at_level(self.config.pivot_level);
-        if pivots.len() < self.config.min_range_pivots {
+        let all_pivots = tree.at_level(self.config.pivot_level);
+        if all_pivots.len() < self.config.min_range_pivots {
             return Vec::new();
         }
+        // P8 — pivot-window cap. Without this, a D1/W1 detector saw
+        // every pivot since the asset's inception, so `from_pivots`
+        // returned the all-time-low / all-time-high (BTCUSDT 1d:
+        // 3621 → 126208). A Wyckoff range is a LOCAL structure; feed
+        // the detector only the trailing `pivot_window` pivots.
+        //
+        // Window size = max(min_range_pivots, config.pivot_window).
+        // Defaults to 40 when unset — canonical ranges span 15–40
+        // pivots per Villahermosa ch. 4.
+        let win = self.config.pivot_window.max(self.config.min_range_pivots);
+        let start = all_pivots.len().saturating_sub(win);
+        let pivots = &all_pivots[start..];
 
         let ctx = EventContext::new(pivots, bars, &self.config);
         let mut out = Vec::new();

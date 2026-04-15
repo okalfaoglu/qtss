@@ -27,6 +27,13 @@ pub struct WyckoffConfig {
     pub shakeout_max_penetration: f64,
     /// Drop candidates below this structural score.
     pub min_structural_score: f32,
+    /// P8 — maximum pivots fed to the detector (trailing window). Without
+    /// a cap, `tree.at_level()` returns all pivots since asset inception
+    /// and `from_pivots` resolves to ATL↔ATH — which made BTC 1d ranges
+    /// read as 3621→126208. Canonical Wyckoff ranges span 15–40 pivots
+    /// (Villahermosa ch. 4); default 40 keeps room for PS+A+B+C+D while
+    /// cutting multi-cycle noise.
+    pub pivot_window: usize,
 
     // --- Phase A: Stopping ---
     /// SC/BC volume must be >= Nx average volume.
@@ -171,6 +178,7 @@ impl WyckoffConfig {
             max_penetration: 0.12,          // P2-P1-#5: tightened from 0.30
             shakeout_max_penetration: 0.30,
             min_structural_score: 0.50,
+            pivot_window: 40,
             // Phase A
             sc_volume_multiplier: 2.5,
             sc_bar_width_multiplier: 2.0,

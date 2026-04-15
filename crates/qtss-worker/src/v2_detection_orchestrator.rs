@@ -474,6 +474,8 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
     let manip_edge_tests = resolve_system_u64(pool, "detector", "wyckoff.manipulation_min_edge_tests", "", 3, 1, 10).await as usize;
     let manip_age_bars = resolve_system_u64(pool, "detector", "wyckoff.manipulation_min_range_age_bars", "", 20, 1, 500).await;
     let manip_edge_slope = resolve_system_f64(pool, "detector", "wyckoff.manipulation_max_edge_slope", "", 0.004).await;
+    // P8 — pivot-window cap (see WyckoffConfig::pivot_window).
+    let pivot_window = resolve_system_u64(pool, "detector", "wyckoff.pivot_window", "", 40, 10, 500).await as usize;
     // TF guards — caller sets these per-TF (H1 tighter than D1).
     let max_range_h_pct = resolve_system_f64(pool, "detector", "wyckoff.max_range_height_pct", "", 0.15).await;
     let max_range_age = resolve_system_u64(pool, "detector", "wyckoff.max_range_age_bars", "", 500, 20, 5000).await;
@@ -511,6 +513,7 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
         max_penetration: max_pen,
         shakeout_max_penetration: shakeout_max_pen,
         min_structural_score: min_score,
+        pivot_window,
         sc_volume_multiplier: sc_vol_mult,
         sc_bar_width_multiplier: sc_bar_mult,
         st_max_volume_ratio: st_max_vol,
