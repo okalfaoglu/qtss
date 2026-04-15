@@ -22,7 +22,8 @@
 
 use crate::config::WyckoffConfig;
 use crate::error::WyckoffResult;
-use crate::events::EVENTS;
+use crate::events::{EventContext, EventEval, EVENTS};
+use qtss_domain::v2::bar::Bar;
 use qtss_domain::v2::detection::{Detection, PatternKind, PatternState, PivotRef};
 use qtss_domain::v2::instrument::Instrument;
 use qtss_domain::v2::pivot::{Pivot, PivotLevel, PivotTree};
@@ -43,9 +44,24 @@ impl WyckoffDetector {
         &self.config
     }
 
+    /// Backward-compatible entry point — no bar context. Call sites that
+    /// want PDF-faithful bar-level checks (SOS/SOW shape, Markup/Markdown,
+    /// JAC body ratio …) must use [`Self::detect_with_bars`].
+    #[allow(dead_code)]
     pub fn detect(
         &self,
         tree: &PivotTree,
+        instrument: &Instrument,
+        timeframe: Timeframe,
+        regime: &RegimeSnapshot,
+    ) -> Vec<Detection> {
+        self.detect_with_bars(tree, &[], instrument, timeframe, regime)
+    }
+
+    pub fn detect_with_bars(
+        &self,
+        tree: &PivotTree,
+        bars: &[Bar],
         instrument: &Instrument,
         timeframe: Timeframe,
         regime: &RegimeSnapshot,
@@ -55,9 +71,14 @@ impl WyckoffDetector {
             return Vec::new();
         }
 
+        let ctx = EventContext::new(pivots, bars, &self.config);
         let mut out = Vec::new();
         for spec in EVENTS {
-            let Some(m) = (spec.eval)(pivots, &self.config) else { continue };
+            let m_opt = match spec.eval {
+                EventEval::Pivots(f) => f(pivots, &self.config),
+                EventEval::WithBars(f) => f(&ctx),
+            };
+            let Some(m) = m_opt else { continue };
             if (m.score as f32) < self.config.min_structural_score {
                 continue;
             }

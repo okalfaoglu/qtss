@@ -7,6 +7,7 @@
 
 use crate::config::WyckoffConfig;
 use crate::range::{average_volume, TradingRange};
+use qtss_domain::v2::bar::Bar;
 use qtss_domain::v2::pivot::{Pivot, PivotKind};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
@@ -20,38 +21,102 @@ pub struct EventMatch {
     pub anchor_labels: Vec<&'static str>,
 }
 
+/// Event evaluation context — P1-refactor.
+///
+/// Legacy pivot-only detectors keep using [`EventEval::Pivots`] which
+/// receives `(&[Pivot], &WyckoffConfig)`. New / PDF-faithful detectors
+/// (SOS/SOW bar-shape, Markup/Markdown, JAC body-ratio …) need bar-level
+/// OHLC access; those register as [`EventEval::WithBars`] and receive
+/// this context.
+///
+/// Bar lookup by pivot uses `open_time` equality — independent of
+/// whether `pivot.bar_index` is window-relative or absolute, so the
+/// refactor never cares about indexing conventions.
+pub struct EventContext<'a> {
+    pub pivots: &'a [Pivot],
+    pub bars: &'a [Bar],
+    pub cfg: &'a WyckoffConfig,
+}
+
+impl<'a> EventContext<'a> {
+    pub fn new(pivots: &'a [Pivot], bars: &'a [Bar], cfg: &'a WyckoffConfig) -> Self {
+        Self { pivots, bars, cfg }
+    }
+
+    /// Bar whose open_time matches the pivot's timestamp, if the
+    /// orchestrator-provided bar window covers that time.
+    pub fn bar_for_pivot(&self, pivot: &Pivot) -> Option<&Bar> {
+        self.bars.iter().find(|b| b.open_time == pivot.time)
+    }
+
+    /// Rolling mean of (high-low) over the trailing `window` bars as an
+    /// ATR proxy. Returns None if the window is too short.
+    pub fn atr_proxy(&self, window: usize) -> Option<f64> {
+        if self.bars.len() < window || window == 0 {
+            return None;
+        }
+        let tail = &self.bars[self.bars.len() - window..];
+        let mut sum = 0.0;
+        for b in tail {
+            sum += (b.high - b.low).to_f64().unwrap_or(0.0);
+        }
+        Some(sum / window as f64)
+    }
+
+    /// Rolling mean of bar volume over the trailing `window` bars.
+    pub fn avg_bar_volume(&self, window: usize) -> Option<f64> {
+        if self.bars.len() < window || window == 0 {
+            return None;
+        }
+        let tail = &self.bars[self.bars.len() - window..];
+        let mut sum = 0.0;
+        for b in tail {
+            sum += b.volume.to_f64().unwrap_or(0.0);
+        }
+        Some(sum / window as f64)
+    }
+}
+
+/// Dual-shape event evaluator. Legacy detectors operate on pivots only;
+/// bar-aware detectors (introduced in the P1 refactor) take a full
+/// [`EventContext`]. Dispatch lives in `detector.rs`.
+pub enum EventEval {
+    Pivots(fn(&[Pivot], &WyckoffConfig) -> Option<EventMatch>),
+    WithBars(fn(&EventContext) -> Option<EventMatch>),
+}
+
 pub struct EventSpec {
     pub name: &'static str,
-    pub eval: fn(&[Pivot], &WyckoffConfig) -> Option<EventMatch>,
+    pub eval: EventEval,
 }
 
 pub const EVENTS: &[EventSpec] = &[
-    EventSpec { name: "trading_range", eval: eval_trading_range },
-    EventSpec { name: "spring",        eval: eval_spring },
-    EventSpec { name: "upthrust",      eval: eval_upthrust },
+    EventSpec { name: "trading_range", eval: EventEval::Pivots(eval_trading_range) },
+    EventSpec { name: "spring",        eval: EventEval::Pivots(eval_spring) },
+    EventSpec { name: "upthrust",      eval: EventEval::Pivots(eval_upthrust) },
     // Phase A
-    EventSpec { name: "selling_climax",  eval: eval_selling_climax },
-    EventSpec { name: "buying_climax",   eval: eval_buying_climax },
-    EventSpec { name: "automatic_rally", eval: eval_automatic_rally },
-    EventSpec { name: "automatic_reaction", eval: eval_automatic_reaction },
-    EventSpec { name: "secondary_test",  eval: eval_secondary_test },
+    EventSpec { name: "selling_climax",     eval: EventEval::Pivots(eval_selling_climax) },
+    EventSpec { name: "buying_climax",      eval: EventEval::Pivots(eval_buying_climax) },
+    EventSpec { name: "automatic_rally",    eval: EventEval::Pivots(eval_automatic_rally) },
+    EventSpec { name: "automatic_reaction", eval: EventEval::Pivots(eval_automatic_reaction) },
+    EventSpec { name: "secondary_test",     eval: EventEval::Pivots(eval_secondary_test) },
     // Phase B
-    EventSpec { name: "upthrust_action", eval: eval_upthrust_action },
+    EventSpec { name: "upthrust_action",    eval: EventEval::Pivots(eval_upthrust_action) },
     // Phase C
-    EventSpec { name: "shakeout",        eval: eval_shakeout },
+    EventSpec { name: "shakeout",           eval: EventEval::Pivots(eval_shakeout) },
     // Phase D
-    EventSpec { name: "sign_of_strength", eval: eval_sign_of_strength },
-    EventSpec { name: "sign_of_weakness", eval: eval_sign_of_weakness },
-    EventSpec { name: "last_point_of_support", eval: eval_last_point_of_support },
-    EventSpec { name: "last_point_of_supply",  eval: eval_last_point_of_supply },
-    EventSpec { name: "jump_across_creek",     eval: eval_jump_across_creek },
-    EventSpec { name: "break_of_ice",          eval: eval_break_of_ice },
+    EventSpec { name: "sign_of_strength",      eval: EventEval::Pivots(eval_sign_of_strength) },
+    EventSpec { name: "sign_of_weakness",      eval: EventEval::Pivots(eval_sign_of_weakness) },
+    EventSpec { name: "last_point_of_support", eval: EventEval::Pivots(eval_last_point_of_support) },
+    EventSpec { name: "last_point_of_supply",  eval: EventEval::Pivots(eval_last_point_of_supply) },
+    EventSpec { name: "jump_across_creek",     eval: EventEval::Pivots(eval_jump_across_creek) },
+    EventSpec { name: "break_of_ice",          eval: EventEval::Pivots(eval_break_of_ice) },
     // SOT
-    EventSpec { name: "shortening_of_thrust",  eval: eval_shortening_of_thrust },
+    EventSpec { name: "shortening_of_thrust",  eval: EventEval::Pivots(eval_shortening_of_thrust) },
     // P13 additions — completes the 16-event vocabulary.
-    EventSpec { name: "preliminary_supply",   eval: eval_preliminary_supply },
-    EventSpec { name: "secondary_test_b",     eval: eval_secondary_test_b },
-    EventSpec { name: "back_up_edge_creek",   eval: eval_back_up_edge_creek },
+    EventSpec { name: "preliminary_supply",    eval: EventEval::Pivots(eval_preliminary_supply) },
+    EventSpec { name: "secondary_test_b",      eval: EventEval::Pivots(eval_secondary_test_b) },
+    EventSpec { name: "back_up_edge_creek",    eval: EventEval::Pivots(eval_back_up_edge_creek) },
 ];
 
 // =========================================================================

@@ -30,7 +30,7 @@ mod tests;
 pub use config::WyckoffConfig;
 pub use detector::WyckoffDetector;
 pub use error::{WyckoffError, WyckoffResult};
-pub use events::{EventMatch, EventSpec, EVENTS};
+pub use events::{EventContext, EventEval, EventMatch, EventSpec, EVENTS};
 pub use range::TradingRange;
 pub use structure::{
     RecordedEvent, WyckoffEvent, WyckoffPhase, WyckoffSchematic,

@@ -155,12 +155,15 @@ impl DetectorRunner for WyckoffRunner {
     fn detect(
         &self,
         tree: &PivotTree,
-        _bars: &[Bar],
+        bars: &[Bar],
         instrument: &Instrument,
         timeframe: Timeframe,
         regime: &RegimeSnapshot,
     ) -> Vec<Detection> {
-        self.0.detect(tree, instrument, timeframe, regime).into_iter().collect()
+        // P1 refactor: bar-level OHLC plumbed through so bar-aware event
+        // detectors (SOS/SOW shape, Markup/Markdown, JAC body ratio …)
+        // can see the full candle anatomy, not just pivots.
+        self.0.detect_with_bars(tree, bars, instrument, timeframe, regime).into_iter().collect()
     }
 }
 
