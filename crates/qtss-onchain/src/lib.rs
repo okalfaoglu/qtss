@@ -31,7 +31,7 @@ pub mod nansen_enriched;
 pub mod stablecoin;
 pub mod types;
 
-pub use aggregator::{aggregate, AggregateOnchain, AggregatorWeights};
+pub use aggregator::{aggregate, aggregate_for_tf, AggregateOnchain, AggregatorWeights};
 pub use cryptoquant::CryptoQuantFetcher;
 pub use derivatives::BinanceDerivativesFetcher;
 pub use glassnode::GlassnodeFetcher;

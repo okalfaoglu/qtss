@@ -12,6 +12,27 @@ use uuid::Uuid;
 
 use crate::error::StorageError;
 
+/// TF bucket written alongside each onchain aggregate row. Encodes
+/// which cadence band of readings fed the blend so the TBM bridge can
+/// pick the right one for its analysis timeframe (Faz 7.7 / P29b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TfBucket {
+    /// Only readings with cadence_s <= ltf_cadence_s (e.g. 1h derivatives).
+    Ltf,
+    /// Every reading (backwards-compatible full blend).
+    Htf,
+}
+
+impl TfBucket {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TfBucket::Ltf => "ltf",
+            TfBucket::Htf => "htf",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct V2OnchainMetricsRow {
     pub id: Uuid,
@@ -24,6 +45,8 @@ pub struct V2OnchainMetricsRow {
     pub direction: String,
     pub confidence: f64,
     pub raw_meta: JsonValue,
+    #[sqlx(default)]
+    pub tf_bucket: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -36,18 +59,22 @@ pub struct V2OnchainMetricsInsert {
     pub direction: String,
     pub confidence: f64,
     pub raw_meta: JsonValue,
+    /// Which TF bucket this aggregate belongs to. Defaults to htf so
+    /// pre-P29b call sites keep their old semantics.
+    pub tf_bucket: Option<TfBucket>,
 }
 
 pub async fn insert_v2_onchain_metrics(
     pool: &PgPool,
     row: &V2OnchainMetricsInsert,
 ) -> Result<Uuid, StorageError> {
+    let bucket = row.tf_bucket.unwrap_or(TfBucket::Htf).as_str();
     let id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO qtss_v2_onchain_metrics (
             symbol, derivatives_score, stablecoin_score, chain_score,
-            aggregate_score, direction, confidence, raw_meta
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+            aggregate_score, direction, confidence, raw_meta, tf_bucket
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
         RETURNING id
         "#,
     )
@@ -59,6 +86,7 @@ pub async fn insert_v2_onchain_metrics(
     .bind(&row.direction)
     .bind(row.confidence)
     .bind(&row.raw_meta)
+    .bind(bucket)
     .fetch_one(pool)
     .await?;
     Ok(id)
@@ -68,17 +96,30 @@ pub async fn fetch_latest_v2_onchain_metrics(
     pool: &PgPool,
     symbol: &str,
 ) -> Result<Option<V2OnchainMetricsRow>, StorageError> {
+    fetch_latest_v2_onchain_metrics_bucket(pool, symbol, TfBucket::Htf).await
+}
+
+/// Bucket-aware latest lookup (Faz 7.7 / P29b). Returns the freshest
+/// row written for `bucket`, or `None` when the worker has not yet
+/// produced one.
+pub async fn fetch_latest_v2_onchain_metrics_bucket(
+    pool: &PgPool,
+    symbol: &str,
+    bucket: TfBucket,
+) -> Result<Option<V2OnchainMetricsRow>, StorageError> {
     let sym = symbol.trim().to_uppercase();
     let row = sqlx::query_as::<_, V2OnchainMetricsRow>(
         r#"SELECT id, symbol, computed_at,
                   derivatives_score, stablecoin_score, chain_score,
-                  aggregate_score, direction, confidence, raw_meta
+                  aggregate_score, direction, confidence, raw_meta, tf_bucket
              FROM qtss_v2_onchain_metrics
             WHERE symbol = $1
+              AND tf_bucket = $2
             ORDER BY computed_at DESC
             LIMIT 1"#,
     )
     .bind(&sym)
+    .bind(bucket.as_str())
     .fetch_optional(pool)
     .await?;
     Ok(row)
@@ -92,7 +133,18 @@ pub async fn fetch_latest_for_tbm(
     symbol: &str,
     stale_after: Duration,
 ) -> Result<Option<V2OnchainMetricsRow>, StorageError> {
-    let Some(row) = fetch_latest_v2_onchain_metrics(pool, symbol).await? else {
+    fetch_latest_for_tbm_bucket(pool, symbol, TfBucket::Htf, stale_after).await
+}
+
+/// Bucket-aware TBM helper (Faz 7.7 / P29b). Collapses stale rows to
+/// `None` exactly like [`fetch_latest_for_tbm`].
+pub async fn fetch_latest_for_tbm_bucket(
+    pool: &PgPool,
+    symbol: &str,
+    bucket: TfBucket,
+    stale_after: Duration,
+) -> Result<Option<V2OnchainMetricsRow>, StorageError> {
+    let Some(row) = fetch_latest_v2_onchain_metrics_bucket(pool, symbol, bucket).await? else {
         return Ok(None);
     };
     if Utc::now() - row.computed_at > stale_after {

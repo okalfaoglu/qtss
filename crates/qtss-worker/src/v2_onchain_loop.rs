@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use qtss_onchain::{
-    aggregate, AggregatorWeights, BinanceDerivativesFetcher, CategoryKind, CategoryReading,
+    aggregate_for_tf, AggregatorWeights, BinanceDerivativesFetcher, CategoryKind, CategoryReading,
     CryptoQuantFetcher, GlassnodeFetcher, NansenFetcher, NansenTuning, OnchainCategoryFetcher,
     StablecoinMacroFetcher,
     nansen_enriched::{self, EnrichedConfig, EnrichedSignal},
@@ -25,7 +25,7 @@ use qtss_storage::{
     list_enabled_engine_symbols, resolve_system_f64, resolve_system_string, resolve_system_u64,
     resolve_worker_enabled_flag,
     SystemConfigRepository,
-    v2_onchain_metrics::{insert_v2_onchain_metrics, V2OnchainMetricsInsert},
+    v2_onchain_metrics::{insert_v2_onchain_metrics, TfBucket, V2OnchainMetricsInsert},
 };
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -36,6 +36,7 @@ struct LoopConfig {
     enabled: bool,
     tick_interval_s: u64,
     weights: AggregatorWeights,
+    ltf_cadence_s: u64,
     derivatives_on: bool,
     stablecoin_on: bool,
     glassnode_on: bool,
@@ -94,6 +95,11 @@ async fn load_config(pool: &PgPool) -> LoopConfig {
         )
         .await,
     };
+    let ltf_cadence_s = resolve_system_u64(
+        pool, "onchain", "aggregator.ltf_cadence_s", "QTSS_ONCHAIN_LTF_CAD",
+        3600, 60, 86_400,
+    )
+    .await;
     let derivatives_on = resolve_worker_enabled_flag(
         pool, "onchain", "fetcher.derivatives.enabled", "QTSS_ONCHAIN_DERIV_ON", true,
     )
@@ -184,6 +190,7 @@ async fn load_config(pool: &PgPool) -> LoopConfig {
         enabled,
         tick_interval_s,
         weights,
+        ltf_cadence_s,
         derivatives_on,
         stablecoin_on,
         glassnode_on,
@@ -336,39 +343,57 @@ async fn process_symbol(
                             qtss_onchain::OnchainDirection::Neutral
                         }),
                         details: vec![format!("[enriched] score={escore:.2} conf={econf:.2}")],
+                        // Enriched nansen blend is a 24h snapshot — same
+                        // cadence as the raw nansen fetcher (P29a).
+                        cadence_s: 86_400,
                     });
                 }
             }
         }
     }
 
-    // Re-aggregate with enriched readings included
-    let agg = aggregate(&readings, cfg.weights);
+    // Faz 7.7 / P29b — write two aggregates per pass so the TBM bridge
+    // can pick one that matches its analysis timeframe:
+    //
+    //   * ltf — only fast readings (cadence_s <= ltf_cadence_s). A 15m
+    //           setup reads this bucket and is no longer dragged by a
+    //           24h stablecoin / nansen-delta snapshot.
+    //   * htf — every reading (legacy full blend) for 4h+ setups where
+    //           the slow macro context is the point.
     let pick = |k: CategoryKind| -> Option<f64> {
         readings.iter().find(|r| r.category == k).map(|r| r.score)
     };
+    let fetcher_count = readings.len();
 
-    let raw_meta = json!({
-        "details": agg.details,
-        "per_category": agg.per_category,
-        "fetcher_count": readings.len(),
-        "enriched": enriched_meta,
-    });
-
-    insert_v2_onchain_metrics(
-        pool,
-        &V2OnchainMetricsInsert {
-            symbol: symbol.to_string(),
-            derivatives_score: pick(CategoryKind::Derivatives),
-            stablecoin_score: pick(CategoryKind::Stablecoin),
-            chain_score: pick(CategoryKind::Chain),
-            aggregate_score: agg.score,
-            direction: agg.direction.as_str().to_string(),
-            confidence: agg.confidence,
-            raw_meta,
-        },
-    )
-    .await?;
+    for (bucket, tf_s) in [
+        (TfBucket::Ltf, cfg.ltf_cadence_s),
+        (TfBucket::Htf, u64::MAX),
+    ] {
+        let agg = aggregate_for_tf(&readings, cfg.weights, tf_s);
+        let raw_meta = json!({
+            "details": agg.details,
+            "per_category": agg.per_category,
+            "fetcher_count": fetcher_count,
+            "tf_bucket": bucket.as_str(),
+            "tf_s": tf_s,
+            "enriched": enriched_meta.clone(),
+        });
+        insert_v2_onchain_metrics(
+            pool,
+            &V2OnchainMetricsInsert {
+                symbol: symbol.to_string(),
+                derivatives_score: pick(CategoryKind::Derivatives),
+                stablecoin_score: pick(CategoryKind::Stablecoin),
+                chain_score: pick(CategoryKind::Chain),
+                aggregate_score: agg.score,
+                direction: agg.direction.as_str().to_string(),
+                confidence: agg.confidence,
+                raw_meta,
+                tf_bucket: Some(bucket),
+            },
+        )
+        .await?;
+    }
     Ok(())
 }
 
