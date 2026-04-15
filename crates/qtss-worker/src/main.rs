@@ -294,10 +294,24 @@ async fn main() -> anyhow::Result<()> {
         // v2_onchain_loop fetcher pipeline). Stale-after window is fixed
         // to 30 minutes here; tunable via `onchain.stale_after_s` would
         // be a follow-up if operators ask for it.
+        // P29c — caller-TF aware onchain bridge. ltf_cadence_s mirrors
+        // the worker-side split in `onchain.aggregator.ltf_cadence_s`;
+        // they stay in sync because both read from the same config key.
+        let onchain_ltf_cadence_s = qtss_storage::resolve_system_u64(
+            &v2_tbm_pool,
+            "onchain",
+            "aggregator.ltf_cadence_s",
+            "QTSS_ONCHAIN_LTF_CAD",
+            3600,
+            60,
+            86_400,
+        )
+        .await;
         let onchain_provider: std::sync::Arc<dyn qtss_tbm::onchain::OnchainMetricsProvider> =
-            std::sync::Arc::new(v2_onchain_bridge::StoredV2OnchainProvider::new(
+            std::sync::Arc::new(v2_onchain_bridge::StoredV2OnchainProvider::with_ltf_cadence(
                 v2_tbm_pool.clone(),
                 1800,
+                onchain_ltf_cadence_s,
             ));
         tokio::spawn(v2_tbm_detector::v2_tbm_detector_loop(
             v2_tbm_pool,

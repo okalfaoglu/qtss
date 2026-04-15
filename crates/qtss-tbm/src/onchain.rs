@@ -69,6 +69,16 @@ impl Default for OnchainTuning {
 #[async_trait::async_trait]
 pub trait OnchainMetricsProvider: Send + Sync {
     async fn fetch(&self, symbol: &str) -> Option<OnchainMetrics>;
+
+    /// TF-aware fetch (Faz 7.7 / P29c). Implementations that back the
+    /// multi-bucket storage (see `StoredV2OnchainProvider`) route the
+    /// caller's analysis timeframe to the matching bucket so a 15m
+    /// setup reads a fast blend while a 4h setup still reads the full
+    /// macro blend. The default impl ignores `tf_s` and delegates to
+    /// [`Self::fetch`] so legacy providers / tests keep working.
+    async fn fetch_for_tf(&self, symbol: &str, _tf_s: u64) -> Option<OnchainMetrics> {
+        self.fetch(symbol).await
+    }
 }
 
 /// Direction parser — single source of truth so the dispatch table

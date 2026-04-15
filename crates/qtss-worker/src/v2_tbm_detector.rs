@@ -364,8 +364,13 @@ async fn process_symbol(
 ) -> anyhow::Result<SymbolStats> {
     // Faz 7.7: pull a fresh OnchainMetrics row up front so we can pass it
     // to both the bottom and top scoring branches without re-fetching.
+    // P29c — route the detector's analysis TF into the bridge so a 15m
+    // setup reads the ltf bucket (fast readings only) while a 4h+ setup
+    // reads the htf bucket (full macro blend). Unknown intervals fall
+    // back to tf_s=0 → htf via the bridge's legacy semantics.
+    let tf_s = interval_to_seconds(&sym.interval).unwrap_or(0);
     let onchain_metrics = if cfg.onchain_enabled {
-        onchain_provider.fetch(&sym.symbol).await
+        onchain_provider.fetch_for_tf(&sym.symbol, tf_s).await
     } else {
         None
     };
@@ -1998,4 +2003,29 @@ fn apply_reversal_checklist(meta: &mut serde_json::Value) {
     };
     cl_obj.insert("score".into(), json!(score));
     cl_obj.insert("tier".into(), json!(tier));
+}
+
+/// Map a Binance kline interval string (e.g. "15m", "1h", "4h") to
+/// seconds. Mirrors ;
+/// duplicated here instead of re-exporting so the two loops stay
+/// decoupled. Returns None for unknown/typo values so the caller can
+/// fall back to legacy semantics.
+fn interval_to_seconds(iv: &str) -> Option<u64> {
+    match iv.trim() {
+        "1m" => Some(60),
+        "3m" => Some(180),
+        "5m" => Some(300),
+        "15m" => Some(900),
+        "30m" => Some(1800),
+        "1h" | "60m" => Some(3600),
+        "2h" => Some(7200),
+        "4h" => Some(14400),
+        "6h" => Some(21600),
+        "8h" => Some(28800),
+        "12h" => Some(43200),
+        "1d" | "1D" => Some(86_400),
+        "3d" | "3D" => Some(259_200),
+        "1w" | "1W" => Some(604_800),
+        _ => None,
+    }
 }
