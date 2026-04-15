@@ -14,13 +14,13 @@
 
 -- --- P2a: SOS/SOW bar-shape (Villahermosa ch. 7) ---
 SELECT _qtss_register_key(
-    'wyckoff.sos_min_bar_width_atr_mult', 'wyckoff', 'event', 'number',
+    'wyckoff.sos_min_bar_width_atr_mult', 'wyckoff', 'event', 'float',
     '1.5'::jsonb, 'x_atr',
     'SOS/SOW bar range must be at least this multiple of ATR proxy. Villahermosa: wide-range bar is the single hard numeric rule.',
     'number', true, 'normal', ARRAY['wyckoff','phase_d']);
 
 SELECT _qtss_register_key(
-    'wyckoff.sos_close_third_threshold', 'wyckoff', 'event', 'number',
+    'wyckoff.sos_close_third_threshold', 'wyckoff', 'event', 'float',
     '0.66'::jsonb, 'fraction',
     'SOS close must sit in upper (1 - N) of its bar range (>=0.66 = upper third). Mirror for SOW lower third.',
     'number', true, 'normal', ARRAY['wyckoff','phase_d']);
@@ -40,7 +40,7 @@ SELECT _qtss_register_key(
 
 -- --- P2d: Spring Test / UTAD Test (Phase C confirmation) ---
 SELECT _qtss_register_key(
-    'wyckoff.spring_test_max_vol_ratio', 'wyckoff', 'event', 'number',
+    'wyckoff.spring_test_max_vol_ratio', 'wyckoff', 'event', 'float',
     '0.6'::jsonb, 'fraction',
     'Spring/UTAD Test volume must be <= N * parent Spring/UTAD volume. Low-volume retest confirms Phase C.',
     'number', true, 'normal', ARRAY['wyckoff','phase_c']);
@@ -52,20 +52,20 @@ SELECT _qtss_register_key(
     'number', true, 'normal', ARRAY['wyckoff','phase_c']);
 
 SELECT _qtss_register_key(
-    'wyckoff.spring_test_max_distance', 'wyckoff', 'event', 'number',
+    'wyckoff.spring_test_max_distance', 'wyckoff', 'event', 'float',
     '0.10'::jsonb, 'fraction',
     'Spring/UTAD Test low must sit within N * range_height of the parent Spring/UTAD price.',
     'number', true, 'normal', ARRAY['wyckoff','phase_c']);
 
 -- --- P5: JAC body ratio + mid-range climactic flip ---
 SELECT _qtss_register_key(
-    'wyckoff.jac_min_body_ratio', 'wyckoff', 'event', 'number',
+    'wyckoff.jac_min_body_ratio', 'wyckoff', 'event', 'float',
     '0.5'::jsonb, 'fraction',
     'JAC body (|close-open|) must be >= N * bar_range. Tiny wicks above creek do not count as Jump-Across-Creek.',
     'number', true, 'normal', ARRAY['wyckoff','phase_d']);
 
 SELECT _qtss_register_key(
-    'wyckoff.phase_b_climactic_vol_flip_mult', 'wyckoff', 'phase', 'number',
+    'wyckoff.phase_b_climactic_vol_flip_mult', 'wyckoff', 'phase', 'float',
     '3.0'::jsonb, 'x_avg',
     'Phase-B bar with volume >= N * avg flips schematic to Distribution (Villahermosa ch.5). Set 0 to disable.',
     'number', true, 'normal', ARRAY['wyckoff','phase_b']);
@@ -79,7 +79,7 @@ ON CONFLICT (module, config_key) DO NOTHING;
 
 -- --- P2-P1-#5 / #11: Spring penetration + SC bar-width ---
 SELECT _qtss_register_key(
-    'wyckoff.shakeout_max_penetration', 'wyckoff', 'event', 'number',
+    'wyckoff.shakeout_max_penetration', 'wyckoff', 'event', 'float',
     '0.30'::jsonb, 'fraction',
     'Shakeout max penetration (deeper than ordinary Spring but bounded). Past this, the move is a true breakout.',
     'number', true, 'normal', ARRAY['wyckoff','phase_c']);
