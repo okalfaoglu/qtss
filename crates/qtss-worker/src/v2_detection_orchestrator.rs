@@ -1639,6 +1639,44 @@ pub(crate) async fn upsert_wyckoff_structure_from_detection(
                 tracker.range_bottom = lo;
             }
 
+            // P7 — TF guard at structure birth.
+            //
+            // SQL dump showed BTCUSDT 1d structures with range 3621 → 126208
+            // (height/midpoint ≈ 189%). `eval_trading_range` applies the
+            // height cap, but individual event detectors (SC/BC/…) bypass
+            // it and feed `detection.anchors` directly here. Apply the cap
+            // per-TF on the birth path so a pivot set spanning an entire
+            // exchange's history cannot seed a Wyckoff structure.
+            //
+            // Per-TF override: `wyckoff.max_range_height_pct.<interval>`;
+            // falls back to the global `wyckoff.max_range_height_pct`.
+            let default_cap_by_tf: f64 = match interval {
+                "1m" | "3m" | "5m"   => 0.05,
+                "15m" | "30m"        => 0.07,
+                "1h" | "2h"          => 0.10,
+                "4h" | "6h" | "8h"   => 0.15,
+                "12h" | "1d"         => 0.25,
+                "3d" | "1w"          => 0.35,
+                "1M"                 => 0.50,
+                _                    => 0.15,
+            };
+            let cap_key = format!("wyckoff.max_range_height_pct.{interval}");
+            let cap = resolve_system_f64(pool, "detector", &cap_key, "", default_cap_by_tf).await;
+            let mid = (tracker.range_top + tracker.range_bottom) * 0.5;
+            if mid > 0.0 {
+                let h_over_mid = (tracker.range_top - tracker.range_bottom) / mid;
+                if h_over_mid > cap {
+                    tracing::debug!(
+                        symbol = %symbol,
+                        interval = %interval,
+                        h_over_mid = %format!("{h_over_mid:.3}"),
+                        cap = %format!("{cap:.3}"),
+                        "wyckoff: rejected structure birth — range too wide for TF",
+                    );
+                    return Ok(());
+                }
+            }
+
             let events_json = serde_json::to_value(&tracker.events)?;
             let segment = "futures"; // default, TODO: from engine_symbol
             insert_wyckoff_structure(
