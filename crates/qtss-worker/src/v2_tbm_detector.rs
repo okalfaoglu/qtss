@@ -1075,6 +1075,16 @@ async fn confirm_forming_or_timeout(
             // P23d — BoS now printed; flip checklist flag and rescore.
             set_checklist_flag(&mut meta, "bos", true);
             apply_reversal_checklist(&mut meta);
+            // P25 — label the classic Wyckoff events (SC/AR/ST/SOS for
+            // accumulation bottoms, BC/AR/UT/SOW for distribution tops)
+            // and persist them alongside anchors for the chart to render.
+            let is_bot = row.subkind.as_str() == "bottom_setup";
+            let events = label_wyckoff_events(
+                chronological, highs, lows, closes, anchor_idx, bos_idx, is_bot,
+            );
+            if let Some(obj) = meta.as_object_mut() {
+                obj.insert("wyckoff_events".into(), json!(events));
+            }
             let confidence = (row.structural_score as f32).clamp(0.0, 1.0);
             let channel_scores = json!({
                 "structural": row.structural_score,
@@ -1580,6 +1590,93 @@ fn pick_anchor(
     }
 
     best_idx.unwrap_or(fallback)
+}
+
+/// P25 — label the canonical Wyckoff reversal events for a confirmed
+/// TBM setup. Bottom / accumulation:
+///   SC  (Selling Climax)      = the anchor bar itself (climactic low)
+///   AR  (Automatic Rally)     = highest high between anchor+1 .. bos
+///   ST  (Secondary Test)      = later pivot low near SC price, lighter
+///   SOS (Sign of Strength)    = the BoS bar itself
+/// Top / distribution mirrors these: BC / AR / UT / SOW.
+///
+/// Events are schema-stable: `{label, bar_index, time, price}` — no
+/// scoring impact (yet); purely annotative so the GUI can render them
+/// and downstream analytics can group by phase.
+fn label_wyckoff_events(
+    bars: &[qtss_storage::MarketBarRow],
+    highs: &[f64],
+    lows: &[f64],
+    _closes: &[f64],
+    anchor_idx: usize,
+    bos_idx: usize,
+    is_bottom: bool,
+) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    if bos_idx <= anchor_idx || bos_idx >= bars.len() {
+        return out;
+    }
+    let ev = |label: &str, idx: usize, price: f64| -> serde_json::Value {
+        json!({
+            "label": label,
+            "bar_index": idx,
+            "time": bars[idx].open_time.to_rfc3339(),
+            "price": price,
+        })
+    };
+
+    if is_bottom {
+        // SC — anchor low
+        out.push(ev("SC", anchor_idx, lows[anchor_idx]));
+        // AR — max high in (anchor, bos]
+        let mut ar_idx = anchor_idx + 1;
+        let mut ar_hi = highs[ar_idx];
+        for i in (anchor_idx + 1)..=bos_idx {
+            if highs[i] > ar_hi { ar_hi = highs[i]; ar_idx = i; }
+        }
+        out.push(ev("AR", ar_idx, ar_hi));
+        // ST — pivot low in [AR, bos) with low within 1.5% of SC low
+        let sc_low = lows[anchor_idx];
+        let tol = (sc_low.abs() * 0.015).max(1e-9);
+        let mut st_idx: Option<usize> = None;
+        for i in (ar_idx + 1)..bos_idx {
+            let is_pivot_lo = i > 0 && i + 1 < bars.len()
+                && lows[i] <= lows[i - 1] && lows[i] <= lows[i + 1];
+            if is_pivot_lo && (lows[i] - sc_low).abs() <= tol && lows[i] > sc_low {
+                st_idx = Some(i);
+                break;
+            }
+        }
+        if let Some(i) = st_idx {
+            out.push(ev("ST", i, lows[i]));
+        }
+        // SOS — the BoS bar itself
+        out.push(ev("SOS", bos_idx, highs[bos_idx]));
+    } else {
+        out.push(ev("BC", anchor_idx, highs[anchor_idx]));
+        let mut ar_idx = anchor_idx + 1;
+        let mut ar_lo = lows[ar_idx];
+        for i in (anchor_idx + 1)..=bos_idx {
+            if lows[i] < ar_lo { ar_lo = lows[i]; ar_idx = i; }
+        }
+        out.push(ev("AR", ar_idx, ar_lo));
+        let bc_hi = highs[anchor_idx];
+        let tol = (bc_hi.abs() * 0.015).max(1e-9);
+        let mut ut_idx: Option<usize> = None;
+        for i in (ar_idx + 1)..bos_idx {
+            let is_pivot_hi = i > 0 && i + 1 < bars.len()
+                && highs[i] >= highs[i - 1] && highs[i] >= highs[i + 1];
+            if is_pivot_hi && (highs[i] - bc_hi).abs() <= tol && highs[i] < bc_hi {
+                ut_idx = Some(i);
+                break;
+            }
+        }
+        if let Some(i) = ut_idx {
+            out.push(ev("UT", i, highs[i]));
+        }
+        out.push(ev("SOW", bos_idx, lows[bos_idx]));
+    }
+    out
 }
 
 /// P24 — fold the effort-vs-result bonus into a TbmScore's volume
