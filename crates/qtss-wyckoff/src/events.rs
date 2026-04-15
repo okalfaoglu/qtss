@@ -105,8 +105,8 @@ pub const EVENTS: &[EventSpec] = &[
     // Phase C
     EventSpec { name: "shakeout",           eval: EventEval::Pivots(eval_shakeout) },
     // Phase D
-    EventSpec { name: "sign_of_strength",      eval: EventEval::Pivots(eval_sign_of_strength) },
-    EventSpec { name: "sign_of_weakness",      eval: EventEval::Pivots(eval_sign_of_weakness) },
+    EventSpec { name: "sign_of_strength",      eval: EventEval::WithBars(eval_sign_of_strength) },
+    EventSpec { name: "sign_of_weakness",      eval: EventEval::WithBars(eval_sign_of_weakness) },
     EventSpec { name: "last_point_of_support", eval: EventEval::Pivots(eval_last_point_of_support) },
     EventSpec { name: "last_point_of_supply",  eval: EventEval::Pivots(eval_last_point_of_supply) },
     EventSpec { name: "jump_across_creek",     eval: EventEval::Pivots(eval_jump_across_creek) },
@@ -919,7 +919,9 @@ fn eval_shakeout(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
 // Phase D: Sign of Strength (SOS) — strong rally after Spring/Test
 // =========================================================================
 
-fn eval_sign_of_strength(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
+fn eval_sign_of_strength(ctx: &EventContext) -> Option<EventMatch> {
+    let pivots = ctx.pivots;
+    let cfg = ctx.cfg;
     if pivots.len() < 5 {
         return None;
     }
@@ -936,6 +938,34 @@ fn eval_sign_of_strength(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventM
     let vol = candidate.volume_at_pivot.to_f64().unwrap_or(0.0);
     if avg > 0.0 && vol < avg * cfg.sos_min_volume_ratio {
         return None; // Not enough volume
+    }
+
+    // P2-P0 / SOS bar-shape (Villahermosa, "Wyckoff 2.0" ch. 7):
+    // a real Sign-of-Strength bar is WIDE RANGE + CLOSE IN UPPER THIRD
+    // + HIGH VOLUME. Narrow-range pivots above creek are not SOS even
+    // if volume clears the ratio. If we cannot resolve the bar (bars
+    // slice empty — legacy callers), fall back to the volume-only path
+    // so existing backfills keep working.
+    let bar_shape_ok = match ctx.bar_for_pivot(candidate) {
+        Some(bar) => {
+            let hi = bar.high.to_f64().unwrap_or(0.0);
+            let lo = bar.low.to_f64().unwrap_or(0.0);
+            let close = bar.close.to_f64().unwrap_or(0.0);
+            let bar_range = (hi - lo).max(0.0);
+            if bar_range <= 0.0 {
+                false
+            } else {
+                let atr = ctx.atr_proxy(20).unwrap_or(bar_range);
+                let wide_enough = bar_range >= atr * cfg.sos_min_bar_width_atr_mult;
+                let close_pos = (close - lo) / bar_range;
+                let upper_third = close_pos >= cfg.sos_close_third_threshold;
+                wide_enough && upper_third
+            }
+        }
+        None => true, // legacy fallback — bars not plumbed
+    };
+    if !bar_shape_ok {
+        return None;
     }
 
     let above_creek = (price - creek) / range.height.max(1e-9);
@@ -962,7 +992,9 @@ fn eval_sign_of_strength(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventM
 // Phase D: Sign of Weakness (SOW) — strong drop after UTAD
 // =========================================================================
 
-fn eval_sign_of_weakness(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
+fn eval_sign_of_weakness(ctx: &EventContext) -> Option<EventMatch> {
+    let pivots = ctx.pivots;
+    let cfg = ctx.cfg;
     if pivots.len() < 5 {
         return None;
     }
@@ -977,6 +1009,30 @@ fn eval_sign_of_weakness(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventM
     }
     let vol = candidate.volume_at_pivot.to_f64().unwrap_or(0.0);
     if avg > 0.0 && vol < avg * cfg.sos_min_volume_ratio {
+        return None;
+    }
+
+    // Mirror of SOS bar-shape: wide range + close in LOWER third.
+    let bar_shape_ok = match ctx.bar_for_pivot(candidate) {
+        Some(bar) => {
+            let hi = bar.high.to_f64().unwrap_or(0.0);
+            let lo = bar.low.to_f64().unwrap_or(0.0);
+            let close = bar.close.to_f64().unwrap_or(0.0);
+            let bar_range = (hi - lo).max(0.0);
+            if bar_range <= 0.0 {
+                false
+            } else {
+                let atr = ctx.atr_proxy(20).unwrap_or(bar_range);
+                let wide_enough = bar_range >= atr * cfg.sos_min_bar_width_atr_mult;
+                let close_pos = (close - lo) / bar_range;
+                // Lower-third = close_pos <= (1 - threshold)
+                let lower_third = close_pos <= (1.0 - cfg.sos_close_third_threshold);
+                wide_enough && lower_third
+            }
+        }
+        None => true,
+    };
+    if !bar_shape_ok {
         return None;
     }
 

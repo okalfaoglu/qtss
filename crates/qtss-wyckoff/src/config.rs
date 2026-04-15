@@ -95,6 +95,14 @@ pub struct WyckoffConfig {
     // --- Phase D ---
     /// SOS/SOW volume must be >= Nx average.
     pub sos_min_volume_ratio: f64,
+    /// SOS/SOW bar range must be >= Nx ATR proxy. Villahermosa ch. 7:
+    /// wide-range bar is the single crisp numeric rule for SOS/SOW. A
+    /// narrow-range pivot above creek is NOT a SOS.
+    pub sos_min_bar_width_atr_mult: f64,
+    /// SOS close must sit in the upper `(1 - N)` of its bar range
+    /// (i.e. close_pos >= N). Default 0.66 = upper third. Mirror for SOW
+    /// (close_pos <= 1 - N = lower third).
+    pub sos_close_third_threshold: f64,
     /// LPS retracement <= N% of SOS move.
     pub lps_max_retracement: f64,
     /// LPS volume must be <= N% of SOS volume.
@@ -148,6 +156,8 @@ impl WyckoffConfig {
             skip_terminal_springs: true,
             // Phase D
             sos_min_volume_ratio: 1.5,
+            sos_min_bar_width_atr_mult: 1.5,
+            sos_close_third_threshold: 0.66,
             lps_max_retracement: 0.5,
             lps_max_volume_ratio: 0.5,
             creek_level_percentile: 0.6,
