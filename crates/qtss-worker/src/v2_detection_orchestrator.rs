@@ -1417,35 +1417,34 @@ pub(crate) async fn upsert_wyckoff_structure_from_detection(
     // events and a 2026 markup into the same `events_json`. Budgets
     // are TF-scaled — roughly "a structure should complete within a
     // few months on its own scale".
-    // TODO(config): move to qtss_config like zigzag params.
+    // P28a — TTL is now measured in seconds (via RecordedEvent.time_ms)
+    // instead of bar_index deltas. Old rows that stored a rolling-window
+    // bar_index produced deltas like 29702 on 15m (~309d) and killed
+    // every structure before Phase B. Limits come from `system_config`
+    // under `wyckoff.structure.ttl_seconds.<TF>` (CLAUDE.md #2).
     if let Some(ref row) = existing {
-        let ttl_bars: i64 = match interval {
-            "1m"  => 500,   // ~8h
-            "3m"  => 500,   // ~25h
-            "5m"  => 500,   // ~42h
-            "15m" => 400,   // ~4d
-            "30m" => 400,   // ~8d
-            "1h"  => 400,   // ~17d
-            "2h"  => 350,   // ~29d
-            "4h"  => 300,   // ~50d
-            "6h" | "8h" => 250,
-            "12h" => 200,
-            "1d"  => 120,   // ~4 months
-            "3d" | "1w" => 80,
-            "1M"  => 36,
-            _ => 300,
-        };
+        let ttl_s = resolve_wyckoff_ttl_seconds(pool, interval).await;
         let events: Vec<qtss_wyckoff::RecordedEvent> =
             serde_json::from_value(row.events_json.clone()).unwrap_or_default();
-        let last_idx = events.last().map(|e| e.bar_index as i64).unwrap_or(0);
-        let age = (bar_idx as i64) - last_idx;
-        if age > ttl_bars {
-            let reason = format!(
-                "structure TTL exceeded ({age} bars since last event; limit {ttl_bars} on {interval})"
-            );
+        let last_time_ms = events.iter().rev().find_map(|e| e.time_ms);
+        let now_time_ms = time_ms.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+        let expire = match last_time_ms {
+            Some(lm) => ((now_time_ms - lm) / 1000) > ttl_s as i64,
+            // Legacy row with no time_ms at all — kill on contact so a
+            // properly anchored structure can seed fresh.
+            None => true,
+        };
+        if expire {
+            let reason = match last_time_ms {
+                Some(lm) => format!(
+                    "structure TTL exceeded ({}s since last event; limit {}s on {})",
+                    (now_time_ms - lm) / 1000, ttl_s, interval
+                ),
+                None => format!(
+                    "legacy structure without time_ms on {interval} — recycled by P28a TTL guard"
+                ),
+            };
             qtss_storage::fail_wyckoff_structure(pool, row.id, &reason).await?;
-            // Treat as if no active structure existed — next block below
-            // will hit the `None` arm and seed iff Phase A.
             return Box::pin(upsert_wyckoff_structure_from_detection(
                 pool, exchange, symbol, interval, subkind, detection, _detection_id, chronological,
             )).await;
@@ -1561,18 +1560,30 @@ pub(crate) async fn upsert_wyckoff_structure_from_detection(
             if wy_event.phase() != WyckoffPhase::A {
                 return Ok(());
             }
-            // Create new structure
+            // P28b — seed schematic from the *directional family* of
+            // the Phase-A climax, not from a Spring/UTAD/SOS lookup
+            // (those are Phase C/D events and never reach this branch
+            // anyway thanks to the guard above). SC/PS → Accumulation,
+            // BC → Distribution, AR/ST inherit the detection.variant
+            // since they are direction-neutral in isolation.
+            //
+            // Prior heuristic mapped SOS→Accum / everything-else→Distrib
+            // which silently put AR into the distribution bucket and
+            // let a subsequent bullish event trigger auto_reclassify →
+            // "schematic flipped" failure. Now direction is sourced
+            // authoritatively from the detection payload, with a
+            // climax-kind fallback only when variant is missing.
             let schematic = match variant {
-                "accumulation" => WyckoffSchematic::Accumulation,
-                "distribution" => WyckoffSchematic::Distribution,
-                _ => {
-                    // Infer from event type
-                    if matches!(wy_event, WyckoffEvent::SC | WyckoffEvent::Spring | WyckoffEvent::SOS) {
-                        WyckoffSchematic::Accumulation
-                    } else {
-                        WyckoffSchematic::Distribution
-                    }
-                }
+                "accumulation" | "reaccumulation" => WyckoffSchematic::Accumulation,
+                "distribution" | "redistribution" => WyckoffSchematic::Distribution,
+                _ => match wy_event {
+                    WyckoffEvent::SC | WyckoffEvent::PS => WyckoffSchematic::Accumulation,
+                    WyckoffEvent::BC => WyckoffSchematic::Distribution,
+                    // AR / ST alone cannot disambiguate direction.
+                    // Drop the event instead of guessing — it will be
+                    // picked up by the next climax-anchored seed.
+                    _ => return Ok(()),
+                },
             };
 
             let mut tracker = WyckoffStructureTracker::new(schematic, price, price);
@@ -1616,6 +1627,34 @@ pub(crate) async fn upsert_wyckoff_structure_from_detection(
         }
     }
     Ok(())
+}
+
+/// P28a — Resolve the per-TF Wyckoff structure TTL in seconds from
+/// `system_config`. Key path: `wyckoff.structure.ttl_seconds.<TF>` with
+/// a `wyckoff.structure.ttl_seconds.default` fallback. Values are
+/// clamped to [60s, 365d] to avoid operator typos disabling the guard.
+async fn resolve_wyckoff_ttl_seconds(pool: &sqlx::PgPool, interval: &str) -> u64 {
+    let key = format!("structure.ttl_seconds.{interval}");
+    let env_key = format!("QTSS_WYCKOFF_TTL_{}", interval.to_uppercase());
+    // resolve_system_u64 falls back to the provided default when the
+    // key is missing; we then treat 0 as "use default fallback key".
+    let per_tf = qtss_storage::resolve_system_u64(
+        pool, "wyckoff", &key, &env_key, 0, 60, 31_536_000,
+    )
+    .await;
+    if per_tf > 0 {
+        return per_tf;
+    }
+    qtss_storage::resolve_system_u64(
+        pool,
+        "wyckoff",
+        "structure.ttl_seconds.default",
+        "QTSS_WYCKOFF_TTL_DEFAULT",
+        4_320_000, // ~50 days
+        60,
+        31_536_000,
+    )
+    .await
 }
 
 /// Synthetic Phase E trigger.

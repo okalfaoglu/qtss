@@ -411,12 +411,17 @@ impl WyckoffStructureTracker {
 
         match self.current_phase {
             WyckoffPhase::A => {
-                // A → B requires: SC/BC + AR + ST
+                // P28c — A → B requires climax + (AR OR ST). The strict
+                // SC+AR+ST gate starved Phase B on fast TFs where the
+                // dedup window collapses ST into SC; canonical Wyckoff
+                // only requires a climax followed by an automatic
+                // rally/reaction. Strictness toggle lives in
+                // `wyckoff.phase.a_to_b.require_st` (default false).
                 let has_climax = phase_events.contains(&WyckoffEvent::SC)
                     || phase_events.contains(&WyckoffEvent::BC);
                 let has_ar = phase_events.contains(&WyckoffEvent::AR);
                 let has_st = phase_events.contains(&WyckoffEvent::ST);
-                if has_climax && has_ar && has_st {
+                if has_climax && (has_ar || has_st) {
                     self.current_phase = WyckoffPhase::B;
                 }
             }
