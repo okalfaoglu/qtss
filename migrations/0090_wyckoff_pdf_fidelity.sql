@@ -57,6 +57,21 @@ SELECT _qtss_register_key(
     'Spring/UTAD Test low must sit within N * range_height of the parent Spring/UTAD price.',
     'number', true, 'normal', ARRAY['wyckoff','phase_c']);
 
+-- --- P2-P1-#5 / #11: Spring penetration + SC bar-width ---
+SELECT _qtss_register_key(
+    'wyckoff.shakeout_max_penetration', 'wyckoff', 'event', 'number',
+    '0.30'::jsonb, 'fraction',
+    'Shakeout max penetration (deeper than ordinary Spring but bounded). Past this, the move is a true breakout.',
+    'number', true, 'normal', ARRAY['wyckoff','phase_c']);
+
+-- Override prior 0.30 default — ordinary Springs only pierce <=12% now.
+INSERT INTO system_config (module, config_key, value, description) VALUES
+    ('detection', 'wyckoff.max_penetration', '0.12'::jsonb,
+     'Ordinary Spring/UTAD max penetration (fraction of range height). Tightened from 0.30 per Villahermosa ch. 6.'),
+    ('detection', 'wyckoff.shakeout_max_penetration', '0.30'::jsonb,
+     'Shakeout (aggressive Spring variant) max penetration.')
+ON CONFLICT (module, config_key) DO UPDATE SET value = EXCLUDED.value;
+
 -- Operator-facing defaults mirrored into system_config for GUI editing.
 INSERT INTO system_config (module, config_key, value, description) VALUES
     ('detector', 'wyckoff.sos_min_bar_width_atr_mult', '1.5'::jsonb,

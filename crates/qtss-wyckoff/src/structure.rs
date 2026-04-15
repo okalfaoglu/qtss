@@ -357,6 +357,19 @@ impl WyckoffStructureTracker {
             _ => {}
         }
 
+        // P2-P1-#7 — Failed Spring / Failed UTAD watchdog.
+        //
+        // Villahermosa ch. 6 (pp. 566-568): a Spring must be followed
+        // by a SpringTest and then SOS. If instead price breaks to a
+        // NEW LOW below the Spring low within N bars, the Phase-C
+        // setup failed — the range was actually distributive and the
+        // structure should flip to ReDistribution. Mirror for UTAD.
+        //
+        // Timeout window is hardcoded here (12 bars) because it is a
+        // Wyckoff-canonical behaviour, not a tuning knob. Operators who
+        // want to disable the flip can set max_flips=0 in policy.
+        self.check_failed_phase_c(event, bar_index, price);
+
         // Auto-reclassify schematic when the event carries an
         // unambiguous directional bias. Canonical Wyckoff:
         //   Spring / SOS / LPS / JAC      → accumulation-family
@@ -399,6 +412,54 @@ impl WyckoffStructureTracker {
 
     /// Promote schematic when an event unambiguously belongs to the
     /// opposite directional family. Look-up table — no scattered if/else.
+    /// P2-P1-#7 — Failed Spring / Failed UTAD watchdog.
+    ///
+    /// Called from `record_event_with_time` BEFORE `auto_reclassify`
+    /// so the flip it triggers supersedes any Spring-induced bullish
+    /// reclassification. We only fire when a fresh Low pivot breaks
+    /// under the latest Spring low (accum) or a fresh High breaks
+    /// above the latest UTAD high (dist) within 12 bars.
+    fn check_failed_phase_c(&mut self, event: WyckoffEvent, bar_index: u64, price: f64) {
+        use WyckoffEvent::*;
+        use WyckoffSchematic::*;
+        const FAILED_PHASE_C_WINDOW: u64 = 12;
+        // Only Low-forming events can invalidate a Spring (Shakeout /
+        // SOW / LPSY all put in a lower low); mirror for UTAD.
+        let accum_breaker = matches!(event, SOW | LPSY | Shakeout);
+        let dist_breaker = matches!(event, SOS | LPS);
+        if !accum_breaker && !dist_breaker {
+            return;
+        }
+        if accum_breaker
+            && matches!(self.schematic, Accumulation | ReAccumulation)
+        {
+            let parent = self.events.iter().rev().find(|e| matches!(e.event, Spring | SpringTest));
+            if let Some(p) = parent {
+                let within_window = bar_index.saturating_sub(p.bar_index) <= FAILED_PHASE_C_WINDOW;
+                if within_window && price < p.price {
+                    self.schematic = ReDistribution;
+                    self.reclassify_count = self.reclassify_count.saturating_add(1);
+                    self.last_reclassify_bar = Some(bar_index);
+                    self.failure_reason = Some("failed_spring".into());
+                }
+            }
+        }
+        if dist_breaker
+            && matches!(self.schematic, Distribution | ReDistribution)
+        {
+            let parent = self.events.iter().rev().find(|e| matches!(e.event, UTAD | UTADTest));
+            if let Some(p) = parent {
+                let within_window = bar_index.saturating_sub(p.bar_index) <= FAILED_PHASE_C_WINDOW;
+                if within_window && price > p.price {
+                    self.schematic = ReAccumulation;
+                    self.reclassify_count = self.reclassify_count.saturating_add(1);
+                    self.last_reclassify_bar = Some(bar_index);
+                    self.failure_reason = Some("failed_utad".into());
+                }
+            }
+        }
+    }
+
     fn auto_reclassify(&mut self, event: WyckoffEvent, bar_index: u64) {
         use WyckoffEvent::*;
         use WyckoffSchematic::*;

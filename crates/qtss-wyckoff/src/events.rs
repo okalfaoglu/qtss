@@ -559,16 +559,19 @@ fn eval_selling_climax(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMat
     let (idx, vol) = best?;
     let pivot = &pivots[idx];
 
-    // Bar width check (approximate via price swing to nearest opposite pivot)
+    // P2-P1-#11 — bar-width was a no-op (commented "might not be true").
+    // Villahermosa SC/BC: wide-range climactic bar. Narrow high-volume
+    // pivots are not climaxes. Score penalty instead of hard reject so
+    // legacy pivot-only callers stay operational, but below 0.5 they
+    // will be rejected by min_structural_score anyway.
     let bar_range = pivot_bar_range(pivot, pivots);
     let range = TradingRange::from_pivots(pivots)?;
     let atr_proxy = range.height / (pivots.len() as f64).max(1.0);
-    if bar_range < atr_proxy * cfg.sc_bar_width_multiplier {
-        // Bar not wide enough — might not be true SC
-    }
+    let width_ok = bar_range >= atr_proxy * cfg.sc_bar_width_multiplier;
+    let width_score = if width_ok { 1.0 } else { 0.4 };
 
     let vol_score = (vol / (avg * cfg.sc_volume_multiplier)).min(2.0) / 2.0;
-    let score = 0.5 + vol_score * 0.5;
+    let score = (0.3 + vol_score * 0.4 + width_score * 0.3).min(1.0);
 
     let mut labels: Vec<&'static str> = (0..pivots.len()).map(label_for).collect();
     if idx < labels.len() {
@@ -892,8 +895,12 @@ fn eval_shakeout(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
         return None;
     }
     let penetration = (range.support - price) / range.height.max(1e-9);
-    // Shakeout is deeper than a normal spring
-    if penetration < cfg.shakeout_min_penetration {
+    // Shakeout is deeper than a normal spring but bounded — past the
+    // shakeout cap the move is a true breakout, not a Wyckoff false
+    // break.
+    if penetration < cfg.shakeout_min_penetration
+        || penetration > cfg.shakeout_max_penetration
+    {
         return None;
     }
     // But must also have high volume (panic)

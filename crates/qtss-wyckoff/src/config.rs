@@ -16,8 +16,15 @@ pub struct WyckoffConfig {
     pub climax_volume_mult: f64,
     /// Min penetration for Spring / Upthrust (fraction of range height).
     pub min_penetration: f64,
-    /// Max penetration before it's a true breakout.
+    /// Max penetration for an *ordinary* Spring/UTAD before it's
+    /// treated as a genuine breakout. Villahermosa: ordinary Springs
+    /// pierce <=5-10% of range height; 30% was letting true breakouts
+    /// register as Springs. Shakeouts (aggressive variant #1) have
+    /// their own deeper cap in `shakeout_max_penetration`.
     pub max_penetration: f64,
+    /// Upper bound for Shakeout penetration specifically. Shakeouts
+    /// legitimately pierce deeper than ordinary Springs.
+    pub shakeout_max_penetration: f64,
     /// Drop candidates below this structural score.
     pub min_structural_score: f32,
 
@@ -151,7 +158,8 @@ impl WyckoffConfig {
             range_edge_tolerance: 0.04,
             climax_volume_mult: 1.8,
             min_penetration: 0.02,
-            max_penetration: 0.30,
+            max_penetration: 0.12,          // P2-P1-#5: tightened from 0.30
+            shakeout_max_penetration: 0.30,
             min_structural_score: 0.50,
             // Phase A
             sc_volume_multiplier: 2.5,

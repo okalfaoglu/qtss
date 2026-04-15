@@ -454,7 +454,10 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
     ).await;
     let max_pen = resolve_system_f64(
         pool, "detection", "wyckoff.max_penetration",
-        "QTSS_DETECTION_WYCKOFF_MAX_PEN", 0.30,
+        "QTSS_DETECTION_WYCKOFF_MAX_PEN", 0.12,
+    ).await;
+    let shakeout_max_pen = resolve_system_f64(
+        pool, "detection", "wyckoff.shakeout_max_penetration", "", 0.30,
     ).await;
 
     // Phase A
@@ -504,6 +507,7 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
         climax_volume_mult: climax_vol,
         min_penetration: min_pen,
         max_penetration: max_pen,
+        shakeout_max_penetration: shakeout_max_pen,
         min_structural_score: min_score,
         sc_volume_multiplier: sc_vol_mult,
         sc_bar_width_multiplier: sc_bar_mult,
