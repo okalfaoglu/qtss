@@ -58,6 +58,17 @@ pub struct CategoryReading {
     /// Free-form details (one short string per signal) — surfaced in
     /// the TBM detection's `raw_meta.details` for ops debugging.
     pub details: Vec<String>,
+    /// Native cadence of the upstream data source, in seconds. Used by
+    /// [`crate::aggregator::aggregate_for_tf`] to exclude readings
+    /// slower than the caller's analysis timeframe (Faz 7.7 / P29a:
+    /// 15m TBM setup'ı, 24h delta nansen verisiyle beslenmemeli).
+    /// Defaults to `3600` when the fetcher does not override.
+    #[serde(default = "default_cadence_s")]
+    pub cadence_s: u64,
+}
+
+fn default_cadence_s() -> u64 {
+    3600
 }
 
 impl CategoryReading {
@@ -68,6 +79,7 @@ impl CategoryReading {
             confidence: 0.0,
             direction: Some(OnchainDirection::Neutral),
             details: Vec::new(),
+            cadence_s: default_cadence_s(),
         }
     }
 }
@@ -96,6 +108,15 @@ pub trait OnchainCategoryFetcher: Send + Sync {
 
     /// Which bucket this fetcher feeds.
     fn category(&self) -> CategoryKind;
+
+    /// Native cadence of the upstream source (seconds). E.g. Binance
+    /// derivatives = 3600 (1h period), DeFiLlama stablecoin chart =
+    /// 86400 (daily). Aggregator filters out readings whose cadence is
+    /// coarser than the caller's analysis timeframe so a 15m setup
+    /// never inherits yesterday's onchain snapshot. Default = 1h.
+    fn cadence_s(&self) -> u64 {
+        3600
+    }
 
     /// Fetch current reading for `symbol` (e.g. `"BTCUSDT"`).
     async fn fetch(&self, symbol: &str) -> Result<CategoryReading, FetcherError>;

@@ -114,6 +114,10 @@ impl OnchainCategoryFetcher for BinanceDerivativesFetcher {
         CategoryKind::Derivatives
     }
 
+    fn cadence_s(&self) -> u64 {
+        3600
+    }
+
     async fn fetch(&self, symbol: &str) -> Result<CategoryReading, FetcherError> {
         // 1) Funding rate
         let funding: f64 = {
@@ -262,6 +266,7 @@ fn blend(
         confidence: 0.9, // Binance public is reliable; only stale on outage.
         direction: Some(direction),
         details,
+        cadence_s: 3600, // openInterestHist / L-S / taker all period=1h
     }
 }
 

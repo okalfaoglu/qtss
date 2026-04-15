@@ -108,6 +108,10 @@ impl OnchainCategoryFetcher for GlassnodeFetcher {
         CategoryKind::Chain
     }
 
+    fn cadence_s(&self) -> u64 {
+        86_400 // v1 metrics default resolution = 24h
+    }
+
     async fn fetch(&self, symbol: &str) -> Result<CategoryReading, FetcherError> {
         let asset = map_asset(symbol)?;
 
@@ -204,6 +208,7 @@ fn blend(
         confidence,
         direction: Some(direction),
         details,
+        cadence_s: 86_400,
     }
 }
 

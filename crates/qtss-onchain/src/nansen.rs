@@ -329,6 +329,10 @@ impl OnchainCategoryFetcher for NansenFetcher {
         CategoryKind::Chain
     }
 
+    fn cadence_s(&self) -> u64 {
+        86_400 // 24h deltas (balance_24h_percent_change, net_flow_24h_usd)
+    }
+
     async fn fetch(&self, symbol: &str) -> Result<CategoryReading, FetcherError> {
         let Some(key) = resolve_symbol(&self.tuning.symbol_map, symbol) else {
             return Err(FetcherError::UnsupportedSymbol(symbol.to_string()));
@@ -422,6 +426,7 @@ fn blend(
         confidence,
         direction: Some(direction),
         details,
+        cadence_s: 86_400,
     }
 }
 

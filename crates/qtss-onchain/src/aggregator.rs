@@ -51,9 +51,32 @@ pub struct AggregateOnchain {
 
 /// Blend `readings` using `weights`. Empty input → neutral score with
 /// zero confidence so the TBM pillar correctly mutes itself.
+///
+/// Backwards-compatible wrapper for callers that do not yet pass a
+/// timeframe. Includes every reading regardless of cadence.
 #[must_use]
 pub fn aggregate(readings: &[CategoryReading], weights: AggregatorWeights) -> AggregateOnchain {
-    if readings.is_empty() {
+    aggregate_for_tf(readings, weights, u64::MAX)
+}
+
+/// TF-aware blend (Faz 7.7 / P29a). Skips readings whose native cadence
+/// is coarser than `tf_s`: a 15-minute TBM setup (tf_s=900) must never
+/// inherit yesterday's stablecoin snapshot (cadence_s=86_400), since
+/// that reading does not change meaningfully on the caller's horizon
+/// and would force a constant bias into the aggregate.
+///
+/// Pass `u64::MAX` to accept every reading (legacy behaviour).
+#[must_use]
+pub fn aggregate_for_tf(
+    readings: &[CategoryReading],
+    weights: AggregatorWeights,
+    tf_s: u64,
+) -> AggregateOnchain {
+    let filtered: Vec<&CategoryReading> = readings
+        .iter()
+        .filter(|r| r.cadence_s <= tf_s)
+        .collect();
+    if filtered.is_empty() {
         return AggregateOnchain {
             score: 0.5,
             direction: OnchainDirection::Neutral,
@@ -69,7 +92,7 @@ pub fn aggregate(readings: &[CategoryReading], weights: AggregatorWeights) -> Ag
     let mut per_category: HashMap<String, f64> = HashMap::new();
     let mut details: Vec<String> = Vec::new();
 
-    for r in readings {
+    for r in &filtered {
         let base = weights.weight_for(r.category);
         let w = base * r.confidence;
         if w <= 0.0 {
@@ -126,6 +149,7 @@ mod tests {
             confidence: conf,
             direction: None,
             details: vec![],
+            cadence_s: 0,
         }
     }
 

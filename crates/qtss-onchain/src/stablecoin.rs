@@ -116,6 +116,10 @@ impl OnchainCategoryFetcher for StablecoinMacroFetcher {
         CategoryKind::Stablecoin
     }
 
+    fn cadence_s(&self) -> u64 {
+        86_400 // DeFiLlama daily + F&G daily
+    }
+
     async fn fetch(&self, _symbol: &str) -> Result<CategoryReading, FetcherError> {
         let stable_delta = fetch_stable_delta(&self.client).await.ok().flatten();
         let fng = fetch_fng(&self.client).await.ok().flatten();
@@ -174,6 +178,7 @@ fn blend(
         confidence,
         direction: Some(direction),
         details,
+        cadence_s: 86_400,
     }
 }
 
