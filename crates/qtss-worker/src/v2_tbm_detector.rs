@@ -249,6 +249,33 @@ async fn load_config(pool: &PgPool) -> TbmConfig {
         ).await != 0,
     };
 
+    let effort_result = qtss_tbm::TbmEffortResultTuning {
+        enabled: resolve_system_u64(
+            pool, "tbm", "effort_result.enabled", "QTSS_TBM_EFFORT_ENABLED", 1, 0, 1,
+        ).await != 0,
+        scan_bars: resolve_system_u64(
+            pool, "tbm", "effort_result.scan_bars", "QTSS_TBM_EFFORT_SCAN", 8, 2, 50,
+        ).await as usize,
+        range_small_ratio: resolve_system_f64(
+            pool, "tbm", "effort_result.range_small_ratio", "QTSS_TBM_EFFORT_RNG", 0.7,
+        ).await,
+        vol_low_ratio: resolve_system_f64(
+            pool, "tbm", "effort_result.vol_low_ratio", "QTSS_TBM_EFFORT_VOL_LO", 0.8,
+        ).await,
+        vol_high_ratio: resolve_system_f64(
+            pool, "tbm", "effort_result.vol_high_ratio", "QTSS_TBM_EFFORT_VOL_HI", 1.5,
+        ).await,
+        no_supply_demand_pts: resolve_system_f64(
+            pool, "tbm", "effort_result.no_supply_demand_pts", "QTSS_TBM_EFFORT_NSD_PTS", 10.0,
+        ).await,
+        absorption_pts: resolve_system_f64(
+            pool, "tbm", "effort_result.absorption_pts", "QTSS_TBM_EFFORT_ABS_PTS", 15.0,
+        ).await,
+        max_bonus_pts: resolve_system_f64(
+            pool, "tbm", "effort_result.max_bonus_pts", "QTSS_TBM_EFFORT_MAX", 25.0,
+        ).await,
+    };
+
     TbmConfig {
         enabled,
         tick_interval_s,
@@ -258,6 +285,7 @@ async fn load_config(pool: &PgPool) -> TbmConfig {
         mtf,
         anchor,
         confirm,
+        effort_result,
         onchain_enabled,
     }
 }
@@ -534,6 +562,23 @@ async fn process_symbol(
         t_fib_p, t_fib_n, t_bb_pb, t_bb_sq,
         onchain_metrics.as_ref(),
     );
+
+    // P24 — Effort vs Result (Wyckoff volume law). Scan bars ending at
+    // each anchor for no-supply / no-demand / absorption tells and add
+    // a capped bonus to the volume pillar. Details are surfaced to
+    // raw_meta via pillar_details.
+    let mut bottom = bottom;
+    let mut top = top;
+    if cfg.effort_result.enabled {
+        apply_effort_result(
+            &mut bottom, bottom_anchor, &opens, &highs, &lows, &closes, &vols, true,
+            &cfg.effort_result,
+        );
+        apply_effort_result(
+            &mut top, top_anchor, &opens, &highs, &lows, &closes, &vols, false,
+            &cfg.effort_result,
+        );
+    }
 
     let thresholds = SetupThresholds {
         min_score: cfg.setup.min_score,
@@ -1535,6 +1580,51 @@ fn pick_anchor(
     }
 
     best_idx.unwrap_or(fallback)
+}
+
+/// P24 — fold the effort-vs-result bonus into a TbmScore's volume
+/// pillar and rebalance the weighted total. Details are appended so
+/// they flow out through pillar_meta into raw_meta.details.
+fn apply_effort_result(
+    score: &mut qtss_tbm::TbmScore,
+    anchor: usize,
+    opens: &[f64],
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    vols: &[f64],
+    is_bottom: bool,
+    cfg: &qtss_tbm::TbmEffortResultTuning,
+) {
+    let lo = anchor.saturating_sub(20);
+    if anchor < lo || anchor >= opens.len() { return; }
+    let (pts, details) = qtss_tbm::volume::score_effort_result(
+        &opens[lo..=anchor],
+        &highs[lo..=anchor],
+        &lows[lo..=anchor],
+        &closes[lo..=anchor],
+        &vols[lo..=anchor],
+        is_bottom,
+        cfg,
+    );
+    if pts <= 0.0 { return; }
+    for p in score.pillars.iter_mut() {
+        if matches!(p.kind, qtss_tbm::PillarKind::Volume) {
+            p.score = (p.score + pts).min(100.0);
+            p.details.extend(details.iter().cloned());
+        }
+    }
+    // Recompute weighted total with the patched volume score.
+    let mut total_w = 0.0;
+    let mut weighted = 0.0;
+    for p in &score.pillars {
+        let w = p.weight.max(0.0);
+        total_w += w;
+        weighted += p.score * w;
+    }
+    if total_w > 0.0 {
+        score.total = (weighted / total_w).min(100.0);
+    }
 }
 
 /// P23d — evaluate the three anchor-bar checklist flags at a chosen

@@ -14,7 +14,94 @@
 //! bar). Slices shorter than 6 bars skip divergence and only use the
 //! fallback sign rule on the last slope.
 
+use crate::config::TbmEffortResultTuning;
 use crate::pillar::{PillarKind, PillarScore};
+
+/// P24 — Wyckoff "effort vs result" volume-law detector. Scans the
+/// last `cfg.scan_bars` bars of the supplied window and returns
+/// (bonus_points, details). `opens/highs/lows/closes/vols` must be the
+/// same length and end at the anchor bar. A 20-bar trailing average
+/// (or shorter if the window is short) establishes the "normal" range
+/// and volume baseline.
+///
+/// Scored bars (all three capped by `cfg.max_bonus_pts`):
+///   * No-supply down-bar (is_bottom hypothesis): bearish close, small
+///     range, low volume → sellers exhausted.
+///   * No-demand up-bar (top hypothesis): bullish close, small range,
+///     low volume → buyers exhausted.
+///   * Absorption: high volume, small range, close mid-range → effort
+///     without result (supply soaking demand, or vice-versa).
+#[must_use]
+pub fn score_effort_result(
+    opens: &[f64],
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    vols: &[f64],
+    is_bottom: bool,
+    cfg: &TbmEffortResultTuning,
+) -> (f64, Vec<String>) {
+    if !cfg.enabled {
+        return (0.0, Vec::new());
+    }
+    let n = opens
+        .len()
+        .min(highs.len())
+        .min(lows.len())
+        .min(closes.len())
+        .min(vols.len());
+    if n < 6 {
+        return (0.0, Vec::new());
+    }
+
+    // Baseline = 20-bar (or available) trailing avg.
+    let base_start = n.saturating_sub(20).min(n);
+    let base_len = (n - base_start).max(1) as f64;
+    let avg_range: f64 = (base_start..n)
+        .map(|i| (highs[i] - lows[i]).max(0.0))
+        .sum::<f64>()
+        / base_len;
+    let avg_vol: f64 = vols[base_start..n].iter().sum::<f64>() / base_len;
+    if avg_range <= 0.0 || avg_vol <= 0.0 {
+        return (0.0, Vec::new());
+    }
+
+    let scan_start = n.saturating_sub(cfg.scan_bars).max(1);
+    let mut pts = 0.0_f64;
+    let mut details = Vec::new();
+
+    for i in scan_start..n {
+        let range_i = (highs[i] - lows[i]).max(0.0);
+        if range_i <= 0.0 {
+            continue;
+        }
+        let range_small = range_i <= cfg.range_small_ratio * avg_range;
+        let vol_low = vols[i] <= cfg.vol_low_ratio * avg_vol;
+        let vol_high = vols[i] >= cfg.vol_high_ratio * avg_vol;
+        let bearish = closes[i] < opens[i];
+        let bullish = closes[i] > opens[i];
+        let close_mid =
+            (closes[i] - lows[i]).abs() >= 0.25 * range_i && (highs[i] - closes[i]).abs() >= 0.25 * range_i;
+
+        if is_bottom && bearish && range_small && vol_low {
+            pts += cfg.no_supply_demand_pts;
+            details.push(format!("no-supply down-bar @ {i} (+{:.0})", cfg.no_supply_demand_pts));
+        }
+        if !is_bottom && bullish && range_small && vol_low {
+            pts += cfg.no_supply_demand_pts;
+            details.push(format!("no-demand up-bar @ {i} (+{:.0})", cfg.no_supply_demand_pts));
+        }
+        if vol_high && range_small && close_mid {
+            pts += cfg.absorption_pts;
+            details.push(format!("absorption bar @ {i} (+{:.0})", cfg.absorption_pts));
+        }
+        if pts >= cfg.max_bonus_pts {
+            break;
+        }
+    }
+
+    (pts.min(cfg.max_bonus_pts), details)
+}
 
 /// Volume pillar skoru hesaplar.
 ///

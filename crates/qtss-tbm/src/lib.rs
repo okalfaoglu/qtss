@@ -10,7 +10,7 @@ pub mod scorer;
 pub mod setup;
 pub mod mtf;
 
-pub use config::{TbmConfig, TbmMtfTuning, TbmPillarWeights, TbmSetupTuning};
+pub use config::{TbmConfig, TbmEffortResultTuning, TbmMtfTuning, TbmPillarWeights, TbmSetupTuning};
 pub use pillar::{PillarScore, PillarKind};
 pub use scorer::{TbmScore, score_tbm};
 pub use setup::{TbmSetup, SetupDirection, detect_setups};

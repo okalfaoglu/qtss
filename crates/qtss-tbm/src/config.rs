@@ -180,6 +180,52 @@ impl Default for TbmConfirmTuning {
     }
 }
 
+/// P24 — Effort vs Result (Wyckoff volume law) detector. Scans the
+/// last `scan_bars` bars around the anchor for textbook volume-mismatch
+/// bars and contributes a capped bonus to the volume pillar:
+///   * no-supply down-bar (bearish bar on shrinking range + low vol)
+///     in a bottom hypothesis → sellers exhausted.
+///   * no-demand up-bar (bullish bar on shrinking range + low vol)
+///     in a top hypothesis → buyers exhausted.
+///   * absorption bar (high vol + small range + close mid-range) →
+///     effort without result, classic reversal tell.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TbmEffortResultTuning {
+    pub enabled: bool,
+    /// Trailing bars (ending at the anchor) to scan.
+    pub scan_bars: usize,
+    /// Range gate — bar total range must be ≤ this × 20-bar avg range
+    /// to qualify as "small".
+    pub range_small_ratio: f64,
+    /// Volume gate for no-supply / no-demand — bar volume must be ≤
+    /// this × 20-bar avg.
+    pub vol_low_ratio: f64,
+    /// Volume gate for absorption — bar volume must be ≥ this × 20-bar
+    /// avg.
+    pub vol_high_ratio: f64,
+    /// Pts added per no-supply / no-demand bar found.
+    pub no_supply_demand_pts: f64,
+    /// Pts added per absorption bar found.
+    pub absorption_pts: f64,
+    /// Total bonus cap (so stacked signals don't blow the pillar out).
+    pub max_bonus_pts: f64,
+}
+
+impl Default for TbmEffortResultTuning {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            scan_bars: 8,
+            range_small_ratio: 0.7,
+            vol_low_ratio: 0.8,
+            vol_high_ratio: 1.5,
+            no_supply_demand_pts: 10.0,
+            absorption_pts: 15.0,
+            max_bonus_pts: 25.0,
+        }
+    }
+}
+
 /// Top-level TBM runtime config. The worker hydrates this from
 /// `system_config` once per tick interval; the detector treats it as
 /// immutable for the duration of the tick.
@@ -193,6 +239,7 @@ pub struct TbmConfig {
     pub mtf: TbmMtfTuning,
     pub anchor: TbmAnchorTuning,
     pub confirm: TbmConfirmTuning,
+    pub effort_result: TbmEffortResultTuning,
     pub onchain_enabled: bool,
 }
 
@@ -207,6 +254,7 @@ impl Default for TbmConfig {
             mtf: TbmMtfTuning::default(),
             anchor: TbmAnchorTuning::default(),
             confirm: TbmConfirmTuning::default(),
+            effort_result: TbmEffortResultTuning::default(),
             onchain_enabled: false,
         }
     }
