@@ -36,6 +36,16 @@ pub struct WyckoffConfig {
     pub ua_max_exceed_pct: f64,
     /// Each ST-B volume must be <= N * previous ST-B volume.
     pub stb_volume_decay_min: f64,
+    /// Minimum bars that must elapse between Phase A completion (last SC/AR/ST)
+    /// and the earliest eligible Phase-B → Phase-C transition. Villahermosa
+    /// ch. 5–6: Phase B is the longest phase and cannot be skipped. Default
+    /// 10 bars; callers override per-TF via config table.
+    pub phase_b_min_bars: usize,
+    /// Phase B requires at least this many internal tests (UA, ST-B, ST)
+    /// beyond the Phase-A canonical triple before C may open. Default 1 —
+    /// i.e. climax + AR + (ST or UA or STB) gives you A→B; B→C then needs
+    /// one *more* inner test on top.
+    pub phase_b_min_inner_tests: usize,
 
     // --- Phase C ---
     /// Shakeout penetration >= N% of range height.
@@ -137,6 +147,8 @@ impl WyckoffConfig {
             // Phase B
             ua_max_exceed_pct: 0.03,
             stb_volume_decay_min: 0.85,
+            phase_b_min_bars: 10,
+            phase_b_min_inner_tests: 1,
             // Phase C
             shakeout_min_penetration: 0.05,
             shakeout_recovery_bars: 3,

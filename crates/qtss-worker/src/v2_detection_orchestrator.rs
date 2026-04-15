@@ -479,8 +479,13 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
     let spr_ns_vol = resolve_system_f64(pool, "detector", "wyckoff.spring_no_supply_vol_ratio", "", 0.8).await;
     let spr_term_vol = resolve_system_f64(pool, "detector", "wyckoff.spring_terminal_vol_ratio", "", 3.0).await;
     let skip_term = resolve_worker_enabled_flag(pool, "detector", "wyckoff.skip_terminal_springs", "", true).await;
+    // Phase B gate (P2c)
+    let phase_b_min_bars = resolve_system_u64(pool, "detector", "wyckoff.phase_b_min_bars", "", 10, 0, 1000).await as usize;
+    let phase_b_min_inner_tests = resolve_system_u64(pool, "detector", "wyckoff.phase_b_min_inner_tests", "", 1, 0, 10).await as usize;
     // Phase D
     let sos_vol = resolve_system_f64(pool, "detector", "wyckoff.sos_min_volume_ratio", "", 1.5).await;
+    let sos_bar_atr = resolve_system_f64(pool, "detector", "wyckoff.sos_min_bar_width_atr_mult", "", 1.5).await;
+    let sos_close_third = resolve_system_f64(pool, "detector", "wyckoff.sos_close_third_threshold", "", 0.66).await;
     let lps_ret = resolve_system_f64(pool, "detector", "wyckoff.lps_max_retracement", "", 0.5).await;
     let lps_vol = resolve_system_f64(pool, "detector", "wyckoff.lps_max_volume_ratio", "", 0.5).await;
     let creek_pct = resolve_system_f64(pool, "detector", "wyckoff.creek_level_percentile", "", 0.6).await;
@@ -502,6 +507,8 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
         ar_min_retracement: ar_min_ret,
         ua_max_exceed_pct: ua_exceed,
         stb_volume_decay_min: stb_decay,
+        phase_b_min_bars,
+        phase_b_min_inner_tests,
         shakeout_min_penetration: shake_pen,
         shakeout_recovery_bars: shake_bars,
         manipulation_min_edge_tests: manip_edge_tests,
@@ -514,6 +521,8 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
         spring_terminal_vol_ratio: spr_term_vol,
         skip_terminal_springs: skip_term,
         sos_min_volume_ratio: sos_vol,
+        sos_min_bar_width_atr_mult: sos_bar_atr,
+        sos_close_third_threshold: sos_close_third,
         lps_max_retracement: lps_ret,
         lps_max_volume_ratio: lps_vol,
         creek_level_percentile: creek_pct,

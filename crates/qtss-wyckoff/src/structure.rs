@@ -200,7 +200,18 @@ pub struct WyckoffStructureTracker {
     /// P17 — hysteresis + dedup policy (config-driven per CLAUDE.md #2).
     #[serde(default)]
     pub policy: ReclassifyPolicy,
+    /// P2c — minimum Phase-B inner tests (UA/ST-B/ST) required before
+    /// B → C opens. 0 preserves legacy behaviour for old serialised rows.
+    #[serde(default = "default_phase_b_min_inner_tests")]
+    pub phase_b_min_inner_tests: usize,
+    /// P2c — minimum bars between the last Phase-A event and the first
+    /// Phase-C event. 0 preserves legacy behaviour.
+    #[serde(default = "default_phase_b_min_bars")]
+    pub phase_b_min_bars: usize,
 }
+
+fn default_phase_b_min_inner_tests() -> usize { 1 }
+fn default_phase_b_min_bars() -> usize { 10 }
 
 impl WyckoffStructureTracker {
     /// Start a new structure from a detected trading range.
@@ -219,12 +230,22 @@ impl WyckoffStructureTracker {
             reclassify_count: 0,
             last_reclassify_bar: None,
             policy: ReclassifyPolicy::default(),
+            phase_b_min_inner_tests: default_phase_b_min_inner_tests(),
+            phase_b_min_bars: default_phase_b_min_bars(),
         }
     }
 
     /// Set hysteresis + dedup policy (caller loads from qtss_config).
     pub fn with_policy(mut self, policy: ReclassifyPolicy) -> Self {
         self.policy = policy;
+        self
+    }
+
+    /// P2c — override Phase-B gate thresholds (caller loads from
+    /// system_config `wyckoff.phase.b.min_bars` / `min_inner_tests`).
+    pub fn with_phase_b_gate(mut self, min_inner_tests: usize, min_bars: usize) -> Self {
+        self.phase_b_min_inner_tests = min_inner_tests;
+        self.phase_b_min_bars = min_bars;
         self
     }
 
@@ -426,13 +447,37 @@ impl WyckoffStructureTracker {
                 }
             }
             WyckoffPhase::B => {
-                // B → C requires: time in range (≥2 events in Phase B)
-                let b_count = phase_events.iter()
+                // P2c — Phase B real gate (Villahermosa ch. 5).
+                //
+                // Prior logic: `b_count≥2 OR has_c_event` — the OR path
+                // let a bare Spring/UTAD jump straight into C, so B was
+                // optional. Canonical Wyckoff: B is the LONGEST phase,
+                // must be traversed. B → C now requires:
+                //   1. at least `phase_b_min_inner_tests` Phase-B events
+                //      (UA / ST-B / ST) since A's last event,
+                //   2. at least `phase_b_min_bars` bars elapsed since
+                //      the latest Phase-A event,
+                //   3. AND a fired Phase-C event (Spring/UTAD/Shakeout).
+                //
+                // Config-driven via WyckoffConfig.phase_b_*; operators
+                // tune per-TF in system_config.
+                let b_inner = phase_events.iter()
                     .filter(|e| e.phase() == WyckoffPhase::B)
                     .count();
-                // Or any Phase C event triggers the transition
+                let last_a_bar = self.events.iter()
+                    .filter(|e| e.event.phase() == WyckoffPhase::A)
+                    .map(|e| e.bar_index)
+                    .max()
+                    .unwrap_or(0);
+                let latest_bar = self.events.iter()
+                    .map(|e| e.bar_index)
+                    .max()
+                    .unwrap_or(last_a_bar);
+                let bars_in_b = latest_bar.saturating_sub(last_a_bar) as usize;
                 let has_c_event = phase_events.iter().any(|e| e.phase() == WyckoffPhase::C);
-                if b_count >= 2 || has_c_event {
+                let min_tests = self.phase_b_min_inner_tests;
+                let min_bars = self.phase_b_min_bars;
+                if has_c_event && b_inner >= min_tests && bars_in_b >= min_bars {
                     self.current_phase = WyckoffPhase::C;
                 }
             }
