@@ -109,3 +109,23 @@ INSERT INTO system_config (module, config_key, value, description) VALUES
     ('detector', 'wyckoff.spring_test_max_distance', '0.10'::jsonb,
      'Spring/UTAD Test price distance cap (fraction of range height).')
 ON CONFLICT (module, config_key) DO NOTHING;
+
+-- --- P6: A→B strict toggle (#17) + per-phase dwell (#15) ---
+SELECT _qtss_register_key(
+    'wyckoff.phase.a_to_b.require_st', 'wyckoff', 'phase', 'bool',
+    'false'::jsonb, 'flag',
+    'When true, A→B requires explicit ST in addition to climax+AR. Default false (canonical relaxed).',
+    'bool', true, 'normal', ARRAY['wyckoff','phase_a']);
+
+SELECT _qtss_register_key(
+    'wyckoff.phase.min_dwell_bars', 'wyckoff', 'phase', 'int',
+    '3'::jsonb, 'bars',
+    'Minimum bars the tracker must spend in the current phase before advancing. Prevents sub-bar phase sprints.',
+    'number', true, 'normal', ARRAY['wyckoff','phases']);
+
+INSERT INTO system_config (module, config_key, value, description) VALUES
+    ('detector', 'wyckoff.phase.a_to_b.require_st', 'false'::jsonb,
+     'Strict A→B gate: require explicit ST.'),
+    ('detector', 'wyckoff.phase.min_dwell_bars', '3'::jsonb,
+     'Min bars in current phase before next transition fires.')
+ON CONFLICT (module, config_key) DO NOTHING;

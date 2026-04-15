@@ -26,7 +26,7 @@ pub struct TbmSetup {
 /// Setup eşik ayarları.
 #[derive(Debug, Clone)]
 pub struct SetupThresholds {
-    /// Minimum skor (varsayılan 30)
+    /// Minimum skor (varsayılan 40)
     pub min_score: f64,
     /// Minimum aktif pillar sayısı (score > 20 olan pillar)
     pub min_active_pillars: usize,
@@ -35,7 +35,7 @@ pub struct SetupThresholds {
 impl Default for SetupThresholds {
     fn default() -> Self {
         Self {
-            min_score: 30.0,
+            min_score: 40.0,
             min_active_pillars: 2,
         }
     }

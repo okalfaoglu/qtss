@@ -1494,6 +1494,14 @@ pub(crate) async fn upsert_wyckoff_structure_from_detection(
                 schematic,
                 row.range_top.unwrap_or(0.0),
                 row.range_bottom.unwrap_or(0.0),
+            )
+            .with_phase_b_gate(
+                resolve_system_u64(pool, "detector", "wyckoff.phase_b_min_inner_tests", "", 1, 0, 10).await as usize,
+                resolve_system_u64(pool, "detector", "wyckoff.phase_b_min_bars", "", 10, 0, 1000).await as usize,
+            )
+            .with_phase_gates(
+                resolve_worker_enabled_flag(pool, "detector", "wyckoff.phase.a_to_b.require_st", "", false).await,
+                resolve_system_u64(pool, "detector", "wyckoff.phase.min_dwell_bars", "", 3, 0, 100).await as usize,
             );
             tracker.creek = row.creek_level;
             tracker.ice = row.ice_level;

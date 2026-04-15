@@ -217,10 +217,23 @@ pub struct WyckoffStructureTracker {
     /// Phase-C event. 0 preserves legacy behaviour.
     #[serde(default = "default_phase_b_min_bars")]
     pub phase_b_min_bars: usize,
+    /// P2-#17 — if true, A → B requires an explicit ST in addition to
+    /// climax + AR. Default false (canonical relaxed gate).
+    #[serde(default)]
+    pub require_st: bool,
+    /// P2-#15 — minimum bar dwell per phase before the next transition
+    /// can fire. Applied uniformly to A→B, B→C, C→D, D→E. 0 disables.
+    #[serde(default = "default_phase_min_dwell_bars")]
+    pub phase_min_dwell_bars: usize,
+    /// P2-#15 — bar_index at which the tracker entered `current_phase`.
+    /// `None` = unknown (legacy rows); treated as "dwell satisfied".
+    #[serde(default)]
+    pub phase_entered_bar: Option<u64>,
 }
 
 fn default_phase_b_min_inner_tests() -> usize { 1 }
 fn default_phase_b_min_bars() -> usize { 10 }
+fn default_phase_min_dwell_bars() -> usize { 3 }
 
 impl WyckoffStructureTracker {
     /// Start a new structure from a detected trading range.
@@ -241,7 +254,17 @@ impl WyckoffStructureTracker {
             policy: ReclassifyPolicy::default(),
             phase_b_min_inner_tests: default_phase_b_min_inner_tests(),
             phase_b_min_bars: default_phase_b_min_bars(),
+            require_st: false,
+            phase_min_dwell_bars: default_phase_min_dwell_bars(),
+            phase_entered_bar: None,
         }
+    }
+
+    /// P2-#15/#17 — configure A→B strictness and min dwell.
+    pub fn with_phase_gates(mut self, require_st: bool, min_dwell_bars: usize) -> Self {
+        self.require_st = require_st;
+        self.phase_min_dwell_bars = min_dwell_bars;
+        self
     }
 
     /// Set hysteresis + dedup policy (caller loads from qtss_config).
@@ -553,6 +576,21 @@ impl WyckoffStructureTracker {
     fn try_advance_phase(&mut self) {
         let phase_events: Vec<WyckoffEvent> = self.events.iter().map(|e| e.event).collect();
 
+        // P2-#15: temporal gate — every transition must wait at least
+        // `phase_min_dwell_bars` bars after we entered the current phase.
+        // Legacy rows with `phase_entered_bar = None` bypass this gate.
+        let latest_bar = self.events.iter().map(|e| e.bar_index).max().unwrap_or(0);
+        let dwell_ok = match self.phase_entered_bar {
+            Some(entered) => latest_bar.saturating_sub(entered) as usize
+                >= self.phase_min_dwell_bars,
+            None => true,
+        };
+        if !dwell_ok {
+            return;
+        }
+
+        let starting_phase = self.current_phase;
+
         match self.current_phase {
             WyckoffPhase::A => {
                 // P28c — A → B requires climax + (AR OR ST). The strict
@@ -565,7 +603,14 @@ impl WyckoffStructureTracker {
                     || phase_events.contains(&WyckoffEvent::BC);
                 let has_ar = phase_events.contains(&WyckoffEvent::AR);
                 let has_st = phase_events.contains(&WyckoffEvent::ST);
-                if has_climax && (has_ar || has_st) {
+                // P2-#17 — strict A→B requires ST explicitly on top of
+                // climax + AR. Relaxed default = climax + (AR or ST).
+                let ok = if self.require_st {
+                    has_climax && has_ar && has_st
+                } else {
+                    has_climax && (has_ar || has_st)
+                };
+                if ok {
                     self.current_phase = WyckoffPhase::B;
                 }
             }
@@ -638,6 +683,11 @@ impl WyckoffStructureTracker {
             WyckoffPhase::E => {
                 // Terminal phase — structure is complete
             }
+        }
+
+        // P2-#15: record entry bar if the phase advanced this call.
+        if self.current_phase != starting_phase {
+            self.phase_entered_bar = Some(latest_bar);
         }
     }
 

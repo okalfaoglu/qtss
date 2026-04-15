@@ -192,6 +192,48 @@ fn creek_level(range: &TradingRange, percentile: f64) -> f64 {
     range.support + range.height * percentile
 }
 
+/// P2-#13: Dynamic creek — use the highest INTERNAL High pivot (the
+/// empirical UA/STB peak) as the creek. Falls back to the percentile
+/// heuristic if no qualifying internal high exists. Internal =
+/// strictly below resistance by edge-tolerance (not a touch of the
+/// ceiling) and above the mid-range line.
+fn dynamic_creek_level(pivots: &[Pivot], range: &TradingRange, cfg: &WyckoffConfig) -> f64 {
+    let tol = range.height.max(1e-9) * cfg.range_edge_tolerance;
+    let mid = range.support + range.height * 0.5;
+    let mut best = f64::MIN;
+    for p in pivots {
+        if p.kind != PivotKind::High { continue; }
+        let v = p.price.to_f64().unwrap_or(0.0);
+        if v <= mid { continue; }
+        if v >= range.resistance - tol { continue; }
+        if v > best { best = v; }
+    }
+    if best == f64::MIN {
+        creek_level(range, cfg.creek_level_percentile)
+    } else {
+        best
+    }
+}
+
+/// Mirror for Ice (distribution analog of creek).
+fn dynamic_ice_level(pivots: &[Pivot], range: &TradingRange, cfg: &WyckoffConfig) -> f64 {
+    let tol = range.height.max(1e-9) * cfg.range_edge_tolerance;
+    let mid = range.support + range.height * 0.5;
+    let mut best = f64::MAX;
+    for p in pivots {
+        if p.kind != PivotKind::Low { continue; }
+        let v = p.price.to_f64().unwrap_or(0.0);
+        if v >= mid { continue; }
+        if v <= range.support + tol { continue; }
+        if v < best { best = v; }
+    }
+    if best == f64::MAX {
+        ice_level(range, cfg.creek_level_percentile)
+    } else {
+        best
+    }
+}
+
 /// True if `context` already shows a real range around `range.support`:
 /// at least `manipulation_min_edge_tests` prior low pivots sit within the
 /// edge-tolerance band of support, AND the earliest such test is at
@@ -804,6 +846,12 @@ fn eval_secondary_test(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMat
             let st_price = st.price.to_f64().unwrap_or(0.0);
             let st_vol = st.volume_at_pivot.to_f64().unwrap_or(0.0);
 
+            // P2-#9: ST must remain INSIDE the range. An accumulation ST
+            // that prints a new low below SC is a failed test / break, not
+            // an ST. Allow a tiny tolerance for wick noise.
+            let tol = range.height.max(1e-9) * cfg.range_edge_tolerance;
+            if st_price < sc_price - tol { continue; }
+
             // ST should be near SC level (within range tolerance)
             let dist = (st_price - sc_price).abs() / range.height.max(1e-9);
             if dist > 0.15 { continue; }
@@ -841,6 +889,10 @@ fn eval_secondary_test(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMat
             if st.kind != PivotKind::High { continue; }
             let st_price = st.price.to_f64().unwrap_or(0.0);
             let st_vol = st.volume_at_pivot.to_f64().unwrap_or(0.0);
+
+            // P2-#9 mirror: distribution ST must stay below BC (inside range).
+            let tol = range.height.max(1e-9) * cfg.range_edge_tolerance;
+            if st_price > bc_price + tol { continue; }
 
             let dist = (st_price - bc_price).abs() / range.height.max(1e-9);
             if dist > 0.15 { continue; }
@@ -972,7 +1024,7 @@ fn eval_sign_of_strength(ctx: &EventContext) -> Option<EventMatch> {
     }
     let range = TradingRange::from_pivots(pivots)?;
     let avg = avg_vol_f64(pivots)?;
-    let creek = creek_level(&range, cfg.creek_level_percentile);
+    let creek = dynamic_creek_level(pivots, &range, cfg);
 
     // Find the last High pivot that is near or above creek level with strong volume
     let candidate = pivots.iter().rev().find(|p| p.kind == PivotKind::High)?;
@@ -1045,7 +1097,7 @@ fn eval_sign_of_weakness(ctx: &EventContext) -> Option<EventMatch> {
     }
     let range = TradingRange::from_pivots(pivots)?;
     let avg = avg_vol_f64(pivots)?;
-    let ice = ice_level(&range, cfg.creek_level_percentile);
+    let ice = dynamic_ice_level(pivots, &range, cfg);
 
     let candidate = pivots.iter().rev().find(|p| p.kind == PivotKind::Low)?;
     let price = candidate.price.to_f64()?;
@@ -1111,7 +1163,7 @@ fn eval_last_point_of_support(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<E
     }
     let range = TradingRange::from_pivots(pivots)?;
     let avg = avg_vol_f64(pivots)?;
-    let creek = creek_level(&range, cfg.creek_level_percentile);
+    let creek = dynamic_creek_level(pivots, &range, cfg);
 
     // P2-P1-#10 — LPS dual-mode anchor (Villahermosa ch. 7).
     //
@@ -1214,7 +1266,7 @@ fn eval_last_point_of_supply(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<Ev
     }
     let range = TradingRange::from_pivots(pivots)?;
     let avg = avg_vol_f64(pivots)?;
-    let ice = ice_level(&range, cfg.creek_level_percentile);
+    let ice = dynamic_ice_level(pivots, &range, cfg);
 
     let mut sow_price = 0.0_f64;
     let mut sow_vol = 0.0_f64;
@@ -1286,7 +1338,7 @@ fn eval_jump_across_creek(ctx: &EventContext) -> Option<EventMatch> {
     }
     let range = TradingRange::from_pivots(pivots)?;
     let avg = avg_vol_f64(pivots)?;
-    let creek = creek_level(&range, cfg.creek_level_percentile);
+    let creek = dynamic_creek_level(pivots, &range, cfg);
 
     let candidate = pivots.last()?;
     if candidate.kind != PivotKind::High {
@@ -1346,7 +1398,7 @@ fn eval_break_of_ice(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch
     }
     let range = TradingRange::from_pivots(pivots)?;
     let avg = avg_vol_f64(pivots)?;
-    let ice = ice_level(&range, cfg.creek_level_percentile);
+    let ice = dynamic_ice_level(pivots, &range, cfg);
 
     let candidate = pivots.last()?;
     if candidate.kind != PivotKind::Low {
@@ -1551,7 +1603,9 @@ fn eval_back_up_edge_creek(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<Even
         return None;
     }
     let range = TradingRange::from_pivots(pivots)?;
-    let creek = range.resistance;
+    // P2-#18: BUEC tests the *dynamic* creek (empirical internal high /
+    // range top), not the blindly recomputed range.resistance.
+    let creek = dynamic_creek_level(pivots, &range, cfg);
     let avg = avg_vol_f64(pivots)?;
     let tol = 0.08_f64;
 
