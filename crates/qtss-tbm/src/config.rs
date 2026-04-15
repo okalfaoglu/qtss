@@ -61,13 +61,23 @@ pub struct TbmMtfTuning {
     pub required_confirms: usize,
     /// Minimum alignment score (0–1) across the confirming TFs.
     pub min_alignment: f64,
+    /// P26 — per-TF parent map for HTF+LTF confluence ("sniper entry").
+    /// Example: "15m" → "1h" means a 15m setup looks up 1h TBM state.
+    /// Missing entries disable confluence for that TF.
+    pub htf_parents: std::collections::HashMap<String, String>,
 }
 
 impl Default for TbmMtfTuning {
     fn default() -> Self {
+        let mut htf_parents = std::collections::HashMap::new();
+        for (k, v) in [
+            ("1m", "5m"), ("5m", "15m"), ("15m", "1h"),
+            ("1h", "4h"), ("4h", "1d"), ("1d", "1w"),
+        ] { htf_parents.insert(k.to_string(), v.to_string()); }
         Self {
             required_confirms: 2,
             min_alignment: 0.5,
+            htf_parents,
         }
     }
 }

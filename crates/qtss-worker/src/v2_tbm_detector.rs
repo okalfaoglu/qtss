@@ -199,6 +199,15 @@ async fn load_config(pool: &PgPool) -> TbmConfig {
             0.5,
         )
         .await,
+        // P26 — HTF parent ladder. Stored as CSV pairs
+        // "ltf:htf,ltf:htf,..." in system_config so operators can retune
+        // the MTF ladder without a deploy.
+        htf_parents: parse_htf_parents(
+            &resolve_system_string(
+                pool, "tbm", "mtf.htf_parents", "QTSS_TBM_HTF_PARENTS",
+                "1m:5m,5m:15m,15m:1h,1h:4h,4h:1d,1d:1w",
+            ).await,
+        ),
     };
 
     let confirm = TbmConfirmTuning {
@@ -623,6 +632,17 @@ async fn process_symbol(
             }
         ]);
         let regime = json!({});
+        // P26 — HTF confluence lookup. If the configured parent TF
+        // carries a same-direction TBM row in forming/confirmed state,
+        // annotate this (LTF) row with an htf_confluence block so the
+        // GUI/risk-allocator can tier "sniper entries" (HTF level +
+        // LTF sweep + BoS).
+        let htf_confluence = if let Some(parent_tf) = cfg.mtf.htf_parents.get(&sym.interval) {
+            fetch_htf_confluence(&repo, sym, parent_tf, subkind_for(setup.direction)).await
+        } else {
+            None
+        };
+
         // P23d — Reversal Confidence Checklist (0–5). Seed sweep /
         // rejection / volume flags from the anchor bar now; bos and
         // retest flip true later in confirm_forming_or_timeout and
@@ -647,6 +667,11 @@ async fn process_symbol(
                 },
             },
         });
+        if let Some(htf) = htf_confluence {
+            if let Some(obj) = raw_meta.as_object_mut() {
+                obj.insert("htf_confluence".into(), htf);
+            }
+        }
         apply_reversal_checklist(&mut raw_meta);
 
         let row = NewDetection {
@@ -1590,6 +1615,71 @@ fn pick_anchor(
     }
 
     best_idx.unwrap_or(fallback)
+}
+
+/// P26 — parse the CSV "ltf:htf,ltf:htf,..." config value into a
+/// parent-TF lookup map. Silently drops malformed entries so a bad
+/// operator edit never kills the worker.
+fn parse_htf_parents(csv: &str) -> std::collections::HashMap<String, String> {
+    let mut m = std::collections::HashMap::new();
+    for pair in csv.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some((k, v)) = pair.split_once(':') {
+            let (k, v) = (k.trim(), v.trim());
+            if !k.is_empty() && !v.is_empty() {
+                m.insert(k.to_string(), v.to_string());
+            }
+        }
+    }
+    m
+}
+
+/// P26 — look up the most recent forming/confirmed TBM row on the HTF
+/// parent for the same symbol + direction. Returns a JSON annotation
+/// `{parent_tf, state, detection_id, tier, score}` when present.
+async fn fetch_htf_confluence(
+    repo: &V2DetectionRepository,
+    sym: &EngineSymbolRow,
+    parent_tf: &str,
+    subkind: &str,
+) -> Option<serde_json::Value> {
+    use qtss_storage::DetectionFilter;
+    // Try confirmed first (stronger signal), then forming.
+    for state in ["confirmed", "forming"] {
+        let rows = repo
+            .list_filtered(DetectionFilter {
+                exchange: Some(&sym.exchange),
+                symbol: Some(&sym.symbol),
+                timeframe: Some(parent_tf),
+                family: Some("tbm"),
+                state: Some(state),
+                mode: None,
+                limit: 5,
+            })
+            .await
+            .ok()?;
+        if let Some(row) = rows.into_iter().find(|r| r.subkind == subkind) {
+            let tier = row
+                .raw_meta
+                .get("reversal_checklist")
+                .and_then(|c| c.get("tier"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let score = row
+                .raw_meta
+                .get("tbm_score")
+                .and_then(|s| s.as_f64())
+                .unwrap_or(row.structural_score as f64 * 100.0);
+            return Some(json!({
+                "parent_tf": parent_tf,
+                "state": state,
+                "detection_id": row.id.to_string(),
+                "tier": tier,
+                "score": score,
+            }));
+        }
+    }
+    None
 }
 
 /// P25 — label the canonical Wyckoff reversal events for a confirmed
