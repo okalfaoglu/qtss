@@ -496,6 +496,8 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
     let lps_ret = resolve_system_f64(pool, "detector", "wyckoff.lps_max_retracement", "", 0.5).await;
     let lps_vol = resolve_system_f64(pool, "detector", "wyckoff.lps_max_volume_ratio", "", 0.5).await;
     let creek_pct = resolve_system_f64(pool, "detector", "wyckoff.creek_level_percentile", "", 0.6).await;
+    let jac_body = resolve_system_f64(pool, "detector", "wyckoff.jac_min_body_ratio", "", 0.5).await;
+    let phase_b_climactic_mult = resolve_system_f64(pool, "detector", "wyckoff.phase_b_climactic_vol_flip_mult", "", 3.0).await;
     // Sloping / SOT
     let slope_thresh = resolve_system_f64(pool, "detector", "wyckoff.slope_threshold_deg", "", 5.0).await;
     let sot_decay = resolve_system_f64(pool, "detector", "wyckoff.sot_thrust_decay_ratio", "", 0.7).await;
@@ -537,6 +539,8 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
         lps_max_retracement: lps_ret,
         lps_max_volume_ratio: lps_vol,
         creek_level_percentile: creek_pct,
+        jac_min_body_ratio: jac_body,
+        phase_b_climactic_vol_flip_mult: phase_b_climactic_mult,
         slope_threshold_deg: slope_thresh,
         sot_thrust_decay_ratio: sot_decay,
     }

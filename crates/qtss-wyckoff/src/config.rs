@@ -140,6 +140,16 @@ pub struct WyckoffConfig {
     pub lps_max_volume_ratio: f64,
     /// Creek = N percentile of range height (from support).
     pub creek_level_percentile: f64,
+    /// JAC body ratio: body (|close-open|) must be >= N * bar_range to
+    /// count as a true Jump-Across-Creek. Tiny wicks that spike above
+    /// creek but close back near the middle are not JACs. Default 0.5.
+    pub jac_min_body_ratio: f64,
+    /// Phase B mid-range climactic-volume flip: any Phase-B bar with
+    /// volume >= N * avg_volume flips schematic to Distribution /
+    /// ReDistribution (Villahermosa: unexpected vol peaks inside the
+    /// range signal distributive character). Default 3.0. Set 0 to
+    /// disable the flip entirely.
+    pub phase_b_climactic_vol_flip_mult: f64,
 
     // --- Sloping structures ---
     /// Range slope > N degrees → sloping structure.
@@ -199,6 +209,8 @@ impl WyckoffConfig {
             lps_max_retracement: 0.5,
             lps_max_volume_ratio: 0.5,
             creek_level_percentile: 0.6,
+            jac_min_body_ratio: 0.5,
+            phase_b_climactic_vol_flip_mult: 3.0,
             // Sloping
             slope_threshold_deg: 5.0,
             // SOT

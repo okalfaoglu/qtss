@@ -111,7 +111,7 @@ pub const EVENTS: &[EventSpec] = &[
     EventSpec { name: "sign_of_weakness",      eval: EventEval::WithBars(eval_sign_of_weakness) },
     EventSpec { name: "last_point_of_support", eval: EventEval::Pivots(eval_last_point_of_support) },
     EventSpec { name: "last_point_of_supply",  eval: EventEval::Pivots(eval_last_point_of_supply) },
-    EventSpec { name: "jump_across_creek",     eval: EventEval::Pivots(eval_jump_across_creek) },
+    EventSpec { name: "jump_across_creek",     eval: EventEval::WithBars(eval_jump_across_creek) },
     EventSpec { name: "break_of_ice",          eval: EventEval::Pivots(eval_break_of_ice) },
     // SOT
     EventSpec { name: "shortening_of_thrust",  eval: EventEval::Pivots(eval_shortening_of_thrust) },
@@ -1278,7 +1278,9 @@ fn eval_last_point_of_supply(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<Ev
 // =========================================================================
 // Strong move above creek with expanding volume. Accumulation confirmation.
 
-fn eval_jump_across_creek(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
+fn eval_jump_across_creek(ctx: &EventContext) -> Option<EventMatch> {
+    let pivots = ctx.pivots;
+    let cfg = ctx.cfg;
     if pivots.len() < 5 {
         return None;
     }
@@ -1298,6 +1300,23 @@ fn eval_jump_across_creek(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<Event
     let vol = candidate.volume_at_pivot.to_f64().unwrap_or(0.0);
     if avg > 0.0 && vol < avg * cfg.sos_min_volume_ratio {
         return None;
+    }
+
+    // P2-P1-#14 — JAC must be a wide-bodied bullish bar, not a wick
+    // spike. body/range ratio below the config threshold is rejected.
+    if let Some(bar) = ctx.bar_for_pivot(candidate) {
+        let open = bar.open.to_f64().unwrap_or(0.0);
+        let close = bar.close.to_f64().unwrap_or(0.0);
+        let hi = bar.high.to_f64().unwrap_or(0.0);
+        let lo = bar.low.to_f64().unwrap_or(0.0);
+        let bar_range = (hi - lo).max(1e-9);
+        let body = (close - open).abs();
+        if body / bar_range < cfg.jac_min_body_ratio {
+            return None;
+        }
+        if close <= open {
+            return None; // bullish body required
+        }
     }
 
     let clearance = (price - creek) / range.height.max(1e-9);

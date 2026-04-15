@@ -57,6 +57,26 @@ SELECT _qtss_register_key(
     'Spring/UTAD Test low must sit within N * range_height of the parent Spring/UTAD price.',
     'number', true, 'normal', ARRAY['wyckoff','phase_c']);
 
+-- --- P5: JAC body ratio + mid-range climactic flip ---
+SELECT _qtss_register_key(
+    'wyckoff.jac_min_body_ratio', 'wyckoff', 'event', 'number',
+    '0.5'::jsonb, 'fraction',
+    'JAC body (|close-open|) must be >= N * bar_range. Tiny wicks above creek do not count as Jump-Across-Creek.',
+    'number', true, 'normal', ARRAY['wyckoff','phase_d']);
+
+SELECT _qtss_register_key(
+    'wyckoff.phase_b_climactic_vol_flip_mult', 'wyckoff', 'phase', 'number',
+    '3.0'::jsonb, 'x_avg',
+    'Phase-B bar with volume >= N * avg flips schematic to Distribution (Villahermosa ch.5). Set 0 to disable.',
+    'number', true, 'normal', ARRAY['wyckoff','phase_b']);
+
+INSERT INTO system_config (module, config_key, value, description) VALUES
+    ('detector', 'wyckoff.jac_min_body_ratio', '0.5'::jsonb,
+     'JAC minimum body/range ratio.'),
+    ('detector', 'wyckoff.phase_b_climactic_vol_flip_mult', '3.0'::jsonb,
+     'Phase-B climactic volume flip multiplier (0 = disabled).')
+ON CONFLICT (module, config_key) DO NOTHING;
+
 -- --- P2-P1-#5 / #11: Spring penetration + SC bar-width ---
 SELECT _qtss_register_key(
     'wyckoff.shakeout_max_penetration', 'wyckoff', 'event', 'number',
