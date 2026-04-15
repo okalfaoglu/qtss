@@ -45,7 +45,7 @@ use qtss_storage::{
     V2DetectionRepository,
 };
 use qtss_tbm::{
-    config::{TbmConfig, TbmMtfTuning, TbmPillarWeights, TbmSetupTuning},
+    config::{TbmAnchorTuning, TbmConfig, TbmMtfTuning, TbmPillarWeights, TbmSetupTuning},
     momentum::score_momentum,
     onchain::{score_onchain, OnchainMetrics, OnchainMetricsProvider},
     pillar::{PillarKind, PillarScore},
@@ -201,6 +201,21 @@ async fn load_config(pool: &PgPool) -> TbmConfig {
         .await,
     };
 
+    let anchor = TbmAnchorTuning {
+        pivot_radius: resolve_system_u64(
+            pool, "tbm", "anchor.pivot_radius", "QTSS_TBM_ANCHOR_PIV_RADIUS", 3, 1, 20,
+        ).await as usize,
+        min_right_bars: resolve_system_u64(
+            pool, "tbm", "anchor.min_right_bars", "QTSS_TBM_ANCHOR_MIN_RIGHT", 3, 0, 50,
+        ).await as usize,
+        wick_min_ratio: resolve_system_f64(
+            pool, "tbm", "anchor.wick_min_ratio", "QTSS_TBM_ANCHOR_WICK_MIN", 0.25,
+        ).await,
+        vol_min_ratio: resolve_system_f64(
+            pool, "tbm", "anchor.vol_min_ratio", "QTSS_TBM_ANCHOR_VOL_MIN", 1.0,
+        ).await,
+    };
+
     TbmConfig {
         enabled,
         tick_interval_s,
@@ -208,6 +223,7 @@ async fn load_config(pool: &PgPool) -> TbmConfig {
         weights,
         setup,
         mtf,
+        anchor,
         onchain_enabled,
     }
 }
@@ -305,6 +321,7 @@ async fn process_symbol(
     let highs: Vec<f64> = chronological.iter().map(|r| r.high.to_string().parse().unwrap_or(0.0)).collect();
     let lows: Vec<f64> = chronological.iter().map(|r| r.low.to_string().parse().unwrap_or(0.0)).collect();
     let closes: Vec<f64> = chronological.iter().map(|r| r.close.to_string().parse().unwrap_or(0.0)).collect();
+    let opens: Vec<f64> = chronological.iter().map(|r| r.open.to_string().parse().unwrap_or(0.0)).collect();
     let vols: Vec<f64> = chronological.iter().map(|r| r.volume.to_string().parse().unwrap_or(0.0)).collect();
 
     let n = closes.len();
@@ -349,18 +366,21 @@ async fn process_symbol(
     let swing_low = lows[win_start..n].iter().cloned().fold(f64::INFINITY, f64::min);
     let last_close = closes[last];
 
-    let bottom_anchor = lows[win_start..n]
-        .iter()
-        .enumerate()
-        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(i, _)| win_start + i)
-        .unwrap_or(last);
-    let top_anchor = highs[win_start..n]
-        .iter()
-        .enumerate()
-        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(i, _)| win_start + i)
-        .unwrap_or(last);
+    // P22f — structural anchor selection. argmin/argmax alone picked
+    // mid-trend forming bars with no wick, no volume climax, no right-
+    // bar confirmation. We now score pivot-low/high candidates on
+    // (depth + rejection wick + volume climax + liquidity sweep) and
+    // require `min_right_bars` of completed bars after the candidate.
+    // Mirrors the Sweep→Rejection legs of the textbook reversal
+    // framework; BoS/Retest is the confirmation state machine (P23).
+    let bottom_anchor = pick_anchor(
+        &opens, &highs, &lows, &closes, &vols,
+        win_start, n, true, &cfg.anchor,
+    );
+    let top_anchor = pick_anchor(
+        &opens, &highs, &lows, &closes, &vols,
+        win_start, n, false, &cfg.anchor,
+    );
 
     // P22e — supersede open forming detections whose stored anchor is
     // worse than the current argmin/argmax. Without this, a bottom_setup
@@ -917,4 +937,135 @@ fn nearest_fib(swing_high: f64, swing_low: f64, price: f64) -> (f64, &'static st
         }
     }
     best
+}
+
+// ---------------------------------------------------------------------
+// P22f — structural anchor picker (Sweep + Rejection + Confirmation)
+// ---------------------------------------------------------------------
+//
+// Ranks pivot-low (or pivot-high) candidates in the window by a
+// composite score and returns the best index. Composite terms:
+//
+//   depth       — how close the candidate is to the window extreme.
+//                 Full weight when it IS the extreme, decays linearly
+//                 to 0 at the opposite side. Always required; a
+//                 mid-range pivot is not a reversal anchor.
+//   wick        — rejection wick ratio (lower wick / total range for
+//                 bottom, upper wick for top). Strong rejection = 1.
+//                 Gated by `wick_min_ratio`.
+//   volume      — volume / 20-bar avg, clamped [0, 1] above threshold.
+//                 Climactic volume at a pivot = reversal tell.
+//   sweep       — bonus when the candidate prints a fresh LL/HH that
+//                 takes out a prior window low/high by at least 0.05%,
+//                 i.e. a textbook liquidity sweep.
+//
+// Gates:
+//   * Must be a pivot extreme over ±pivot_radius bars.
+//   * Must have at least `min_right_bars` completed bars AFTER it
+//     (keeps the picker off the currently forming bar).
+//
+// Fallback: plain argmin/argmax if no candidate clears the gates —
+// early bars, very short history.
+fn pick_anchor(
+    opens: &[f64],
+    highs: &[f64],
+    lows: &[f64],
+    _closes: &[f64],
+    vols: &[f64],
+    win_start: usize,
+    n: usize,
+    is_bottom: bool,
+    cfg: &TbmAnchorTuning,
+) -> usize {
+    let last = n.saturating_sub(1);
+    let fallback = if is_bottom {
+        lows[win_start..n]
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| win_start + i)
+            .unwrap_or(last)
+    } else {
+        highs[win_start..n]
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| win_start + i)
+            .unwrap_or(last)
+    };
+
+    let r = cfg.pivot_radius.max(1);
+    let right = cfg.min_right_bars;
+    let lo_start = win_start + r;
+    let hi_end = last.saturating_sub(right);
+    if lo_start > hi_end {
+        return fallback;
+    }
+
+    let win_hi = highs[win_start..n].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let win_lo = lows[win_start..n].iter().cloned().fold(f64::INFINITY, f64::min);
+    let win_range = (win_hi - win_lo).max(1e-10);
+
+    let mut best_idx: Option<usize> = None;
+    let mut best_score = f64::NEG_INFINITY;
+
+    for i in lo_start..=hi_end {
+        let l = i.saturating_sub(r);
+        let h = (i + r).min(last);
+        let range_i = (highs[i] - lows[i]).max(1e-10);
+
+        // Pivot gate
+        let is_pivot = if is_bottom {
+            let local_min = lows[l..=h].iter().cloned().fold(f64::INFINITY, f64::min);
+            (lows[i] - local_min).abs() < 1e-9
+        } else {
+            let local_max = highs[l..=h].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            (highs[i] - local_max).abs() < 1e-9
+        };
+        if !is_pivot { continue; }
+
+        // Wick gate + term
+        let body_hi = opens[i].max(_closes[i]);
+        let body_lo = opens[i].min(_closes[i]);
+        let wick_ratio = if is_bottom {
+            ((body_lo - lows[i]).max(0.0)) / range_i
+        } else {
+            ((highs[i] - body_hi).max(0.0)) / range_i
+        };
+        if wick_ratio < cfg.wick_min_ratio { continue; }
+
+        // Depth term (linear to window extreme)
+        let depth = if is_bottom {
+            (win_hi - lows[i]) / win_range
+        } else {
+            (highs[i] - win_lo) / win_range
+        };
+
+        // Volume term
+        let v_start = i.saturating_sub(20).max(win_start);
+        let v_count = (i - v_start).max(1) as f64;
+        let v_avg = vols[v_start..i].iter().sum::<f64>() / v_count;
+        let v_ratio = if v_avg > 0.0 { vols[i] / v_avg } else { 1.0 };
+        let vol_term = ((v_ratio - cfg.vol_min_ratio).max(0.0) / 2.0).min(1.0);
+
+        // Sweep term — did this bar take out a prior window extreme?
+        let sweep = if is_bottom {
+            let prior_lo = lows[win_start..i].iter().cloned().fold(f64::INFINITY, f64::min);
+            if prior_lo.is_finite() && lows[i] < prior_lo * 0.9995 { 1.0 } else { 0.0 }
+        } else {
+            let prior_hi = highs[win_start..i].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            if prior_hi.is_finite() && highs[i] > prior_hi * 1.0005 { 1.0 } else { 0.0 }
+        };
+
+        // Composite. Depth is the dominant term so we still prefer the
+        // actual window extreme when multiple pivots qualify; wick and
+        // volume break ties and demote low-quality pivots.
+        let score = depth * 2.0 + wick_ratio * 1.0 + vol_term * 1.0 + sweep * 0.75;
+        if score > best_score {
+            best_score = score;
+            best_idx = Some(i);
+        }
+    }
+
+    best_idx.unwrap_or(fallback)
 }

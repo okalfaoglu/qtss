@@ -72,6 +72,46 @@ impl Default for TbmMtfTuning {
     }
 }
 
+/// P22f — structural anchor selection. Previously we used a plain
+/// `argmin(lows) / argmax(highs)` over the last N bars, which picked
+/// the deepest bar in the window regardless of whether it was a pivot,
+/// whether the market had confirmed it (no bars to its right), whether
+/// the bar had any reversal wick, or whether the move ended on climactic
+/// volume. Those raw extrema landed on the *current forming* bar far too
+/// often — labels appeared on mid-trend candles that never reversed.
+///
+/// The new anchor picker ranks pivot-low / pivot-high candidates inside
+/// the window by a composite of depth, reversal-wick ratio, and volume
+/// climax; bars without `min_right_bars` of right-hand confirmation are
+/// excluded. Falls back to plain argmin/argmax only if nothing in the
+/// window qualifies (early in a series).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TbmAnchorTuning {
+    /// Symmetric radius (in bars) a candidate must dominate on both
+    /// sides to count as a pivot extremum.
+    pub pivot_radius: usize,
+    /// Minimum completed bars AFTER the candidate before it is eligible
+    /// as an anchor. Keeps the picker off the forming bar.
+    pub min_right_bars: usize,
+    /// Candidate must have lower/upper wick at least this fraction of
+    /// its total range. Weeds out mid-trend low-wick bars.
+    pub wick_min_ratio: f64,
+    /// Volume climax bonus kicks in when bar volume ≥ this × 20-bar
+    /// average. 1.0 = "average or above".
+    pub vol_min_ratio: f64,
+}
+
+impl Default for TbmAnchorTuning {
+    fn default() -> Self {
+        Self {
+            pivot_radius: 3,
+            min_right_bars: 3,
+            wick_min_ratio: 0.25,
+            vol_min_ratio: 1.0,
+        }
+    }
+}
+
 /// Top-level TBM runtime config. The worker hydrates this from
 /// `system_config` once per tick interval; the detector treats it as
 /// immutable for the duration of the tick.
@@ -83,6 +123,7 @@ pub struct TbmConfig {
     pub weights: TbmPillarWeights,
     pub setup: TbmSetupTuning,
     pub mtf: TbmMtfTuning,
+    pub anchor: TbmAnchorTuning,
     pub onchain_enabled: bool,
 }
 
@@ -95,6 +136,7 @@ impl Default for TbmConfig {
             weights: TbmPillarWeights::default(),
             setup: TbmSetupTuning::default(),
             mtf: TbmMtfTuning::default(),
+            anchor: TbmAnchorTuning::default(),
             onchain_enabled: false,
         }
     }
