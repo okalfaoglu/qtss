@@ -238,6 +238,15 @@ async fn load_config(pool: &PgPool) -> TbmConfig {
         sweep_required: resolve_system_u64(
             pool, "tbm", "anchor.sweep_required", "QTSS_TBM_ANCHOR_SWEEP_REQ", 0, 0, 1,
         ).await != 0,
+        equal_level_tol: resolve_system_f64(
+            pool, "tbm", "anchor.equal_level_tol", "QTSS_TBM_ANCHOR_EQLVL_TOL", 0.002,
+        ).await,
+        equal_level_min_touches: resolve_system_u64(
+            pool, "tbm", "anchor.equal_level_min_touches", "QTSS_TBM_ANCHOR_EQLVL_MIN", 1, 0, 10,
+        ).await as usize,
+        equal_level_required: resolve_system_u64(
+            pool, "tbm", "anchor.equal_level_required", "QTSS_TBM_ANCHOR_EQLVL_REQ", 0, 0, 1,
+        ).await != 0,
     };
 
     TbmConfig {
@@ -1306,6 +1315,52 @@ fn nearest_fib(swing_high: f64, swing_low: f64, price: f64) -> (f64, &'static st
     best
 }
 
+/// P22g — count prior pivot touches that sit within `tol` (fractional,
+/// e.g. 0.002 = 0.2%) of the candidate's price. "Prior pivot" = local
+/// minimum (for bottom) or maximum (for top) over +/- `r` bars, at an
+/// index strictly before the candidate. Bars within `r` of the
+/// candidate itself are skipped so adjacent noise doesn't register as
+/// a touch. Returns the count (candidate itself NOT counted).
+fn count_equal_level_touches(
+    lows: &[f64],
+    highs: &[f64],
+    win_start: usize,
+    candidate: usize,
+    r: usize,
+    tol: f64,
+    is_bottom: bool,
+) -> usize {
+    if candidate <= win_start + r { return 0; }
+    let target = if is_bottom { lows[candidate] } else { highs[candidate] };
+    if target.abs() < 1e-10 { return 0; }
+    let band = target.abs() * tol;
+    let mut touches = 0usize;
+    // Scan candidate pivots in [win_start + r, candidate - r - 1].
+    let scan_end = candidate.saturating_sub(r + 1);
+    let mut j = win_start + r;
+    while j <= scan_end {
+        let l = j.saturating_sub(r);
+        let h = (j + r).min(lows.len().saturating_sub(1));
+        if is_bottom {
+            let local_min = lows[l..=h].iter().cloned().fold(f64::INFINITY, f64::min);
+            if (lows[j] - local_min).abs() < 1e-9 && (lows[j] - target).abs() <= band {
+                touches += 1;
+                j += r + 1; // skip ahead to avoid counting same pivot twice
+                continue;
+            }
+        } else {
+            let local_max = highs[l..=h].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            if (highs[j] - local_max).abs() < 1e-9 && (highs[j] - target).abs() <= band {
+                touches += 1;
+                j += r + 1;
+                continue;
+            }
+        }
+        j += 1;
+    }
+    touches
+}
+
 // ---------------------------------------------------------------------
 // P22f — structural anchor picker (Sweep + Rejection + Confirmation)
 // ---------------------------------------------------------------------
@@ -1426,10 +1481,28 @@ fn pick_anchor(
         // Hard gate when `sweep_required` is on — pure-Wyckoff mode.
         if cfg.sweep_required && sweep < 0.5 { continue; }
 
+        // P22g — equal-level (double/triple bottom|top) detection.
+        // Count prior pivot lows/highs within `equal_level_tol` of the
+        // candidate price. Gives a bonus when ≥ min_touches, optional
+        // hard gate via `equal_level_required`.
+        let touches = count_equal_level_touches(
+            lows, highs, win_start, i, cfg.pivot_radius, cfg.equal_level_tol, is_bottom,
+        );
+        if cfg.equal_level_required && touches < cfg.equal_level_min_touches { continue; }
+        let equal_level = if touches >= cfg.equal_level_min_touches {
+            (touches as f64).min(3.0) / 3.0
+        } else {
+            0.0
+        };
+
         // Composite. Depth is the dominant term so we still prefer the
         // actual window extreme when multiple pivots qualify; wick and
         // volume break ties and demote low-quality pivots.
-        let score = depth * 2.0 + wick_ratio * 1.0 + vol_term * 1.0 + sweep * 0.75;
+        let score = depth * 2.0
+            + wick_ratio * 1.0
+            + vol_term * 1.0
+            + sweep * 0.75
+            + equal_level * 0.75;
         if score > best_score {
             best_score = score;
             best_idx = Some(i);

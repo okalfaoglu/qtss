@@ -105,6 +105,19 @@ pub struct TbmAnchorTuning {
     /// bonus term so V-bottom reversals without a liquidity grab are
     /// still picked up.
     pub sweep_required: bool,
+    /// P22g — tolerance (fraction of price) within which a prior pivot
+    /// counts as an "equal low / equal high" touch of the candidate.
+    /// 0.002 = 0.2%. Tighter values demand cleaner double/triple
+    /// bottoms; looser values pick up wider liquidity pools.
+    pub equal_level_tol: f64,
+    /// P22g — minimum number of prior pivot touches (NOT counting the
+    /// candidate itself) at roughly the candidate's price for the
+    /// equal-level bonus to fire. 1 = double bottom/top; 2 = triple.
+    pub equal_level_min_touches: usize,
+    /// P22g — when true, a candidate without the required equal-level
+    /// touches is rejected outright. Default false: equal-level stays
+    /// a scoring bonus; flip for pure-Wyckoff liquidity-pool mode.
+    pub equal_level_required: bool,
 }
 
 impl Default for TbmAnchorTuning {
@@ -115,6 +128,9 @@ impl Default for TbmAnchorTuning {
             wick_min_ratio: 0.25,
             vol_min_ratio: 1.0,
             sweep_required: false,
+            equal_level_tol: 0.002,
+            equal_level_min_touches: 1,
+            equal_level_required: false,
         }
     }
 }
