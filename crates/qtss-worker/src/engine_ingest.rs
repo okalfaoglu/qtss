@@ -1,13 +1,25 @@
-//! `engine_symbols` → `market_bars` coverage: REST history + health/gap metrics (`engine_symbol_ingestion_state`).
+//! `engine_symbols` → `market_bars` coverage: REST history + health/gap metrics.
+//!
+//! State machine per series (tracked in `backfill_progress`):
+//!   pending → backfilling → verifying → complete → live
+//!
+//! - **pending/backfilling**: fetch history from listing to now, resume-safe
+//! - **verifying**: count bars + scan gaps, decide complete or retry
+//! - **complete**: all history present, only live updates needed
+//! - **live**: complete + real-time feed active
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use qtss_domain::bar::MarketBarProvider;
+use tokio::sync::Semaphore;
 use qtss_storage::{
-    count_market_bars_series, list_enabled_engine_symbols,
-    list_recent_bar_open_times_desc, resolve_system_u64, resolve_worker_tick_secs,
-    upsert_engine_symbol_ingestion_state, EngineSymbolRow,
+    count_market_bars_series, get_or_create_backfill_progress, list_enabled_engine_symbols,
+    list_recent_bar_open_times_desc, mark_backfill_finished, mark_backfill_started, mark_live,
+    record_backfill_error, resolve_system_u64, resolve_worker_tick_secs,
+    update_backfill_cursor, update_verification, upsert_engine_symbol_ingestion_state,
+    BackfillProgressRow, EngineSymbolRow,
 };
 use sqlx::PgPool;
 use tracing::{debug, info, warn};
@@ -39,7 +51,7 @@ fn segment_db(segment: &str) -> &'static str {
     }
 }
 
-/// Count gaps in ascending time order: consecutive step differs >15% from expected bar length.
+/// Count gaps in ascending time order.
 fn scan_gaps_asc(times_asc: &[DateTime<Utc>], expected_sec: i64) -> (i32, Option<i32>) {
     if times_asc.len() < 2 || expected_sec <= 0 {
         return (0, None);
@@ -67,6 +79,8 @@ fn scan_gaps_asc(times_asc: &[DateTime<Utc>], expected_sec: i64) -> (i32, Option
     (gaps, max_gap_i32)
 }
 
+// ─── State Machine: one tick per engine_symbol ──────────────────────
+
 async fn run_one_target(
     pool: &PgPool,
     row: &EngineSymbolRow,
@@ -79,199 +93,312 @@ async fn run_one_target(
     let seg = row.segment.trim();
     let sym = row.symbol.trim();
     let iv = row.interval.trim();
-    let now = Utc::now();
 
     if !ex.eq_ignore_ascii_case(provider.exchange_id()) {
-        let _ = upsert_engine_symbol_ingestion_state(
-            pool,
-            row.id,
-            0,
-            None,
-            None,
-            0,
-            None,
-            None,
-            now,
-            Some("exchange_mismatch_auto_ingest_skipped"),
-        )
-        .await;
         return;
     }
-
     if !provider.is_tradable(sym, seg).await {
-        debug!(
-            engine_symbol_id = %row.id,
-            symbol = %sym,
-            "engine_ingest: skip backfill — symbol not tradable on provider"
-        );
-        let _ = upsert_engine_symbol_ingestion_state(
-            pool,
-            row.id,
-            0,
-            None,
-            None,
-            0,
-            None,
-            None,
-            now,
-            Some("not_tradable_on_provider"),
-        )
-        .await;
+        debug!(engine_symbol_id = %row.id, symbol = %sym, "skip — not tradable");
         return;
     }
 
-    let (count, min_ot, max_ot) = match count_market_bars_series(pool, ex, segment_db(seg), sym, iv).await {
-        Ok(x) => x,
+    // ── Get/create backfill progress ────────────────────────────────
+    let progress = match get_or_create_backfill_progress(pool, row.id).await {
+        Ok(p) => p,
         Err(e) => {
-            warn!(%e, engine_symbol_id = %row.id, "count_market_bars_series");
-            let _ = upsert_engine_symbol_ingestion_state(
-                pool,
-                row.id,
-                0,
-                None,
-                None,
-                0,
-                None,
-                None,
-                now,
-                Some("count_market_bars_failed"),
-            )
-            .await;
+            warn!(%e, engine_symbol_id = %row.id, "get_or_create_backfill_progress");
             return;
         }
     };
 
-    let mut last_backfill: Option<chrono::DateTime<Utc>> = None;
-    let mut last_err: Option<String> = None;
+    let exp = binance_kline_interval_seconds(iv);
 
-    // Full history mode: when enabled, check whether the oldest bar in
-    // this series is "old enough". If the existing data only goes back a
-    // few months but the pair has been listed for years, we need to
-    // backfill further. The heuristic: if oldest bar is less than
-    // `full_history_min_age_days` old, trigger a full fetch.
-    // For series with zero bars, always trigger.
-    let full_history_min_age_days: i64 = 365; // at least 1 year of history
-    let needs_full = if full_history {
-        match (count, min_ot) {
-            (0, _) => true,
-            (_, Some(oldest)) => {
-                let age_days = now.signed_duration_since(oldest).num_days();
-                age_days < full_history_min_age_days
+    match progress.state.as_str() {
+        "pending" | "backfilling" => {
+            // ── PHASE 1: Historical backfill (resumable) ────────────
+            if !full_history && progress.state == "pending" {
+                // full_history disabled — skip to cold-start / live mode
+                run_cold_start_and_live(pool, row, min_bars, gap_window, provider).await;
+                return;
             }
-            _ => false,
+            run_resumable_backfill(pool, row, &progress, provider, exp).await;
         }
-    } else {
-        false
-    };
+        "verifying" => {
+            // ── PHASE 2: Verify completeness ────────────────────────
+            run_verification(pool, row, gap_window, exp).await;
+        }
+        "complete" | "live" => {
+            // ── PHASE 3: Live updates (stale/gap patch) ─────────────
+            run_live_updates(pool, row, min_bars, gap_window, provider, exp).await;
+        }
+        other => {
+            warn!(engine_symbol_id = %row.id, state = %other, "unknown backfill_progress state");
+        }
+    }
+}
 
-    if needs_full {
-        let age_info = min_ot
-            .map(|t| format!("oldest={}, age={}d", t.format("%Y-%m-%d"), now.signed_duration_since(t).num_days()))
-            .unwrap_or_else(|| "no data".into());
+/// Phase 1: Resumable full-history backfill — fetches in small blocks (5 pages
+/// each) and updates the DB cursor after every block. If the worker crashes,
+/// at most one block (~5 000 bars) is lost.
+async fn run_resumable_backfill(
+    pool: &PgPool,
+    row: &EngineSymbolRow,
+    progress: &BackfillProgressRow,
+    provider: &dyn MarketBarProvider,
+    _exp: Option<i64>,
+) {
+    let sym = row.symbol.trim();
+    let iv = row.interval.trim();
+    let seg = row.segment.trim();
+
+    let mut cursor_ms: Option<u64> = progress.oldest_fetched.map(|t| {
+        (t.timestamp_millis() as u64).saturating_sub(1)
+    });
+    let mut total_pages = progress.pages_fetched;
+    let mut total_bars = progress.bars_upserted;
+
+    info!(
+        engine_symbol_id = %row.id,
+        symbol = %sym,
+        interval = %iv,
+        resume_from = ?progress.oldest_fetched,
+        pages_so_far = total_pages,
+        bars_so_far = total_bars,
+        "backfill: resuming history fetch"
+    );
+
+    // Mark as backfilling
+    let _ = mark_backfill_started(pool, row.id).await;
+
+    // ── Block-by-block loop ────────────────────────────────────────
+    // Each block = 5 pages × 1000 bars = 5 000 bars.
+    // After each block the cursor is persisted so restarts are cheap.
+    // We do up to 20 blocks per tick (≈100 000 bars) then yield.
+    const BLOCK_SIZE: i64 = 5_000;
+    const MAX_BLOCKS: u32 = 20;
+
+    for block_idx in 0..MAX_BLOCKS {
+        let res = match provider
+            .backfill_bars_resumable(sym, iv, seg, BLOCK_SIZE, cursor_ms)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(%e, engine_symbol_id = %row.id, symbol = %sym, block = block_idx, "backfill block error");
+                let _ = record_backfill_error(pool, row.id, &e.to_string()).await;
+                return;
+            }
+        };
+
+        total_pages += res.pages as i32;
+        total_bars += res.upserted;
+
+        // Persist cursor after every block
+        let oldest_dt = res.oldest_ms.and_then(|ms| Utc.timestamp_millis_opt(ms as i64).single());
+        let newest_dt = res.newest_ms.and_then(|ms| Utc.timestamp_millis_opt(ms as i64).single());
+
+        if let Some(oldest) = oldest_dt {
+            let _ = update_backfill_cursor(pool, row.id, oldest, newest_dt, total_pages, total_bars).await;
+            // Advance cursor for next block
+            cursor_ms = Some((oldest.timestamp_millis() as u64).saturating_sub(1));
+        }
+
         info!(
             engine_symbol_id = %row.id,
             symbol = %sym,
             interval = %iv,
-            %age_info,
-            "engine_ingest: FULL HISTORY backfill starting (listing → now)"
+            block = block_idx + 1,
+            block_bars = res.upserted,
+            total_bars,
+            total_pages,
+            reached_listing = res.reached_listing,
+            "backfill: block done"
         );
-        match provider.backfill_bars(sym, iv, seg, 0).await {
-            Ok(n) => {
-                last_backfill = Some(Utc::now());
-                info!(
-                    engine_symbol_id = %row.id,
-                    symbol = %sym,
-                    interval = %iv,
-                    upserted = n,
-                    "engine_ingest: full history backfill complete"
-                );
-            }
-            Err(e) => {
-                last_err = Some(format!("full_history_backfill:{e}"));
-                warn!(%e, engine_symbol_id = %row.id, symbol = %sym, "engine_ingest full history backfill");
-            }
+
+        if res.reached_listing {
+            info!(
+                engine_symbol_id = %row.id,
+                symbol = %sym,
+                interval = %iv,
+                total_bars,
+                total_pages,
+                "backfill: COMPLETE — reached listing date"
+            );
+            let _ = mark_backfill_finished(pool, row.id).await;
+            return;
         }
-    } else if count < min_bars {
-        let need = (min_bars - count).max(0) as i64;
-        let fetch_n = need.saturating_add(200).clamp(300, 15_000);
-        match provider.backfill_bars(sym, iv, seg, fetch_n).await {
-            Ok(n) => {
-                last_backfill = Some(Utc::now());
-                info!(
-                    engine_symbol_id = %row.id,
-                    symbol = %sym,
-                    interval = %iv,
-                    upserted = n,
-                    "engine_ingest REST backfill"
-                );
-            }
-            Err(e) => {
-                last_err = Some(format!("backfill:{e}"));
-                warn!(%e, engine_symbol_id = %row.id, symbol = %sym, "engine_ingest backfill");
-            }
+
+        // If the block returned 0 bars, something is off — bail
+        if res.upserted == 0 {
+            warn!(engine_symbol_id = %row.id, symbol = %sym, "backfill: 0 bars in block, stopping");
+            return;
         }
     }
 
-    let (count2, min_ot2, max_ot2) = match count_market_bars_series(pool, ex, segment_db(seg), sym, iv).await {
+    info!(
+        engine_symbol_id = %row.id,
+        symbol = %sym,
+        interval = %iv,
+        total_bars,
+        "backfill: tick limit reached, will continue next tick"
+    );
+}
+
+/// Phase 2: Verify data completeness after backfill.
+async fn run_verification(
+    pool: &PgPool,
+    row: &EngineSymbolRow,
+    gap_window: i64,
+    exp: Option<i64>,
+) {
+    let ex = row.exchange.trim();
+    let seg = segment_db(row.segment.trim());
+    let sym = row.symbol.trim();
+    let iv = row.interval.trim();
+
+    let (count, min_ot, max_ot) = match count_market_bars_series(pool, ex, seg, sym, iv).await {
         Ok(x) => x,
-        Err(_) => (count, min_ot, max_ot),
+        Err(e) => {
+            warn!(%e, "verification: count_market_bars_series");
+            return;
+        }
     };
 
-    let exp = binance_kline_interval_seconds(iv);
-    let mut gap_n = 0;
+    // Calculate expected bar count from time span
+    let expected = match (min_ot, max_ot, exp) {
+        (Some(mn), Some(mx), Some(sec)) if sec > 0 => {
+            let span = mx.signed_duration_since(mn).num_seconds();
+            (span / sec) + 1
+        }
+        _ => count as i64,
+    };
+
+    // Gap scan — check ALL bars, not just recent window
+    let mut gap_count = 0_i32;
     let mut max_gap_sec: Option<i32> = None;
     if let Some(sec) = exp {
-        match list_recent_bar_open_times_desc(pool, ex, segment_db(seg), sym, iv, gap_window).await {
+        // Scan in chunks to avoid memory issues for large series
+        let scan_limit = gap_window.max(count as i64).min(500_000);
+        match list_recent_bar_open_times_desc(pool, ex, seg, sym, iv, scan_limit).await {
             Ok(mut desc) => {
                 desc.reverse();
                 let (g, mx) = scan_gaps_asc(&desc, sec);
-                gap_n = g;
+                gap_count = g;
                 max_gap_sec = mx;
             }
-            Err(e) => warn!(%e, "list_recent_bar_open_times_desc"),
+            Err(e) => warn!(%e, "verification gap scan"),
         }
     }
 
-    // Self-healing patch backfill — runs whenever the cold-start branch
-    // didn't fire. Two triggers, both pointing at the same fix:
-    //   1. Stale tail: now - max_ot is more than 2× the bar interval,
-    //      meaning the live feed has been silent (worker downtime, WS
-    //      reconnect storm, venue outage). Catch up from the gap.
-    //   2. Interior holes: scan_gaps_asc reported gap_n > 0; the gap
-    //      window may stretch back farther than the stale-tail measure,
-    //      so we cover it explicitly.
-    // The Binance backfill helper takes "last N bars" rather than a
-    // since-timestamp; we size N to comfortably cover whichever trigger
-    // fired and rely on the (exchange, segment, symbol, interval,
-    // open_time) UPSERT to make the re-fetch idempotent.
-    let needs_patch = exp
-        .and_then(|sec| {
-            let stale_n = max_ot2.map(|t| {
-                ((now.signed_duration_since(t).num_seconds() / sec).max(0) + 50) as i64
-            });
-            let gap_n_fetch = if gap_n > 0 { Some(gap_window) } else { None };
-            match (stale_n, gap_n_fetch) {
-                (Some(a), Some(b)) => Some(a.max(b)),
-                (Some(a), None) => Some(a),
-                (None, Some(b)) => Some(b),
-                (None, None) => None,
-            }
-            .filter(|n| {
-                // Only fire when we'd actually fetch *more* than the
-                // cold-start branch already did this tick.
-                last_backfill.is_none()
-                    && exp
-                        .map(|sec| {
-                            max_ot2
-                                .map(|t| now.signed_duration_since(t).num_seconds() > sec * 2)
-                                .unwrap_or(true)
-                                || gap_n > 0
-                        })
-                        .unwrap_or(false)
-                    && *n >= 60
-            })
+    // Completeness criteria:
+    //   1. Bar count >= 95% of expected (some bars may legitimately not exist,
+    //      e.g., exchange maintenance, zero-volume periods)
+    //   2. No large gaps (max_gap < 10× interval)
+    let ratio = if expected > 0 { count as f64 / expected as f64 } else { 1.0 };
+    let large_gap = max_gap_sec
+        .and_then(|g| exp.map(|s| g as i64 > s * 10))
+        .unwrap_or(false);
+    let is_complete = ratio >= 0.95 && !large_gap;
+
+    info!(
+        engine_symbol_id = %row.id,
+        symbol = %row.symbol.trim(),
+        interval = %iv,
+        count,
+        expected,
+        ratio = format!("{:.2}%", ratio * 100.0),
+        gap_count,
+        max_gap_seconds = ?max_gap_sec,
+        is_complete,
+        "verification result"
+    );
+
+    let _ = update_verification(
+        pool,
+        row.id,
+        count as i64,
+        expected,
+        gap_count,
+        max_gap_sec,
+        is_complete,
+    )
+    .await;
+
+    // Also update ingestion state for GUI
+    let _ = upsert_engine_symbol_ingestion_state(
+        pool,
+        row.id,
+        count.clamp(0, i32::MAX as i64) as i32,
+        min_ot,
+        max_ot,
+        gap_count,
+        max_gap_sec,
+        None,
+        Utc::now(),
+        if is_complete { None } else { Some("incomplete_data") },
+    )
+    .await;
+}
+
+/// Phase 3: Live updates — patch gaps, catch up stale feed.
+async fn run_live_updates(
+    pool: &PgPool,
+    row: &EngineSymbolRow,
+    _min_bars: i64,
+    gap_window: i64,
+    provider: &dyn MarketBarProvider,
+    exp: Option<i64>,
+) {
+    let ex = row.exchange.trim();
+    let seg = row.segment.trim();
+    let sym = row.symbol.trim();
+    let iv = row.interval.trim();
+    let now = Utc::now();
+
+    let (count, min_ot, max_ot) = match count_market_bars_series(pool, ex, segment_db(seg), sym, iv).await {
+        Ok(x) => x,
+        Err(_) => return,
+    };
+
+    // Promote complete → live on first successful live tick
+    let _ = mark_live(pool, row.id).await;
+
+    // Gap scan on trailing window
+    let mut gap_n = 0_i32;
+    let mut max_gap_sec: Option<i32> = None;
+    if let Some(sec) = exp {
+        if let Ok(mut desc) = list_recent_bar_open_times_desc(pool, ex, segment_db(seg), sym, iv, gap_window).await {
+            desc.reverse();
+            let (g, mx) = scan_gaps_asc(&desc, sec);
+            gap_n = g;
+            max_gap_sec = mx;
+        }
+    }
+
+    // Stale tail check: catch up if latest bar is old
+    let needs_patch = exp.and_then(|sec| {
+        let stale_n = max_ot.map(|t| {
+            ((now.signed_duration_since(t).num_seconds() / sec).max(0) + 50) as i64
+        });
+        let gap_n_fetch = if gap_n > 0 { Some(gap_window) } else { None };
+        match (stale_n, gap_n_fetch) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
+        .filter(|_| {
+            max_ot
+                .map(|t| now.signed_duration_since(t).num_seconds() > sec * 2)
+                .unwrap_or(true)
+                || gap_n > 0
         })
-        .map(|n| n.clamp(300, 15_000));
+        .filter(|n| *n >= 10)
+    })
+    .map(|n| n.clamp(100, 15_000));
+
+    let mut last_backfill: Option<DateTime<Utc>> = None;
+    let mut last_err: Option<String> = None;
 
     if let Some(fetch_n) = needs_patch {
         match provider.backfill_bars(sym, iv, seg, fetch_n).await {
@@ -283,44 +410,21 @@ async fn run_one_target(
                     interval = %iv,
                     upserted = n,
                     gap_n,
-                    "engine_ingest patch backfill (gap/stale)"
+                    "live: patch backfill (gap/stale)"
                 );
-                // Re-scan after the patch so the metrics row reflects
-                // the post-fix state instead of the pre-fix one.
-                if let Ok(x) = count_market_bars_series(pool, ex, segment_db(seg), sym, iv).await {
-                    let (c3, mn3, mx3) = x;
-                    if let (Some(sec), Ok(mut desc)) = (
-                        exp,
-                        list_recent_bar_open_times_desc(pool, ex, segment_db(seg), sym, iv, gap_window).await,
-                    ) {
-                        desc.reverse();
-                        let (g, mx) = scan_gaps_asc(&desc, sec);
-                        gap_n = g;
-                        max_gap_sec = mx;
-                    }
-                    return upsert_engine_symbol_ingestion_state(
-                        pool,
-                        row.id,
-                        c3.clamp(0, i32::MAX as i64) as i32,
-                        mn3,
-                        mx3,
-                        gap_n,
-                        max_gap_sec,
-                        last_backfill,
-                        now,
-                        None,
-                    )
-                    .await
-                    .map(|_| ())
-                    .unwrap_or(());
-                }
             }
             Err(e) => {
-                warn!(%e, engine_symbol_id = %row.id, symbol = %sym, "engine_ingest patch backfill");
-                last_err = Some(format!("patch_backfill:{e}"));
+                last_err = Some(format!("patch:{e}"));
+                warn!(%e, engine_symbol_id = %row.id, "live patch backfill");
             }
         }
     }
+
+    // Update ingestion state metrics
+    let (count2, min_ot2, max_ot2) = match count_market_bars_series(pool, ex, segment_db(seg), sym, iv).await {
+        Ok(x) => x,
+        Err(_) => (count, min_ot, max_ot),
+    };
 
     let mut err = last_err;
     if err.is_none() {
@@ -347,12 +451,55 @@ async fn run_one_target(
     .await;
 }
 
-pub async fn engine_symbol_ingest_loop(pool: PgPool) {
-    // Construct provider once — currently only Binance. Adding a new
-    // exchange is a new impl + one entry here (CLAUDE.md rule #1).
-    let binance = qtss_binance::BinanceBarProvider::new(pool.clone());
-    let providers: Vec<&dyn MarketBarProvider> = vec![&binance];
+/// Legacy cold-start path: for when full_history is disabled.
+/// Uses simple min_bars threshold and non-resumable backfill.
+async fn run_cold_start_and_live(
+    pool: &PgPool,
+    row: &EngineSymbolRow,
+    min_bars: i64,
+    gap_window: i64,
+    provider: &dyn MarketBarProvider,
+) {
+    let ex = row.exchange.trim();
+    let seg = row.segment.trim();
+    let sym = row.symbol.trim();
+    let iv = row.interval.trim();
 
+    let (count, _, _) = match count_market_bars_series(pool, ex, segment_db(seg), sym, iv).await {
+        Ok(x) => x,
+        Err(_) => return,
+    };
+
+    if count < min_bars {
+        let need = (min_bars - count).max(0) as i64;
+        let fetch_n = need.saturating_add(200).clamp(300, 15_000);
+        match provider.backfill_bars(sym, iv, seg, fetch_n).await {
+            Ok(n) => {
+                info!(
+                    engine_symbol_id = %row.id,
+                    symbol = %sym,
+                    interval = %iv,
+                    upserted = n,
+                    "cold-start backfill"
+                );
+            }
+            Err(e) => {
+                warn!(%e, engine_symbol_id = %row.id, "cold-start backfill");
+            }
+        }
+    }
+
+    // Mark as complete (no full history verification needed)
+    let _ = mark_backfill_finished(pool, row.id).await;
+    let _ = update_verification(pool, row.id, count as i64, count as i64, 0, None, true).await;
+
+    let exp = binance_kline_interval_seconds(iv);
+    run_live_updates(pool, row, min_bars, gap_window, provider, exp).await;
+}
+
+// ─── Main Loop ──────────────────────────────────────────────────────
+
+pub async fn engine_symbol_ingest_loop(pool: PgPool) {
     loop {
         let tick = resolve_worker_tick_secs(
             &pool,
@@ -388,29 +535,63 @@ pub async fn engine_symbol_ingest_loop(pool: PgPool) {
             "worker",
             "engine_ingest_full_history",
             "QTSS_ENGINE_INGEST_FULL_HISTORY",
-            0,  // default: off
+            1,  // default ON — fetch full history from listing date
             0,
             1,
         )
         .await == 1;
 
+        // Run backfill for all symbols concurrently (bounded by semaphore
+        // to stay within Binance rate limits — max 4 parallel fetchers).
+        let sem = Arc::new(Semaphore::new(4));
+
         match list_enabled_engine_symbols(&pool).await {
             Ok(rows) => {
-                for r in rows {
-                    let ex = r.exchange.trim();
-                    let provider = providers
-                        .iter()
-                        .find(|p| p.exchange_id().eq_ignore_ascii_case(ex));
-                    match provider {
-                        Some(p) => run_one_target(&pool, &r, min_bars, gap_window, full_history, *p).await,
-                        None => {
-                            debug!(
-                                symbol = %r.symbol,
-                                exchange = %ex,
-                                "engine_ingest: no provider for exchange, skipping"
-                            );
+                // ── Phase A: verification + live (no API calls, no semaphore) ──
+                for r in &rows {
+                    let progress = match get_or_create_backfill_progress(&pool, r.id).await {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    };
+                    match progress.state.as_str() {
+                        "verifying" => {
+                            let exp = binance_kline_interval_seconds(r.interval.trim());
+                            run_verification(&pool, r, gap_window, exp).await;
                         }
+                        "complete" | "live" => {
+                            let prov = qtss_binance::BinanceBarProvider::new(pool.clone());
+                            let exp = binance_kline_interval_seconds(r.interval.trim());
+                            run_live_updates(&pool, r, min_bars, gap_window, &prov, exp).await;
+                        }
+                        _ => {} // pending/backfilling handled in Phase B
                     }
+                }
+
+                // ── Phase B: backfill (API calls, bounded by semaphore) ────────
+                let mut handles = Vec::new();
+                for r in rows {
+                    let ex = r.exchange.trim().to_lowercase();
+                    if ex != "binance" {
+                        continue;
+                    }
+                    // Only spawn tasks for pending/backfilling — others already handled
+                    let progress = match get_or_create_backfill_progress(&pool, r.id).await {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    };
+                    if progress.state != "pending" && progress.state != "backfilling" {
+                        continue;
+                    }
+                    let pool2 = pool.clone();
+                    let sem2 = sem.clone();
+                    handles.push(tokio::spawn(async move {
+                        let _permit = sem2.acquire().await;
+                        let prov = qtss_binance::BinanceBarProvider::new(pool2.clone());
+                        run_one_target(&pool2, &r, min_bars, gap_window, full_history, &prov).await;
+                    }));
+                }
+                for h in handles {
+                    let _ = h.await;
                 }
             }
             Err(e) => warn!(%e, "engine_ingest list_enabled_engine_symbols"),

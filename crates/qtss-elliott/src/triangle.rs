@@ -97,86 +97,59 @@ impl FormationDetector for TriangleDetector {
         if pivots.len() < 6 {
             return Vec::new();
         }
-        let tail = &pivots[pivots.len() - 6..];
-        if !alternation_ok(tail) {
-            return Vec::new();
+
+        let mut results = Vec::new();
+        for start in 0..=(pivots.len() - 6) {
+            let tail = &pivots[start..start + 6];
+            if !alternation_ok(tail) { continue; }
+            let raw: Vec<f64> = tail.iter().map(|p| p.price.to_f64().unwrap_or(0.0)).collect();
+
+            let first_leg = raw[1] - raw[0];
+            if first_leg == 0.0 { continue; }
+            let (tops, bots): (Vec<f64>, Vec<f64>) = if first_leg < 0.0 {
+                (vec![raw[0], raw[2], raw[4]], vec![raw[1], raw[3], raw[5]])
+            } else {
+                (vec![raw[1], raw[3], raw[5]], vec![raw[0], raw[2], raw[4]])
+            };
+
+            let top_first = (tops[1] - tops[0]).abs();
+            let top_second = (tops[2] - tops[1]).abs();
+            let bot_first = (bots[1] - bots[0]).abs();
+            let bot_second = (bots[2] - bots[1]).abs();
+            if top_first == 0.0 || bot_first == 0.0 { continue; }
+            let top_ratio = top_second / top_first;
+            let bot_ratio = bot_second / bot_first;
+
+            let subtype = SUBTYPES
+                .iter()
+                .find_map(|(label, pred)| pred(top_ratio, bot_ratio).then_some(*label));
+            let Some(subtype) = subtype else { continue; };
+
+            let s_top = nearest_fib_score(top_ratio, &[0.618, 1.0, 1.618]);
+            let s_bot = nearest_fib_score(bot_ratio, &[0.618, 1.0, 1.618]);
+            let score = mean_score(&[s_top, s_bot]);
+            if (score as f32) < self.config.min_structural_score { continue; }
+
+            let suffix = if first_leg < 0.0 { "bear" } else { "bull" };
+            let subkind = format!("triangle_{subtype}_{suffix}");
+            let anchors = label_anchors(tail, self.config.pivot_level, ANCHOR_LABELS);
+            let projected = projection::project(&subkind, &anchors, self.config.pivot_level);
+            let sub_waves = decomposition::decompose(tree, &anchors, self.config.pivot_level);
+            let invalidation_price = tail[0].price;
+
+            results.push(Detection::new(
+                instrument.clone(),
+                timeframe,
+                PatternKind::Elliott(subkind),
+                PatternState::Forming,
+                anchors,
+                score as f32,
+                invalidation_price,
+                regime.clone(),
+            )
+            .with_projection(projected)
+            .with_sub_waves(sub_waves));
         }
-        let raw: Vec<f64> = tail
-            .iter()
-            .map(|p| p.price.to_f64().unwrap_or(0.0))
-            .collect();
-
-        // Six pivots → five legs. Tag the touchpoints by side: pivots
-        // 1, 3, 5 are one trendline, pivots 2, 4 are the other. The
-        // first leg's sign decides which side is "top" (highs) and
-        // which is "bottom" (lows).
-        let first_leg = raw[1] - raw[0];
-        if first_leg == 0.0 {
-            return Vec::new();
-        }
-        // For a triangle starting at a HIGH (first_leg < 0): pivots
-        // 0, 2, 4 are highs (top trendline) and 1, 3, 5 are lows.
-        // For one starting at a LOW: swapped.
-        let (tops, bots): (Vec<f64>, Vec<f64>) = if first_leg < 0.0 {
-            (vec![raw[0], raw[2], raw[4]], vec![raw[1], raw[3], raw[5]])
-        } else {
-            (vec![raw[1], raw[3], raw[5]], vec![raw[0], raw[2], raw[4]])
-        };
-
-        // Per-side leg comparisons. Top: |t1-t0| vs |t2-t1|.
-        // Triangle classification cares about the *ratio* of the second
-        // span to the first on each side (>1 expands, <1 contracts).
-        let top_first = (tops[1] - tops[0]).abs();
-        let top_second = (tops[2] - tops[1]).abs();
-        let bot_first = (bots[1] - bots[0]).abs();
-        let bot_second = (bots[2] - bots[1]).abs();
-        if top_first == 0.0 || bot_first == 0.0 {
-            return Vec::new();
-        }
-        let top_ratio = top_second / top_first;
-        let bot_ratio = bot_second / bot_first;
-
-        // Sub-type look-up — first matching predicate wins.
-        let subtype = SUBTYPES
-            .iter()
-            .find_map(|(label, pred)| pred(top_ratio, bot_ratio).then_some(*label));
-        let Some(subtype) = subtype else {
-            return Vec::new();
-        };
-
-        // Score: how cleanly the legs alternate, plus distance of each
-        // ratio from canonical contraction (~0.618) for contracting
-        // triangles. For expanding/barrier we just take the geometric
-        // signal at face value.
-        let s_top = nearest_fib_score(top_ratio, &[0.618, 1.0, 1.618]);
-        let s_bot = nearest_fib_score(bot_ratio, &[0.618, 1.0, 1.618]);
-        let score = mean_score(&[s_top, s_bot]);
-
-        if (score as f32) < self.config.min_structural_score {
-            return Vec::new();
-        }
-
-        // dir suffix: triangle that starts at a HIGH corrects a bullish
-        // leg → bear; vice versa.
-        let suffix = if first_leg < 0.0 { "bear" } else { "bull" };
-        let subkind = format!("triangle_{subtype}_{suffix}");
-        let anchors = label_anchors(tail, self.config.pivot_level, ANCHOR_LABELS);
-        let projected =
-            projection::project(&subkind, &anchors, self.config.pivot_level);
-        let sub_waves = decomposition::decompose(tree, &anchors, self.config.pivot_level);
-        let invalidation_price = tail[0].price;
-
-        vec![Detection::new(
-            instrument.clone(),
-            timeframe,
-            PatternKind::Elliott(subkind),
-            PatternState::Forming,
-            anchors,
-            score as f32,
-            invalidation_price,
-            regime.clone(),
-        )
-        .with_projection(projected)
-        .with_sub_waves(sub_waves)]
+        results
     }
 }

@@ -184,7 +184,7 @@ pub async fn partial_sell(
     pool: &PgPool,
     position_id: Uuid,
     sell_qty: f32,
-    price: f32,
+    _price: f32,
     pnl: f32,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(

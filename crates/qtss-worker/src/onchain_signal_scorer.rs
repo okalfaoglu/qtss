@@ -797,7 +797,11 @@ pub async fn onchain_signal_loop(pool: PgPool) {
             }
         };
         let mut symbols: BTreeSet<String> = BTreeSet::new();
-        for r in rows {
+        for r in &rows {
+            // Only score symbols whose backfill is complete
+            if !qtss_storage::is_backfill_ready(&pool, r.id).await {
+                continue;
+            }
             symbols.insert(r.symbol.to_uppercase());
         }
         if symbols.is_empty() {

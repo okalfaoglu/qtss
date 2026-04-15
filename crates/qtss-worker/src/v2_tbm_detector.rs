@@ -578,12 +578,31 @@ async fn process_symbol(
             }
         ]);
         let regime = json!({});
-        let raw_meta = json!({
+        // P23d — Reversal Confidence Checklist (0–5). Seed sweep /
+        // rejection / volume flags from the anchor bar now; bos and
+        // retest flip true later in confirm_forming_or_timeout and
+        // detect_retest_for_confirmed. See apply_reversal_checklist.
+        let is_bottom_dir = matches!(setup.direction, SetupDirection::Bottom);
+        let (anchor_sweep, anchor_rejection, anchor_volume) = anchor_flags(
+            &opens, &highs, &lows, &closes, &vols,
+            win_start, n, anchor_idx, is_bottom_dir, &cfg.anchor,
+        );
+        let mut raw_meta = json!({
             "tbm_score": setup.score,
             "signal": format!("{:?}", setup.signal),
             "pillars": pillar_meta(&bottom, &top, setup.direction),
             "details": setup.pillar_details,
+            "reversal_checklist": {
+                "flags": {
+                    "sweep": anchor_sweep,
+                    "rejection": anchor_rejection,
+                    "volume": anchor_volume,
+                    "bos": false,
+                    "retest": false,
+                },
+            },
         });
+        apply_reversal_checklist(&mut raw_meta);
 
         let row = NewDetection {
             id: Uuid::new_v4(),
@@ -1008,6 +1027,9 @@ async fn confirm_forming_or_timeout(
                 obj.insert("followthrough_bar_index".into(), json!(ft_idx));
                 obj.insert("confirm_reason".into(), json!("bos+followthrough"));
             }
+            // P23d — BoS now printed; flip checklist flag and rescore.
+            set_checklist_flag(&mut meta, "bos", true);
+            apply_reversal_checklist(&mut meta);
             let confidence = (row.structural_score as f32).clamp(0.0, 1.0);
             let channel_scores = json!({
                 "structural": row.structural_score,
@@ -1199,6 +1221,9 @@ async fn detect_retest_for_confirmed(
             obj.insert("retest_price".into(), json!(retest_price));
             obj.insert("retest_broken_level".into(), json!(broken_level));
         }
+        // P23d — retest printed; flip checklist flag and rescore.
+        set_checklist_flag(&mut meta, "retest", true);
+        apply_reversal_checklist(&mut meta);
         let _ = repo.update_projection(row.id, row.structural_score, meta).await;
         debug!(
             id = %row.id,
@@ -1510,4 +1535,101 @@ fn pick_anchor(
     }
 
     best_idx.unwrap_or(fallback)
+}
+
+/// P23d — evaluate the three anchor-bar checklist flags at a chosen
+/// index (re-deriving the same logic `pick_anchor` uses internally so
+/// the picker can stay a pure usize return). Returns (sweep, rejection,
+/// volume). `rejection` = wick ≥ cfg.wick_min_ratio; `volume` = bar
+/// volume ≥ cfg.vol_min_ratio × 20-bar avg; `sweep` = bar takes out a
+/// prior window extreme.
+fn anchor_flags(
+    opens: &[f64],
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    vols: &[f64],
+    win_start: usize,
+    n: usize,
+    idx: usize,
+    is_bottom: bool,
+    cfg: &TbmAnchorTuning,
+) -> (bool, bool, bool) {
+    if idx >= n || idx < win_start {
+        return (false, false, false);
+    }
+    let range_i = (highs[idx] - lows[idx]).max(1e-10);
+    let body_hi = opens[idx].max(closes[idx]);
+    let body_lo = opens[idx].min(closes[idx]);
+    let wick_ratio = if is_bottom {
+        ((body_lo - lows[idx]).max(0.0)) / range_i
+    } else {
+        ((highs[idx] - body_hi).max(0.0)) / range_i
+    };
+    let rejection = wick_ratio >= cfg.wick_min_ratio;
+
+    let v_start = idx.saturating_sub(20).max(win_start);
+    let v_count = (idx - v_start).max(1) as f64;
+    let v_avg = vols[v_start..idx].iter().sum::<f64>() / v_count;
+    let v_ratio = if v_avg > 0.0 { vols[idx] / v_avg } else { 0.0 };
+    let volume_ok = v_ratio >= cfg.vol_min_ratio;
+
+    let sweep = if is_bottom {
+        let prior_lo = lows[win_start..idx].iter().cloned().fold(f64::INFINITY, f64::min);
+        prior_lo.is_finite() && lows[idx] < prior_lo * 0.9995
+    } else {
+        let prior_hi = highs[win_start..idx].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        prior_hi.is_finite() && highs[idx] > prior_hi * 1.0005
+    };
+
+    (sweep, rejection, volume_ok)
+}
+
+/// P23d — flip one flag inside `raw_meta.reversal_checklist.flags`
+/// without clobbering neighbours. Creates the subtree if missing so
+/// older rows emitted before P23d still aggregate cleanly.
+fn set_checklist_flag(meta: &mut serde_json::Value, key: &str, value: bool) {
+    let obj = match meta.as_object_mut() {
+        Some(o) => o,
+        None => return,
+    };
+    let checklist = obj
+        .entry("reversal_checklist")
+        .or_insert_with(|| json!({ "flags": {} }));
+    let flags = checklist
+        .as_object_mut()
+        .and_then(|c| {
+            c.entry("flags").or_insert_with(|| json!({}));
+            c.get_mut("flags").and_then(|v| v.as_object_mut())
+        });
+    if let Some(flags) = flags {
+        flags.insert(key.into(), json!(value));
+    }
+}
+
+/// P23d — recompute `reversal_checklist.score` (0–5) + `tier` from the
+/// five boolean flags. Tier ladder:
+///   5 → elite, 4 → strong, 3 → ok, 2 → weak, ≤1 → filtered.
+/// Downstream filters (GUI, alerting, risk allocator) key off `tier` so
+/// the scorecard stays a single source of truth.
+fn apply_reversal_checklist(meta: &mut serde_json::Value) {
+    let Some(obj) = meta.as_object_mut() else { return };
+    let checklist = obj
+        .entry("reversal_checklist")
+        .or_insert_with(|| json!({ "flags": {} }));
+    let Some(cl_obj) = checklist.as_object_mut() else { return };
+    let flags_val = cl_obj.entry("flags").or_insert_with(|| json!({}));
+    let flags = flags_val.as_object().cloned().unwrap_or_default();
+    let get = |k: &str| flags.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+    let components = ["sweep", "rejection", "bos", "retest", "volume"];
+    let score: u32 = components.iter().map(|k| if get(k) { 1 } else { 0 }).sum();
+    let tier = match score {
+        5 => "elite",
+        4 => "strong",
+        3 => "ok",
+        2 => "weak",
+        _ => "filtered",
+    };
+    cl_obj.insert("score".into(), json!(score));
+    cl_obj.insert("tier".into(), json!(tier));
 }

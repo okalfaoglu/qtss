@@ -156,6 +156,9 @@ async fn run_pass(
 
     let mut written = 0usize;
     for sym in symbols {
+        if !qtss_storage::is_backfill_ready(pool, sym.id).await {
+            continue;
+        }
         match process_symbol(pool, &repo, &sym, cfg, cutoff).await {
             Ok(true) => written += 1,
             Ok(false) => {}

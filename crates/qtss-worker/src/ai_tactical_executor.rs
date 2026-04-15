@@ -536,6 +536,9 @@ pub async fn ai_tactical_executor_loop(pool: PgPool) {
         };
 
         for es in &engine_symbols {
+            if !qtss_storage::is_backfill_ready(&pool, es.id).await {
+                continue;
+            }
             let sym = es.symbol.trim().to_uppercase();
             let segment = parse_segment(&es.segment);
 

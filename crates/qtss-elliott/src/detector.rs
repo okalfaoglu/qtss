@@ -34,9 +34,9 @@ impl ImpulseDetector {
         &self.config
     }
 
-    /// Scan the latest pivots in the configured level and report a single
-    /// impulse if one is present. Returns `None` if there are fewer than
-    /// six pivots, alternation is broken, or any rule fails.
+    /// Scan all 6-pivot windows across the configured level and return
+    /// every valid impulse found. Older detections use historical pivots;
+    /// the dedup layer in the orchestrator prevents re-insertion.
     pub fn detect(
         &self,
         tree: &PivotTree,
@@ -44,61 +44,85 @@ impl ImpulseDetector {
         timeframe: Timeframe,
         regime: &RegimeSnapshot,
     ) -> Option<Detection> {
+        self.detect_all(tree, instrument, timeframe, regime)
+            .into_iter()
+            .max_by(|a, b| a.structural_score.partial_cmp(&b.structural_score).unwrap_or(std::cmp::Ordering::Equal))
+    }
+
+    /// Scan every valid 6-pivot window and return all impulses found.
+    pub fn detect_all(
+        &self,
+        tree: &PivotTree,
+        instrument: &Instrument,
+        timeframe: Timeframe,
+        regime: &RegimeSnapshot,
+    ) -> Vec<Detection> {
         let pivots = tree.at_level(self.config.pivot_level);
         if pivots.len() < 6 {
-            return None;
+            return vec![];
         }
-        let tail = &pivots[pivots.len() - 6..];
 
-        // The very first pivot decides direction. Bullish impulses begin
-        // with a low; bearish impulses begin with a high.
-        let direction = match tail[0].kind {
-            PivotKind::Low => Direction::Bullish,
-            PivotKind::High => Direction::Bearish,
-        };
+        let mut results = Vec::new();
 
-        let normalized = match direction {
-            Direction::Bullish => collect_points(tail, false),
-            Direction::Bearish => collect_points(tail, true),
-        };
-        let arr = normalized.as_f64();
+        // Sliding window: check every consecutive 6-pivot group
+        for start in 0..=(pivots.len() - 6) {
+            let window = &pivots[start..start + 6];
 
-        // Run rules in order; bail on the first failure.
-        for rule in RULES {
-            if rule(&arr).is_err() {
-                return None;
+            let direction = match window[0].kind {
+                PivotKind::Low => Direction::Bullish,
+                PivotKind::High => Direction::Bearish,
+            };
+
+            let normalized = match direction {
+                Direction::Bullish => collect_points(window, false),
+                Direction::Bearish => collect_points(window, true),
+            };
+            let arr = normalized.as_f64();
+
+            // Run rules in order; bail on the first failure.
+            let mut valid = true;
+            for rule in RULES {
+                if rule(&arr).is_err() {
+                    valid = false;
+                    break;
+                }
             }
+            if !valid {
+                continue;
+            }
+
+            let score = score_impulse(&arr);
+            if (score as f32) < self.config.min_structural_score {
+                continue;
+            }
+
+            let subkind = match direction {
+                Direction::Bullish => "impulse_5_bull".to_string(),
+                Direction::Bearish => "impulse_5_bear".to_string(),
+            };
+            let anchors = label_anchors(window, self.config.pivot_level);
+            let projected =
+                projection::project(&subkind, &anchors, self.config.pivot_level);
+            let sub_waves = decomposition::decompose(tree, &anchors, self.config.pivot_level);
+            let invalidation_price = invalidation_for(direction, window);
+
+            results.push(
+                Detection::new(
+                    instrument.clone(),
+                    timeframe,
+                    PatternKind::Elliott(subkind),
+                    PatternState::Forming,
+                    anchors,
+                    score as f32,
+                    invalidation_price,
+                    regime.clone(),
+                )
+                .with_projection(projected)
+                .with_sub_waves(sub_waves),
+            );
         }
 
-        let score = score_impulse(&arr);
-        if (score as f32) < self.config.min_structural_score {
-            return None;
-        }
-
-        let subkind = match direction {
-            Direction::Bullish => "impulse_5_bull".to_string(),
-            Direction::Bearish => "impulse_5_bear".to_string(),
-        };
-        let anchors = label_anchors(tail, self.config.pivot_level);
-        let projected =
-            projection::project(&subkind, &anchors, self.config.pivot_level);
-        let sub_waves = decomposition::decompose(tree, &anchors, self.config.pivot_level);
-        let invalidation_price = invalidation_for(direction, tail);
-
-        Some(
-            Detection::new(
-                instrument.clone(),
-                timeframe,
-                PatternKind::Elliott(subkind),
-                PatternState::Forming,
-                anchors,
-                score as f32,
-                invalidation_price,
-                regime.clone(),
-            )
-            .with_projection(projected)
-            .with_sub_waves(sub_waves),
-        )
+        results
     }
 }
 

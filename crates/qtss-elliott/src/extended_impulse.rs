@@ -60,70 +60,59 @@ impl FormationDetector for ExtendedImpulseDetector {
         if pivots.len() < 6 {
             return Vec::new();
         }
-        let tail = &pivots[pivots.len() - 6..];
-        if !alternation_ok(tail) {
-            return Vec::new();
-        }
-        let dir = Direction::from_first(tail[0].kind);
-        let p = normalize(tail, dir);
 
-        let w1 = p[1] - p[0];
-        let w3 = p[3] - p[2];
-        let w5 = p[5] - p[4];
-        if w1 <= 0.0 || w3 <= 0.0 || w5 <= 0.0 {
-            return Vec::new();
-        }
-        // Standard impulse rules — w2 doesn't break start, w3 not
-        // shortest, w4 no overlap. Reuse them inline.
-        if p[2] <= p[0] || p[4] <= p[1] {
-            return Vec::new();
-        }
-        if w3 < w1 && w3 < w5 {
-            return Vec::new();
-        }
+        let mut results = Vec::new();
+        for start in 0..=(pivots.len() - 6) {
+            let tail = &pivots[start..start + 6];
+            if !alternation_ok(tail) { continue; }
+            let dir = Direction::from_first(tail[0].kind);
+            let p = normalize(tail, dir);
 
-        // Pick the largest wave; verify the other two are ≤ 1/1.618 of it.
-        let waves = [("w1", w1), ("w3", w3), ("w5", w5)];
-        let (label, longest) = waves
-            .iter()
-            .copied()
-            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap();
-        let others_max = waves
-            .iter()
-            .filter(|(l, _)| *l != label)
-            .map(|(_, v)| *v)
-            .fold(0.0_f64, f64::max);
-        if others_max == 0.0 || others_max / longest > EXTENSION_RATIO {
-            return Vec::new();
+            let w1 = p[1] - p[0];
+            let w3 = p[3] - p[2];
+            let w5 = p[5] - p[4];
+            if w1 <= 0.0 || w3 <= 0.0 || w5 <= 0.0 { continue; }
+            if p[2] <= p[0] || p[4] <= p[1] { continue; }
+            if w3 < w1 && w3 < w5 { continue; }
+
+            let waves = [("w1", w1), ("w3", w3), ("w5", w5)];
+            let (label, longest) = waves
+                .iter()
+                .copied()
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .unwrap();
+            let others_max = waves
+                .iter()
+                .filter(|(l, _)| *l != label)
+                .map(|(_, v)| *v)
+                .fold(0.0_f64, f64::max);
+            if others_max == 0.0 || others_max / longest > EXTENSION_RATIO { continue; }
+
+            let ratio = longest / others_max;
+            let s_ext = nearest_fib_score(ratio, &[1.618, 2.618, 4.236]);
+            let s_w2 = nearest_fib_score((p[1] - p[2]) / w1, &[0.382, 0.5, 0.618]);
+            let score = mean_score(&[s_ext, s_w2]);
+            if (score as f32) < self.config.min_structural_score { continue; }
+
+            let subkind = format!("impulse_{label}_extended_{}", dir.suffix());
+            let anchors = label_anchors(tail, self.config.pivot_level, ANCHOR_LABELS);
+            let projected = projection::project(&subkind, &anchors, self.config.pivot_level);
+            let sub_waves = decomposition::decompose(tree, &anchors, self.config.pivot_level);
+            let invalidation_price = tail[0].price;
+
+            results.push(Detection::new(
+                instrument.clone(),
+                timeframe,
+                PatternKind::Elliott(subkind),
+                PatternState::Forming,
+                anchors,
+                score as f32,
+                invalidation_price,
+                regime.clone(),
+            )
+            .with_projection(projected)
+            .with_sub_waves(sub_waves));
         }
-
-        let ratio = longest / others_max;
-        let s_ext = nearest_fib_score(ratio, &[1.618, 2.618, 4.236]);
-        let s_w2 = nearest_fib_score((p[1] - p[2]) / w1, &[0.382, 0.5, 0.618]);
-        let score = mean_score(&[s_ext, s_w2]);
-        if (score as f32) < self.config.min_structural_score {
-            return Vec::new();
-        }
-
-        let subkind = format!("impulse_{label}_extended_{}", dir.suffix());
-        let anchors = label_anchors(tail, self.config.pivot_level, ANCHOR_LABELS);
-        let projected =
-            projection::project(&subkind, &anchors, self.config.pivot_level);
-        let sub_waves = decomposition::decompose(tree, &anchors, self.config.pivot_level);
-        let invalidation_price = tail[0].price;
-
-        vec![Detection::new(
-            instrument.clone(),
-            timeframe,
-            PatternKind::Elliott(subkind),
-            PatternState::Forming,
-            anchors,
-            score as f32,
-            invalidation_price,
-            regime.clone(),
-        )
-        .with_projection(projected)
-        .with_sub_waves(sub_waves)]
+        results
     }
 }

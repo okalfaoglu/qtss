@@ -22,6 +22,16 @@ pub trait TimestampBarFeed: Send {
 // Market data provider abstraction (venue-agnostic)
 // ---------------------------------------------------------------------------
 
+/// Result of a resumable backfill run.
+#[derive(Debug, Clone)]
+pub struct BackfillResult {
+    pub upserted: i64,
+    pub pages: u32,
+    pub oldest_ms: Option<u64>,
+    pub newest_ms: Option<u64>,
+    pub reached_listing: bool,
+}
+
 /// Venue-agnostic bar backfill provider. Each exchange adapter (Binance,
 /// Bybit, …) implements this so the worker ingest loop doesn't hard-code
 /// any exchange. See CLAUDE.md rule #4 (asset-class agnostic core).
@@ -45,6 +55,28 @@ pub trait MarketBarProvider: Send + Sync {
         Box<dyn std::future::Future<Output = Result<i64, Box<dyn std::error::Error + Send + Sync>>>
             + Send
             + '_>,
+    >;
+
+    /// Resumable backfill: fetch bars backwards from `resume_end_ms`.
+    /// Returns (upserted, pages, oldest_ms, newest_ms, reached_listing).
+    /// Default delegates to `backfill_bars` ignoring resume cursor.
+    fn backfill_bars_resumable(
+        &self,
+        symbol: &str,
+        interval: &str,
+        segment: &str,
+        limit: i64,
+        resume_end_ms: Option<u64>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        BackfillResult,
+                        Box<dyn std::error::Error + Send + Sync>,
+                    >,
+                > + Send
+                + '_,
+        >,
     >;
 
     /// Check whether the symbol is tradable on this exchange/segment.

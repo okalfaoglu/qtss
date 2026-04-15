@@ -74,6 +74,9 @@ async fn regime_deep_tick(pool: &PgPool) -> anyhow::Result<()> {
     let mut trans_count = 0u32;
 
     for sym_row in &symbols {
+        if !qtss_storage::is_backfill_ready(pool, sym_row.id).await {
+            continue;
+        }
         let symbol = &sym_row.symbol;
         let venue = &sym_row.exchange;
         let segment = &sym_row.segment;

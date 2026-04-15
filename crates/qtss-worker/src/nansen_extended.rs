@@ -537,6 +537,9 @@ pub async fn nansen_flow_intel_loop(pool: PgPool) {
         let rows = list_enabled_engine_symbols(&pool).await.unwrap_or_default();
         let mut any = false;
         for es in rows {
+            if !qtss_storage::is_backfill_ready(&pool, es.id).await {
+                continue;
+            }
             let sym = es.symbol.trim().to_uppercase();
             let body = obj
                 .get(&sym)
@@ -869,6 +872,9 @@ macro_rules! nansen_opt_in_tgm_loop {
                 let rows = list_enabled_engine_symbols(&pool).await.unwrap_or_default();
                 let mut any = false;
                 for es in rows {
+                    if !qtss_storage::is_backfill_ready(&pool, es.id).await {
+                        continue;
+                    }
                     let sym = es.symbol.trim().to_uppercase();
                     let body = obj
                         .get(&sym)

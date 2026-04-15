@@ -269,6 +269,9 @@ async fn run_pass(
     let mut seen: HashSet<String> = HashSet::new();
     let mut processed = 0usize;
     for s in symbols {
+        if !qtss_storage::is_backfill_ready(pool, s.id).await {
+            continue;
+        }
         let sym = s.symbol.trim().to_uppercase();
         if !seen.insert(sym.clone()) {
             continue;

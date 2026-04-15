@@ -316,7 +316,7 @@ async fn backfill_market_bars_from_rest(
         _ => "spot",
     };
     let target = i64::from(body.limit.unwrap_or(500).clamp(1, 50_000));
-    let upserted = backfill_binance_public_klines(&st.pool, &sym, &interval, seg, target)
+    let result = backfill_binance_public_klines(&st.pool, &sym, &interval, seg, target, None)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -325,7 +325,7 @@ async fn backfill_market_bars_from_rest(
         "segment": seg_db,
         "symbol": sym,
         "interval": interval,
-        "upserted": upserted,
+        "upserted": result.upserted,
         "source": "binance_rest_klines"
     })))
 }
