@@ -92,8 +92,8 @@ pub struct EventSpec {
 
 pub const EVENTS: &[EventSpec] = &[
     EventSpec { name: "trading_range", eval: EventEval::Pivots(eval_trading_range) },
-    EventSpec { name: "spring",        eval: EventEval::Pivots(eval_spring) },
-    EventSpec { name: "upthrust",      eval: EventEval::Pivots(eval_upthrust) },
+    EventSpec { name: "spring",        eval: EventEval::WithBars(eval_spring) },
+    EventSpec { name: "upthrust",      eval: EventEval::WithBars(eval_upthrust) },
     // Phase A
     EventSpec { name: "selling_climax",     eval: EventEval::Pivots(eval_selling_climax) },
     EventSpec { name: "buying_climax",      eval: EventEval::Pivots(eval_buying_climax) },
@@ -378,7 +378,9 @@ fn climactic_variant(
 // Spring (Phase C — bullish false-break)
 // =========================================================================
 
-fn eval_spring(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
+fn eval_spring(ctx: &EventContext) -> Option<EventMatch> {
+    let pivots = ctx.pivots;
+    let cfg = ctx.cfg;
     if pivots.len() < cfg.min_range_pivots + 1 {
         return None;
     }
@@ -395,6 +397,16 @@ fn eval_spring(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
     let penetration = (range.support - price) / range.height.max(1e-9);
     if penetration < cfg.min_penetration || penetration > cfg.max_penetration {
         return None;
+    }
+    // P2-P1-#6 — Spring requires the bar to CLOSE BACK INSIDE the range.
+    // An intrabar wick below support followed by a close above it is a
+    // Spring; a close below is a genuine breakdown. If we can resolve
+    // the bar (bars plumbed), enforce this. Otherwise fall through.
+    if let Some(bar) = ctx.bar_for_pivot(candidate) {
+        let close = bar.close.to_f64().unwrap_or(0.0);
+        if close < range.support {
+            return None;
+        }
     }
 
     // Wyckoff rule: a Spring pierces an ESTABLISHED range. An isolated
@@ -485,7 +497,9 @@ fn classify_spring_variant(
 // Upthrust (Phase C — bearish false-break)
 // =========================================================================
 
-fn eval_upthrust(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
+fn eval_upthrust(ctx: &EventContext) -> Option<EventMatch> {
+    let pivots = ctx.pivots;
+    let cfg = ctx.cfg;
     if pivots.len() < cfg.min_range_pivots + 1 {
         return None;
     }
@@ -502,6 +516,14 @@ fn eval_upthrust(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
     let penetration = (price - range.resistance) / range.height.max(1e-9);
     if penetration < cfg.min_penetration || penetration > cfg.max_penetration {
         return None;
+    }
+    // P2-P1-#6 — mirror of Spring close-inside. A genuine UTAD closes
+    // BACK UNDER resistance (close > resistance = real breakout).
+    if let Some(bar) = ctx.bar_for_pivot(candidate) {
+        let close = bar.close.to_f64().unwrap_or(0.0);
+        if close > range.resistance {
+            return None;
+        }
     }
     // Established-range gate, mirror of Spring. Without this any pullback
     // high above a trimmed body is flagged UTAD in trending markets.
@@ -656,7 +678,21 @@ fn eval_automatic_rally(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMa
     let ar = pivots[sc_i + 1..].iter().find(|p| p.kind == PivotKind::High)?;
     let ar_price = ar.price.to_f64()?;
     let rally = ar_price - sc_price;
-    let drop = range.resistance - sc_price;
+    // P2-P1-#12 — AR retracement reference must be the PRIOR downswing,
+    // not `range.resistance - sc_price`. `range.resistance` is computed
+    // from the same pivots that include AR itself — the denominator was
+    // (AR ≈ resistance) - SC, i.e. nearly circular. Use the highest
+    // High that occurred STRICTLY BEFORE the SC pivot as the swing top.
+    let swing_top = pivots[..sc_i]
+        .iter()
+        .filter(|p| p.kind == PivotKind::High)
+        .filter_map(|p| p.price.to_f64())
+        .fold(f64::NEG_INFINITY, f64::max);
+    let drop = if swing_top.is_finite() {
+        swing_top - sc_price
+    } else {
+        range.resistance - sc_price
+    };
     if drop <= 0.0 { return None; }
     let retracement = rally / drop;
     if retracement < cfg.ar_min_retracement {
@@ -1077,11 +1113,23 @@ fn eval_last_point_of_support(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<E
     let avg = avg_vol_f64(pivots)?;
     let creek = creek_level(&range, cfg.creek_level_percentile);
 
-    // Need a prior SOS (high above creek with volume) followed by a low pullback
+    // P2-P1-#10 — LPS dual-mode anchor (Villahermosa ch. 7).
+    //
+    // Canonical Wyckoff recognises TWO LPS variants:
+    //   (a) post-SOS LPS — high-volume SOS High, then shallow pullback
+    //       above the creek. This was the only variant the original
+    //       detector handled.
+    //   (b) post-Spring LPS — right after a Spring, a low above the
+    //       Spring low (and above support) but possibly BELOW creek.
+    //       Villahermosa treats this as the first LPS that precedes
+    //       SOS and triggers Phase D.
+    // Implemented as a two-parent scan: prefer an SOS High in the
+    // tail; if none, fall back to a Low pivot matching a Spring.
     let mut sos_price = 0.0_f64;
     let mut sos_vol = 0.0_f64;
     let mut sos_found = false;
     let mut sos_idx = 0;
+    let mut anchor_floor = creek * 0.97;
 
     for (i, p) in pivots.iter().enumerate().rev() {
         if p.kind == PivotKind::High {
@@ -1096,15 +1144,33 @@ fn eval_last_point_of_support(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<E
             }
         }
     }
+    // Fallback: Spring-anchored LPS.
+    if !sos_found {
+        // Pick the deepest Low that pierced support = Spring candidate.
+        for (i, p) in pivots.iter().enumerate() {
+            if p.kind == PivotKind::Low {
+                let pr = p.price.to_f64().unwrap_or(0.0);
+                if pr < range.support {
+                    sos_price = pr;
+                    sos_vol = p.volume_at_pivot.to_f64().unwrap_or(0.0);
+                    sos_idx = i;
+                    sos_found = true;
+                    anchor_floor = pr; // LPS must hold above the Spring low
+                    break;
+                }
+            }
+        }
+    }
     if !sos_found { return None; }
 
-    // LPS: low after SOS, shallow retracement, low volume
-    let lps = pivots[sos_idx + 1..].iter().find(|p| p.kind == PivotKind::Low)?;
+    // LPS: low after anchor, shallow retracement, low volume
+    let lps = pivots.get(sos_idx + 1..)?.iter().find(|p| p.kind == PivotKind::Low)?;
     let lps_price = lps.price.to_f64()?;
     let lps_vol = lps.volume_at_pivot.to_f64().unwrap_or(0.0);
 
-    // Must hold above creek
-    if lps_price < creek * 0.97 {
+    // Must hold above the anchor floor (creek for SOS-LPS, Spring low
+    // for Spring-LPS).
+    if lps_price < anchor_floor {
         return None;
     }
 
