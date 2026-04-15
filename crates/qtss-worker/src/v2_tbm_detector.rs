@@ -1317,6 +1317,11 @@ async fn detect_retest_for_confirmed(
         // P23d — retest printed; flip checklist flag and rescore.
         set_checklist_flag(&mut meta, "retest", true);
         apply_reversal_checklist(&mut meta);
+        // P23g — textbook pullback printed → the row is now at the
+        // sniper-entry moment. Promote state confirmed → entry_ready
+        // so downstream filters (risk allocator, alerting, GUI) can
+        // distinguish "confirmed setup" vs "entry-ready right now".
+        let _ = repo.update_state(row.id, "entry_ready").await;
         let _ = repo.update_projection(row.id, row.structural_score, meta).await;
         debug!(
             id = %row.id,
