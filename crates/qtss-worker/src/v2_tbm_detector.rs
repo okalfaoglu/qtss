@@ -214,6 +214,12 @@ async fn load_config(pool: &PgPool) -> TbmConfig {
         followthrough_bars: resolve_system_u64(
             pool, "tbm", "confirm.followthrough_bars", "QTSS_TBM_CONFIRM_FT_BARS", 3, 1, 20,
         ).await as usize,
+        retest_max_age_bars: resolve_system_u64(
+            pool, "tbm", "confirm.retest_max_age_bars", "QTSS_TBM_RETEST_MAX_AGE", 12, 1, 100,
+        ).await as usize,
+        retest_proximity_atr: resolve_system_f64(
+            pool, "tbm", "confirm.retest_proximity_atr", "QTSS_TBM_RETEST_PROX_ATR", 0.5,
+        ).await,
     };
 
     let anchor = TbmAnchorTuning {
@@ -429,6 +435,19 @@ async fn process_symbol(
         )
         .await?;
     }
+
+    // P23c — retest detection. For every `confirmed` row that doesn't
+    // yet carry a retest meta field, scan bars after the stored BoS
+    // bar for a textbook pullback: for a bottom that's the first bar
+    // whose low comes within `retest_proximity_atr × ATR` of the
+    // broken pre-anchor swing high AND closes above it (HL); for a
+    // top the mirror (LH). We stop looking after `retest_max_age_bars`.
+    // The resulting bar is written into raw_meta so the chart can
+    // render the entry zone — textbook "en güvenli giriş" point.
+    detect_retest_for_confirmed(
+        &repo, sym, &chronological, &highs, &lows, &closes, &cfg.confirm,
+    )
+    .await?;
 
     let empty: Vec<(usize, f64)> = Vec::new();
 
@@ -1044,6 +1063,142 @@ fn evaluate_bottom_confirm(
         }
     }
     (false, false, bos, 0)
+}
+
+/// P23c — scan confirmed TBM rows for a retest bar (HL for bottom,
+/// LH for top) and persist it into raw_meta. Idempotent: rows that
+/// already have `retest_bar_index` are skipped.
+async fn detect_retest_for_confirmed(
+    repo: &V2DetectionRepository,
+    sym: &EngineSymbolRow,
+    chronological: &[qtss_storage::MarketBarRow],
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    cfg: &TbmConfirmTuning,
+) -> anyhow::Result<()> {
+    use qtss_storage::DetectionFilter;
+    let rows = repo
+        .list_filtered(DetectionFilter {
+            exchange: Some(&sym.exchange),
+            symbol: Some(&sym.symbol),
+            timeframe: Some(&sym.interval),
+            family: Some("tbm"),
+            state: Some("confirmed"),
+            mode: None,
+            limit: 50,
+        })
+        .await?;
+    if rows.is_empty() { return Ok(()); }
+
+    let n = chronological.len();
+    if n < 20 { return Ok(()); }
+    let latest_idx = n - 1;
+    let atr_v = qtss_indicators::volatility::atr(highs, lows, closes, 14);
+    let atr_last = atr_v.get(latest_idx).copied().unwrap_or(0.0);
+    if !atr_last.is_finite() || atr_last <= 0.0 { return Ok(()); }
+
+    for row in rows {
+        // Skip rows that already carry a retest entry.
+        if row
+            .raw_meta
+            .as_object()
+            .map(|m| m.contains_key("retest_bar_index"))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        // Locate the anchor + BoS bars from raw_meta.
+        let anchor_time: Option<chrono::DateTime<Utc>> = row
+            .anchors
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|a| a.get("time"))
+            .and_then(|t| t.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+        let Some(anchor_time) = anchor_time else { continue; };
+        let Some(anchor_idx) = chronological.iter().position(|b| b.open_time == anchor_time)
+        else { continue; };
+
+        let bos_idx: Option<usize> = row
+            .raw_meta
+            .get("bos_bar_index")
+            .and_then(|v| v.as_u64())
+            .map(|x| x as usize);
+        let Some(bos_idx) = bos_idx else { continue; };
+        if bos_idx >= n { continue; }
+
+        // Structural level that was broken.
+        let pre_start = anchor_idx.saturating_sub(50);
+        let broken_level = match row.subkind.as_str() {
+            "bottom_setup" => highs[pre_start..anchor_idx]
+                .iter()
+                .cloned()
+                .fold(f64::NEG_INFINITY, f64::max),
+            "top_setup" => lows[pre_start..anchor_idx]
+                .iter()
+                .cloned()
+                .fold(f64::INFINITY, f64::min),
+            _ => continue,
+        };
+        if !broken_level.is_finite() { continue; }
+
+        let tol = cfg.retest_proximity_atr * atr_last;
+        let scan_end = latest_idx.min(bos_idx + cfg.retest_max_age_bars);
+        let mut retest_idx: Option<usize> = None;
+
+        for i in (bos_idx + 1)..=scan_end {
+            match row.subkind.as_str() {
+                "bottom_setup" => {
+                    // Pullback touches near broken_level from above;
+                    // closes back above it → HL retest.
+                    let near = (lows[i] - broken_level).abs() <= tol
+                        || lows[i] <= broken_level + tol;
+                    if near && closes[i] > broken_level && lows[i] > lows[anchor_idx] {
+                        retest_idx = Some(i);
+                        break;
+                    }
+                }
+                "top_setup" => {
+                    // Pullback pokes up near broken_level from below;
+                    // closes back below it → LH retest.
+                    let near = (highs[i] - broken_level).abs() <= tol
+                        || highs[i] >= broken_level - tol;
+                    if near && closes[i] < broken_level && highs[i] < highs[anchor_idx] {
+                        retest_idx = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let Some(ri) = retest_idx else { continue; };
+        let retest_bar = &chronological[ri];
+        let retest_price = match row.subkind.as_str() {
+            "bottom_setup" => lows[ri],
+            "top_setup" => highs[ri],
+            _ => continue,
+        };
+
+        let mut meta: serde_json::Value = row.raw_meta.clone();
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert("retest_bar_index".into(), json!(ri));
+            obj.insert("retest_time".into(), json!(retest_bar.open_time.to_rfc3339()));
+            obj.insert("retest_price".into(), json!(retest_price));
+            obj.insert("retest_broken_level".into(), json!(broken_level));
+        }
+        let _ = repo.update_projection(row.id, row.structural_score, meta).await;
+        debug!(
+            id = %row.id,
+            subkind = %row.subkind,
+            retest_bar = ri,
+            "P23c: tbm retest detected"
+        );
+    }
+    Ok(())
 }
 
 fn evaluate_top_confirm(

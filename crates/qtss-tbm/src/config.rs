@@ -140,6 +140,15 @@ pub struct TbmConfirmTuning {
     pub followthrough_atr_mult: f64,
     /// Bars after BoS to look for the follow-through close.
     pub followthrough_bars: usize,
+    /// P23c — maximum bars after the BoS bar within which a retest
+    /// (HL for bottom / LH for top) is still considered valid. Past
+    /// this point we assume the trend moved on without a textbook
+    /// retest and stop hunting.
+    pub retest_max_age_bars: usize,
+    /// P23c — how close (in ATR units) the retest wick must come to
+    /// the broken structural level (pre_hi for bottom, pre_lo for
+    /// top) to count as a real retest. 0.5 = "within half an ATR".
+    pub retest_proximity_atr: f64,
 }
 
 impl Default for TbmConfirmTuning {
@@ -149,6 +158,8 @@ impl Default for TbmConfirmTuning {
             window_bars: 8,
             followthrough_atr_mult: 1.0,
             followthrough_bars: 3,
+            retest_max_age_bars: 12,
+            retest_proximity_atr: 0.5,
         }
     }
 }
