@@ -1122,6 +1122,19 @@ async fn confirm_forming_or_timeout(
             // Persist BoS/FT bar indices into raw_meta.
             let _ = repo.update_projection(row.id, row.structural_score, meta).await;
             debug!(id = %row.id, subkind = %row.subkind, bos_idx, ft_idx, "P23: tbm confirmed");
+            // P23e — opposite-direction invalidation. A confirmed bottom
+            // means any open top_setup on the same symbol/TF is stale
+            // by definition (price just proved the reversal the other
+            // way), and vice-versa. Without this, stale opposite rows
+            // linger in `forming` and pollute the GUI + risk allocator.
+            let opp = match row.subkind.as_str() {
+                "bottom_setup" => "top_setup",
+                "top_setup" => "bottom_setup",
+                _ => "",
+            };
+            if !opp.is_empty() {
+                let _ = invalidate_opposite_open(&repo, sym, opp).await;
+            }
         } else if timeout {
             repo.update_state(row.id, "invalidated").await?;
             debug!(id = %row.id, subkind = %row.subkind, "P23: tbm invalidated (timeout, no BoS)");
@@ -1615,6 +1628,37 @@ fn pick_anchor(
     }
 
     best_idx.unwrap_or(fallback)
+}
+
+/// P23e — invalidate any open forming rows of the opposite subkind on
+/// the same exchange+symbol+timeframe. Called right after a confirm so
+/// stale counter-direction setups don't survive a proven reversal.
+async fn invalidate_opposite_open(
+    repo: &V2DetectionRepository,
+    sym: &EngineSymbolRow,
+    opposite_subkind: &str,
+) -> anyhow::Result<()> {
+    use qtss_storage::DetectionFilter;
+    let rows = repo
+        .list_filtered(DetectionFilter {
+            exchange: Some(&sym.exchange),
+            symbol: Some(&sym.symbol),
+            timeframe: Some(&sym.interval),
+            family: Some("tbm"),
+            state: Some("forming"),
+            mode: None,
+            limit: 50,
+        })
+        .await?;
+    for row in rows.into_iter().filter(|r| r.subkind == opposite_subkind) {
+        let _ = repo.update_state(row.id, "invalidated").await;
+        debug!(
+            id = %row.id,
+            subkind = %row.subkind,
+            "P23e: opposite-direction invalidation (rival confirmed)"
+        );
+    }
+    Ok(())
 }
 
 /// P26 — parse the CSV "ltf:htf,ltf:htf,..." config value into a
