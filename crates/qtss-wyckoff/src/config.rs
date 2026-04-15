@@ -178,7 +178,7 @@ impl WyckoffConfig {
             max_penetration: 0.12,          // P2-P1-#5: tightened from 0.30
             shakeout_max_penetration: 0.30,
             min_structural_score: 0.50,
-            pivot_window: 40,
+            pivot_window: 20,
             // Phase A
             sc_volume_multiplier: 2.5,
             sc_bar_width_multiplier: 2.0,

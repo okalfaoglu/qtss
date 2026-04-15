@@ -475,7 +475,7 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
     let manip_age_bars = resolve_system_u64(pool, "detector", "wyckoff.manipulation_min_range_age_bars", "", 20, 1, 500).await;
     let manip_edge_slope = resolve_system_f64(pool, "detector", "wyckoff.manipulation_max_edge_slope", "", 0.004).await;
     // P8 — pivot-window cap (see WyckoffConfig::pivot_window).
-    let pivot_window = resolve_system_u64(pool, "detector", "wyckoff.pivot_window", "", 40, 10, 500).await as usize;
+    let pivot_window = resolve_system_u64(pool, "detector", "wyckoff.pivot_window", "", 20, 8, 500).await as usize;
     // TF guards — caller sets these per-TF (H1 tighter than D1).
     let max_range_h_pct = resolve_system_f64(pool, "detector", "wyckoff.max_range_height_pct", "", 0.15).await;
     let max_range_age = resolve_system_u64(pool, "detector", "wyckoff.max_range_age_bars", "", 500, 20, 5000).await;
@@ -1669,11 +1669,14 @@ pub(crate) async fn upsert_wyckoff_structure_from_detection(
             if mid > 0.0 {
                 let h_over_mid = (tracker.range_top - tracker.range_bottom) / mid;
                 if h_over_mid > cap {
-                    tracing::debug!(
+                    tracing::info!(
                         symbol = %symbol,
                         interval = %interval,
                         h_over_mid = %format!("{h_over_mid:.3}"),
                         cap = %format!("{cap:.3}"),
+                        event = %wy_event.as_str(),
+                        range_bottom = %tracker.range_bottom,
+                        range_top = %tracker.range_top,
                         "wyckoff: rejected structure birth — range too wide for TF",
                     );
                     return Ok(());
