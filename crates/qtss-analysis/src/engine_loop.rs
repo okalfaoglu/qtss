@@ -1707,7 +1707,7 @@ async fn run_engines_for_symbol(
             };
 
             // OBV ve CVD eğimi (son 10 bar)
-            let slope = |series: &[f64], lookback: usize| -> f64 {
+            let _slope = |series: &[f64], lookback: usize| -> f64 {
                 if series.len() < lookback + 1 { return 0.0; }
                 let end = series.len() - 1;
                 let start = end - lookback;

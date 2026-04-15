@@ -550,13 +550,23 @@ async fn process_symbol(
         t_vol, t_vol_avg, t_fib_p, t_fib_n,
     ) = snapshot(top_anchor);
 
+    // P27 — price & indicator pivots for momentum divergence. Previously
+    // the detector passed empty pivot slices, killing a potential 50 pts
+    // of regular+hidden divergence in the Momentum pillar. We now derive
+    // pivots over the anchor window from `closes` (price) and the MACD
+    // histogram (indicator; the classic divergence pair). Pivot radius
+    // reuses cfg.anchor.pivot_radius so tuning stays in one place.
+    let piv_r = cfg.anchor.pivot_radius.max(1);
+    let (price_hi_pivots, price_lo_pivots) = compute_pivots(&closes, piv_r);
+    let (ind_hi_pivots, ind_lo_pivots) = compute_pivots(&macd_r.histogram, piv_r);
+
     // ----- Pillar evaluation (bottom + top, each anchored) -----------
     let bottom = build_score(
         cfg,
         true,
         b_stoch_k, b_stoch_d, b_macd_h, b_macd_hp,
         b_ema_f, b_ema_s,
-        &empty, &empty, &empty, &empty,
+        &price_hi_pivots, &price_lo_pivots, &ind_hi_pivots, &ind_lo_pivots,
         b_mfi, &b_price_w, &b_obv_w, &b_cvd_w, b_vol, b_vol_avg,
         b_fib_p, b_fib_n, b_bb_pb, b_bb_sq,
         onchain_metrics.as_ref(),
@@ -566,11 +576,13 @@ async fn process_symbol(
         false,
         t_stoch_k, t_stoch_d, t_macd_h, t_macd_hp,
         t_ema_f, t_ema_s,
-        &empty, &empty, &empty, &empty,
+        &price_hi_pivots, &price_lo_pivots, &ind_hi_pivots, &ind_lo_pivots,
         t_mfi, &t_price_w, &t_obv_w, &t_cvd_w, t_vol, t_vol_avg,
         t_fib_p, t_fib_n, t_bb_pb, t_bb_sq,
         onchain_metrics.as_ref(),
     );
+    // Keep _empty for the day one of the remaining call sites needs it.
+    let _ = &empty;
 
     // P24 — Effort vs Result (Wyckoff volume law). Scan bars ending at
     // each anchor for no-supply / no-demand / absorption tells and add
@@ -1633,6 +1645,34 @@ fn pick_anchor(
     }
 
     best_idx.unwrap_or(fallback)
+}
+
+/// P27 — simple symmetric-radius pivot detector. Returns
+/// (high_pivots, low_pivots) as (index, value) pairs where each pivot
+/// index dominates the `2*r+1` bar window around it. Skips non-finite
+/// samples so NaN-prefix indicator series (RSI/MACD warmup) don't blow
+/// up the detector. Used for momentum-divergence pivot sets.
+fn compute_pivots(series: &[f64], r: usize) -> (Vec<(usize, f64)>, Vec<(usize, f64)>) {
+    let n = series.len();
+    if n < 2 * r + 1 { return (Vec::new(), Vec::new()); }
+    let mut highs = Vec::new();
+    let mut lows = Vec::new();
+    for i in r..(n - r) {
+        let v = series[i];
+        if !v.is_finite() { continue; }
+        let mut is_hi = true;
+        let mut is_lo = true;
+        for j in (i - r)..=(i + r) {
+            if j == i { continue; }
+            let w = series[j];
+            if !w.is_finite() { is_hi = false; is_lo = false; break; }
+            if w > v { is_hi = false; }
+            if w < v { is_lo = false; }
+        }
+        if is_hi { highs.push((i, v)); }
+        if is_lo { lows.push((i, v)); }
+    }
+    (highs, lows)
 }
 
 /// P23e — invalidate any open forming rows of the opposite subkind on
