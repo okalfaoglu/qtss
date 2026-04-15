@@ -325,7 +325,7 @@ async fn process_symbol(
     )
     .await?;
 
-    // ----- Indicator inputs ------------------------------------------
+    // ----- Indicator series (whole window, evaluate per-direction) ---
     let stoch = stochastic(&highs, &lows, &closes, 14, 3);
     let macd_r = macd(&closes, 12, 26, 9);
     let bb = bollinger(&closes, 20, 2.0);
@@ -336,61 +336,105 @@ async fn process_symbol(
     let ema_fast = ema(&closes, 9);
     let ema_slow = ema(&closes, 21);
 
-    let stoch_k = finite_or(stoch.k.get(last).copied(), 50.0);
-    let stoch_d = finite_or(stoch.d.get(last).copied(), 50.0);
-    let macd_hist = finite_or(macd_r.histogram.get(last).copied(), 0.0);
-    let macd_hist_prev = finite_or(macd_r.histogram.get(last.saturating_sub(1)).copied(), 0.0);
-    let ema_fast_last = finite_or(ema_fast.get(last).copied(), closes[last]);
-    let ema_slow_last = finite_or(ema_slow.get(last).copied(), closes[last]);
-    let bb_pct_b = finite_or(bb.percent_b.get(last).copied(), 0.5);
-    let bb_squeeze = bb
-        .bandwidth
-        .get(last)
-        .copied()
-        .map(|w| w.is_finite() && w < 0.05)
-        .unwrap_or(false);
-    let mfi_last = finite_or(mfi_v.get(last).copied(), 50.0);
-    let obv_slope = slope_last_n(&obv_v, 20);
-    // CVD slope: bar-delta CVD'nin son 20 bar eğimi. Sıfır olarak
-    // hardcode'luydu — volume pillar'ın CVD ayağı hiç puan alamıyor,
-    // total skor her sembolde ~30'a kilitleniyordu. Canlı akışa bağlı
-    // trade-flow CVD'si gelene kadar bar-bazlı tahmin doğru yönde
-    // sinyal veriyor.
-    let cvd_slope = slope_last_n(&cvd_v, 20);
-    let vol_last = vols[last];
-    let vol_avg = window_mean(&vols, 20);
-
-    // Swing extremes for fib proximity (very simple — last 50 bars).
+    // P22c — scoring is now anchored to the structural extremum bar
+    // for each direction, not the latest bar. Previously stoch/MACD/
+    // MFI were all read at `last`, so a bottom_setup anchored to a dip
+    // 30 bars ago still carried the LATEST (post-rally) indicator
+    // state. Result: oversold dip showed stoch=65 Weak instead of
+    // stoch=12 Strong. Now each direction evaluates indicators at its
+    // own extremum bar (argmin(lows) for Bottom, argmax(highs) for Top)
+    // within the same 50-bar window that feeds swing_high/low.
     let win_start = n.saturating_sub(50);
     let swing_high = highs[win_start..n].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let swing_low = lows[win_start..n].iter().cloned().fold(f64::INFINITY, f64::min);
     let last_close = closes[last];
-    let (fib_proximity, fib_level_name) = nearest_fib(swing_high, swing_low, last_close);
 
-    // Divergence pivots — keep empty for now; v1 fills these from a
-    // dedicated pivot scanner. The momentum pillar handles empty inputs
-    // gracefully (returns 0 for the divergence sub-score).
+    let bottom_anchor = lows[win_start..n]
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| win_start + i)
+        .unwrap_or(last);
+    let top_anchor = highs[win_start..n]
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| win_start + i)
+        .unwrap_or(last);
+
     let empty: Vec<(usize, f64)> = Vec::new();
 
-    // ----- Pillar evaluation (bottom + top) --------------------------
+    // Helper: take an indicator snapshot at `idx` (not `last`).
+    let snapshot = |idx: usize| {
+        let stoch_k = finite_or(stoch.k.get(idx).copied(), 50.0);
+        let stoch_d = finite_or(stoch.d.get(idx).copied(), 50.0);
+        let macd_hist = finite_or(macd_r.histogram.get(idx).copied(), 0.0);
+        let macd_hist_prev = finite_or(
+            macd_r.histogram.get(idx.saturating_sub(1)).copied(),
+            0.0,
+        );
+        let ema_fast_v = finite_or(ema_fast.get(idx).copied(), closes[idx]);
+        let ema_slow_v = finite_or(ema_slow.get(idx).copied(), closes[idx]);
+        let bb_pct_b = finite_or(bb.percent_b.get(idx).copied(), 0.5);
+        let bb_squeeze = bb
+            .bandwidth
+            .get(idx)
+            .copied()
+            .map(|w| w.is_finite() && w < 0.05)
+            .unwrap_or(false);
+        let mfi_val = finite_or(mfi_v.get(idx).copied(), 50.0);
+        // Slope is inherently windowed — evaluate up to `idx`.
+        let obv_up_to_idx: Vec<f64> = obv_v.iter().take(idx + 1).copied().collect();
+        let cvd_up_to_idx: Vec<f64> = cvd_v.iter().take(idx + 1).copied().collect();
+        let obv_slope = slope_last_n(&obv_up_to_idx, 20);
+        let cvd_slope = slope_last_n(&cvd_up_to_idx, 20);
+        let vol_at = vols[idx];
+        // Average volume in the 20-bar window ending at idx.
+        let vol_start = idx.saturating_sub(20);
+        let vol_window: Vec<f64> = vols[vol_start..=idx].to_vec();
+        let vol_avg_v = window_mean(&vol_window, vol_window.len());
+        let close_at = closes[idx];
+        let (fib_prox, fib_name) = nearest_fib(swing_high, swing_low, close_at);
+        (
+            stoch_k, stoch_d, macd_hist, macd_hist_prev,
+            ema_fast_v, ema_slow_v, bb_pct_b, bb_squeeze,
+            mfi_val, obv_slope, cvd_slope, vol_at, vol_avg_v,
+            fib_prox, fib_name,
+        )
+    };
+
+    let (
+        b_stoch_k, b_stoch_d, b_macd_h, b_macd_hp,
+        b_ema_f, b_ema_s, b_bb_pb, b_bb_sq,
+        b_mfi, b_obv, b_cvd, b_vol, b_vol_avg,
+        b_fib_p, b_fib_n,
+    ) = snapshot(bottom_anchor);
+    let (
+        t_stoch_k, t_stoch_d, t_macd_h, t_macd_hp,
+        t_ema_f, t_ema_s, t_bb_pb, t_bb_sq,
+        t_mfi, t_obv, t_cvd, t_vol, t_vol_avg,
+        t_fib_p, t_fib_n,
+    ) = snapshot(top_anchor);
+
+    // ----- Pillar evaluation (bottom + top, each anchored) -----------
     let bottom = build_score(
         cfg,
         true,
-        stoch_k, stoch_d, macd_hist, macd_hist_prev,
-        ema_fast_last, ema_slow_last,
+        b_stoch_k, b_stoch_d, b_macd_h, b_macd_hp,
+        b_ema_f, b_ema_s,
         &empty, &empty, &empty, &empty,
-        mfi_last, obv_slope, cvd_slope, vol_last, vol_avg,
-        fib_proximity, fib_level_name, bb_pct_b, bb_squeeze,
+        b_mfi, b_obv, b_cvd, b_vol, b_vol_avg,
+        b_fib_p, b_fib_n, b_bb_pb, b_bb_sq,
         onchain_metrics.as_ref(),
     );
     let top = build_score(
         cfg,
         false,
-        stoch_k, stoch_d, macd_hist, macd_hist_prev,
-        ema_fast_last, ema_slow_last,
+        t_stoch_k, t_stoch_d, t_macd_h, t_macd_hp,
+        t_ema_f, t_ema_s,
         &empty, &empty, &empty, &empty,
-        mfi_last, obv_slope, cvd_slope, vol_last, vol_avg,
-        fib_proximity, fib_level_name, bb_pct_b, bb_squeeze,
+        t_mfi, t_obv, t_cvd, t_vol, t_vol_avg,
+        t_fib_p, t_fib_n, t_bb_pb, t_bb_sq,
         onchain_metrics.as_ref(),
     );
 
@@ -415,34 +459,11 @@ async fn process_symbol(
 
         let subkind = subkind_for(setup.direction);
 
-        // P21 — anchor the label to the STRUCTURAL extremum in the
-        // lookback window, not the latest bar. A `bottom_setup` drawn
-        // on the last bar while price is mid-spike looks like the
-        // label is pinned to the wrong bar (user report: "bottom_setup
-        // 42% Weak" floating on top of a rally mum). The structural
-        // low/high inside the same 50-bar window that feeds swing_high/
-        // swing_low is the correct anchor.
+        // P21/P22c — reuse the anchor indices already computed above
+        // (same argmin/argmax that fed the indicator snapshot).
         let (anchor_idx, anchor_px_f64) = match setup.direction {
-            SetupDirection::Bottom => {
-                let slice = &lows[win_start..n];
-                let (rel_i, &px) = slice
-                    .iter()
-                    .enumerate()
-                    .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-                    .map(|(i, v)| (i, v))
-                    .unwrap_or((slice.len().saturating_sub(1), &last_close));
-                (win_start + rel_i, px)
-            }
-            SetupDirection::Top => {
-                let slice = &highs[win_start..n];
-                let (rel_i, &px) = slice
-                    .iter()
-                    .enumerate()
-                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-                    .map(|(i, v)| (i, v))
-                    .unwrap_or((slice.len().saturating_sub(1), &last_close));
-                (win_start + rel_i, px)
-            }
+            SetupDirection::Bottom => (bottom_anchor, lows[bottom_anchor]),
+            SetupDirection::Top => (top_anchor, highs[top_anchor]),
         };
         let anchor_bar_time = chronological[anchor_idx].open_time;
         let anchor_price = Decimal::from_f64(anchor_px_f64).unwrap_or(Decimal::ZERO);
