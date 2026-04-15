@@ -362,6 +362,18 @@ async fn process_symbol(
         .map(|(i, _)| win_start + i)
         .unwrap_or(last);
 
+    // P22e — supersede open forming detections whose stored anchor is
+    // worse than the current argmin/argmax. Without this, a bottom_setup
+    // from 3 hours ago at $60k sticks around even after price makes a
+    // fresh $58k LL; the chart keeps rendering the stale anchor and
+    // dedup_open blocks a new, correct emission. We invalidate the old
+    // row (reason=superseded) so a freshly-anchored one can be inserted
+    // this tick.
+    supersede_outdated_forming(
+        &repo, sym, &chronological, &lows, &highs, bottom_anchor, top_anchor,
+    )
+    .await?;
+
     let empty: Vec<(usize, f64)> = Vec::new();
 
     // Helper: take an indicator snapshot at `idx` (not `last`).
@@ -383,13 +395,14 @@ async fn process_symbol(
             .map(|w| w.is_finite() && w < 0.05)
             .unwrap_or(false);
         let mfi_val = finite_or(mfi_v.get(idx).copied(), 50.0);
-        // Slope is inherently windowed — evaluate up to `idx`.
-        let obv_up_to_idx: Vec<f64> = obv_v.iter().take(idx + 1).copied().collect();
-        let cvd_up_to_idx: Vec<f64> = cvd_v.iter().take(idx + 1).copied().collect();
-        let obv_slope = slope_last_n(&obv_up_to_idx, 20);
-        let cvd_slope = slope_last_n(&cvd_up_to_idx, 20);
+        // P22d-div — pass the actual OBV/CVD/price window ending at idx
+        // so score_volume can do a real half-window swing comparison
+        // (divergence) instead of just reading the sign of a slope.
+        let win_lo = idx.saturating_sub(19);
+        let price_window: Vec<f64> = closes[win_lo..=idx].to_vec();
+        let obv_window: Vec<f64> = obv_v[win_lo..=idx].to_vec();
+        let cvd_window: Vec<f64> = cvd_v[win_lo..=idx].to_vec();
         let vol_at = vols[idx];
-        // Average volume in the 20-bar window ending at idx.
         let vol_start = idx.saturating_sub(20);
         let vol_window: Vec<f64> = vols[vol_start..=idx].to_vec();
         let vol_avg_v = window_mean(&vol_window, vol_window.len());
@@ -398,22 +411,22 @@ async fn process_symbol(
         (
             stoch_k, stoch_d, macd_hist, macd_hist_prev,
             ema_fast_v, ema_slow_v, bb_pct_b, bb_squeeze,
-            mfi_val, obv_slope, cvd_slope, vol_at, vol_avg_v,
-            fib_prox, fib_name,
+            mfi_val, price_window, obv_window, cvd_window,
+            vol_at, vol_avg_v, fib_prox, fib_name,
         )
     };
 
     let (
         b_stoch_k, b_stoch_d, b_macd_h, b_macd_hp,
         b_ema_f, b_ema_s, b_bb_pb, b_bb_sq,
-        b_mfi, b_obv, b_cvd, b_vol, b_vol_avg,
-        b_fib_p, b_fib_n,
+        b_mfi, b_price_w, b_obv_w, b_cvd_w,
+        b_vol, b_vol_avg, b_fib_p, b_fib_n,
     ) = snapshot(bottom_anchor);
     let (
         t_stoch_k, t_stoch_d, t_macd_h, t_macd_hp,
         t_ema_f, t_ema_s, t_bb_pb, t_bb_sq,
-        t_mfi, t_obv, t_cvd, t_vol, t_vol_avg,
-        t_fib_p, t_fib_n,
+        t_mfi, t_price_w, t_obv_w, t_cvd_w,
+        t_vol, t_vol_avg, t_fib_p, t_fib_n,
     ) = snapshot(top_anchor);
 
     // ----- Pillar evaluation (bottom + top, each anchored) -----------
@@ -423,7 +436,7 @@ async fn process_symbol(
         b_stoch_k, b_stoch_d, b_macd_h, b_macd_hp,
         b_ema_f, b_ema_s,
         &empty, &empty, &empty, &empty,
-        b_mfi, b_obv, b_cvd, b_vol, b_vol_avg,
+        b_mfi, &b_price_w, &b_obv_w, &b_cvd_w, b_vol, b_vol_avg,
         b_fib_p, b_fib_n, b_bb_pb, b_bb_sq,
         onchain_metrics.as_ref(),
     );
@@ -433,7 +446,7 @@ async fn process_symbol(
         t_stoch_k, t_stoch_d, t_macd_h, t_macd_hp,
         t_ema_f, t_ema_s,
         &empty, &empty, &empty, &empty,
-        t_mfi, t_obv, t_cvd, t_vol, t_vol_avg,
+        t_mfi, &t_price_w, &t_obv_w, &t_cvd_w, t_vol, t_vol_avg,
         t_fib_p, t_fib_n, t_bb_pb, t_bb_sq,
         onchain_metrics.as_ref(),
     );
@@ -448,16 +461,10 @@ async fn process_symbol(
     }
 
     // ----- Persist to qtss_v2_detections -----------------------------
-    let last_bar_time = chronological[last].open_time;
     let invalidation = invalidation_for(swing_high, swing_low, last_close);
 
     for setup in &setups {
         stats.emitted += 1;
-        if dedup_open(&repo, sym, setup, last_bar_time).await? {
-            continue;
-        }
-
-        let subkind = subkind_for(setup.direction);
 
         // P21/P22c — reuse the anchor indices already computed above
         // (same argmin/argmax that fed the indicator snapshot).
@@ -466,6 +473,14 @@ async fn process_symbol(
             SetupDirection::Top => (top_anchor, highs[top_anchor]),
         };
         let anchor_bar_time = chronological[anchor_idx].open_time;
+
+        // P22e — dedup now keys on (subkind, anchor_bar_time). A new
+        // anchor bar means a new structural extremum → new row.
+        if dedup_open(&repo, sym, setup, anchor_bar_time).await? {
+            continue;
+        }
+
+        let subkind = subkind_for(setup.direction);
         let anchor_price = Decimal::from_f64(anchor_px_f64).unwrap_or(Decimal::ZERO);
         let invalidation_price = Decimal::from_f64(invalidation).unwrap_or(Decimal::ZERO);
 
@@ -528,8 +543,9 @@ fn build_score(
     indicator_high_pivots: &[(usize, f64)],
     indicator_low_pivots: &[(usize, f64)],
     mfi_last: f64,
-    obv_slope: f64,
-    cvd_slope: f64,
+    price_window: &[f64],
+    obv_window: &[f64],
+    cvd_window: &[f64],
     vol_last: f64,
     vol_avg: f64,
     fib_proximity: f64,
@@ -553,7 +569,15 @@ fn build_score(
     );
     momentum.weight = cfg.weights.momentum;
 
-    let mut volume = score_volume(mfi_last, obv_slope, cvd_slope, vol_last, vol_avg, is_bottom);
+    let mut volume = score_volume(
+        mfi_last,
+        price_window,
+        obv_window,
+        cvd_window,
+        vol_last,
+        vol_avg,
+        is_bottom,
+    );
     volume.weight = cfg.weights.volume;
 
     let mut structure = score_structure(
@@ -710,11 +734,18 @@ async fn invalidate_stale_forming(
     Ok(())
 }
 
+/// P22e — dedup key is now (subkind, anchor_bar_time). Previously we
+/// blocked any new same-subkind emission that arrived after the last
+/// bar's open_time, which meant a re-anchored setup at a *new* extremum
+/// got silently dropped because an older forming row existed. The
+/// supersede pass invalidates the older row; this function only
+/// short-circuits when the same anchor bar already has an open row —
+/// i.e. re-emissions within the same bar.
 async fn dedup_open(
     repo: &V2DetectionRepository,
     sym: &EngineSymbolRow,
     setup: &TbmSetup,
-    last_bar_time: chrono::DateTime<Utc>,
+    anchor_bar_time: chrono::DateTime<Utc>,
 ) -> anyhow::Result<bool> {
     use qtss_storage::DetectionFilter;
     let rows = repo
@@ -725,16 +756,102 @@ async fn dedup_open(
             family: Some("tbm"),
             state: Some("forming"),
             mode: None,
-            limit: 5,
+            limit: 20,
         })
         .await?;
     let target_subkind = subkind_for(setup.direction);
     for row in rows {
-        if row.subkind == target_subkind && row.detected_at >= last_bar_time {
+        if row.subkind != target_subkind { continue; }
+        let stored_anchor = row
+            .anchors
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|a| a.get("time"))
+            .and_then(|t| t.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+        if stored_anchor == Some(anchor_bar_time) {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// P22e — invalidate any open forming TBM row whose stored anchor is
+/// *worse* than the current tick's argmin/argmax. "Worse" means: for a
+/// bottom_setup the current argmin(lows) is lower than the stored
+/// anchor price (market made a fresh LL), and mirror for tops. Uses a
+/// 0.1% tolerance so tiny floating-point / rounding noise doesn't flip
+/// rows needlessly. The row that owns the current anchor bar is left
+/// alone (stored_time == current_time short-circuit).
+async fn supersede_outdated_forming(
+    repo: &V2DetectionRepository,
+    sym: &EngineSymbolRow,
+    chronological: &[qtss_storage::MarketBarRow],
+    lows: &[f64],
+    highs: &[f64],
+    bottom_anchor: usize,
+    top_anchor: usize,
+) -> anyhow::Result<()> {
+    use qtss_storage::DetectionFilter;
+    let rows = repo
+        .list_filtered(DetectionFilter {
+            exchange: Some(&sym.exchange),
+            symbol: Some(&sym.symbol),
+            timeframe: Some(&sym.interval),
+            family: Some("tbm"),
+            state: Some("forming"),
+            mode: None,
+            limit: 50,
+        })
+        .await?;
+    if rows.is_empty() { return Ok(()); }
+
+    let bottom_px = lows[bottom_anchor];
+    let bottom_time = chronological[bottom_anchor].open_time;
+    let top_px = highs[top_anchor];
+    let top_time = chronological[top_anchor].open_time;
+
+    for row in rows {
+        let stored_px: Option<f64> = row
+            .anchors
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|a| a.get("price"))
+            .and_then(|p| p.as_str())
+            .and_then(|s| s.parse::<f64>().ok());
+        let stored_time: Option<chrono::DateTime<Utc>> = row
+            .anchors
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|a| a.get("time"))
+            .and_then(|t| t.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+
+        let (better, curr_time) = match row.subkind.as_str() {
+            "bottom_setup" => {
+                let b = stored_px.map(|sp| bottom_px < sp * 0.999).unwrap_or(false);
+                (b, bottom_time)
+            }
+            "top_setup" => {
+                let b = stored_px.map(|sp| top_px > sp * 1.001).unwrap_or(false);
+                (b, top_time)
+            }
+            _ => (false, Utc::now()),
+        };
+
+        if stored_time == Some(curr_time) { continue; }
+        if !better { continue; }
+
+        repo.update_state(row.id, "invalidated").await?;
+        debug!(
+            id = %row.id,
+            subkind = %row.subkind,
+            "P22e: tbm forming superseded by better extremum"
+        );
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------
@@ -748,6 +865,7 @@ fn finite_or(v: Option<f64>, fallback: f64) -> f64 {
     }
 }
 
+#[allow(dead_code)]
 fn slope_last_n(series: &[f64], n: usize) -> f64 {
     if series.len() < n + 1 {
         return 0.0;

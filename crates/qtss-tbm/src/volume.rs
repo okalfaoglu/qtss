@@ -1,20 +1,36 @@
-//! Volume Pillar — MFI, OBV trend, CVD divergence, volume spike.
+//! Volume Pillar — MFI, OBV/CVD divergence, volume spike.
+//!
+//! P22d-div — OBV/CVD gates are no longer binary slope signs (`slope > 0
+//! => +25`). That model scored poorly exactly at the turning point, when
+//! the slope is still negative by inertia but new flow has stopped
+//! confirming price. We now compare **half-window swings**: for a bottom
+//! hypothesis, if price makes a *lower* low in the second half of the
+//! window while OBV/CVD makes an *equal or higher* low, that is a textbook
+//! bullish divergence (hidden accumulation). Mirrored for tops. Binary
+//! sign is retained as a weaker fallback so trending-only confirmations
+//! still contribute, but at a reduced weight.
+//!
+//! Window length is caller-chosen (typically 20 bars ending at the anchor
+//! bar). Slices shorter than 6 bars skip divergence and only use the
+//! fallback sign rule on the last slope.
 
 use crate::pillar::{PillarKind, PillarScore};
 
 /// Volume pillar skoru hesaplar.
 ///
-/// - `mfi`: Money Flow Index (0–100)
-/// - `obv_slope`: OBV'nin son N bardaki eğimi (pozitif = alım baskısı)
-/// - `cvd_slope`: CVD eğimi
-/// - `volume_last`: Son bar hacmi
-/// - `volume_avg`: Ortalama hacim (SMA20)
+/// Girdiler:
+/// - `mfi`: anchor barındaki Money Flow Index (0–100)
+/// - `price_window`: kapanış serisi (anchor ile biten, tipik 20 bar)
+/// - `obv_window`: aynı aralıkta OBV serisi
+/// - `cvd_window`: aynı aralıkta CVD serisi
+/// - `volume_last`, `volume_avg`: anchor bar hacmi + 20-bar ortalaması
 /// - `is_bottom_search`: true = dip, false = tepe
 #[must_use]
 pub fn score_volume(
     mfi: f64,
-    obv_slope: f64,
-    cvd_slope: f64,
+    price_window: &[f64],
+    obv_window: &[f64],
+    cvd_window: &[f64],
     volume_last: f64,
     volume_avg: f64,
     is_bottom_search: bool,
@@ -22,11 +38,7 @@ pub fn score_volume(
     let mut score = 0.0_f64;
     let mut details = Vec::new();
 
-    // 1) MFI (max 30 puan) — tek doğrusal bant; klasik yorumla uyumlu (düşük = dip sinyali, yüksek = tepe).
-    //
-    // Eski formül hatası: `30*(20-mfi)/20` ile mfi≈19 neredeyse 0 puana düşüyor, oysa 20–35 bandında
-    // düz +10 vardı → **daha derin oversold (ör. 15)**, daha zayıf bölgeden (ör. 32) **daha az** puan alıyordu.
-    // Tepe tarafında aynı ayna sorunu (ör. mfi=85 < mfi=70’nin +10’u).
+    // 1) MFI (max 30 puan)
     if is_bottom_search {
         if mfi < 35.0 {
             let pts = (30.0 * (35.0 - mfi) / 35.0).clamp(0.0, 30.0);
@@ -39,27 +51,22 @@ pub fn score_volume(
         details.push(format!("MFI overbought / top zone {mfi:.1} (+{pts:.1})"));
     }
 
-    // 2) OBV trend (max 25 puan)
-    if is_bottom_search && obv_slope > 0.0 {
-        score += 25.0;
-        details.push("OBV rising (accumulation)".into());
-    } else if !is_bottom_search && obv_slope < 0.0 {
-        score += 25.0;
-        details.push("OBV falling (distribution)".into());
+    // 2) OBV divergence (max 25 puan) — dogmatic swing comparison,
+    //    fallback to sign-of-slope at reduced weight.
+    let (obv_pts, obv_msg) = divergence_score(price_window, obv_window, is_bottom_search, "OBV");
+    if obv_pts > 0.0 {
+        score += obv_pts;
+        details.push(obv_msg);
     }
 
     // 3) CVD divergence (max 25 puan)
-    // Dip arama: fiyat düşerken CVD yükseliyorsa = gizli alım
-    if is_bottom_search && cvd_slope > 0.0 {
-        score += 25.0;
-        details.push("CVD rising while searching bottom (hidden buying)".into());
-    } else if !is_bottom_search && cvd_slope < 0.0 {
-        score += 25.0;
-        details.push("CVD falling while searching top (hidden selling)".into());
+    let (cvd_pts, cvd_msg) = divergence_score(price_window, cvd_window, is_bottom_search, "CVD");
+    if cvd_pts > 0.0 {
+        score += cvd_pts;
+        details.push(cvd_msg);
     }
 
     // 4) Volume spike — climactic volume (max 20 puan)
-    // Smooth ramp: `2×` kesitinde 0→~10 sıçraması yerine 1.5× → 0 puan, 3× → 20 puan (doğrusal, sürekli).
     const VOL_SPIKE_LO: f64 = 1.5;
     const VOL_SPIKE_HI: f64 = 3.0;
     if volume_avg > 0.0 {
@@ -80,65 +87,167 @@ pub fn score_volume(
     }
 }
 
+/// Half-window swing comparison between price and a flow indicator
+/// (OBV or CVD). Returns (points, explanation).
+///
+/// Bottom search (bullish divergence):
+///   price makes lower low in H2 vs H1, flow holds equal or higher low.
+///   Strong div → 25 pts. Partial (price flat but flow rising) → 12 pts.
+/// Top search is mirrored on highs.
+///
+/// Fallback (short series or no divergence): binary slope sign at a
+/// reduced 10 pts so trending confirmations still show up but don't
+/// over-reward mid-trend reads.
+fn divergence_score(
+    price: &[f64],
+    flow: &[f64],
+    is_bottom: bool,
+    label: &str,
+) -> (f64, String) {
+    let n = price.len().min(flow.len());
+    if n < 6 {
+        return fallback_slope(flow, is_bottom, label);
+    }
+    let mid = n / 2;
+    // H1 = [0..mid), H2 = [mid..n)
+    let p_h1 = &price[..mid];
+    let p_h2 = &price[mid..n];
+    let f_h1 = &flow[..mid];
+    let f_h2 = &flow[mid..n];
+
+    if is_bottom {
+        let p_low1 = min_f(p_h1);
+        let p_low2 = min_f(p_h2);
+        let f_low1 = min_f(f_h1);
+        let f_low2 = min_f(f_h2);
+        // Strong: price lower low AND flow higher low (classic bullish div).
+        if p_low2 < p_low1 && f_low2 > f_low1 {
+            return (
+                25.0,
+                format!("{label} bullish divergence (price LL, {label} HL)"),
+            );
+        }
+        // Partial: price roughly equal/slightly lower low AND flow rising.
+        if p_low2 <= p_low1 * 1.005 && f_low2 >= f_low1 {
+            return (
+                12.0,
+                format!("{label} partial bullish divergence (flow holding)"),
+            );
+        }
+    } else {
+        let p_hi1 = max_f(p_h1);
+        let p_hi2 = max_f(p_h2);
+        let f_hi1 = max_f(f_h1);
+        let f_hi2 = max_f(f_h2);
+        if p_hi2 > p_hi1 && f_hi2 < f_hi1 {
+            return (
+                25.0,
+                format!("{label} bearish divergence (price HH, {label} LH)"),
+            );
+        }
+        if p_hi2 >= p_hi1 * 0.995 && f_hi2 <= f_hi1 {
+            return (
+                12.0,
+                format!("{label} partial bearish divergence (flow fading)"),
+            );
+        }
+    }
+
+    fallback_slope(flow, is_bottom, label)
+}
+
+fn fallback_slope(flow: &[f64], is_bottom: bool, label: &str) -> (f64, String) {
+    if flow.len() < 2 {
+        return (0.0, String::new());
+    }
+    let slope = flow[flow.len() - 1] - flow[0];
+    if is_bottom && slope > 0.0 {
+        (10.0, format!("{label} rising (trend confirmation)"))
+    } else if !is_bottom && slope < 0.0 {
+        (10.0, format!("{label} falling (trend confirmation)"))
+    } else {
+        (0.0, String::new())
+    }
+}
+
+fn min_f(xs: &[f64]) -> f64 {
+    xs.iter().cloned().filter(|v| v.is_finite()).fold(f64::INFINITY, f64::min)
+}
+fn max_f(xs: &[f64]) -> f64 {
+    xs.iter().cloned().filter(|v| v.is_finite()).fold(f64::NEG_INFINITY, f64::max)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn bottom_accumulation() {
-        let s = score_volume(15.0, 100.0, 50.0, 3000.0, 1000.0, true);
-        assert!(s.score > 60.0);
-        assert!(!s.details.is_empty());
+    fn lin(from: f64, to: f64, n: usize) -> Vec<f64> {
+        (0..n).map(|i| from + (to - from) * (i as f64) / ((n - 1).max(1) as f64)).collect()
     }
 
     #[test]
-    fn top_distribution() {
-        let s = score_volume(85.0, -100.0, -50.0, 500.0, 1000.0, false);
-        assert!(s.score > 50.0);
+    fn bullish_divergence_scores_strong() {
+        // Price makes a lower low in H2, OBV makes a higher low.
+        let price = vec![100.0, 98.0, 95.0, 92.0, 90.0, 93.0,  91.0, 89.0, 88.0, 92.0];
+        let obv   = vec![  0.0, -5.0,-10.0,-15.0,-20.0,-10.0, -12.0,-11.0, -8.0, -5.0];
+        // price_low2=88 < price_low1=90; obv_low2=-12 > obv_low1=-20 → strong div
+        let cvd = obv.clone();
+        let s = score_volume(20.0, &price, &obv, &cvd, 1000.0, 1000.0, true);
+        // MFI(20) contributes ~12.8 pts; OBV+CVD strong div contribute 25+25.
+        assert!(s.score > 55.0, "got {}", s.score);
+        assert!(s.details.iter().any(|d| d.contains("bullish divergence")));
+    }
+
+    #[test]
+    fn bearish_divergence_scores_strong() {
+        let price = vec![100.0, 102.0, 104.0, 106.0, 108.0, 105.0, 108.0, 110.0, 112.0, 109.0];
+        let obv   = vec![  0.0,   5.0,  10.0,  15.0,  20.0,  12.0,  14.0,  13.0,  10.0,   5.0];
+        let cvd = obv.clone();
+        let s = score_volume(80.0, &price, &obv, &cvd, 500.0, 1000.0, false);
+        assert!(s.score > 55.0, "got {}", s.score);
+        assert!(s.details.iter().any(|d| d.contains("bearish divergence")));
+    }
+
+    #[test]
+    fn trend_only_gets_fallback_not_full_credit() {
+        // Clean uptrend in both price and flow — no divergence, just fallback.
+        let price = lin(90.0, 100.0, 20);
+        let obv   = lin(0.0, 200.0, 20);
+        let cvd = obv.clone();
+        let s = score_volume(50.0, &price, &obv, &cvd, 1000.0, 1000.0, true);
+        // MFI=50 → 0 pts; OBV+CVD fallback → 10+10 = 20. No divergence.
+        assert!(s.score <= 25.0, "fallback should be modest, got {}", s.score);
+        assert!(s.details.iter().all(|d| !d.contains("divergence")));
     }
 
     #[test]
     fn mfi_lower_reading_scores_higher_on_bottom_search() {
-        let deep = score_volume(12.0, 0.0, 0.0, 0.0, 1.0, true);
-        let mild = score_volume(30.0, 0.0, 0.0, 0.0, 1.0, true);
-        assert!(
-            deep.score > mild.score,
-            "deeper oversold MFI should contribute more to bottom pillar than mid band"
-        );
+        let deep = score_volume(12.0, &[], &[], &[], 0.0, 1.0, true);
+        let mild = score_volume(30.0, &[], &[], &[], 0.0, 1.0, true);
+        assert!(deep.score > mild.score);
     }
 
     #[test]
     fn mfi_higher_reading_scores_higher_on_top_search() {
-        let strong = score_volume(92.0, 0.0, 0.0, 0.0, 1.0, false);
-        let weak = score_volume(68.0, 0.0, 0.0, 0.0, 1.0, false);
-        assert!(
-            strong.score > weak.score,
-            "stronger overbought MFI should contribute more to top pillar"
-        );
+        let strong = score_volume(92.0, &[], &[], &[], 0.0, 1.0, false);
+        let weak = score_volume(68.0, &[], &[], &[], 0.0, 1.0, false);
+        assert!(strong.score > weak.score);
     }
 
     #[test]
-    fn volume_spike_no_cliff_near_2x() {
-        // Yalnızca hacim bileşeni: MFI 50 (dip bandı dışı), OBV/CVD kapalı.
-        let just_below = score_volume(50.0, 0.0, 0.0, 1990.0, 1000.0, true);
-        let just_above = score_volume(50.0, 0.0, 0.0, 2010.0, 1000.0, true);
-        assert!(
-            just_below.score > 0.0 && just_above.score > just_below.score,
-            "1.99x and 2.01x should both score with a small delta"
-        );
+    fn volume_spike_smooth_ramp() {
+        let just_below = score_volume(50.0, &[], &[], &[], 1990.0, 1000.0, true);
+        let just_above = score_volume(50.0, &[], &[], &[], 2010.0, 1000.0, true);
+        assert!(just_above.score > just_below.score);
         let step = just_above.score - just_below.score;
-        assert!(step < 1.5, "old design jumped ~10 pts across 2×; smooth ramp step={step}");
+        assert!(step < 1.5, "smooth ramp step={step}");
     }
 
     #[test]
-    fn volume_spike_1_5_zero_3_0_full() {
-        let at_lo = score_volume(50.0, 0.0, 0.0, 1500.0, 1000.0, true);
-        assert!(
-            !at_lo.details.iter().any(|d| d.starts_with("Volume spike")),
-            "1.5x should not add spike (threshold exclusive)"
-        );
+    fn volume_spike_thresholds() {
+        let at_lo = score_volume(50.0, &[], &[], &[], 1500.0, 1000.0, true);
         assert!((at_lo.score - 0.0).abs() < 1e-9);
-        let at_hi = score_volume(50.0, 0.0, 0.0, 3000.0, 1000.0, true);
+        let at_hi = score_volume(50.0, &[], &[], &[], 3000.0, 1000.0, true);
         assert!((at_hi.score - 20.0).abs() < 1e-6);
     }
 }

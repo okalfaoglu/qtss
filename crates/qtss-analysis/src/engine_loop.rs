@@ -1736,18 +1736,23 @@ async fn run_engines_for_symbol(
                     &price_highs, &price_lows, &macd_highs, &macd_lows,
                     true,
                 ),
-                qtss_tbm::volume::score_volume(
-                    get_val(&bundle.mfi_14, last),
-                    slope(&bundle.obv, 10),
-                    slope(&bundle.cvd, 10),
-                    volumes.get(last).copied().unwrap_or(0.0),
-                    // volume SMA20, NOT sma_20 (which is closes). Passing
-                    // the close SMA here made volume_last/volume_avg
-                    // collapse to ~0 so the spike sub-score never fired
-                    // and the Volume pillar pinned to 0 on every symbol.
-                    qtss_indicators::ema::sma(&volumes, 20).get(last).copied().unwrap_or(0.0),
-                    true,
-                ),
+                {
+                    // P22d-div — 20-bar windows ending at `last` for
+                    // OBV/CVD divergence scoring.
+                    let wlo = last.saturating_sub(19);
+                    let pw: Vec<f64> = closes[wlo..=last].to_vec();
+                    let ow: Vec<f64> = bundle.obv[wlo..=last.min(bundle.obv.len().saturating_sub(1))].to_vec();
+                    let cw: Vec<f64> = bundle.cvd[wlo..=last.min(bundle.cvd.len().saturating_sub(1))].to_vec();
+                    qtss_tbm::volume::score_volume(
+                        get_val(&bundle.mfi_14, last),
+                        &pw,
+                        &ow,
+                        &cw,
+                        volumes.get(last).copied().unwrap_or(0.0),
+                        qtss_indicators::ema::sma(&volumes, 20).get(last).copied().unwrap_or(0.0),
+                        true,
+                    )
+                },
                 qtss_tbm::structure::score_structure(
                     fib_proximity, "nearest",
                     get_val(&bundle.bollinger.percent_b, last),
@@ -1772,14 +1777,21 @@ async fn run_engines_for_symbol(
                     &price_highs, &price_lows, &macd_highs, &macd_lows,
                     false,
                 ),
-                qtss_tbm::volume::score_volume(
-                    get_val(&bundle.mfi_14, last),
-                    slope(&bundle.obv, 10),
-                    slope(&bundle.cvd, 10),
-                    volumes.get(last).copied().unwrap_or(0.0),
-                    qtss_indicators::ema::sma(&volumes, 20).get(last).copied().unwrap_or(0.0),
-                    false,
-                ),
+                {
+                    let wlo = last.saturating_sub(19);
+                    let pw: Vec<f64> = closes[wlo..=last].to_vec();
+                    let ow: Vec<f64> = bundle.obv[wlo..=last.min(bundle.obv.len().saturating_sub(1))].to_vec();
+                    let cw: Vec<f64> = bundle.cvd[wlo..=last.min(bundle.cvd.len().saturating_sub(1))].to_vec();
+                    qtss_tbm::volume::score_volume(
+                        get_val(&bundle.mfi_14, last),
+                        &pw,
+                        &ow,
+                        &cw,
+                        volumes.get(last).copied().unwrap_or(0.0),
+                        qtss_indicators::ema::sma(&volumes, 20).get(last).copied().unwrap_or(0.0),
+                        false,
+                    )
+                },
                 qtss_tbm::structure::score_structure(
                     fib_proximity, "nearest",
                     get_val(&bundle.bollinger.percent_b, last),
