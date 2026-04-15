@@ -104,6 +104,8 @@ pub const EVENTS: &[EventSpec] = &[
     EventSpec { name: "upthrust_action",    eval: EventEval::Pivots(eval_upthrust_action) },
     // Phase C
     EventSpec { name: "shakeout",           eval: EventEval::Pivots(eval_shakeout) },
+    EventSpec { name: "spring_test",        eval: EventEval::Pivots(eval_spring_test) },
+    EventSpec { name: "utad_test",          eval: EventEval::Pivots(eval_utad_test) },
     // Phase D
     EventSpec { name: "sign_of_strength",      eval: EventEval::WithBars(eval_sign_of_strength) },
     EventSpec { name: "sign_of_weakness",      eval: EventEval::WithBars(eval_sign_of_weakness) },
@@ -1548,4 +1550,105 @@ fn check_sot_sequence(
         variant,
         anchor_labels: labels,
     })
+}
+
+// =========================================================================
+// Phase C: Spring Test / UTAD Test (P2d)
+// =========================================================================
+//
+// Villahermosa ch. 6 — after a Spring pierces support, price must return
+// to test the pierce low on *lower volume* before Phase D can open. A
+// high-volume retest means sellers are still active and the Spring is
+// unconfirmed. The mirror applies for UTAD Tests.
+//
+// We scan the pivot tail for a Spring/UTAD candidate within the last
+// `spring_test_window_bars`, then require:
+//   - same-kind pivot (Low for SpringTest, High for UTADTest)
+//   - within `spring_test_max_distance * range_height` of the parent
+//   - volume <= `spring_test_max_vol_ratio * parent_vol`
+
+fn eval_spring_test_impl(
+    pivots: &[Pivot],
+    cfg: &WyckoffConfig,
+    parent_kind: PivotKind,
+    label: &'static str,
+) -> Option<EventMatch> {
+    if pivots.len() < 4 {
+        return None;
+    }
+    // Find most recent Spring / UTAD anchor in the tail. We approximate
+    // this as the most extreme same-kind pivot within the configured
+    // window: Spring = deepest Low; UTAD = highest High.
+    let window = cfg.spring_test_window_bars.max(2);
+    let candidate = pivots.last()?;
+    if candidate.kind != parent_kind {
+        return None;
+    }
+    // Parent = same-kind pivot further back in the window, excluding the
+    // candidate itself.
+    let candidate_bar = candidate.bar_index;
+    let parent_opt = pivots
+        .iter()
+        .rev()
+        .skip(1)
+        .take_while(|p| candidate_bar.saturating_sub(p.bar_index) <= window)
+        .filter(|p| p.kind == parent_kind)
+        .max_by(|a, b| {
+            let av = a.volume_at_pivot.to_f64().unwrap_or(0.0);
+            let bv = b.volume_at_pivot.to_f64().unwrap_or(0.0);
+            av.partial_cmp(&bv).unwrap_or(std::cmp::Ordering::Equal)
+        });
+    let parent = parent_opt?;
+    let parent_vol = parent.volume_at_pivot.to_f64().unwrap_or(0.0);
+    let cand_vol = candidate.volume_at_pivot.to_f64().unwrap_or(0.0);
+    if parent_vol <= 0.0 {
+        return None;
+    }
+    // Low-volume retest gate.
+    if cand_vol > parent_vol * cfg.spring_test_max_vol_ratio {
+        return None;
+    }
+
+    let range = TradingRange::from_pivots(pivots)?;
+    let p_price = parent.price.to_f64()?;
+    let c_price = candidate.price.to_f64()?;
+    let dist = (p_price - c_price).abs() / range.height.max(1e-9);
+    if dist > cfg.spring_test_max_distance {
+        return None;
+    }
+
+    // Directional anchor: SpringTest's low must sit at-or-above the
+    // Spring low (we don't want a lower-low retest — that is a failed
+    // Spring, not a test). Mirror for UTADTest.
+    let above_parent = match parent_kind {
+        PivotKind::Low => c_price >= p_price,
+        PivotKind::High => c_price <= p_price,
+    };
+    if !above_parent {
+        return None;
+    }
+
+    let vol_score = 1.0 - (cand_vol / (parent_vol * cfg.spring_test_max_vol_ratio)).min(1.0);
+    let dist_score = 1.0 - (dist / cfg.spring_test_max_distance).min(1.0);
+    let score = 0.4 + vol_score * 0.3 + dist_score * 0.3;
+
+    let mut labels: Vec<&'static str> = (0..pivots.len()).map(label_for).collect();
+    if let Some(last) = labels.last_mut() {
+        *last = label;
+    }
+    let variant = if parent_kind == PivotKind::Low { "accumulation" } else { "distribution" };
+    Some(EventMatch {
+        score: score.min(1.0),
+        invalidation: parent.price,
+        variant,
+        anchor_labels: labels,
+    })
+}
+
+fn eval_spring_test(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
+    eval_spring_test_impl(pivots, cfg, PivotKind::Low, "Test")
+}
+
+fn eval_utad_test(pivots: &[Pivot], cfg: &WyckoffConfig) -> Option<EventMatch> {
+    eval_spring_test_impl(pivots, cfg, PivotKind::High, "Test")
 }

@@ -68,6 +68,12 @@ pub enum WyckoffEvent {
     Spring,
     #[serde(rename = "utad")] UTAD,
     Shakeout,
+    /// Low-volume retest of a prior Spring low (Villahermosa ch. 6,
+    /// "Test"). Confirms Phase C before SOS can open Phase D. Distinct
+    /// from LPS — LPS sits above creek, SpringTest sits near support.
+    #[serde(rename = "spring_test")] SpringTest,
+    /// Mirror of SpringTest for distribution schematics.
+    #[serde(rename = "utad_test")] UTADTest,
     // Phase D
     #[serde(rename = "s_o_s")]        SOS,
     #[serde(rename = "s_o_w")]        SOW,
@@ -95,6 +101,8 @@ impl WyckoffEvent {
             Self::Spring => "Spring",
             Self::UTAD => "UTAD",
             Self::Shakeout => "Shakeout",
+            Self::SpringTest => "SpringTest",
+            Self::UTADTest => "UTADTest",
             Self::SOS => "SOS",
             Self::SOW => "SOW",
             Self::LPS => "LPS",
@@ -113,7 +121,8 @@ impl WyckoffEvent {
         match self {
             Self::PS | Self::SC | Self::BC | Self::AR | Self::ST => WyckoffPhase::A,
             Self::UA | Self::STB => WyckoffPhase::B,
-            Self::Spring | Self::UTAD | Self::Shakeout => WyckoffPhase::C,
+            Self::Spring | Self::UTAD | Self::Shakeout
+            | Self::SpringTest | Self::UTADTest => WyckoffPhase::C,
             Self::SOS | Self::SOW | Self::LPS | Self::LPSY
             | Self::JAC | Self::BreakOfIce | Self::BUEC | Self::SOT => WyckoffPhase::D,
             Self::Markup | Self::Markdown => WyckoffPhase::E,
@@ -394,8 +403,8 @@ impl WyckoffStructureTracker {
         use WyckoffEvent::*;
         use WyckoffSchematic::*;
         let bullish = match event {
-            Spring | SOS | LPS | JAC => Some(true),
-            UTAD | SOW | LPSY | BreakOfIce => Some(false),
+            Spring | SpringTest | SOS | LPS | JAC => Some(true),
+            UTAD | UTADTest | SOW | LPSY | BreakOfIce => Some(false),
             _ => None,
         };
         let Some(bull) = bullish else { return };
@@ -482,12 +491,23 @@ impl WyckoffStructureTracker {
                 }
             }
             WyckoffPhase::C => {
-                // C → D requires: Spring/UTAD/Shakeout + subsequent test
-                let has_spring = phase_events.contains(&WyckoffEvent::Spring)
-                    || phase_events.contains(&WyckoffEvent::Shakeout);
+                // P2d — C → D now requires the Spring/UTAD *test* as
+                // explicit confirmation, not just "any Phase-D event
+                // fired". Villahermosa ch. 6: the sequence is
+                // Spring → (SpringTest) → SOS. Without the low-volume
+                // retest the Phase-C setup is unconfirmed and SOS can
+                // be noise. Shakeout retains its self-confirming
+                // semantics (aggressive Spring variant #1).
+                let has_spring = phase_events.contains(&WyckoffEvent::Spring);
                 let has_utad = phase_events.contains(&WyckoffEvent::UTAD);
+                let has_shakeout = phase_events.contains(&WyckoffEvent::Shakeout);
+                let has_spring_test = phase_events.contains(&WyckoffEvent::SpringTest);
+                let has_utad_test = phase_events.contains(&WyckoffEvent::UTADTest);
                 let has_d_event = phase_events.iter().any(|e| e.phase() == WyckoffPhase::D);
-                if (has_spring || has_utad) && has_d_event {
+                let confirmed = has_shakeout
+                    || (has_spring && has_spring_test)
+                    || (has_utad && has_utad_test);
+                if confirmed && has_d_event {
                     self.current_phase = WyckoffPhase::D;
                 }
             }
@@ -598,6 +618,8 @@ impl WyckoffStructureTracker {
             "secondary_test" => Some(WyckoffEvent::ST),
             "spring" => Some(WyckoffEvent::Spring),
             "upthrust" => Some(WyckoffEvent::UTAD),
+            "spring_test" => Some(WyckoffEvent::SpringTest),
+            "utad_test" => Some(WyckoffEvent::UTADTest),
             "upthrust_action" => Some(WyckoffEvent::UA),
             "shakeout" => Some(WyckoffEvent::Shakeout),
             "sign_of_strength" => Some(WyckoffEvent::SOS),
@@ -732,8 +754,8 @@ fn coherence_ratio(schematic: WyckoffSchematic, events: &[RecordedEvent]) -> f64
     use WyckoffSchematic::*;
     let is_bull_schematic = matches!(schematic, Accumulation | ReAccumulation);
     let opposing = events.iter().filter(|e| {
-        let bullish_ev = matches!(e.event, Spring | SOS | LPS | JAC | Markup);
-        let bearish_ev = matches!(e.event, UTAD | SOW | LPSY | BreakOfIce | Markdown);
+        let bullish_ev = matches!(e.event, Spring | SpringTest | SOS | LPS | JAC | Markup);
+        let bearish_ev = matches!(e.event, UTAD | UTADTest | SOW | LPSY | BreakOfIce | Markdown);
         // neutral events (SC/BC/AR/ST/UA/STB/Shakeout/SOT) don't count
         // either way — they are schematic-agnostic phase-A/B markers.
         if is_bull_schematic { bearish_ev } else { bullish_ev }

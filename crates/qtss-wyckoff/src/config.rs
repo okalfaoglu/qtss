@@ -89,6 +89,20 @@ pub struct WyckoffConfig {
     /// range if late/early ratio exceeds this cap.
     pub max_range_volume_expansion: f64,
 
+    // --- Phase C: Spring / UTAD test ---
+    /// Spring/UTAD Test: retest bar volume must be <= N * Spring/UTAD
+    /// volume. Villahermosa ch. 6 — the test is a LOW-VOLUME return to
+    /// the prior pierce; high-volume retest = still-active supply/demand
+    /// and the setup is not confirmed. Default 0.6 (60% of Spring vol).
+    pub spring_test_max_vol_ratio: f64,
+    /// Spring/UTAD Test must fire within this many bars of the parent
+    /// Spring/UTAD. Beyond this window the pullback is a separate move.
+    pub spring_test_window_bars: u64,
+    /// Maximum distance (as fraction of range height) between the test
+    /// low and the parent Spring low. Too far away = different swing,
+    /// not a test. Default 0.10 (within 10% of range height).
+    pub spring_test_max_distance: f64,
+
     // --- Phase C: Spring variant (Pruden) ---
     /// A "No-Supply" Spring (#3): climax bar volume <= N x avg_vol.
     /// The hallmark of the highest-probability Spring — absence of
@@ -162,6 +176,10 @@ impl WyckoffConfig {
             // Canonical Wyckoff ranges exhibit volume contraction;
             // 1.3 allows up to ~30% expansion (mild noise) before reject.
             max_range_volume_expansion: 1.3,
+            // Phase C test
+            spring_test_max_vol_ratio: 0.6,
+            spring_test_window_bars: 8,
+            spring_test_max_distance: 0.10,
             // Spring variant (Pruden): no-supply = low vol, terminal = very high vol
             spring_no_supply_vol_ratio: 0.8,
             spring_terminal_vol_ratio: 3.0,

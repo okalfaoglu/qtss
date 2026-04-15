@@ -38,6 +38,25 @@ SELECT _qtss_register_key(
     'Phase B requires at least this many internal tests (UA, ST-B, ST) beyond the Phase-A triple before C may open.',
     'number', true, 'normal', ARRAY['wyckoff','phase_b']);
 
+-- --- P2d: Spring Test / UTAD Test (Phase C confirmation) ---
+SELECT _qtss_register_key(
+    'wyckoff.spring_test_max_vol_ratio', 'wyckoff', 'event', 'number',
+    '0.6'::jsonb, 'fraction',
+    'Spring/UTAD Test volume must be <= N * parent Spring/UTAD volume. Low-volume retest confirms Phase C.',
+    'number', true, 'normal', ARRAY['wyckoff','phase_c']);
+
+SELECT _qtss_register_key(
+    'wyckoff.spring_test_window_bars', 'wyckoff', 'event', 'int',
+    '8'::jsonb, 'bars',
+    'Spring/UTAD Test must fire within this many bars of the parent Spring/UTAD.',
+    'number', true, 'normal', ARRAY['wyckoff','phase_c']);
+
+SELECT _qtss_register_key(
+    'wyckoff.spring_test_max_distance', 'wyckoff', 'event', 'number',
+    '0.10'::jsonb, 'fraction',
+    'Spring/UTAD Test low must sit within N * range_height of the parent Spring/UTAD price.',
+    'number', true, 'normal', ARRAY['wyckoff','phase_c']);
+
 -- Operator-facing defaults mirrored into system_config for GUI editing.
 INSERT INTO system_config (module, config_key, value, description) VALUES
     ('detector', 'wyckoff.sos_min_bar_width_atr_mult', '1.5'::jsonb,
@@ -47,5 +66,11 @@ INSERT INTO system_config (module, config_key, value, description) VALUES
     ('detector', 'wyckoff.phase_b_min_bars', '10'::jsonb,
      'Minimum bars in Phase B before C may open.'),
     ('detector', 'wyckoff.phase_b_min_inner_tests', '1'::jsonb,
-     'Minimum Phase-B inner tests (UA/STB/ST) before C.')
+     'Minimum Phase-B inner tests (UA/STB/ST) before C.'),
+    ('detector', 'wyckoff.spring_test_max_vol_ratio', '0.6'::jsonb,
+     'Spring/UTAD Test volume fraction of parent Spring/UTAD.'),
+    ('detector', 'wyckoff.spring_test_window_bars', '8'::jsonb,
+     'Bars within which Spring/UTAD Test must follow parent.'),
+    ('detector', 'wyckoff.spring_test_max_distance', '0.10'::jsonb,
+     'Spring/UTAD Test price distance cap (fraction of range height).')
 ON CONFLICT (module, config_key) DO NOTHING;

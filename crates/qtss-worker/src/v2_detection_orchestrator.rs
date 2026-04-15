@@ -475,6 +475,10 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
     let max_range_h_pct = resolve_system_f64(pool, "detector", "wyckoff.max_range_height_pct", "", 0.15).await;
     let max_range_age = resolve_system_u64(pool, "detector", "wyckoff.max_range_age_bars", "", 500, 20, 5000).await;
     let max_vol_expansion = resolve_system_f64(pool, "detector", "wyckoff.max_range_volume_expansion", "", 1.3).await;
+    // Phase C test (P2d)
+    let spring_test_vol = resolve_system_f64(pool, "detector", "wyckoff.spring_test_max_vol_ratio", "", 0.6).await;
+    let spring_test_win = resolve_system_u64(pool, "detector", "wyckoff.spring_test_window_bars", "", 8, 1, 100).await;
+    let spring_test_dist = resolve_system_f64(pool, "detector", "wyckoff.spring_test_max_distance", "", 0.10).await;
     // Spring variant thresholds (Pruden)
     let spr_ns_vol = resolve_system_f64(pool, "detector", "wyckoff.spring_no_supply_vol_ratio", "", 0.8).await;
     let spr_term_vol = resolve_system_f64(pool, "detector", "wyckoff.spring_terminal_vol_ratio", "", 3.0).await;
@@ -517,6 +521,9 @@ async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
         max_range_height_pct: max_range_h_pct,
         max_range_age_bars: max_range_age,
         max_range_volume_expansion: max_vol_expansion,
+        spring_test_max_vol_ratio: spring_test_vol,
+        spring_test_window_bars: spring_test_win,
+        spring_test_max_distance: spring_test_dist,
         spring_no_supply_vol_ratio: spr_ns_vol,
         spring_terminal_vol_ratio: spr_term_vol,
         skip_terminal_springs: skip_term,
