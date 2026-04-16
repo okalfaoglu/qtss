@@ -9,9 +9,45 @@
 //! under the `setup.training_set` prefix.
 
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 use sqlx::{FromRow, PgPool};
 
 use crate::error::StorageError;
+
+/// Faz 9.3.3 — look up the latest per-source feature JSON for a
+/// (exchange, symbol, timeframe) triplet, aggregated into the same
+/// `features_by_source` shape the trainer view emits. Used by the
+/// inference sidecar at setup-open time.
+///
+/// Returns `Ok(None)` when no features exist in the window — the
+/// setup path treats that as "skip inference, persist ai_score=NULL".
+pub async fn fetch_latest_features_by_source(
+    pool: &PgPool,
+    exchange: &str,
+    symbol: &str,
+    timeframe: &str,
+    window_minutes: i64,
+) -> Result<Option<JsonValue>, StorageError> {
+    let row: Option<(Option<JsonValue>,)> = sqlx::query_as(
+        r#"
+        SELECT jsonb_object_agg(source, features_json) AS features_by_source
+        FROM (
+            SELECT DISTINCT ON (source) source, features_json
+            FROM qtss_features_snapshot
+            WHERE exchange = $1 AND symbol = $2 AND timeframe = $3
+              AND computed_at > now() - ($4 || ' minutes')::interval
+            ORDER BY source, computed_at DESC
+        ) latest
+        "#,
+    )
+    .bind(exchange)
+    .bind(symbol)
+    .bind(timeframe)
+    .bind(window_minutes.to_string())
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.and_then(|(v,)| v))
+}
 
 /// Single row of a per-label histogram (win / loss / null / ...).
 #[derive(Debug, Clone, Serialize, FromRow)]

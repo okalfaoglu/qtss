@@ -71,8 +71,8 @@ pub use v2_setup_events::{
 };
 pub use models_registry::{activate_model, active_model, list_models, ModelRow};
 pub use training_set::{
-    fetch_training_set_stats, CloseReasonBucket, DirectionBucket, FeatureCoverage, LabelBucket,
-    PnlSummary, SymbolBucket, TrainingSetStats,
+    fetch_latest_features_by_source, fetch_training_set_stats, CloseReasonBucket, DirectionBucket,
+    FeatureCoverage, LabelBucket, PnlSummary, SymbolBucket, TrainingSetStats,
 };
 pub use v2_setup_rejections::{
     insert_v2_setup_rejection, list_recent_setup_rejections, list_setup_rejections_filtered,

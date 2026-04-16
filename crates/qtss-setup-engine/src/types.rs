@@ -263,6 +263,8 @@ pub enum RejectReason {
     GateDirectionConsensus,
     GateBelowMinScore,
     GateNoDirection,
+    // Faz 9.3.3 — LightGBM inference sidecar veto (gate_enabled=true).
+    AiGate,
 }
 
 impl RejectReason {
@@ -279,6 +281,7 @@ impl RejectReason {
             RejectReason::GateDirectionConsensus => "gate_direction_consensus",
             RejectReason::GateBelowMinScore => "gate_below_min_score",
             RejectReason::GateNoDirection => "gate_no_direction",
+            RejectReason::AiGate => "ai_gate",
         }
     }
 

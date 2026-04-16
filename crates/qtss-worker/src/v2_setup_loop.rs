@@ -1015,6 +1015,45 @@ async fn try_arm_new_setup(
 
     let alt_type = classify_alt_type(direction, ema50, ema200, price);
 
+    // Faz 9.3.3 — ask the inference sidecar for P(win). `None` on any
+    // soft failure keeps the setup path alive (shadow mode). The gate
+    // only vetoes when `ai.inference.gate_enabled=true` AND the sidecar
+    // returned an actual score below `min_score`.
+    let ai_cfg = crate::ai_inference::InferenceConfig::load(pool).await;
+    let ai_window_minutes = 15;
+    let features_by_source = qtss_storage::fetch_latest_features_by_source(
+        pool,
+        &sym.exchange,
+        &sym.symbol,
+        &sym.interval,
+        ai_window_minutes,
+    )
+    .await
+    .unwrap_or(None);
+    let ai_response = match features_by_source.as_ref() {
+        Some(f) => crate::ai_inference::score(&ai_cfg, f).await,
+        None => None,
+    };
+    let ai_score = ai_response.as_ref().map(|r| r.score as f32);
+    if ai_cfg.gate_enabled {
+        if let Some(r) = ai_response.as_ref() {
+            if r.score < ai_cfg.min_score {
+                debug!(
+                    symbol = %sym.symbol,
+                    score = r.score,
+                    min = ai_cfg.min_score,
+                    "ai_gate rejected setup"
+                );
+                record_rejection(
+                    pool, cfg, venue, profile, sym, direction, conf.id,
+                    RejectReason::AiGate,
+                )
+                .await?;
+                return Ok(());
+            }
+        }
+    }
+
     let row = V2SetupInsert {
         venue_class: venue.as_str().to_string(),
         exchange: sym.exchange.clone(),
@@ -1043,7 +1082,15 @@ async fn try_arm_new_setup(
             "atr": atr_val,
             "guven": conf.guven,
             "correlation_groups": groups,
+            "ai": ai_response.as_ref().map(|r| json!({
+                "model_family": r.model_family,
+                "model_version": r.model_version,
+                "score": r.score,
+                "missing_features": r.missing_features,
+                "n_features": r.n_features,
+            })),
         }),
+        ai_score,
     };
     let id: Uuid = match insert_v2_setup(pool, &row).await {
         Ok(id) => id,

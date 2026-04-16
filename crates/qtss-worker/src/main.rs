@@ -2,6 +2,7 @@
 //! `engine_symbols` → analiz snapshot (Trading Range, …).
 
 mod ai_engine;
+mod ai_inference;
 mod detection_stats_refresh;
 mod binance_catalog_sync_loop;
 mod binance_futures_reconcile;

@@ -43,6 +43,8 @@ pub struct V2SetupRow {
     pub pnl_pct: Option<f32>,
     /// D/T/Q: risk mode at setup creation (migration 0055).
     pub risk_mode: Option<String>,
+    /// Faz 9.3.3 — P(win) from the LightGBM inference sidecar at open.
+    pub ai_score: Option<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +64,10 @@ pub struct V2SetupInsert {
     pub target_ref: Option<f32>,
     pub risk_pct: Option<f32>,
     pub raw_meta: JsonValue,
+    /// Faz 9.3.3 — LightGBM P(win) resolved at setup-open time via the
+    /// inference sidecar. `None` when the sidecar is disabled / unreachable
+    /// / errored; shadow-only until `ai.inference.gate_enabled` flips true.
+    pub ai_score: Option<f32>,
 }
 
 pub async fn insert_v2_setup(
@@ -73,8 +79,9 @@ pub async fn insert_v2_setup(
         INSERT INTO qtss_v2_setups (
             venue_class, exchange, symbol, timeframe, profile, alt_type,
             state, direction, confluence_id,
-            entry_price, entry_sl, koruma, target_ref, risk_pct, raw_meta
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+            entry_price, entry_sl, koruma, target_ref, risk_pct, raw_meta,
+            ai_score
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
         -- P14 — matches migration 0078 `uq_open_setup_key`:
         -- one open setup per (exchange, symbol, timeframe, profile)
         -- regardless of direction, using the real state value
@@ -102,6 +109,7 @@ pub async fn insert_v2_setup(
     .bind(row.target_ref)
     .bind(row.risk_pct)
     .bind(&row.raw_meta)
+    .bind(row.ai_score)
     .fetch_optional(pool)
     .await?;
     match id {
@@ -164,7 +172,7 @@ pub async fn fetch_v2_setup(
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
-                  pnl_pct, risk_mode
+                  pnl_pct, risk_mode, ai_score
              FROM qtss_v2_setups
             WHERE id = $1"#,
     )
@@ -183,7 +191,7 @@ pub async fn list_open_v2_setups(
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
-                  pnl_pct, risk_mode
+                  pnl_pct, risk_mode, ai_score
              FROM qtss_v2_setups
             WHERE state IN ('armed','active')
               AND ($1::text IS NULL OR venue_class = $1)
@@ -219,7 +227,7 @@ pub async fn list_v2_setups_filtered(
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
-                  pnl_pct, risk_mode
+                  pnl_pct, risk_mode, ai_score
              FROM qtss_v2_setups
             WHERE 1=1"#,
     );
@@ -274,7 +282,7 @@ pub async fn list_recent_v2_setups(
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
-                  pnl_pct, risk_mode
+                  pnl_pct, risk_mode, ai_score
              FROM qtss_v2_setups
             ORDER BY created_at DESC
             LIMIT $1"#,
