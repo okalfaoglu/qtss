@@ -8,3 +8,5 @@ description = "Faz 7.8 — dual-track confluence scoring (erken_uyari + guven). 
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+async-trait.workspace = true
+uuid = { workspace = true, features = ["v4", "serde"] }

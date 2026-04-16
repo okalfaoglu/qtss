@@ -16,6 +16,8 @@ mod copy_trade_follower;
 mod copy_trade_queue;
 mod data_sources;
 mod engines;
+mod feature_sources;
+mod feature_store;
 mod kill_switch;
 mod live_position_notify;
 mod nansen_credit_monitor;

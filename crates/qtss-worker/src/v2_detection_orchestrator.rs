@@ -1486,8 +1486,41 @@ async fn process_symbol(
             mode,
         };
         let inserted_id = new_row.id;
+        let fs_raw_meta = new_row.raw_meta.clone();
+        let fs_family = new_row.family;
         repo.insert(new_row).await?;
         stats.inserted += 1;
+
+        // Faz 9.0.2 — feature store hook: per-detection ConfluenceSource
+        // extraction → qtss_features_snapshot. Best-effort, logged-only
+        // on failure so detector pipeline never blocks.
+        {
+            use serde_json::json;
+            let raw_for_fs = json!({
+                "family": fs_family,
+                "phase": fs_raw_meta.get("phase"),
+                "events_json": fs_raw_meta.get("events_json"),
+                "structural_score": fs_raw_meta.get("structural_score"),
+                "range_bars": fs_raw_meta.get("range_bars"),
+                "is_accumulation": fs_raw_meta.get("is_accumulation"),
+                "is_distribution": fs_raw_meta.get("is_distribution"),
+            });
+            let store = crate::feature_store::FeatureStore::new(pool);
+            if let Err(e) = store
+                .write_for_detection(
+                    inserted_id,
+                    None,
+                    &sym.exchange,
+                    &sym.symbol,
+                    &sym.interval,
+                    None,
+                    &raw_for_fs,
+                )
+                .await
+            {
+                tracing::warn!(%e, detection_id = %inserted_id, "feature_store write");
+            }
+        }
 
         // Live revision: retire any older `forming` row for the same
         // (symbol, tf, family, subkind). Each new bar tick produces a

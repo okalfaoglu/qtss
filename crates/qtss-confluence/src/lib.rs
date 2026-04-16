@@ -30,9 +30,11 @@
 //! Pure crate: no DB, no HTTP, no asset-class assumptions
 //! (CLAUDE.md #4). The worker loop loads inputs, this crate scores.
 
+pub mod feature_source;
 pub mod scoring;
 pub mod types;
 
+pub use feature_source::{ConfluenceSource, FeatureSnapshot, SourceContext, SourceQuery};
 pub use scoring::score_confluence;
 pub use types::{
     ConfluenceDirection, ConfluenceInputs, ConfluenceReading, ConfluenceWeights, DetectionVote,
