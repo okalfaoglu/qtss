@@ -1595,50 +1595,82 @@ pub(crate) async fn upsert_wyckoff_structure_from_detection(
     // Check if there's an active structure for this symbol/interval
     let existing = find_active_wyckoff_structure(pool, symbol, interval).await?;
 
-    // Structure TTL — a Wyckoff structure is a localised phenomenon
-    // (range + manipulation + resolution). If the last recorded event
-    // is more than `ttl_bars` bars behind the incoming event, the
-    // active row is *not* the same structure — it was a cycle we
-    // never closed. Fail it and fall through to the None branch so a
-    // fresh structure is seeded (iff this event is Phase A).
+    // Structure TTL + chronology guard.
     //
-    // Without this guard the orchestrator used to append 2019 climax
-    // events and a 2026 markup into the same `events_json`. Budgets
-    // are TF-scaled — roughly "a structure should complete within a
-    // few months on its own scale".
-    // P28a — TTL is now measured in seconds (via RecordedEvent.time_ms)
-    // instead of bar_index deltas. Old rows that stored a rolling-window
-    // bar_index produced deltas like 29702 on 15m (~309d) and killed
-    // every structure before Phase B. Limits come from `system_config`
-    // under `wyckoff.structure.ttl_seconds.<TF>` (CLAUDE.md #2).
+    // A Wyckoff structure is a localised phenomenon (range + manipulation
+    // + resolution). If the last recorded event is more than `ttl_s`
+    // seconds behind the incoming event — measured purely from each
+    // event's own `time_ms` — the active row is not the same structure.
+    //
+    // P28c (2026-04) — the prior implementation (P28a) fell back to
+    // `chrono::Utc::now()` whenever the incoming event had no `time_ms`,
+    // which happens constantly on historical scans where the anchor
+    // `bar_idx` is out of range of the rolling `chronological` window.
+    // Wall-clock minus a 2021 event ≈ 140M seconds, far beyond any TTL
+    // → every structure died on its 2nd event, none reached Phase C.
+    // Verdict from Faz 8.2 diagnostic (383 structs, 0 completed).
+    //
+    // Now we ONLY expire when both sides have a concrete `time_ms` and
+    // the incoming event is strictly newer than the last recorded event
+    // by more than `ttl_s`. Missing `time_ms` → withhold the guard
+    // (structure survives); family-flip detection below still catches
+    // cross-cycle corruption. Non-monotonic arrivals (backfill
+    // interleaving) are dropped outright rather than poisoning phase
+    // derivation — see the chronology guard immediately after.
     if let Some(ref row) = existing {
         let ttl_s = resolve_wyckoff_ttl_seconds(pool, interval).await;
         let events: Vec<qtss_wyckoff::RecordedEvent> =
             serde_json::from_value(row.events_json.clone()).unwrap_or_default();
         let last_time_ms = events.iter().rev().find_map(|e| e.time_ms);
-        let now_time_ms = time_ms.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
-        let expire = match last_time_ms {
-            Some(lm) => ((now_time_ms - lm) / 1000) > ttl_s as i64,
-            // Legacy row with no time_ms at all — kill on contact so a
-            // properly anchored structure can seed fresh.
-            None => true,
-        };
+
+        // Chronology guard: drop events that would rewrite history.
+        // Returning Ok early is preferable to silently corrupting
+        // `events_json` with out-of-order entries — the next in-order
+        // event will re-trigger this code path cleanly.
+        if let (Some(lm), Some(now)) = (last_time_ms, time_ms) {
+            if now < lm {
+                tracing::warn!(
+                    %symbol, %interval,
+                    delta_s = (lm - now) / 1000,
+                    event = %wy_event.as_str(),
+                    "wyckoff: dropped non-monotonic event (chronology guard)",
+                );
+                return Ok(());
+            }
+        }
+
+        let expire = matches!(
+            (last_time_ms, time_ms),
+            (Some(lm), Some(now)) if (now - lm) / 1000 > ttl_s as i64
+        );
         if expire {
-            let reason = match last_time_ms {
-                Some(lm) => format!(
-                    "structure TTL exceeded ({}s since last event; limit {}s on {})",
-                    (now_time_ms - lm) / 1000, ttl_s, interval
-                ),
-                None => format!(
-                    "legacy structure without time_ms on {interval} — recycled by P28a TTL guard"
-                ),
-            };
+            let (lm, now) = (last_time_ms.unwrap(), time_ms.unwrap());
+            let reason = format!(
+                "structure TTL exceeded ({}s since last event; limit {}s on {})",
+                (now - lm) / 1000,
+                ttl_s,
+                interval,
+            );
             qtss_storage::fail_wyckoff_structure(pool, row.id, &reason).await?;
             return Box::pin(upsert_wyckoff_structure_from_detection(
                 pool, exchange, symbol, interval, subkind, detection, _detection_id, chronological,
             )).await;
         }
     }
+
+    // Faz 8.2 — failed Phase-C watchdog window (bars after Spring/UTAD
+    // within which a contrary pivot invalidates the trigger). Previously
+    // hardcoded to 12 in structure.rs (CLAUDE.md #2 violation).
+    let failed_phase_c_window = qtss_storage::resolve_system_u64(
+        pool,
+        "wyckoff",
+        "failed_phase_c_window_bars",
+        "QTSS_WYCKOFF_FAILED_PHASE_C_WINDOW_BARS",
+        12,
+        1,
+        500,
+    )
+    .await;
 
     match existing {
         Some(row) => {
@@ -1664,7 +1696,8 @@ pub(crate) async fn upsert_wyckoff_structure_from_detection(
             .with_phase_gates(
                 resolve_worker_enabled_flag(pool, "detector", "wyckoff.phase.a_to_b.require_st", "", false).await,
                 resolve_system_u64(pool, "detector", "wyckoff.phase.min_dwell_bars", "", 3, 0, 100).await as usize,
-            );
+            )
+            .with_failed_phase_c_window(failed_phase_c_window);
             tracker.creek = row.creek_level;
             tracker.ice = row.ice_level;
             tracker.events = events;
@@ -1720,7 +1753,8 @@ pub(crate) async fn upsert_wyckoff_structure_from_detection(
             // show a sustained breakout beyond the established range,
             // consistent with the tracker's directional bias.
             if tracker.current_phase == WyckoffPhase::D {
-                maybe_inject_markup_markdown(&mut tracker, chronological, time_ms, bar_idx);
+                let inj = resolve_markup_inject_config(pool).await;
+                maybe_inject_markup_markdown(&mut tracker, chronological, time_ms, bar_idx, &inj);
                 // record_event_with_time may have advanced to E.
                 let events_json = serde_json::to_value(&tracker.events)?;
                 let _ = update_wyckoff_structure(
@@ -1783,7 +1817,8 @@ pub(crate) async fn upsert_wyckoff_structure_from_detection(
                 },
             };
 
-            let mut tracker = WyckoffStructureTracker::new(schematic, price, price);
+            let mut tracker = WyckoffStructureTracker::new(schematic, price, price)
+                .with_failed_phase_c_window(failed_phase_c_window);
             tracker.record_event_with_time(
                 wy_event, bar_idx, price, detection.structural_score as f64, time_ms,
             );
@@ -1924,11 +1959,44 @@ async fn resolve_wyckoff_ttl_seconds(pool: &sqlx::PgPool, interval: &str) -> u64
 ///
 /// Source is tagged via score (0.55 — below detector norms) so analysts
 /// can filter these out if they want to audit only hard-detector events.
+/// Faz 8.2 — Markup/Markdown injection tunables (CLAUDE.md #2).
+/// Previously hardcoded (30 / 10 / 60% / 0.5%); now config-driven so
+/// operators can relax or tighten the synthetic Phase-E trigger without
+/// a deploy.
+struct MarkupInjectConfig {
+    window_bars: usize,
+    min_window_bars: usize,
+    confirm_pct: f64,
+    breakout_tol_pct: f64,
+}
+
+async fn resolve_markup_inject_config(pool: &sqlx::PgPool) -> MarkupInjectConfig {
+    MarkupInjectConfig {
+        window_bars: qtss_storage::resolve_system_u64(
+            pool, "wyckoff", "markup_inject.window_bars",
+            "QTSS_WYCKOFF_MARKUP_WINDOW_BARS", 30, 1, 1000,
+        ).await as usize,
+        min_window_bars: qtss_storage::resolve_system_u64(
+            pool, "wyckoff", "markup_inject.min_window_bars",
+            "QTSS_WYCKOFF_MARKUP_MIN_WINDOW_BARS", 10, 1, 1000,
+        ).await as usize,
+        confirm_pct: qtss_storage::resolve_system_f64(
+            pool, "wyckoff", "markup_inject.confirm_pct",
+            "QTSS_WYCKOFF_MARKUP_CONFIRM_PCT", 60.0,
+        ).await,
+        breakout_tol_pct: qtss_storage::resolve_system_f64(
+            pool, "wyckoff", "markup_inject.breakout_tol_pct",
+            "QTSS_WYCKOFF_MARKUP_BREAKOUT_TOL_PCT", 0.5,
+        ).await,
+    }
+}
+
 fn maybe_inject_markup_markdown(
     tracker: &mut qtss_wyckoff::WyckoffStructureTracker,
     chronological: &[MarketBarRow],
     time_ms: Option<i64>,
     bar_idx: u64,
+    cfg: &MarkupInjectConfig,
 ) {
     use qtss_wyckoff::{WyckoffEvent, WyckoffSchematic};
 
@@ -1947,13 +2015,14 @@ fn maybe_inject_markup_markdown(
     if top <= 0.0 || bot <= 0.0 || top <= bot {
         return;
     }
-    let threshold = if bullish { top * 1.005 } else { bot * 0.995 };
+    let tol = cfg.breakout_tol_pct / 100.0;
+    let threshold = if bullish { top * (1.0 + tol) } else { bot * (1.0 - tol) };
 
-    // Window of up to 30 bars ending at bar_idx (inclusive).
+    // Window ending at bar_idx (inclusive).
     let end = (bar_idx as usize + 1).min(chronological.len());
-    let start = end.saturating_sub(30);
+    let start = end.saturating_sub(cfg.window_bars);
     let window = &chronological[start..end];
-    if window.len() < 10 {
+    if window.len() < cfg.min_window_bars {
         return;
     }
 
@@ -1964,9 +2033,10 @@ fn maybe_inject_markup_markdown(
             if bullish { c > threshold } else { c < threshold }
         })
         .count();
-    // Require >=60% of recent bars beyond the breakout threshold — one
-    // spike is not a markup.
-    if confirmed * 10 < window.len() * 6 {
+    // Require ≥ confirm_pct of recent bars beyond the breakout
+    // threshold — one spike is not a markup.
+    let ratio = (confirmed as f64) / (window.len() as f64) * 100.0;
+    if ratio < cfg.confirm_pct {
         return;
     }
 

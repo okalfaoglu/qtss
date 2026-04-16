@@ -229,11 +229,19 @@ pub struct WyckoffStructureTracker {
     /// `None` = unknown (legacy rows); treated as "dwell satisfied".
     #[serde(default)]
     pub phase_entered_bar: Option<u64>,
+    /// Faz 8.2 — bars-after-Spring/UTAD within which a contrary
+    /// low/high pivot flags the Phase-C trigger as failed (see
+    /// `check_failed_phase_c`). Caller loads from system_config
+    /// `wyckoff.failed_phase_c_window_bars` (CLAUDE.md #2); default
+    /// preserves the historical hardcoded value of 12 bars.
+    #[serde(default = "default_failed_phase_c_window_bars")]
+    pub failed_phase_c_window_bars: u64,
 }
 
 fn default_phase_b_min_inner_tests() -> usize { 1 }
 fn default_phase_b_min_bars() -> usize { 10 }
 fn default_phase_min_dwell_bars() -> usize { 3 }
+fn default_failed_phase_c_window_bars() -> u64 { 12 }
 
 impl WyckoffStructureTracker {
     /// Start a new structure from a detected trading range.
@@ -257,7 +265,16 @@ impl WyckoffStructureTracker {
             require_st: false,
             phase_min_dwell_bars: default_phase_min_dwell_bars(),
             phase_entered_bar: None,
+            failed_phase_c_window_bars: default_failed_phase_c_window_bars(),
         }
+    }
+
+    /// Faz 8.2 — override the failed-Phase-C detection window
+    /// (caller reads `wyckoff.failed_phase_c_window_bars` from
+    /// system_config).
+    pub fn with_failed_phase_c_window(mut self, window_bars: u64) -> Self {
+        self.failed_phase_c_window_bars = window_bars;
+        self
     }
 
     /// P2-#15/#17 — configure A→B strictness and min dwell.
@@ -511,7 +528,6 @@ impl WyckoffStructureTracker {
     fn check_failed_phase_c(&mut self, event: WyckoffEvent, bar_index: u64, price: f64) {
         use WyckoffEvent::*;
         use WyckoffSchematic::*;
-        const FAILED_PHASE_C_WINDOW: u64 = 12;
         // Only Low-forming events can invalidate a Spring (Shakeout /
         // SOW / LPSY all put in a lower low); mirror for UTAD.
         let accum_breaker = matches!(event, SOW | LPSY | Shakeout);
@@ -519,12 +535,13 @@ impl WyckoffStructureTracker {
         if !accum_breaker && !dist_breaker {
             return;
         }
+        let window = self.failed_phase_c_window_bars;
         if accum_breaker
             && matches!(self.schematic, Accumulation | ReAccumulation)
         {
             let parent = self.events.iter().rev().find(|e| matches!(e.event, Spring | SpringTest));
             if let Some(p) = parent {
-                let within_window = bar_index.saturating_sub(p.bar_index) <= FAILED_PHASE_C_WINDOW;
+                let within_window = bar_index.saturating_sub(p.bar_index) <= window;
                 if within_window && price < p.price {
                     self.schematic = ReDistribution;
                     self.reclassify_count = self.reclassify_count.saturating_add(1);
@@ -538,7 +555,7 @@ impl WyckoffStructureTracker {
         {
             let parent = self.events.iter().rev().find(|e| matches!(e.event, UTAD | UTADTest));
             if let Some(p) = parent {
-                let within_window = bar_index.saturating_sub(p.bar_index) <= FAILED_PHASE_C_WINDOW;
+                let within_window = bar_index.saturating_sub(p.bar_index) <= window;
                 if within_window && price > p.price {
                     self.schematic = ReAccumulation;
                     self.reclassify_count = self.reclassify_count.saturating_add(1);
