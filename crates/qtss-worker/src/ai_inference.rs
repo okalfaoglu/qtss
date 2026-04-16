@@ -36,6 +36,13 @@ pub struct InferenceConfig {
     pub timeout_ms: u64,
     pub gate_enabled: bool,
     pub min_score: f64,
+    /// Faz 9.3.5 — when `gate_enabled=false`, still POST to the sidecar
+    /// and persist the prediction so AI vs classic can be measured
+    /// offline. Setting this to `false` is a hard kill-switch for
+    /// sidecar traffic (skips both scoring and persistence).
+    pub log_shadow_predictions: bool,
+    /// Faz 9.3.4 — whether to also call `/explain` for top-10 SHAP.
+    pub explain_enabled: bool,
 }
 
 impl InferenceConfig {
@@ -80,12 +87,30 @@ impl InferenceConfig {
             0.55,
         )
         .await;
+        let log_shadow_predictions = resolve_worker_enabled_flag(
+            pool,
+            "ai",
+            "inference.log_shadow_predictions",
+            "QTSS_AI_INFERENCE_LOG_SHADOW_PREDICTIONS",
+            true,
+        )
+        .await;
+        let explain_enabled = resolve_worker_enabled_flag(
+            pool,
+            "ai",
+            "inference.explain_enabled",
+            "QTSS_AI_INFERENCE_EXPLAIN_ENABLED",
+            true,
+        )
+        .await;
         Self {
             enabled,
             sidecar_url,
             timeout_ms,
             gate_enabled,
             min_score,
+            log_shadow_predictions,
+            explain_enabled,
         }
     }
 }
@@ -100,10 +125,31 @@ pub struct ScoreResponse {
     pub score: f64,
     pub model_family: String,
     pub model_version: String,
+    /// Faz 9.3.5 — logical model name; the sidecar currently mirrors
+    /// `model_family` but kept separate so future A/B splits can diverge.
+    #[serde(default)]
+    pub model_name: String,
+    #[serde(default)]
+    pub feature_spec_version: String,
     #[serde(default)]
     pub missing_features: i64,
     #[serde(default)]
     pub n_features: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShapEntry {
+    pub feature: String,
+    pub value: f64,
+    pub contribution: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExplainResponse {
+    pub shap_top10: Vec<ShapEntry>,
+    pub base_value: f64,
+    #[serde(default)]
+    pub model_version: String,
 }
 
 /// Fire one /score call. Returns `Ok(None)` for any *soft* failure
@@ -150,4 +196,72 @@ pub async fn score(
             None
         }
     }
+}
+
+/// Faz 9.3.4 — Fire one `/explain` call. Same soft-fail contract as
+/// `score`: returns `None` on any failure so the setup path never
+/// blocks on SHAP extraction. This is diagnostic; persisting the
+/// prediction itself is the caller's responsibility.
+pub async fn explain(
+    cfg: &InferenceConfig,
+    features_by_source: &JsonValue,
+) -> Option<ExplainResponse> {
+    if !cfg.enabled || !cfg.explain_enabled {
+        return None;
+    }
+    if features_by_source.is_null() {
+        return None;
+    }
+    let url = format!("{}/explain", cfg.sidecar_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(cfg.timeout_ms.max(50)))
+        .build()
+        .ok()?;
+    let resp = match client
+        .post(&url)
+        .json(&ScoreRequest { features_by_source })
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(err) => {
+            debug!(%err, "inference sidecar /explain unreachable");
+            return None;
+        }
+    };
+    if !resp.status().is_success() {
+        debug!(status = %resp.status(), "inference sidecar /explain non-2xx");
+        return None;
+    }
+    match resp.json::<ExplainResponse>().await {
+        Ok(body) => Some(body),
+        Err(err) => {
+            debug!(%err, "inference sidecar /explain parse failed");
+            None
+        }
+    }
+}
+
+/// Compute a reproducible SHA-256 hash of the feature vector actually
+/// sent to the sidecar. We canonicalize by walking the JSON into a
+/// `BTreeMap<String, BTreeMap<String, ...>>` first so key ordering
+/// can't perturb the hash.
+pub fn feature_hash(features_by_source: &JsonValue) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
+    let obj = features_by_source.as_object()?;
+    let mut canonical: BTreeMap<String, BTreeMap<String, JsonValue>> = BTreeMap::new();
+    for (source, feats) in obj.iter() {
+        let Some(inner) = feats.as_object() else {
+            continue;
+        };
+        let mut row: BTreeMap<String, JsonValue> = BTreeMap::new();
+        for (k, v) in inner.iter() {
+            row.insert(k.clone(), v.clone());
+        }
+        canonical.insert(source.clone(), row);
+    }
+    let bytes = serde_json::to_vec(&canonical).ok()?;
+    let digest = Sha256::digest(&bytes);
+    Some(format!("{:x}", digest))
 }

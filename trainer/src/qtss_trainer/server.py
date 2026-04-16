@@ -109,8 +109,25 @@ class ScoreResponse(BaseModel):
     score: float
     model_family: str
     model_version: str
+    # Faz 9.3.5 — Rust side stamps these on `qtss_ml_predictions`. The
+    # sidecar already loads them from `qtss_models`; relaying keeps the
+    # Rust client schema-free.
+    model_name: str
+    feature_spec_version: str
     missing_features: int  # how many of feature_names weren't supplied
     n_features: int
+
+
+class ShapEntry(BaseModel):
+    feature: str
+    value: float
+    contribution: float
+
+
+class ExplainResponse(BaseModel):
+    shap_top10: list[ShapEntry]
+    base_value: float
+    model_version: str
 
 
 # ---- feature flattening (kept in sync with features.py) ------------------
@@ -202,15 +219,60 @@ def score(req: ScoreRequest) -> ScoreResponse:
         mf, mv = _STATE["model_family"], _STATE["model_version"]
     if booster is None:
         raise HTTPException(status_code=503, detail="no active model loaded")
+    with _LOCK:
+        fsv = _STATE["feature_spec_version"] or ""
     x, missing = _vector(req.features_by_source, order)
     p = float(booster.predict(x)[0])
     return ScoreResponse(
         score=p,
         model_family=mf or "",
         model_version=mv or "",
+        model_name=mf or "",  # Model registry uses "family" as the logical name.
+        feature_spec_version=fsv,
         missing_features=missing,
         n_features=len(order),
     )
+
+
+@app.post("/explain", response_model=ExplainResponse)
+def explain(req: ScoreRequest) -> ExplainResponse:
+    """Return top-10 SHAP contributions for the same vector as /score.
+
+    Faz 9.3.4 — LightGBM's `pred_contrib=True` returns an array of shape
+    (n_samples, n_features + 1) where the last column is the model's
+    expected value (base / intercept). We sort by |contribution| desc
+    and keep the 10 most impactful features.
+    """
+    with _LOCK:
+        booster = _STATE["booster"]
+        order = _STATE["feature_names"]
+        mv = _STATE["model_version"]
+    if booster is None:
+        raise HTTPException(status_code=503, detail="no active model loaded")
+    x, _missing = _vector(req.features_by_source, order)
+    # shape: (1, n_features + 1); last column = base value.
+    contrib = booster.predict(x, pred_contrib=True)
+    row = np.asarray(contrib)[0]
+    base_value = float(row[-1])
+    feat_contribs = row[:-1]
+    # Flatten the input dict once so we can echo back the raw value.
+    flat: dict[str, float] = {}
+    for source, feats in req.features_by_source.items():
+        if not isinstance(feats, dict):
+            continue
+        for name, val in feats.items():
+            flat[f"{source}.{name}"] = _coerce(val)
+    # Top-10 by absolute contribution.
+    idxs = np.argsort(-np.abs(feat_contribs))[: min(10, len(order))]
+    top = [
+        ShapEntry(
+            feature=order[i],
+            value=float(flat.get(order[i], float("nan"))),
+            contribution=float(feat_contribs[i]),
+        )
+        for i in idxs
+    ]
+    return ExplainResponse(shap_top10=top, base_value=base_value, model_version=mv or "")
 
 
 # ---- entrypoint -----------------------------------------------------------

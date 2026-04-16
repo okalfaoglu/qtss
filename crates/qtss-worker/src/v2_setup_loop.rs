@@ -1015,25 +1015,102 @@ async fn try_arm_new_setup(
 
     let alt_type = classify_alt_type(direction, ema50, ema200, price);
 
-    // Faz 9.3.3 — ask the inference sidecar for P(win). `None` on any
-    // soft failure keeps the setup path alive (shadow mode). The gate
-    // only vetoes when `ai.inference.gate_enabled=true` AND the sidecar
-    // returned an actual score below `min_score`.
+    // Faz 9.3.3 + 9.3.5 — ask the inference sidecar for P(win) and
+    // persist a full telemetry row to `qtss_ml_predictions`. `None` on
+    // any soft failure keeps the setup path alive (shadow mode). The
+    // gate only vetoes when `ai.inference.gate_enabled=true` AND the
+    // sidecar returned an actual score below `min_score`.
     let ai_cfg = crate::ai_inference::InferenceConfig::load(pool).await;
+
+    // Shadow kill-switch: skip sidecar entirely if gate is off AND
+    // operator disabled shadow logging (CLAUDE.md #2).
+    let should_call_sidecar =
+        ai_cfg.enabled && (ai_cfg.gate_enabled || ai_cfg.log_shadow_predictions);
+
     let ai_window_minutes = 15;
-    let features_by_source = qtss_storage::fetch_latest_features_by_source(
-        pool,
-        &sym.exchange,
-        &sym.symbol,
-        &sym.interval,
-        ai_window_minutes,
-    )
-    .await
-    .unwrap_or(None);
+    let features_by_source = if should_call_sidecar {
+        qtss_storage::fetch_latest_features_by_source(
+            pool,
+            &sym.exchange,
+            &sym.symbol,
+            &sym.interval,
+            ai_window_minutes,
+        )
+        .await
+        .unwrap_or(None)
+    } else {
+        None
+    };
+
+    let inference_start = std::time::Instant::now();
     let ai_response = match features_by_source.as_ref() {
         Some(f) => crate::ai_inference::score(&ai_cfg, f).await,
         None => None,
     };
+    let inference_latency_ms = inference_start.elapsed().as_millis() as i32;
+
+    // Compute feature hash for reproducibility (Faz 9.3.5).
+    let feat_hash = features_by_source
+        .as_ref()
+        .and_then(crate::ai_inference::feature_hash);
+
+    // Faz 9.3.4 — SHAP top-10 (optional, diagnostic).
+    let shap_json: Option<serde_json::Value> = match (
+        &ai_response,
+        features_by_source.as_ref(),
+        ai_cfg.explain_enabled,
+    ) {
+        (Some(_), Some(f), true) => crate::ai_inference::explain(&ai_cfg, f)
+            .await
+            .and_then(|r| serde_json::to_value(&r.shap_top10).ok()),
+        _ => None,
+    };
+
+    // Determine decision for the prediction row.
+    let ai_decision = ai_response.as_ref().map(|r| {
+        if !ai_cfg.gate_enabled {
+            "shadow"
+        } else if r.score >= ai_cfg.min_score {
+            "pass"
+        } else {
+            "block"
+        }
+    });
+
+    // Persist prediction row (Faz 9.3.5). Inserted with setup_id=None;
+    // if a setup is later born we back-fill the FK via `attach_setup_id`.
+    let prediction_id: Option<Uuid> = match ai_response.as_ref() {
+        Some(r) => {
+            let insert = qtss_storage::MlPredictionInsert {
+                setup_id: None,
+                detection_id: None, // linked post-insert if needed
+                exchange: sym.exchange.clone(),
+                symbol: sym.symbol.clone(),
+                timeframe: sym.interval.clone(),
+                model_name: r.model_name.clone(),
+                model_version: r.model_version.clone(),
+                model_sha: None,
+                feature_spec_version: r.feature_spec_version.clone(),
+                feature_hash: feat_hash.clone(),
+                score: r.score as f32,
+                threshold: ai_cfg.min_score as f32,
+                gate_enabled: ai_cfg.gate_enabled,
+                decision: ai_decision.unwrap_or("shadow").to_string(),
+                shap_top10: shap_json,
+                latency_ms: inference_latency_ms,
+                sidecar_url: ai_cfg.sidecar_url.clone(),
+            };
+            match qtss_storage::insert_ml_prediction(pool, &insert).await {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    warn!(%e, "insert_ml_prediction failed (non-fatal)");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
     let ai_score = ai_response.as_ref().map(|r| r.score as f32);
     if ai_cfg.gate_enabled {
         if let Some(r) = ai_response.as_ref() {
@@ -1100,6 +1177,15 @@ async fn try_arm_new_setup(
         }
         Err(e) => return Err(e.into()),
     };
+
+    // Faz 9.3.5 — back-fill the setup FK on the prediction row now
+    // that the setup is born.
+    if let Some(pred_id) = prediction_id {
+        if let Err(e) = qtss_storage::attach_ml_prediction_setup_id(pool, pred_id, id).await {
+            warn!(%e, "attach_ml_prediction_setup_id failed (non-fatal)");
+        }
+    }
+
     insert_v2_setup_event(
         pool,
         &V2SetupEventInsert {
