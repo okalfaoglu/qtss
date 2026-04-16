@@ -7,6 +7,7 @@ mod binance_catalog_sync_loop;
 mod binance_futures_reconcile;
 mod binance_spot_reconcile;
 mod binance_user_stream;
+mod commission_sync_loop;
 mod confluence;
 mod confluence_hook;
 mod dry_exchange_order;
@@ -330,6 +331,10 @@ async fn main() -> anyhow::Result<()> {
         let wyckoff_inv_pool = pool.clone();
         tokio::spawn(wyckoff_setup_invalidation_loop::wyckoff_setup_invalidation_loop(
             wyckoff_inv_pool,
+        ));
+        let commission_sync_pool = pool.clone();
+        tokio::spawn(commission_sync_loop::commission_sync_loop(
+            commission_sync_pool,
         ));
         let v2_setup_tg_pool = pool.clone();
         tokio::spawn(v2_setup_telegram_loop::v2_setup_telegram_loop(
