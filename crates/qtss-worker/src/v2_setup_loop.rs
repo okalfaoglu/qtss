@@ -645,6 +645,23 @@ async fn evaluate_close(
     Ok(None)
 }
 
+/// Round-trip (entry + exit) taker commission expressed as a % of entry.
+///
+/// Single source so the open-time gate and the close-time P&L adjustment
+/// can't drift apart. Routed through `resolve_commission_bps` so the
+/// venue-specific override (`setup.commission.{venue}.taker_bps`) wins
+/// over the global fallback.
+async fn net_round_trip_commission_pct(pool: &PgPool, venue_class: &str) -> f64 {
+    let taker_bps = qtss_storage::resolve_commission_bps(
+        pool,
+        venue_class,
+        qtss_storage::CommissionSide::Taker,
+        5.0,
+    )
+    .await;
+    (taker_bps * 2.0) / 10_000.0 * 100.0
+}
+
 async fn close_setup(
     pool: &PgPool,
     row: &V2SetupRow,
@@ -654,15 +671,21 @@ async fn close_setup(
 ) -> Result<(), BoxErr> {
     // Granular close state + P&L computation.
     let close_state = SetupState::from_close_reason(reason);
+    // Net-of-commission pnl_pct — we subtract the round-trip taker fee so the
+    // outcome labeler + Faz 9.3 trainer see the realized P&L the account
+    // actually booked. Gross pnl at this point silently biased the win label
+    // for marginal trades whose fees ate the edge (CLAUDE.md #2: all tunables
+    // are config-driven).
+    let round_trip_pct = net_round_trip_commission_pct(pool, &row.venue_class).await;
     let pnl_pct = row.entry_price.map(|ep| {
         let ep = ep as f64;
         if ep.abs() < 1e-12 { return 0.0f32; }
-        let pct = match row.direction.as_str() {
+        let gross = match row.direction.as_str() {
             "long" => (exit_price - ep) / ep * 100.0,
             "short" => (ep - exit_price) / ep * 100.0,
             _ => 0.0,
         };
-        pct as f32
+        (gross - round_trip_pct) as f32
     });
 
     update_v2_setup_state(
@@ -737,17 +760,20 @@ async fn record_detection_outcome(
         CloseReason::ReverseSignal | CloseReason::Manual => "scratch",
     };
 
+    // Same net-of-commission adjustment as close_setup — keeps the detection
+    // outcome table and v2 setup row in sync so downstream stats don't drift.
+    let round_trip_pct = net_round_trip_commission_pct(pool, &row.venue_class).await;
     let pnl_pct = row.entry_price.map(|ep| {
         let ep = ep as f64;
         if ep.abs() < 1e-12 {
             return 0.0_f32;
         }
-        let pct = match row.direction.as_str() {
+        let gross = match row.direction.as_str() {
             "long" => (exit_price - ep) / ep * 100.0,
             "short" => (ep - exit_price) / ep * 100.0,
             _ => 0.0,
         };
-        pct as f32
+        (gross - round_trip_pct) as f32
     });
 
     let duration_secs = row.created_at.signed_duration_since(chrono::DateTime::UNIX_EPOCH).num_seconds();
@@ -961,14 +987,19 @@ async fn try_arm_new_setup(
     // (MEMORY gap list). Order: `commission.{venue_class}.taker_bps` →
     // `commission.taker_bps` → 5 bps fallback.
     {
-        let taker_bps = qtss_storage::resolve_commission_bps(
+        let round_trip_pct = net_round_trip_commission_pct(pool, venue.as_str()).await;
+        // Safety multiplier — `profit_pct = 1.01 × round_trip` is effectively
+        // break-even once slippage + funding are counted. Default 1.5 forces a
+        // real edge; operators can tighten or loosen from Config GUI.
+        let min_mult = qtss_storage::resolve_system_f64(
             pool,
-            venue.as_str(),
-            qtss_storage::CommissionSide::Taker,
-            5.0,
+            "setup",
+            "commission_gate.min_profit_multiple",
+            "",
+            1.5,
         )
         .await;
-        let round_trip_pct = (taker_bps * 2.0) / 10_000.0 * 100.0; // convert to %
+        let gate_pct = round_trip_pct * min_mult;
         let entry = guard.entry;
         let target = guard.target_ref;
         let profit_pct = match direction {
@@ -976,7 +1007,7 @@ async fn try_arm_new_setup(
             Direction::Short => ((entry - target) / entry) * 100.0,
             Direction::Neutral => 0.0,
         };
-        if profit_pct <= round_trip_pct {
+        if profit_pct <= gate_pct {
             record_rejection(pool, cfg, venue, profile, sym, direction, conf.id, RejectReason::CommissionGate).await?;
             return Ok(());
         }
