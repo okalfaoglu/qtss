@@ -7,6 +7,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Risk } from "./pages/Risk";
 import { Blotter } from "./pages/Blotter";
 import { Setups } from "./pages/Setups";
+import { SetupRejections } from "./pages/SetupRejections";
 import { MonteCarlo } from "./pages/MonteCarlo";
 import { Regime } from "./pages/Regime";
 import { Chart } from "./pages/Chart";
@@ -49,6 +50,7 @@ export const router = createBrowserRouter([
       { path: "risk", element: <Risk /> },
       { path: "blotter", element: <Blotter /> },
       { path: "setups", element: <Setups /> },
+      { path: "setup-rejections", element: <SetupRejections /> },
       { path: "montecarlo", element: <MonteCarlo /> },
       { path: "regime", element: <Regime /> },
       { path: "chart", element: <Chart /> },
