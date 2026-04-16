@@ -24,6 +24,7 @@ mod nansen_extended;
 mod nansen_query;
 mod notify_outbox;
 mod onchain_signal_scorer;
+mod outcome_labeler_loop;
 mod paper_fill_notify;
 mod position_manager;
 mod range_signal_execute_loop;
@@ -261,6 +262,9 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(binance_public_ws::liquidation_stream_loop(liq_pool));
         let cvd_pool = pool.clone();
         tokio::spawn(binance_public_ws::aggtrade_cvd_loop(cvd_pool));
+        // Faz 9.0.1 — outcome labeler (AI training substrate).
+        let ol_pool = pool.clone();
+        tokio::spawn(outcome_labeler_loop::outcome_labeler_loop(ol_pool));
         let cg_pool = pool.clone();
         tokio::spawn(engines::external_coinglass_loop(cg_pool));
         let hl_pool = pool.clone();
