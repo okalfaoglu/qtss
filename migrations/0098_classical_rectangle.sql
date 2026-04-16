@@ -12,7 +12,7 @@ SELECT _qtss_register_key(
     'number', true, 'normal', ARRAY['classical','rectangle']);
 
 SELECT _qtss_register_key(
-    'classical.rectangle_min_bars','classical','detection','integer',
+    'classical.rectangle_min_bars','classical','detection','int',
     '15'::jsonb, 'bars',
     'Rectangle minimum süresi (ilk pivot ile son pivot arası bar sayısı). Kısa range gürültüsünü eler. Default 15.',
     'number', true, 'normal', ARRAY['classical','rectangle']);

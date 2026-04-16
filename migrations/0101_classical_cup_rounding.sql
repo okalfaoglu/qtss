@@ -5,7 +5,7 @@
 -- Curvature parabolic fit R² ile doğrulanır. Reference: Bulkowski.
 
 SELECT _qtss_register_key(
-    'classical.cup_min_bars','classical','detection','integer',
+    'classical.cup_min_bars','classical','detection','int',
     '30'::jsonb, 'bars',
     'Cup minimum süresi (rim_left → rim_right bar farkı). Default 30.',
     'number', true, 'normal', ARRAY['classical','cup']);
@@ -41,7 +41,7 @@ SELECT _qtss_register_key(
     'number', true, 'normal', ARRAY['classical','cup']);
 
 SELECT _qtss_register_key(
-    'classical.rounding_min_bars','classical','detection','integer',
+    'classical.rounding_min_bars','classical','detection','int',
     '40'::jsonb, 'bars',
     'Rounding minimum süresi. Default 40.',
     'number', true, 'normal', ARRAY['classical','rounding']);

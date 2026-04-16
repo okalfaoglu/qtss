@@ -12,7 +12,7 @@ SELECT _qtss_register_key(
     'number', true, 'normal', ARRAY['validator','classical','retest']);
 
 SELECT _qtss_register_key(
-    'validator.classical.retest_max_bars_after_breakout','validator','detection','integer',
+    'validator.classical.retest_max_bars_after_breakout','validator','detection','int',
     '30'::jsonb, 'bars',
     'Kırılım sonrası retest beklenen maksimum bar sayısı. Default 30.',
     'number', true, 'normal', ARRAY['validator','classical','retest']);

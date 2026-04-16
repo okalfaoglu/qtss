@@ -11,7 +11,7 @@ SELECT _qtss_register_key(
     'number', true, 'normal', ARRAY['classical','channel']);
 
 SELECT _qtss_register_key(
-    'classical.channel_min_bars','classical','detection','integer',
+    'classical.channel_min_bars','classical','detection','int',
     '20'::jsonb, 'bars',
     'Channel minimum süresi (ilk-son pivot bar farkı). Default 20.',
     'number', true, 'normal', ARRAY['classical','channel']);

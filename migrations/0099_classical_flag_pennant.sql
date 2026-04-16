@@ -13,7 +13,7 @@ SELECT _qtss_register_key(
     'number', true, 'normal', ARRAY['classical','flag','pennant']);
 
 SELECT _qtss_register_key(
-    'classical.flag_pole_max_bars','classical','detection','integer',
+    'classical.flag_pole_max_bars','classical','detection','int',
     '20'::jsonb, 'bars',
     'Flagpole için geriye bakılacak maksimum bar penceresi. Default 20.',
     'number', true, 'normal', ARRAY['classical','flag','pennant']);
@@ -25,7 +25,7 @@ SELECT _qtss_register_key(
     'number', true, 'normal', ARRAY['classical','flag']);
 
 SELECT _qtss_register_key(
-    'classical.flag_atr_period','classical','detection','integer',
+    'classical.flag_atr_period','classical','detection','int',
     '14'::jsonb, 'bars',
     'Flag/Pennant için Wilder ATR periyodu. Default 14.',
     'number', true, 'normal', ARRAY['classical','flag','pennant']);
