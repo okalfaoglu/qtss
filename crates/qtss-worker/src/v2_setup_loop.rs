@@ -815,11 +815,18 @@ async fn try_arm_new_setup(
     }
 
     // Commission gate: reject if expected profit < round-trip commission cost.
-    // Commission is expressed in bps (config table); we compare profit % vs
-    // 2 × taker_bps (entry + exit taker fills, worst case).
+    // Faz 8 step 1 — route through the shared `resolve_commission_bps`
+    // so Wyckoff + D/T/Q agree on a single venue-aware source of truth
+    // (MEMORY gap list). Order: `commission.{venue_class}.taker_bps` →
+    // `commission.taker_bps` → 5 bps fallback.
     {
-        let taker_bps =
-            resolve_system_f64(pool, "setup", "commission.taker_bps", "", 5.0).await;
+        let taker_bps = qtss_storage::resolve_commission_bps(
+            pool,
+            venue.as_str(),
+            qtss_storage::CommissionSide::Taker,
+            5.0,
+        )
+        .await;
         let round_trip_pct = (taker_bps * 2.0) / 10_000.0 * 100.0; // convert to %
         let entry = guard.entry;
         let target = guard.target_ref;

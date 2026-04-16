@@ -29,8 +29,9 @@ use tracing::{debug, info, warn};
 
 use qtss_storage::{
     find_active_wyckoff_structure, list_enabled_engine_symbols, list_recent_bars,
-    resolve_system_csv, resolve_system_f64, resolve_system_string, resolve_system_u64,
-    resolve_worker_enabled_flag, upsert_wyckoff_setup, WyckoffSetupUpsert,
+    resolve_commission_bps, resolve_system_csv, resolve_system_f64, resolve_system_string,
+    resolve_system_u64, resolve_worker_enabled_flag, upsert_wyckoff_setup, CommissionSide,
+    WyckoffSetupUpsert,
 };
 use qtss_wyckoff::{
     persistence::signal_to_payload,
@@ -251,10 +252,35 @@ async fn process_symbol(
         cfg: setup_cfg,
     };
 
+    // Faz 8 step 1 — commission gate. Inject the venue-resolved
+    // taker bps + `wyckoff.plan.min_net_rr` into a per-symbol clone
+    // of the emit config. Without this the planner fell back to a
+    // hardcoded 7.5 bps / 1.5 R default, silently diverging from the
+    // D/T/Q loop which reads `setup.commission.*` (MEMORY gap list).
+    let venue_class_for_commission = classify_venue(exchange, segment);
+    let commission_bps = resolve_commission_bps(
+        pool,
+        &venue_class_for_commission,
+        CommissionSide::Taker,
+        emit_cfg.planner.commission_bps,
+    )
+    .await;
+    let min_net_rr = resolve_system_f64(
+        pool,
+        "setup",
+        "wyckoff.plan.min_net_rr",
+        "",
+        emit_cfg.planner.min_net_rr,
+    )
+    .await;
+    let mut emit_cfg_owned = emit_cfg.clone();
+    emit_cfg_owned.planner.commission_bps = commission_bps;
+    emit_cfg_owned.planner.min_net_rr = min_net_rr;
+
     // 3. Emit — range id = structure uuid so rescans hit the same key.
     let range_id = structure.id.to_string();
     let vp_hint = build_vp_hint_from_setup_bars(&bars);
-    let raw_signals = emit_with_vp(&ctx, emit_cfg, symbol, timeframe, &range_id, vp_hint.as_ref());
+    let raw_signals = emit_with_vp(&ctx, &emit_cfg_owned, symbol, timeframe, &range_id, vp_hint.as_ref());
     if raw_signals.is_empty() {
         return Ok(0);
     }

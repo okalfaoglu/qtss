@@ -4,6 +4,7 @@ pub mod audit_log;
 pub mod backfill_progress;
 pub mod catalog;
 pub mod config;
+pub mod commission_resolver;
 pub mod config_tick;
 pub mod copy_trade;
 pub mod copy_trade_jobs;
@@ -116,6 +117,7 @@ pub use catalog::{
     is_binance_futures_tradable, resolve_series_catalog_ids, ui_segment_to_market_keys,
     BarIntervalRow, CatalogRepository, ExchangeRow, InstrumentRow, MarketRow, SeriesCatalogIds,
 };
+pub use commission_resolver::{resolve_commission_bps, CommissionSide};
 pub use config::{AppConfigEntry, AppConfigRepository};
 pub use config_tick::{
     decimal_from_config_value, normalize_notify_locale_code, resolve_notify_default_locale,
