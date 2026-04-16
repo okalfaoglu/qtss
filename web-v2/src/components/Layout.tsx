@@ -21,7 +21,6 @@ const NAV_ENTRIES: NavEntry[] = [
   { label: "Regime", to: "/v2/regime", enabled: true },
   { label: "Wave Tree", to: "/v2/wave-tree", enabled: true },
   { label: "Wyckoff", to: "/v2/wyckoff", enabled: true },
-  { label: "Wyckoff Signals", to: "/v2/wyckoff-setups", enabled: true },
   { label: "Scenarios", to: "/v2/scenarios", enabled: true },
   { label: "Monte Carlo", to: "/v2/montecarlo", enabled: true },
   { label: "Risk", to: "/v2/risk", enabled: true },

@@ -121,7 +121,13 @@ pub async fn update_v2_setup_state(
     close_reason: Option<&str>,
     close_price: Option<f32>,
 ) -> Result<(), StorageError> {
-    let closed_at: Option<DateTime<Utc>> = if new_state == "closed" {
+    // Faz 9.3.4 — any `closed*` variant (`closed`, `closed_win`,
+    // `closed_loss`, `closed_timeout`, ...) terminates the lifecycle,
+    // so all of them must stamp `closed_at`. Prior bug: only exact
+    // "closed" matched, which left `closed_win`/`closed_loss` with
+    // NULL closed_at → `v_qtss_training_set_closed` (WHERE closed_at
+    // IS NOT NULL) was empty and the trainer saw zero rows.
+    let closed_at: Option<DateTime<Utc>> = if new_state.starts_with("closed") {
         Some(Utc::now())
     } else {
         None

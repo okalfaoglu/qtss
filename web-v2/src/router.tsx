@@ -25,7 +25,6 @@ import { Users } from "./pages/Users";
 import { EngineSymbols } from "./pages/EngineSymbols";
 import { WaveTree } from "./pages/WaveTree";
 import { Wyckoff } from "./pages/Wyckoff";
-import { WyckoffSetups } from "./pages/WyckoffSetups";
 
 // Guard: bounce to /login when there is no token in storage. We deliberately
 // keep this check synchronous (localStorage) so the first paint never flashes
@@ -70,7 +69,6 @@ export const router = createBrowserRouter([
       { path: "engine-symbols", element: <EngineSymbols /> },
       { path: "wave-tree", element: <WaveTree /> },
       { path: "wyckoff", element: <Wyckoff /> },
-      { path: "wyckoff-setups", element: <WyckoffSetups /> },
     ],
   },
   { path: "/", element: <Navigate to="/v2/dashboard" replace /> },
