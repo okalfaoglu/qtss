@@ -61,6 +61,10 @@ pub struct SetupEntry {
     pub closed_at: Option<DateTime<Utc>>,
     pub pnl_pct: Option<f32>,
     pub risk_mode: Option<String>,
+    /// Faz 9.3.3 — LightGBM P(win) stamped at setup-open. NULL when
+    /// the inference sidecar was disabled/unreachable or no active
+    /// model was loaded.
+    pub ai_score: Option<f32>,
     pub confluence_id: Option<Uuid>,
     pub raw_meta: serde_json::Value,
 }
@@ -160,6 +164,7 @@ fn row_to_entry(row: V2SetupRow) -> SetupEntry {
         closed_at: row.closed_at,
         pnl_pct: row.pnl_pct,
         risk_mode: row.risk_mode,
+        ai_score: row.ai_score,
         confluence_id: row.confluence_id,
         raw_meta: row.raw_meta,
     }

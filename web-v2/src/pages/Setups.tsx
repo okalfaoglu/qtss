@@ -48,6 +48,42 @@ function badge(map: Record<string, string>, key: string): string {
   return map[key] ?? "bg-zinc-800/40 text-zinc-300 border-zinc-700";
 }
 
+// Faz 9.3.3 — color-coded P(win) chip so the operator can see at a
+// glance whether the LightGBM meta-classifier agreed with the setup.
+// `null` = sidecar down / no active model / older pre-9.3.3 row;
+// shown as a muted em dash so it doesn't compete with real scores.
+function AiScoreChip({ score }: { score: number | null }) {
+  if (score == null || Number.isNaN(score)) {
+    return (
+      <span
+        className="font-mono text-[11px] text-zinc-600"
+        title="No inference score (sidecar disabled, no active model, or pre-9.3.3 setup)."
+      >
+        —
+      </span>
+    );
+  }
+  const pct = score * 100;
+  // Thresholds match `ai.inference.min_score` default (0.55) +
+  // a "strong" band at 0.65 for quick visual triage.
+  const cls =
+    score >= 0.65
+      ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+      : score >= 0.55
+        ? "border-sky-500/40 bg-sky-500/15 text-sky-300"
+        : score >= 0.45
+          ? "border-amber-500/40 bg-amber-500/15 text-amber-300"
+          : "border-red-500/40 bg-red-500/15 text-red-300";
+  return (
+    <span
+      className={`inline-block rounded border px-1.5 py-0.5 font-mono text-[10px] ${cls}`}
+      title={`LightGBM P(win) = ${pct.toFixed(1)}%`}
+    >
+      {pct.toFixed(0)}%
+    </span>
+  );
+}
+
 function SetupRow({
   s,
   onSelect,
@@ -94,6 +130,9 @@ function SetupRow({
       </td>
       <td className="px-2 py-1.5 text-right font-mono text-zinc-400">
         {fmtNum(s.risk_pct, 2)}
+      </td>
+      <td className="px-2 py-1.5 text-right">
+        <AiScoreChip score={s.ai_score} />
       </td>
       <td className="px-2 py-1.5 text-zinc-600">{fmtTs(s.updated_at)}</td>
     </tr>
@@ -250,6 +289,7 @@ export function Setups() {
                   <th className="px-2 py-2 text-right">Koruma</th>
                   <th className="px-2 py-2 text-right">Target</th>
                   <th className="px-2 py-2 text-right">Risk%</th>
+                  <th className="px-2 py-2 text-right" title="LightGBM P(win) at setup-open (Faz 9.3.3)">AI</th>
                   <th className="px-2 py-2 text-left">Updated</th>
                 </tr>
               </thead>
@@ -304,6 +344,10 @@ export function Setups() {
                     <div className="text-zinc-500">Risk %</div>
                     <div className="text-right font-mono text-zinc-300">
                       {fmtNum(selectedEntry.risk_pct, 2)}
+                    </div>
+                    <div className="text-zinc-500">AI score</div>
+                    <div className="text-right">
+                      <AiScoreChip score={selectedEntry.ai_score} />
                     </div>
                     {selectedEntry.close_reason && (
                       <>

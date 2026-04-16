@@ -355,6 +355,10 @@ export interface SetupEntry {
   close_reason: string | null;
   close_price: number | null;
   closed_at: string | null;
+  pnl_pct: number | null;
+  risk_mode: string | null;
+  /** Faz 9.3.3 — P(win) stamped at open by the inference sidecar, or null. */
+  ai_score: number | null;
   confluence_id: string | null;
   raw_meta: unknown;
 }
