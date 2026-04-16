@@ -70,14 +70,71 @@ pub async fn list_recent_setup_rejections(
     pool: &PgPool,
     limit: i64,
 ) -> Result<Vec<V2SetupRejectionRow>, StorageError> {
+    list_setup_rejections_filtered(pool, &RejectionFilter { limit, ..Default::default() }).await
+}
+
+/// Filter set for the Faz 9.1.3 Confluence Inspector.
+#[derive(Debug, Clone, Default)]
+pub struct RejectionFilter {
+    pub limit: i64,
+    pub venue_class: Option<String>,
+    pub reason: Option<String>,
+    pub symbol: Option<String>,
+    pub timeframe: Option<String>,
+    /// Only include rows strictly newer than this many hours ago.
+    pub since_hours: Option<i64>,
+}
+
+pub async fn list_setup_rejections_filtered(
+    pool: &PgPool,
+    f: &RejectionFilter,
+) -> Result<Vec<V2SetupRejectionRow>, StorageError> {
+    let limit = f.limit.clamp(1, 5_000);
     let rows = sqlx::query_as::<_, V2SetupRejectionRow>(
         r#"SELECT id, created_at, venue_class, exchange, symbol, timeframe,
                   profile, direction, reject_reason, confluence_id, raw_meta
              FROM qtss_v2_setup_rejections
+            WHERE ($1::text IS NULL OR venue_class = $1)
+              AND ($2::text IS NULL OR reject_reason = $2)
+              AND ($3::text IS NULL OR symbol = $3)
+              AND ($4::text IS NULL OR timeframe = $4)
+              AND ($5::bigint IS NULL OR created_at > now() - ($5 || ' hours')::interval)
             ORDER BY created_at DESC
-            LIMIT $1"#,
+            LIMIT $6"#,
     )
+    .bind(f.venue_class.as_deref())
+    .bind(f.reason.as_deref())
+    .bind(f.symbol.as_deref())
+    .bind(f.timeframe.as_deref())
+    .bind(f.since_hours)
     .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Aggregate count per reason for the Confluence Inspector summary card.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct RejectionReasonCount {
+    pub reject_reason: String,
+    pub n: i64,
+}
+
+pub async fn summarize_setup_rejections(
+    pool: &PgPool,
+    since_hours: i64,
+    venue_class: Option<&str>,
+) -> Result<Vec<RejectionReasonCount>, StorageError> {
+    let rows = sqlx::query_as::<_, RejectionReasonCount>(
+        r#"SELECT reject_reason, COUNT(*)::bigint AS n
+             FROM qtss_v2_setup_rejections
+            WHERE created_at > now() - ($1 || ' hours')::interval
+              AND ($2::text IS NULL OR venue_class = $2)
+            GROUP BY reject_reason
+            ORDER BY n DESC"#,
+    )
+    .bind(since_hours)
+    .bind(venue_class)
     .fetch_all(pool)
     .await?;
     Ok(rows)

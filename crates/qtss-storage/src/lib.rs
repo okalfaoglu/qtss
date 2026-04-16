@@ -68,7 +68,8 @@ pub use v2_setup_events::{
     mark_setup_event_delivered, mark_setup_event_failed, V2SetupEventInsert, V2SetupEventRow,
 };
 pub use v2_setup_rejections::{
-    insert_v2_setup_rejection, list_recent_setup_rejections, V2SetupRejectionInsert,
+    insert_v2_setup_rejection, list_recent_setup_rejections, list_setup_rejections_filtered,
+    summarize_setup_rejections, RejectionFilter, RejectionReasonCount, V2SetupRejectionInsert,
     V2SetupRejectionRow,
 };
 pub use v2_setups::{
