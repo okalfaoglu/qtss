@@ -13,7 +13,7 @@ use qtss_nansen::post_token_screener;
 use qtss_notify::{Notification, NotificationChannel, NotificationDispatcher};
 use qtss_storage::{
     fetch_nansen_snapshot, insert_nansen_setup_row, insert_nansen_setup_run, list_recent_bars,
-    NansenSetupRowInsert, NansenSetupRunInsert,
+    resolve_worker_enabled_flag, NansenSetupRowInsert, NansenSetupRunInsert,
 };
 use reqwest::Client;
 use rust_decimal::prelude::ToPrimitive;
@@ -948,6 +948,21 @@ pub async fn nansen_setup_scan_loop(pool: PgPool) {
     let mut logged_mode = false;
 
     loop {
+        // Faz 9.0.0 — master Nansen kapısı: `worker.nansen_enabled=false` →
+        // setup_scan da durur (diğer nansen loop'ları zaten bu bayrağı kontrol
+        // ediyor; CLAUDE.md #2 gereği master flag tek kaynak).
+        if !resolve_worker_enabled_flag(
+            &pool,
+            "worker",
+            "nansen_enabled",
+            "QTSS_NANSEN_ENABLED",
+            true,
+        )
+        .await
+        {
+            tokio::time::sleep(Duration::from_secs(secs)).await;
+            continue;
+        }
         let snapshot_only = setup_snapshot_only_mode();
         if !logged_mode {
             logged_mode = true;

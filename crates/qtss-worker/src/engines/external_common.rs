@@ -19,14 +19,16 @@ fn tick_floor_secs(s: i32) -> i64 {
     (s as i64).max(30)
 }
 
-/// Suffix after `binance_taker_` / `binance_premium_` / `binance_open_interest_` / `binance_ls_ratio_`,
-/// uppercased for catalog lookup (e.g. `btcusdt` → `BTCUSDT`). Other `binance_*` keys return `None`.
+/// Suffix after `binance_taker_` / `binance_premium_` / `binance_open_interest_` / `binance_ls_ratio_` /
+/// `binance_funding_rate_`, uppercased for catalog lookup (e.g. `btcusdt` → `BTCUSDT`).
+/// Other `binance_*` keys return `None`.
 fn native_pair_upper_for_binance_metric_key(key: &str) -> Option<String> {
     const PREFIXES: &[&str] = &[
         "binance_taker_",
         "binance_premium_",
         "binance_open_interest_",
         "binance_ls_ratio_",
+        "binance_funding_rate_",
     ];
     for prefix in PREFIXES {
         if let Some(rest) = key.strip_prefix(prefix) {

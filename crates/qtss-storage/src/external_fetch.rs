@@ -136,6 +136,14 @@ pub async fn ensure_binance_sources_for_active_symbols(pool: &PgPool) -> Result<
                 300,
                 "Binance global long/short account ratio",
             ),
+            // Faz 9.0.0 — historical funding rate stream (premiumIndex carries
+            // only lastFundingRate; this one gives recent history for features).
+            (
+                format!("binance_funding_rate_{}", pair.to_lowercase()),
+                format!("https://fapi.binance.com/fapi/v1/fundingRate?symbol={pair}&limit=24"),
+                3600,
+                "Binance historical funding rate (last 24 intervals)",
+            ),
         ];
 
         for (key, url, tick, desc) in &sources {
