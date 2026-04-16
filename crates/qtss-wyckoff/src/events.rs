@@ -580,10 +580,28 @@ fn eval_upthrust(ctx: &EventContext) -> Option<EventMatch> {
             return None;
         }
     }
+    // Phase-C UTAD canonical signature: volume PEAKS on the false break
+    // (institutional completion of selling). Without a volume guard this
+    // function flags every shallow resistance poke — incl. low-liquidity
+    // afterhours wicks — as UTAD. Mirrors the panic-volume requirement on
+    // the Spring/Shakeout side. Softer than a full climax (0.8x) so the
+    // lower-confidence UT variant still qualifies.
+    let avg = avg_vol_f64(pivots).unwrap_or(0.0);
+    let vol = candidate.volume_at_pivot.to_f64().unwrap_or(0.0);
+    let utad_vol_floor = avg * cfg.climax_volume_mult * 0.8;
+    if avg > 0.0 && vol < utad_vol_floor {
+        return None;
+    }
+    let vol_score = if avg > 0.0 {
+        (vol / (avg * cfg.climax_volume_mult)).min(1.0)
+    } else {
+        0.5
+    };
     let center = (cfg.min_penetration + cfg.max_penetration) / 2.0;
     let half = (cfg.max_penetration - cfg.min_penetration) / 2.0;
     let z = (penetration - center) / half.max(1e-9);
-    let score = (-(z * z) / 2.0).exp();
+    let pen_score = (-(z * z) / 2.0).exp();
+    let score = pen_score * 0.6 + vol_score * 0.4;
     let labels: Vec<&'static str> = (0..context.len())
         .map(label_for)
         .chain(std::iter::once("UTAD"))

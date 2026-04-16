@@ -52,6 +52,49 @@ const SCHEMATIC_COLORS: Record<string, string> = {
   redistribution: "text-rose-400",
 };
 
+// Wyckoff literature commits a schematic family (accum vs distrib) at
+// Phase C — Spring for accumulation, UTAD for distribution. Before C the
+// family call is provisional: only PS/BC/AR/ST evidence exists, which any
+// later shakeout or upthrust can legitimately flip. Mirrors the backend
+// `detector.wyckoff.schematic_lock_phase = C` guard (migration 0124) so
+// the GUI stops announcing "DISTRIBUTION" on a Phase-A card with two AR
+// events.
+function isSchematicLocked(phase: string): boolean {
+  const p = (phase ?? "").toUpperCase();
+  return p === "C" || p === "D" || p === "E";
+}
+
+// Muted palette used when the schematic is still provisional — same hue
+// family but desaturated so the operator can see the *bias* without
+// mistaking it for a committed call.
+const SCHEMATIC_PROVISIONAL_COLORS: Record<string, string> = {
+  accumulation: "text-emerald-500/50",
+  distribution: "text-red-500/50",
+  reaccumulation: "text-teal-500/50",
+  redistribution: "text-rose-500/50",
+};
+
+function schematicDisplay(schematic: string, phase: string): {
+  label: string;
+  className: string;
+  provisional: boolean;
+} {
+  const locked = isSchematicLocked(phase);
+  const key = (schematic ?? "").toLowerCase();
+  if (!locked) {
+    return {
+      label: `RANGE · ${key}?`,
+      className: SCHEMATIC_PROVISIONAL_COLORS[key] ?? "text-zinc-500",
+      provisional: true,
+    };
+  }
+  return {
+    label: key.toUpperCase(),
+    className: SCHEMATIC_COLORS[key] ?? "text-zinc-300",
+    provisional: false,
+  };
+}
+
 const PHASE_DESC: Record<string, string> = {
   A: "Stopping — SC/BC + AR + ST",
   B: "Building the Cause",
@@ -144,9 +187,21 @@ function StructureCard({
         <PhaseBadge phase={s.current_phase} />
       </div>
       <div className="mt-2 flex items-center gap-3">
-        <span className={`text-sm font-semibold ${SCHEMATIC_COLORS[s.schematic] ?? "text-zinc-300"}`}>
-          {s.schematic.toUpperCase()}
-        </span>
+        {(() => {
+          const d = schematicDisplay(s.schematic, s.current_phase);
+          return (
+            <span
+              className={`text-sm font-semibold ${d.className}`}
+              title={
+                d.provisional
+                  ? `Provisional bias — schematic commits at Phase C (UTAD/Spring). Current: Phase ${s.current_phase}.`
+                  : undefined
+              }
+            >
+              {d.label}
+            </span>
+          );
+        })()}
         <ConfidenceBar value={s.confidence} />
       </div>
       <div className="mt-2 grid grid-cols-4 gap-2 text-xs text-zinc-400">
@@ -182,9 +237,26 @@ function StructureDetail({ id }: { id: string }) {
         <span className="text-lg font-bold text-zinc-100">{s.symbol}</span>
         <span className="text-sm text-zinc-500">{s.interval}</span>
         <PhaseBadge phase={s.current_phase} />
-        <span className={`text-sm font-semibold ${SCHEMATIC_COLORS[s.schematic] ?? ""}`}>
-          {s.schematic.toUpperCase()}
-        </span>
+        {(() => {
+          const d = schematicDisplay(s.schematic, s.current_phase);
+          return (
+            <span
+              className={`text-sm font-semibold ${d.className}`}
+              title={
+                d.provisional
+                  ? `Provisional bias — schematic commits at Phase C (UTAD/Spring). Current: Phase ${s.current_phase}.`
+                  : undefined
+              }
+            >
+              {d.label}
+            </span>
+          );
+        })()}
+        {!isSchematicLocked(s.current_phase) && (
+          <span className="rounded border border-zinc-700 bg-zinc-800/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">
+            provisional
+          </span>
+        )}
       </div>
 
       {/* Phase description */}
