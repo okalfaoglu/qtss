@@ -6,6 +6,7 @@ mod detection_stats_refresh;
 mod binance_catalog_sync_loop;
 mod binance_futures_reconcile;
 mod binance_spot_reconcile;
+mod binance_public_ws;
 mod binance_user_stream;
 mod commission_sync_loop;
 mod confluence;
@@ -255,6 +256,11 @@ async fn main() -> anyhow::Result<()> {
         }
         let b_pool = pool.clone();
         tokio::spawn(engines::external_binance_loop(b_pool));
+        // Faz 9.0.0 — Binance public WS feature streams (liquidations, CVD).
+        let liq_pool = pool.clone();
+        tokio::spawn(binance_public_ws::liquidation_stream_loop(liq_pool));
+        let cvd_pool = pool.clone();
+        tokio::spawn(binance_public_ws::aggtrade_cvd_loop(cvd_pool));
         let cg_pool = pool.clone();
         tokio::spawn(engines::external_coinglass_loop(cg_pool));
         let hl_pool = pool.clone();
