@@ -847,5 +847,49 @@
       "max_concurrent": "Eş zamanlı setup limitine ulaşıldı",
       "correlation_cap": "Korelasyon grup limitine ulaşıldı"
     }
+  },
+  "confluenceInspector": {
+    "title": "Konfluans Denetçisi",
+    "loginPrompt": "Gate redlerini görmek için giriş yapın.",
+    "refresh": "Yenile",
+    "refreshing": "Yükleniyor…",
+    "empty": "Bu pencerede red kaydı yok.",
+    "window": {
+      "1h": "Son 1 saat",
+      "6h": "Son 6 saat",
+      "24h": "Son 24 saat",
+      "7d": "Son 7 gün",
+      "30d": "Son 30 gün"
+    },
+    "filter": {
+      "symbol": "Sembol filtresi",
+      "reason": "Sebep filtresi"
+    },
+    "summary": {
+      "total": "Toplam: {{n}}",
+      "clickToFilter": "Bu sebebe göre filtrelemek için tıklayın"
+    },
+    "col": {
+      "time": "Zaman",
+      "venue": "Piyasa",
+      "symbol": "Sembol",
+      "tf": "ZAD",
+      "profile": "Profil",
+      "direction": "Yön",
+      "reason": "Sebep"
+    },
+    "reason": {
+      "total_risk_cap": "Toplam risk tavanı",
+      "max_concurrent": "Eş zamanlı limit",
+      "correlation_cap": "Korelasyon tavanı",
+      "commission_gate": "Komisyon kapısı",
+      "gate_kill_switch": "Kill switch",
+      "gate_stale_data": "Bayat veri",
+      "gate_news_blackout": "Haber karartması",
+      "gate_regime_opposite": "Rejim zıt",
+      "gate_direction_consensus": "Yön konsensüsü",
+      "gate_below_min_score": "Skor eşik altı",
+      "gate_no_direction": "Yön yok"
+    }
   }
 }

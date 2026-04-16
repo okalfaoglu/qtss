@@ -74,6 +74,7 @@ import { ChannelScanMatchesTable } from "./components/ChannelScanMatchesTable";
 import { AiDecisionsPanel } from "./components/AiDecisionsPanel";
 import { AiDashboardPanel } from "./components/AiDashboardPanel";
 import { AiPerformancePanel } from "./components/AiPerformancePanel";
+import { ConfluenceInspectorPanel } from "./components/ConfluenceInspectorPanel";
 import { AiSettingsPanel } from "./components/AiSettingsPanel";
 import { NansenApiCreditsPanel } from "./components/NansenApiCreditsPanel";
 import { IntakePlaybookPanel } from "./components/IntakePlaybookPanel";
@@ -5510,7 +5511,10 @@ export default function App() {
                     <OperationsQueuesPanel accessToken={token} canOps={rbacIsOps} canAdmin={rbacIsAdmin} />
                   ) : null}
                   {aiSubtab === "ai_performance" && (
-                    <AiPerformancePanel accessToken={token} canAdmin={rbacIsAdmin} />
+                    <>
+                      <AiPerformancePanel accessToken={token} canAdmin={rbacIsAdmin} />
+                      <ConfluenceInspectorPanel accessToken={token} />
+                    </>
                   )}
                   {aiSubtab === "ai_settings" && (
                     <AiSettingsPanel accessToken={token} canAdmin={rbacIsAdmin} />

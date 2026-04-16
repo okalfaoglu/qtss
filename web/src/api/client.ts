@@ -2097,3 +2097,82 @@ export async function fetchTelegramSetupAnalysisStatus(
   if (!r.ok) throwQtssApiError("telegram-setup-analysis/status", r, t);
   return JSON.parse(t) as TelegramSetupAnalysisStatusApi;
 }
+
+// ── Faz 9.1.3 — Confluence Inspector ───────────────────────────────
+
+export type SetupRejectionApi = {
+  id: string;
+  created_at: string;
+  venue_class: string;
+  exchange: string;
+  symbol: string;
+  timeframe: string;
+  profile: string;
+  direction: string;
+  reject_reason: string;
+  confluence_id: string | null;
+  raw_meta: unknown;
+};
+
+export type SetupRejectionFeedApi = {
+  generated_at: string;
+  entries: SetupRejectionApi[];
+};
+
+export type RejectionBucketApi = {
+  reason: string;
+  n: number;
+};
+
+export type SetupRejectionSummaryApi = {
+  generated_at: string;
+  since_hours: number;
+  venue_class: string | null;
+  total: number;
+  by_reason: RejectionBucketApi[];
+};
+
+export async function fetchSetupRejections(
+  accessToken: string,
+  q?: {
+    limit?: number;
+    venue?: string;
+    reason?: string;
+    symbol?: string;
+    timeframe?: string;
+    sinceHours?: number;
+  },
+): Promise<SetupRejectionFeedApi> {
+  const p = new URLSearchParams();
+  if (q?.limit != null) p.set('limit', String(q.limit));
+  if (q?.venue) p.set('venue', q.venue);
+  if (q?.reason) p.set('reason', q.reason);
+  if (q?.symbol) p.set('symbol', q.symbol);
+  if (q?.timeframe) p.set('timeframe', q.timeframe);
+  if (q?.sinceHours != null) p.set('since_hours', String(q.sinceHours));
+  const r = await fetchWithBearerRetry(
+    `${API_BASE}/api/v1/v2/setup-rejections?${p}`,
+    accessToken,
+    {},
+  );
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError('v2/setup-rejections', r, t);
+  return JSON.parse(t) as SetupRejectionFeedApi;
+}
+
+export async function fetchSetupRejectionSummary(
+  accessToken: string,
+  q?: { sinceHours?: number; venue?: string },
+): Promise<SetupRejectionSummaryApi> {
+  const p = new URLSearchParams();
+  if (q?.sinceHours != null) p.set('since_hours', String(q.sinceHours));
+  if (q?.venue) p.set('venue', q.venue);
+  const r = await fetchWithBearerRetry(
+    `${API_BASE}/api/v1/v2/setup-rejections/summary?${p}`,
+    accessToken,
+    {},
+  );
+  const t = await r.text();
+  if (!r.ok) throwQtssApiError('v2/setup-rejections/summary', r, t);
+  return JSON.parse(t) as SetupRejectionSummaryApi;
+}

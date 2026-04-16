@@ -847,5 +847,49 @@
       "max_concurrent": "Max concurrent setups reached",
       "correlation_cap": "Correlation group cap reached"
     }
+  },
+  "confluenceInspector": {
+    "title": "Confluence Inspector",
+    "loginPrompt": "Sign in to view gate rejections.",
+    "refresh": "Refresh",
+    "refreshing": "Loading…",
+    "empty": "No rejections in this window.",
+    "window": {
+      "1h": "Last 1h",
+      "6h": "Last 6h",
+      "24h": "Last 24h",
+      "7d": "Last 7d",
+      "30d": "Last 30d"
+    },
+    "filter": {
+      "symbol": "Symbol filter",
+      "reason": "Reason filter"
+    },
+    "summary": {
+      "total": "Total: {{n}}",
+      "clickToFilter": "Click to filter by this reason"
+    },
+    "col": {
+      "time": "Time",
+      "venue": "Venue",
+      "symbol": "Symbol",
+      "tf": "TF",
+      "profile": "Profile",
+      "direction": "Direction",
+      "reason": "Reason"
+    },
+    "reason": {
+      "total_risk_cap": "Total risk cap",
+      "max_concurrent": "Max concurrent",
+      "correlation_cap": "Correlation cap",
+      "commission_gate": "Commission gate",
+      "gate_kill_switch": "Kill switch",
+      "gate_stale_data": "Stale data",
+      "gate_news_blackout": "News blackout",
+      "gate_regime_opposite": "Regime opposite",
+      "gate_direction_consensus": "Direction consensus",
+      "gate_below_min_score": "Below min score",
+      "gate_no_direction": "No direction"
+    }
   }
 }

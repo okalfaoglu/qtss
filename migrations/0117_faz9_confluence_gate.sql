@@ -45,7 +45,7 @@ SELECT _qtss_register_key(
     'number', false, 'normal', ARRAY['setup','confluence_gate']);
 
 SELECT _qtss_register_key(
-    'confluence_gate.reject_on_regimes','setup','confluence_gate','json',
+    'confluence_gate.reject_on_regimes','setup','confluence_gate','array',
     '[]'::jsonb, '',
     'Regime labels that categorically reject a candidate (JSON array of strings, case-insensitive).',
     'json', false, 'normal', ARRAY['setup','confluence_gate']);
