@@ -28,7 +28,9 @@ use crate::setup_builder::{
     build_all, ClimaxMetrics, SetupContext, WyckoffSetupCandidate, WyckoffSetupType,
 };
 use crate::structure::WyckoffPhase;
-use crate::trade_planner::{plan as plan_trade, Profile, TradePlan, TradePlannerConfig};
+use crate::trade_planner::{
+    plan_with_vp, Profile, TradePlan, TradePlannerConfig, VpTargetsHint,
+};
 
 // =========================================================================
 // Profile resolver — maps setup_type → D/Q (loaded from config by caller)
@@ -116,12 +118,26 @@ pub fn emit(
     timeframe: &str,
     range_id: &str,
 ) -> Vec<WyckoffSignal> {
+    emit_with_vp(ctx, cfg, symbol, timeframe, range_id, None)
+}
+
+/// P7.4 — same as `emit` but routes Volume-Profile TP hints into the
+/// planner. `vp_hint = None` falls back to pure adaptive R-multiple
+/// TPs (legacy path).
+pub fn emit_with_vp(
+    ctx: &SetupContext<'_>,
+    cfg: &EmitterConfig,
+    symbol: &str,
+    timeframe: &str,
+    range_id: &str,
+    vp_hint: Option<&VpTargetsHint>,
+) -> Vec<WyckoffSignal> {
     let candidates = build_all(ctx);
     let mut out: Vec<WyckoffSignal> = candidates
         .into_iter()
         .filter_map(|cand| {
             let profile = *cfg.profile_map.get(&cand.setup_type)?;
-            let plan = plan_trade(&cand, profile, &cfg.planner);
+            let plan = plan_with_vp(&cand, profile, &cfg.planner, vp_hint);
             if plan.rejected.is_some() { return None; }
 
             let breakdown = score(&cand, &plan, cfg);

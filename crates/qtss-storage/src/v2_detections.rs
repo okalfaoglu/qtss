@@ -262,13 +262,15 @@ impl V2DetectionRepository {
         &self,
     ) -> Result<Vec<HistoricalOutcomeRow>, StorageError> {
         let rows = sqlx::query_as::<_, HistoricalOutcomeRow>(
+            // Reads from the MATERIALIZED VIEW (migration 0107) refreshed
+            // by the worker — scanning the 11M-row base table on every
+            // validator tick was costing ≈1.2 s.
             r#"SELECT family,
                       subkind,
                       timeframe,
-                      COUNT(*) FILTER (WHERE confidence IS NOT NULL) AS validated_count,
-                      COUNT(*) FILTER (WHERE state = 'invalidated')  AS invalidated_count
-                 FROM qtss_v2_detections
-                GROUP BY family, subkind, timeframe"#,
+                      validated_count,
+                      invalidated_count
+                 FROM qtss_v2_detection_outcome_stats"#,
         )
         .fetch_all(&self.pool)
         .await?;

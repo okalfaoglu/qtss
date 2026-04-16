@@ -46,6 +46,7 @@ members = [
     "crates/qtss-telegram-setup-analysis",
     "crates/qtss-setup-engine",
     "crates/qtss-range",
+    "crates/qtss-vprofile",
 ]
 
 [workspace.package]
@@ -117,6 +118,7 @@ qtss-confluence = { path = "crates/qtss-confluence" }
 qtss-telegram-setup-analysis = { path = "crates/qtss-telegram-setup-analysis" }
 qtss-setup-engine = { path = "crates/qtss-setup-engine" }
 qtss-range = { path = "crates/qtss-range" }
+qtss-vprofile = { path = "crates/qtss-vprofile" }
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 hmac = "0.12"

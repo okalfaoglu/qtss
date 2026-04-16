@@ -118,6 +118,7 @@ fn wyckoff_classic_payload(signal: &WyckoffSignal) -> JsonValue {
         "pnf_target":   c.pnf_target,
         "entry":        c.entry,
         "sl":           c.sl,
+        "sl_wide":      c.sl_wide,
         "tp_targets":   c.tp_targets,
         "trigger_event":      c.trigger_event,
         "trigger_bar_index":  c.trigger_bar_index,

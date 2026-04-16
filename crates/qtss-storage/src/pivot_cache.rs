@@ -59,7 +59,16 @@ pub async fn upsert_pivot_cache(pool: &PgPool, row: &PivotCacheRow) -> Result<()
     Ok(())
 }
 
-/// Batch upsert pivots (uses a transaction for performance).
+/// Batch upsert pivots in a **single** statement via `UNNEST` of parallel
+/// arrays. Replaces the earlier row-by-row loop which, when run
+/// concurrently by the backfill worker and the live detection
+/// orchestrator, serialised on the unique-index row lock and produced
+/// 4 s single-row waits (sqlx slow-statement alerts).
+///
+/// Why UNNEST instead of multi-VALUES: bind-count stays at 11 (one
+/// array per column) regardless of batch size, well under Postgres'
+/// 65 535 parameter ceiling, and lets us send ~10k pivots per round
+/// trip without any string templating.
 pub async fn upsert_pivot_cache_batch(
     pool: &PgPool,
     rows: &[PivotCacheRow],
@@ -67,42 +76,90 @@ pub async fn upsert_pivot_cache_batch(
     if rows.is_empty() {
         return Ok(0);
     }
-    let mut tx = pool.begin().await?;
-    let mut count = 0u64;
-    for row in rows {
-        sqlx::query(
-            r#"
-            INSERT INTO pivot_cache
-                (exchange, symbol, timeframe, level, bar_index, open_time,
-                 price, kind, prominence, volume_at_pivot, swing_type, computed_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
-            ON CONFLICT (exchange, symbol, timeframe, level, bar_index)
-            DO UPDATE SET
-                price = EXCLUDED.price,
-                kind = EXCLUDED.kind,
-                prominence = EXCLUDED.prominence,
-                volume_at_pivot = EXCLUDED.volume_at_pivot,
-                swing_type = EXCLUDED.swing_type,
-                computed_at = now()
-            "#,
-        )
-        .bind(&row.exchange)
-        .bind(&row.symbol)
-        .bind(&row.timeframe)
-        .bind(&row.level)
-        .bind(row.bar_index)
-        .bind(row.open_time)
-        .bind(row.price)
-        .bind(&row.kind)
-        .bind(row.prominence)
-        .bind(row.volume_at_pivot)
-        .bind(&row.swing_type)
-        .execute(&mut *tx)
-        .await?;
-        count += 1;
+
+    // Cap per-statement batch. A 130k-row UNNEST took ~5 s of row-lock
+    // hold time, which blocked concurrent live upserts (sqlx slow-
+    // statement alert). Chunking keeps each statement sub-second and
+    // lets the live orchestrator slot in between chunks.
+    const CHUNK: usize = 5_000;
+    if rows.len() > CHUNK {
+        let mut total = 0u64;
+        for c in rows.chunks(CHUNK) {
+            total += upsert_pivot_cache_batch_inner(pool, c).await?;
+        }
+        return Ok(total);
     }
-    tx.commit().await?;
-    Ok(count)
+    upsert_pivot_cache_batch_inner(pool, rows).await
+}
+
+async fn upsert_pivot_cache_batch_inner(
+    pool: &PgPool,
+    rows: &[PivotCacheRow],
+) -> Result<u64, sqlx::Error> {
+    let n = rows.len();
+    let mut exchange   = Vec::with_capacity(n);
+    let mut symbol     = Vec::with_capacity(n);
+    let mut timeframe  = Vec::with_capacity(n);
+    let mut level      = Vec::with_capacity(n);
+    let mut bar_index  = Vec::with_capacity(n);
+    let mut open_time  = Vec::with_capacity(n);
+    let mut price      = Vec::with_capacity(n);
+    let mut kind       = Vec::with_capacity(n);
+    let mut prominence = Vec::with_capacity(n);
+    let mut vol_at     = Vec::with_capacity(n);
+    let mut swing_type = Vec::with_capacity(n);
+
+    for r in rows {
+        exchange.push(r.exchange.clone());
+        symbol.push(r.symbol.clone());
+        timeframe.push(r.timeframe.clone());
+        level.push(r.level.clone());
+        bar_index.push(r.bar_index);
+        open_time.push(r.open_time);
+        price.push(r.price);
+        kind.push(r.kind.clone());
+        prominence.push(r.prominence);
+        vol_at.push(r.volume_at_pivot);
+        swing_type.push(r.swing_type.clone());
+    }
+
+    let res = sqlx::query(
+        r#"
+        INSERT INTO pivot_cache
+            (exchange, symbol, timeframe, level, bar_index, open_time,
+             price, kind, prominence, volume_at_pivot, swing_type, computed_at)
+        SELECT * FROM UNNEST(
+            $1::text[],  $2::text[],  $3::text[],  $4::text[],  $5::bigint[],
+            $6::timestamptz[], $7::numeric[], $8::text[], $9::numeric[],
+            $10::numeric[], $11::text[]
+        ) AS t(exchange, symbol, timeframe, level, bar_index, open_time,
+               price, kind, prominence, volume_at_pivot, swing_type)
+        CROSS JOIN LATERAL (SELECT now() AS computed_at) c
+        ON CONFLICT (exchange, symbol, timeframe, level, bar_index)
+        DO UPDATE SET
+            price           = EXCLUDED.price,
+            kind            = EXCLUDED.kind,
+            prominence      = EXCLUDED.prominence,
+            volume_at_pivot = EXCLUDED.volume_at_pivot,
+            swing_type      = EXCLUDED.swing_type,
+            computed_at     = now()
+        "#,
+    )
+    .bind(&exchange)
+    .bind(&symbol)
+    .bind(&timeframe)
+    .bind(&level)
+    .bind(&bar_index)
+    .bind(&open_time)
+    .bind(&price)
+    .bind(&kind)
+    .bind(&prominence)
+    .bind(&vol_at)
+    .bind(&swing_type)
+    .execute(pool)
+    .await?;
+
+    Ok(res.rows_affected())
 }
 
 /// Read cached pivots for a series, ordered by bar_index ascending.

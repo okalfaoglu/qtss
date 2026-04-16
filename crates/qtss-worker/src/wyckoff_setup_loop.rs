@@ -29,14 +29,14 @@ use tracing::{debug, info, warn};
 
 use qtss_storage::{
     find_active_wyckoff_structure, list_enabled_engine_symbols, list_recent_bars,
-    resolve_system_f64, resolve_system_string, resolve_system_u64, resolve_worker_enabled_flag,
-    upsert_wyckoff_setup, WyckoffSetupUpsert,
+    resolve_system_csv, resolve_system_f64, resolve_system_string, resolve_system_u64,
+    resolve_worker_enabled_flag, upsert_wyckoff_setup, WyckoffSetupUpsert,
 };
 use qtss_wyckoff::{
     persistence::signal_to_payload,
-    setup_builder::{SetupBar, SetupContext, WyckoffSetupConfig},
-    signal_emitter::{default_profile_map, emit, EmitterConfig},
-    trade_planner::TradePlannerConfig,
+    setup_builder::{SetupBar, SetupContext, WyckoffSetupConfig, WyckoffSetupType},
+    signal_emitter::{default_profile_map, emit_with_vp, EmitterConfig},
+    trade_planner::{TradePlannerConfig, VpTargetsHint},
     RecordedEvent, WyckoffPhase, WyckoffSchematic, WyckoffStructureTracker,
 };
 
@@ -98,13 +98,84 @@ async fn run_pass(pool: &PgPool) -> Result<usize, Box<dyn std::error::Error + Se
     )
     .await;
 
+    // P7.3 — Dual SL policy (tight/adaptive/structural dispatch).
+    let sl_policy_raw = resolve_system_string(
+        pool, "setup", "wyckoff.plan.sl_policy", "", "tighter",
+    )
+    .await;
+    let use_vprofile_tp = resolve_worker_enabled_flag(
+        pool, "setup", "wyckoff.plan.use_vprofile_tp", "", true,
+    )
+    .await;
+    let mut planner_cfg = TradePlannerConfig::default();
+    planner_cfg.sl_policy = qtss_wyckoff::trade_planner::SlPolicy::from_str(&sl_policy_raw);
+    planner_cfg.use_vprofile_tp = use_vprofile_tp;
+
     let emit_cfg = EmitterConfig {
         min_score,
         profile_map: default_profile_map(),
-        planner: TradePlannerConfig::default(),
+        planner: planner_cfg,
         ..EmitterConfig::default()
     };
-    let setup_cfg = WyckoffSetupConfig::default();
+    // P7.2 — SOS/SOW confirmation gate for Phase-D continuation setups.
+    let require_sos_sow = resolve_worker_enabled_flag(
+        pool, "setup", "wyckoff.setup.require_sos_sow_trigger", "", true,
+    )
+    .await;
+    let sos_sow_max_bars_ago = resolve_system_u64(
+        pool, "setup", "wyckoff.setup.sos_sow_max_bars_ago", "", 50, 5, 500,
+    )
+    .await;
+    let sos_sow_required_for_csv = resolve_system_csv(
+        pool, "setup", "wyckoff.setup.sos_sow_required_for", "",
+        "lps,buec,lpsy,ice_retest",
+    )
+    .await;
+    let sos_sow_required_for: Vec<WyckoffSetupType> = sos_sow_required_for_csv
+        .iter()
+        .filter_map(|s| wyckoff_setup_type_from_str(s))
+        .collect();
+
+    // P7.3 — ATR buffer for the structural (wide) SL.
+    let sl_wide_buffer_atr = resolve_system_f64(
+        pool, "setup", "wyckoff.setup.sl_wide_buffer_atr", "", 0.5,
+    )
+    .await;
+
+    // P7.5 — Per-setup entry filter rules.
+    let require_directional_trigger = resolve_worker_enabled_flag(
+        pool, "setup", "wyckoff.setup.require_directional_trigger", "", true,
+    )
+    .await;
+    let trigger_bar_min_close_pos = resolve_system_f64(
+        pool, "setup", "wyckoff.setup.trigger_bar_min_close_pos", "", 0.5,
+    )
+    .await;
+    let jac_min_volume_ratio = resolve_system_f64(
+        pool, "setup", "wyckoff.setup.jac_min_volume_ratio", "", 1.5,
+    )
+    .await;
+    let jac_min_range_atr = resolve_system_f64(
+        pool, "setup", "wyckoff.setup.jac_min_range_atr", "", 1.2,
+    )
+    .await;
+    let jac_buffer_atr = resolve_system_f64(
+        pool, "setup", "wyckoff.setup.jac_buffer_atr", "", 0.4,
+    )
+    .await;
+
+    let mut setup_cfg = WyckoffSetupConfig::default();
+    setup_cfg.sl_wide_buffer_atr = sl_wide_buffer_atr;
+    setup_cfg.require_sos_sow_trigger = require_sos_sow;
+    setup_cfg.sos_sow_max_bars_ago = sos_sow_max_bars_ago;
+    if !sos_sow_required_for.is_empty() {
+        setup_cfg.sos_sow_required_for = sos_sow_required_for;
+    }
+    setup_cfg.require_directional_trigger = require_directional_trigger;
+    setup_cfg.trigger_bar_min_close_pos = trigger_bar_min_close_pos;
+    setup_cfg.jac_min_volume_ratio = jac_min_volume_ratio;
+    setup_cfg.jac_min_range_atr = jac_min_range_atr;
+    setup_cfg.jac_buffer_atr = jac_buffer_atr;
 
     let symbols = list_enabled_engine_symbols(pool).await?;
     let mut emitted = 0usize;
@@ -182,7 +253,8 @@ async fn process_symbol(
 
     // 3. Emit — range id = structure uuid so rescans hit the same key.
     let range_id = structure.id.to_string();
-    let raw_signals = emit(&ctx, emit_cfg, symbol, timeframe, &range_id);
+    let vp_hint = build_vp_hint_from_setup_bars(&bars);
+    let raw_signals = emit_with_vp(&ctx, emit_cfg, symbol, timeframe, &range_id, vp_hint.as_ref());
     if raw_signals.is_empty() {
         return Ok(0);
     }
@@ -431,4 +503,87 @@ fn parse_json_string_array(raw: &str) -> Option<Vec<String>> {
         .filter(|s| !s.is_empty())
         .collect();
     if csv.is_empty() { None } else { Some(csv) }
+}
+
+/// P7.4 — Build a Volume-Profile TP hint from the ASC-ordered SetupBar
+/// window. Uses a 50-bin price histogram weighted by bar volume; HVNs
+/// are midpoints whose volume exceeds 130% of the local 7-bin mean
+/// (mirrors `qtss_vprofile::profile::derive` semantics but operates on
+/// f64 so we avoid a Decimal round-trip for the worker hot path).
+/// Returns `None` on degenerate input.
+fn build_vp_hint_from_setup_bars(bars: &[SetupBar]) -> Option<VpTargetsHint> {
+    const BINS: usize = 50;
+    const HALF_WIN: usize = 3;
+    const HVN_THR: f64 = 1.30;
+
+    if bars.len() < 20 { return None; }
+    let (mut lo, mut hi) = (bars[0].low, bars[0].high);
+    for b in &bars[1..] {
+        if b.low < lo { lo = b.low; }
+        if b.high > hi { hi = b.high; }
+    }
+    if !(hi > lo) { return None; }
+    let bin_size = (hi - lo) / BINS as f64;
+    if !(bin_size > 0.0) { return None; }
+
+    let mut vols = [0.0f64; BINS];
+    for b in bars {
+        if b.volume <= 0.0 || b.high <= b.low { continue; }
+        let bar_range = b.high - b.low;
+        let first = (((b.low - lo) / bin_size).floor() as isize).max(0) as usize;
+        let last = (((b.high - lo) / bin_size).floor() as isize).min(BINS as isize - 1) as usize;
+        for i in first..=last {
+            let p_lo = lo + bin_size * i as f64;
+            let p_hi = if i == BINS - 1 { hi } else { lo + bin_size * (i + 1) as f64 };
+            let ov_lo = b.low.max(p_lo);
+            let ov_hi = b.high.min(p_hi);
+            if ov_hi <= ov_lo { continue; }
+            vols[i] += (ov_hi - ov_lo) * b.volume / bar_range;
+        }
+    }
+
+    // HVN detection: bin volume / local-window mean ≥ 1.30.
+    let mut hvns: Vec<f64> = Vec::new();
+    for i in 0..BINS {
+        let lo_n = i.saturating_sub(HALF_WIN);
+        let hi_n = (i + HALF_WIN).min(BINS - 1);
+        if hi_n - lo_n < 2 { continue; }
+        let mut sum = 0.0;
+        let mut cnt = 0;
+        for j in lo_n..=hi_n {
+            if j == i { continue; }
+            sum += vols[j];
+            cnt += 1;
+        }
+        if cnt == 0 { continue; }
+        let mean = sum / cnt as f64;
+        if !(mean > 0.0) { continue; }
+        if vols[i] / mean >= HVN_THR {
+            let mid = lo + bin_size * (i as f64 + 0.5);
+            hvns.push(mid);
+        }
+    }
+    if hvns.is_empty() { return None; }
+    Some(VpTargetsHint {
+        hvns,
+        naked_vpocs: Vec::new(),
+        prior_swings: Vec::new(),
+    })
+}
+
+/// Map a CSV token → `WyckoffSetupType`. Uses the canonical `as_str()`
+/// suffix ("wyckoff_<name>") plus the short form users type in config.
+fn wyckoff_setup_type_from_str(raw: &str) -> Option<WyckoffSetupType> {
+    let t = raw.trim().to_lowercase();
+    match t.as_str() {
+        "spring" | "wyckoff_spring" => Some(WyckoffSetupType::Spring),
+        "lps" | "wyckoff_lps" => Some(WyckoffSetupType::Lps),
+        "buec" | "wyckoff_buec" => Some(WyckoffSetupType::Buec),
+        "ut" | "wyckoff_ut" => Some(WyckoffSetupType::Ut),
+        "utad" | "wyckoff_utad" => Some(WyckoffSetupType::Utad),
+        "lpsy" | "wyckoff_lpsy" => Some(WyckoffSetupType::Lpsy),
+        "ice_retest" | "ice" | "wyckoff_ice_retest" => Some(WyckoffSetupType::IceRetest),
+        "jac" | "wyckoff_jac" | "jump_across_creek" => Some(WyckoffSetupType::Jac),
+        _ => None,
+    }
 }

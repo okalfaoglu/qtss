@@ -21,7 +21,7 @@ import type { SetupEntry, SetupEventsResponse } from "../lib/types";
 // --- lookup tables (CLAUDE.md #1) ----------------------------------------
 
 const MODES = ["", "dry", "live", "backtest"];
-const STATES = ["", "armed", "active", "closed", "rejected"];
+const STATES = ["", "armed", "active", "closed", "rejected", "invalidated"];
 const TIMEFRAMES = ["", "1h", "4h"];
 const ALT_TYPES = [
   "",
@@ -32,13 +32,28 @@ const ALT_TYPES = [
   "wyckoff_buec",
   "wyckoff_lpsy",
   "wyckoff_ice_retest",
+  "wyckoff_jac",
 ];
+
+// P7.6 — close_reason colour map. Severity ordered: structural > tactical
+// > benign so the eye picks the worst failure first in the Plan panel.
+const CLOSE_REASON_BADGE: Record<string, string> = {
+  structural_invalidated:
+    "bg-red-500/20 text-red-300 border-red-500/40",
+  sl_breach:
+    "bg-amber-500/15 text-amber-300 border-amber-500/40",
+  tp_hit:
+    "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
+  time_stop:
+    "bg-zinc-700/30 text-zinc-300 border-zinc-600/40",
+};
 
 const STATE_BADGE: Record<string, string> = {
   armed: "bg-sky-500/15 text-sky-300 border-sky-500/30",
   active: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
   closed: "bg-zinc-700/40 text-zinc-400 border-zinc-600/40",
   rejected: "bg-red-500/15 text-red-300 border-red-500/30",
+  invalidated: "bg-red-500/20 text-red-300 border-red-500/40",
 };
 
 const PROFILE_BADGE: Record<string, string> = {
@@ -190,6 +205,28 @@ function readClassic(raw: unknown): Rec | null {
   return asObj(r?.wyckoff_classic) ?? asObj(r?.classic) ?? null;
 }
 
+function readNum(rec: Rec | null, key: string): number | null {
+  if (!rec) return null;
+  const v = rec[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function readStr(rec: Rec | null, key: string): string | null {
+  if (!rec) return null;
+  const v = rec[key];
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+// P7.4 — `tp_source` travels either in classic or in raw_meta.plan.
+function readTpSource(raw: unknown): string | null {
+  const r = asObj(raw);
+  return (
+    readStr(asObj(r?.plan), "tp_source") ??
+    readStr(asObj(r?.wyckoff_classic), "tp_source") ??
+    readStr(r, "tp_source")
+  );
+}
+
 // --- detail pane ----------------------------------------------------------
 
 function Detail({ entry }: { entry: SetupEntry }) {
@@ -233,23 +270,59 @@ function Detail({ entry }: { entry: SetupEntry }) {
           <div className="text-right font-mono text-zinc-200">
             {fmtNum(entry.entry_price)}
           </div>
-          <div className="text-zinc-500">Initial SL</div>
+          <div className="text-zinc-500">Tight SL</div>
           <div className="text-right font-mono text-zinc-300">
             {fmtNum(entry.entry_sl)}
           </div>
+          {/* P7.3 — structural (wide) SL lives in classic payload. */}
+          {readNum(classic, "sl_wide") !== null && (
+            <>
+              <div className="text-zinc-500">Structural SL</div>
+              <div className="text-right font-mono text-red-300/80">
+                {fmtNum(readNum(classic, "sl_wide"))}
+              </div>
+            </>
+          )}
           <div className="text-zinc-500">Target ref</div>
           <div className="text-right font-mono text-zinc-300">
             {fmtNum(entry.target_ref)}
           </div>
+          {/* P7.4 — which TP engine produced the ladder. */}
+          {readTpSource(entry.raw_meta) && (
+            <>
+              <div className="text-zinc-500">TP source</div>
+              <div className="text-right font-mono text-sky-300/80">
+                {readTpSource(entry.raw_meta)}
+              </div>
+            </>
+          )}
           <div className="text-zinc-500">Risk %</div>
           <div className="text-right font-mono text-zinc-300">
             {fmtNum(entry.risk_pct, 2)}
           </div>
+          {/* Trigger bar summary (P7.5 gate audit). */}
+          {readStr(classic, "trigger_event") && (
+            <>
+              <div className="text-zinc-500">Trigger</div>
+              <div className="text-right font-mono text-amber-300/80">
+                {readStr(classic, "trigger_event")}
+                {readNum(classic, "trigger_price") !== null &&
+                  ` @ ${fmtNum(readNum(classic, "trigger_price"))}`}
+              </div>
+            </>
+          )}
           {entry.close_reason && (
             <>
               <div className="text-zinc-500">Close</div>
-              <div className="text-right font-mono text-zinc-300">
-                {entry.close_reason} @ {fmtNum(entry.close_price)}
+              <div className="text-right">
+                <span
+                  className={`rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase ${badge(CLOSE_REASON_BADGE, entry.close_reason)}`}
+                >
+                  {entry.close_reason}
+                </span>
+                <span className="ml-2 font-mono text-zinc-400">
+                  @ {fmtNum(entry.close_price)}
+                </span>
               </div>
             </>
           )}

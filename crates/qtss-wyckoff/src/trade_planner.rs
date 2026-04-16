@@ -74,6 +74,12 @@ pub struct TradePlannerConfig {
     /// TP ladder rungs collapse onto entry. Default 0.001 (= 0.1% of
     /// entry). Config key: `wyckoff.plan.min_risk_frac`.
     pub min_risk_frac: f64,
+    /// P7.4 — when true, overwrite TP1 with the nearest HVN / naked VPOC
+    /// / prior-swing level if one exists between entry and the range
+    /// cap. Villahermosa *Wyckoff 2.0* §7.4.3: "targets cluster at
+    /// mean-volume reference points — trade to the next node, not to an
+    /// R-multiple."
+    pub use_vprofile_tp: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,8 +87,11 @@ pub struct TradePlannerConfig {
 pub enum SlPolicy {
     Tighter,        // min distance from entry (lower risk)
     Looser,         // max distance (more breathing room)
-    ClassicalOnly,  // L1 only
+    ClassicalOnly,  // L1 only (tight)
     AdaptiveOnly,   // L2 only
+    StructuralOnly, // P7.3 — candidate.sl_wide (range-boundary stop)
+    TightestOfAll,  // P7.3 — min distance across tight/adaptive/structural
+    WidestOfAll,    // P7.3 — max distance across tight/adaptive/structural
 }
 
 impl SlPolicy {
@@ -91,6 +100,9 @@ impl SlPolicy {
             "looser"          => Self::Looser,
             "classical_only"  => Self::ClassicalOnly,
             "adaptive_only"   => Self::AdaptiveOnly,
+            "structural_only" => Self::StructuralOnly,
+            "tightest_of_all" => Self::TightestOfAll,
+            "widest_of_all"   => Self::WidestOfAll,
             _                 => Self::Tighter,
         }
     }
@@ -121,6 +133,7 @@ impl Default for TradePlannerConfig {
             d_entry_sl_atr_mult: 2.5,
             q_entry_sl_atr_mult: 1.5,
             min_risk_frac: 0.001,
+            use_vprofile_tp: true,
         }
     }
 }
@@ -139,7 +152,35 @@ pub struct TpRung {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TpSource { Adaptive, Classical, ClassicalCapped }
+pub enum TpSource { Adaptive, Classical, ClassicalCapped, VolumeProfile }
+
+/// P7.4 — Volume-Profile TP hint passed into `plan_with_vp`. Plain
+/// data so qtss-wyckoff stays free of a `qtss-vprofile` dep (CLAUDE.md
+/// #4 — crate remains asset-class agnostic). The caller builds the
+/// profile and fills these vectors; priority order is HVN → naked
+/// VPOC → prior swing.
+#[derive(Debug, Clone, Default)]
+pub struct VpTargetsHint {
+    pub hvns: Vec<f64>,
+    pub naked_vpocs: Vec<f64>,
+    pub prior_swings: Vec<f64>,
+}
+
+impl VpTargetsHint {
+    /// First (priority-ordered, nearest-first within priority) target
+    /// beyond `price` in the given direction (`up=true` = above).
+    pub fn first_target_in_dir(&self, price: f64, up: bool) -> Option<f64> {
+        let pick = |list: &[f64]| -> Option<f64> {
+            list.iter().copied()
+                .filter(|p| if up { *p > price } else { *p < price })
+                .min_by(|a, b| (a - price).abs().partial_cmp(&(b - price).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal))
+        };
+        pick(&self.hvns)
+            .or_else(|| pick(&self.naked_vpocs))
+            .or_else(|| pick(&self.prior_swings))
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradePlan {
@@ -148,8 +189,9 @@ pub struct TradePlan {
     pub profile: Profile,
     pub entry: f64,
     pub entry_sl: f64,             // final SL after policy
-    pub classical_sl: f64,         // L1 SL for audit
+    pub classical_sl: f64,         // L1 tight SL for audit
     pub adaptive_sl: f64,          // L2 SL for audit
+    pub structural_sl: f64,        // P7.3 — wide (range-boundary) SL for audit
     pub tp_ladder: Vec<TpRung>,
     pub net_rr_tp1: f64,           // weighted expected net R across full ladder (kept name for compat)
     pub bucket_label: String,
@@ -179,6 +221,17 @@ pub fn plan(
     profile: Profile,
     cfg: &TradePlannerConfig,
 ) -> TradePlan {
+    plan_with_vp(cand, profile, cfg, None)
+}
+
+/// P7.4 — same as `plan` but allows overriding TP1 with a volume-profile
+/// target (HVN / naked VPOC / prior swing). `None` hint = legacy path.
+pub fn plan_with_vp(
+    cand: &WyckoffSetupCandidate,
+    profile: Profile,
+    cfg: &TradePlannerConfig,
+    vp_hint: Option<&VpTargetsHint>,
+) -> TradePlan {
     let dir = cand.direction;
 
     // ── L2 adaptive SL ────────────────────────────────────────
@@ -189,9 +242,12 @@ pub fn plan(
     };
     let adaptive_sl = cand.entry - dir.sign() * sl_mult * atr;
     let classical_sl = cand.sl;
+    let structural_sl = cand.sl_wide;
 
     // ── SL policy dispatch (no scattered if/else — table) ─────
-    let final_sl = pick_sl(cfg.sl_policy, cand.entry, classical_sl, adaptive_sl, dir);
+    let final_sl = pick_sl(
+        cfg.sl_policy, cand.entry, classical_sl, adaptive_sl, structural_sl, dir,
+    );
 
     // ── ATR% bucket selection ─────────────────────────────────
     let atr_pct = (atr / cand.entry.max(1e-9)) * 100.0;
@@ -204,7 +260,7 @@ pub fn plan(
             profile,
             entry: cand.entry,
             entry_sl: final_sl,
-            classical_sl, adaptive_sl,
+            classical_sl, adaptive_sl, structural_sl,
             tp_ladder: vec![],
             net_rr_tp1: 0.0,
             bucket_label: "none".into(),
@@ -221,7 +277,7 @@ pub fn plan(
     // otherwise produce absurd position sizes and infinite RR.
     let min_risk = cand.entry.abs() * cfg.min_risk_frac;
     if risk <= 0.0 || risk < min_risk {
-        return reject(cand, profile, final_sl, classical_sl, adaptive_sl, atr_pct,
+        return reject(cand, profile, final_sl, classical_sl, adaptive_sl, structural_sl, atr_pct,
                       cfg.commission_bps, RejectReason::InvalidGeometry);
     }
 
@@ -233,6 +289,26 @@ pub fn plan(
             TpRung { r: *mult, price, qty_pct: qty, source: TpSource::Adaptive }
         })
         .collect();
+
+    // ── P7.4 — VP-priority TP1 override ───────────────────────
+    // If a VP hint is supplied, replace TP1 with the nearest HVN /
+    // naked VPOC / prior swing that lies beyond entry in direction.
+    // Subsequent rungs are kept as adaptive ATR targets.
+    if cfg.use_vprofile_tp {
+        if let Some(hint) = vp_hint {
+            let up = matches!(dir, SetupDirection::Long);
+            if let Some(vp_price) = hint.first_target_in_dir(cand.entry, up) {
+                if let Some(first) = ladder.first_mut() {
+                    let r_new = ((vp_price - cand.entry) * dir.sign()) / risk;
+                    if r_new > 0.0 {
+                        first.price = vp_price;
+                        first.r = r_new;
+                        first.source = TpSource::VolumeProfile;
+                    }
+                }
+            }
+        }
+    }
 
     // ── Score boost: append a runner if score >= threshold ────
     if cand.raw_score >= cfg.score_boost_threshold {
@@ -257,7 +333,7 @@ pub fn plan(
     ladder.retain(|t| (t.price - cand.entry) * dir.sign() > 0.0);
 
     if ladder.is_empty() {
-        return reject(cand, profile, final_sl, classical_sl, adaptive_sl, atr_pct,
+        return reject(cand, profile, final_sl, classical_sl, adaptive_sl, structural_sl, atr_pct,
                       cfg.commission_bps, RejectReason::EmptyTpLadder);
     }
 
@@ -281,7 +357,7 @@ pub fn plan(
         profile,
         entry: cand.entry,
         entry_sl: final_sl,
-        classical_sl, adaptive_sl,
+        classical_sl, adaptive_sl, structural_sl,
         tp_ladder: ladder,
         net_rr_tp1,
         bucket_label: bucket.label.clone(),
@@ -296,14 +372,32 @@ pub fn plan(
 // Internal helpers (small, single-purpose — CLAUDE.md #1)
 // =========================================================================
 
-fn pick_sl(policy: SlPolicy, entry: f64, classical: f64, adaptive: f64, dir: SetupDirection) -> f64 {
+fn pick_sl(
+    policy: SlPolicy,
+    entry: f64,
+    classical: f64,
+    adaptive: f64,
+    structural: f64,
+    dir: SetupDirection,
+) -> f64 {
     let dc = (entry - classical).abs();
     let da = (entry - adaptive).abs();
+    let ds = (entry - structural).abs();
+    let pick_by = |cmp: fn(f64, f64) -> bool| {
+        // (dist, price) tuples scanned by cmp — cmp(a,b)==true means a wins.
+        let mut best = (dc, classical);
+        if cmp(da, best.0) { best = (da, adaptive); }
+        if cmp(ds, best.0) { best = (ds, structural); }
+        best.1
+    };
     match policy {
-        SlPolicy::ClassicalOnly => classical,
-        SlPolicy::AdaptiveOnly  => adaptive,
-        SlPolicy::Tighter       => if dc < da { classical } else { adaptive },
-        SlPolicy::Looser        => if dc > da { classical } else { adaptive },
+        SlPolicy::ClassicalOnly  => classical,
+        SlPolicy::AdaptiveOnly   => adaptive,
+        SlPolicy::StructuralOnly => structural,
+        SlPolicy::Tighter        => if dc < da { classical } else { adaptive },
+        SlPolicy::Looser         => if dc > da { classical } else { adaptive },
+        SlPolicy::TightestOfAll  => pick_by(|a, b| a < b),
+        SlPolicy::WidestOfAll    => pick_by(|a, b| a > b),
     }.min_max_clamp(entry, dir)  // ensure SL stays on the correct side of entry
 }
 
@@ -323,7 +417,7 @@ fn cap_ladder_to(ladder: &mut [TpRung], cap: f64, dir: SetupDirection) {
 fn reject(
     cand: &WyckoffSetupCandidate,
     profile: Profile,
-    sl: f64, csl: f64, asl: f64,
+    sl: f64, csl: f64, asl: f64, ssl: f64,
     atr_pct: f64, commission_bps: f64,
     reason: RejectReason,
 ) -> TradePlan {
@@ -335,6 +429,7 @@ fn reject(
         entry_sl: sl,
         classical_sl: csl,
         adaptive_sl: asl,
+        structural_sl: ssl,
         tp_ladder: vec![],
         net_rr_tp1: 0.0,
         bucket_label: "rejected".into(),

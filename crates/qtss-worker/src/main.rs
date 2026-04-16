@@ -2,6 +2,7 @@
 //! `engine_symbols` → analiz snapshot (Trading Range, …).
 
 mod ai_engine;
+mod detection_stats_refresh;
 mod binance_catalog_sync_loop;
 mod binance_futures_reconcile;
 mod binance_spot_reconcile;
@@ -51,6 +52,7 @@ mod setup_chart;
 mod v2_setup_loop;
 mod v2_setup_telegram_loop;
 mod wyckoff_setup_loop;
+mod wyckoff_setup_invalidation_loop;
 mod regime_deep_loop;
 mod pivot_historical_backfill;
 mod historical_progressive_scan;
@@ -325,6 +327,10 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(v2_setup_loop::v2_setup_loop(v2_setup_pool));
         let wyckoff_setup_pool = pool.clone();
         tokio::spawn(wyckoff_setup_loop::wyckoff_setup_loop(wyckoff_setup_pool));
+        let wyckoff_inv_pool = pool.clone();
+        tokio::spawn(wyckoff_setup_invalidation_loop::wyckoff_setup_invalidation_loop(
+            wyckoff_inv_pool,
+        ));
         let v2_setup_tg_pool = pool.clone();
         tokio::spawn(v2_setup_telegram_loop::v2_setup_telegram_loop(
             v2_setup_tg_pool,
@@ -347,6 +353,8 @@ async fn main() -> anyhow::Result<()> {
             v2_val_pool,
             v2_val_bus,
         ));
+        // Keep the hit-rate outcome aggregate MV fresh (migration 0107).
+        tokio::spawn(detection_stats_refresh::detection_stats_refresh_loop(pool.clone()));
         let v2_strat_pool = pool.clone();
         let v2_strat_bus = v2_bus.clone();
         tokio::spawn(v2_pattern_strategy_bridge::v2_pattern_strategy_bridge_loop(

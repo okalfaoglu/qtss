@@ -29,6 +29,7 @@ pub enum WyckoffSetupType {
     Spring,
     Lps,
     Buec,
+    Jac,
     Ut,
     Utad,
     Lpsy,
@@ -41,6 +42,7 @@ impl WyckoffSetupType {
             Self::Spring => "wyckoff_spring",
             Self::Lps => "wyckoff_lps",
             Self::Buec => "wyckoff_buec",
+            Self::Jac => "wyckoff_jac",
             Self::Ut => "wyckoff_ut",
             Self::Utad => "wyckoff_utad",
             Self::Lpsy => "wyckoff_lpsy",
@@ -50,7 +52,7 @@ impl WyckoffSetupType {
 
     pub fn direction(self) -> SetupDirection {
         match self {
-            Self::Spring | Self::Lps | Self::Buec => SetupDirection::Long,
+            Self::Spring | Self::Lps | Self::Buec | Self::Jac => SetupDirection::Long,
             Self::Ut | Self::Utad | Self::Lpsy | Self::IceRetest => SetupDirection::Short,
         }
     }
@@ -123,6 +125,37 @@ pub struct WyckoffSetupConfig {
     pub lpsy_buffer_atr: f64,
     pub buec_buffer_atr: f64,
     pub ice_retest_buffer_atr: f64,
+    /// P7.3 — ATR buffer past the structural range boundary used to
+    /// compute the **wide** invalidation stop. Long → range_bottom −
+    /// buffer·ATR; short → range_top + buffer·ATR. The close-to-trigger
+    /// "tight" stop remains each setup's classical `*_buffer_atr`.
+    pub sl_wide_buffer_atr: f64,
+    /// P7.5 — directional trigger-bar gate. Long setups require a
+    /// bullish close (close > open) with close position in the upper
+    /// `trigger_bar_min_close_pos` of the bar range; short setups
+    /// require the mirror. A "close in the upper third with volume"
+    /// trigger bar is the canonical Wyckoff commitment signal
+    /// (Villahermosa §7.4.1). Set `require_directional_trigger=false`
+    /// to disable (for backtests / legacy behaviour).
+    pub require_directional_trigger: bool,
+    pub trigger_bar_min_close_pos: f64,
+    /// P7.5 — JAC (Jump Across Creek) setup: wide-range bullish bar
+    /// breaks the creek with volume ≥ `jac_min_volume_ratio × vol_avg_20`.
+    pub jac_min_volume_ratio: f64,
+    pub jac_min_range_atr: f64,
+    pub jac_buffer_atr: f64,
+    /// Villahermosa *Wyckoff 2.0* §7.4.2 — Phase-D continuation setups
+    /// (LPS/BUEC/LPSY/IceRetest) must be preceded by a fresh SOS (long)
+    /// or SOW (short) confirming that Composite Operator is driving
+    /// price in the setup direction. Without the SOS/SOW the "LPS" is
+    /// just a random pullback. Phase-C climax setups (Spring/UT/UTAD)
+    /// are exempt — they ARE the initial trigger.
+    pub require_sos_sow_trigger: bool,
+    /// Max bars between the SOS/SOW and the setup trigger for the
+    /// confirmation to still count.
+    pub sos_sow_max_bars_ago: u64,
+    /// Setup types that require the SOS/SOW gate. Others bypass it.
+    pub sos_sow_required_for: Vec<WyckoffSetupType>,
 }
 
 impl Default for WyckoffSetupConfig {
@@ -135,6 +168,7 @@ impl Default for WyckoffSetupConfig {
                 WyckoffSetupType::Spring,
                 WyckoffSetupType::Lps,
                 WyckoffSetupType::Buec,
+                WyckoffSetupType::Jac,
                 WyckoffSetupType::Ut,
                 WyckoffSetupType::Utad,
                 WyckoffSetupType::Lpsy,
@@ -147,6 +181,20 @@ impl Default for WyckoffSetupConfig {
             lpsy_buffer_atr: 0.3,
             buec_buffer_atr: 0.4,
             ice_retest_buffer_atr: 0.4,
+            sl_wide_buffer_atr: 0.5,
+            require_directional_trigger: true,
+            trigger_bar_min_close_pos: 0.5,
+            jac_min_volume_ratio: 1.5,
+            jac_min_range_atr: 1.2,
+            jac_buffer_atr: 0.4,
+            require_sos_sow_trigger: true,
+            sos_sow_max_bars_ago: 50,
+            sos_sow_required_for: vec![
+                WyckoffSetupType::Lps,
+                WyckoffSetupType::Buec,
+                WyckoffSetupType::Lpsy,
+                WyckoffSetupType::IceRetest,
+            ],
         }
     }
 }
@@ -201,7 +249,13 @@ pub struct WyckoffSetupCandidate {
     pub range_height: f64,
     pub pnf_target: f64,           // classical P&F projection
     pub entry: f64,
+    /// Classical "tight" SL — close to the trigger bar (spring low /
+    /// UT high ± buffer). Used for R:R math.
     pub sl: f64,
+    /// Structural "wide" SL — below/above the range boundary ±
+    /// `sl_wide_buffer_atr·ATR`. Full invalidation of the setup
+    /// hypothesis; trade planner may elect this instead of `sl`.
+    pub sl_wide: f64,
     pub tp_targets: Vec<f64>,      // classical Wyckoff TPs (creek/ice + projection)
     pub trigger_event: WyckoffEvent,
     pub trigger_bar_index: u64,
@@ -240,6 +294,7 @@ pub fn all_builders() -> Vec<Box<dyn SetupBuilder>> {
         Box::new(SpringBuilder),
         Box::new(LpsBuilder),
         Box::new(BuecBuilder),
+        Box::new(JacBuilder),
         Box::new(UtBuilder),
         Box::new(UtadBuilder),
         Box::new(LpsyBuilder),
@@ -258,6 +313,56 @@ fn gate_basic(ctx: &SetupContext<'_>, ty: WyckoffSetupType) -> Option<()> {
     if ctx.bars.len() < ctx.cfg.min_range_bars { return None; }
     if ctx.atr <= 0.0 { return None; }
     Some(())
+}
+
+/// P7.2 — SOS/SOW confirmation gate. Phase-D continuation setups
+/// require a Sign-of-Strength (long) or Sign-of-Weakness (short) to
+/// have fired within `sos_sow_max_bars_ago` bars BEFORE the setup
+/// trigger. Without that confirmation the pullback is not a genuine
+/// LPS/BUEC/LPSY/IceRetest — just a regime-neutral retracement.
+fn gate_sos_sow(
+    ctx: &SetupContext<'_>,
+    ty: WyckoffSetupType,
+    dir: SetupDirection,
+    trigger_bar: u64,
+) -> Option<()> {
+    if !ctx.cfg.require_sos_sow_trigger { return Some(()); }
+    if !ctx.cfg.sos_sow_required_for.contains(&ty) { return Some(()); }
+    let needed = match dir {
+        SetupDirection::Long => WyckoffEvent::SOS,
+        SetupDirection::Short => WyckoffEvent::SOW,
+    };
+    let hit = ctx.tracker.events.iter().rev().find(|e| e.event == needed)?;
+    if hit.bar_index > trigger_bar { return None; }
+    if trigger_bar.saturating_sub(hit.bar_index) > ctx.cfg.sos_sow_max_bars_ago {
+        return None;
+    }
+    Some(())
+}
+
+/// P7.5 — directional trigger-bar gate. Long setups need a bullish bar
+/// (close > open) whose close sits in the upper `min_close_pos` of the
+/// bar range; short setups need the mirror. Disabled via
+/// `require_directional_trigger=false`.
+fn gate_trigger_bar(ctx: &SetupContext<'_>, dir: SetupDirection, bar: &SetupBar) -> Option<()> {
+    if !ctx.cfg.require_directional_trigger { return Some(()); }
+    let rng = (bar.high - bar.low).max(1e-9);
+    let min_pos = ctx.cfg.trigger_bar_min_close_pos.clamp(0.0, 1.0);
+    let ok = match dir {
+        SetupDirection::Long  => bar.close > bar.open && (bar.close - bar.low)  / rng >= min_pos,
+        SetupDirection::Short => bar.close < bar.open && (bar.high - bar.close) / rng >= min_pos,
+    };
+    if ok { Some(()) } else { None }
+}
+
+/// Structural "wide" SL — below range_bottom for longs, above
+/// range_top for shorts, with an ATR buffer (`sl_wide_buffer_atr`).
+fn structural_sl(ctx: &SetupContext<'_>, dir: SetupDirection) -> f64 {
+    let buf = ctx.cfg.sl_wide_buffer_atr * ctx.atr;
+    match dir {
+        SetupDirection::Long  => ctx.tracker.range_bottom - buf,
+        SetupDirection::Short => ctx.tracker.range_top + buf,
+    }
 }
 
 fn pnf_target(ctx: &SetupContext<'_>, dir: SetupDirection) -> f64 {
@@ -284,8 +389,10 @@ impl SetupBuilder for SpringBuilder {
         let last = ctx.last()?;
         // Trigger: close back inside range above range_bottom
         if last.close < ctx.tracker.range_bottom { return None; }
+        gate_trigger_bar(ctx, SetupDirection::Long, last)?;
 
         let sl = spring.price - ctx.cfg.spring_buffer_atr * ctx.atr;
+        let sl_wide = structural_sl(ctx, SetupDirection::Long);
         let entry = last.close.max(ctx.tracker.range_bottom + ctx.atr * 0.1);
         let target_proj = pnf_target(ctx, SetupDirection::Long);
         let tp_targets = vec![ctx.tracker.range_top, target_proj];
@@ -301,6 +408,7 @@ impl SetupBuilder for SpringBuilder {
             pnf_target: target_proj,
             entry,
             sl,
+            sl_wide,
             tp_targets,
             trigger_event: WyckoffEvent::Spring,
             trigger_bar_index: spring.bar_index,
@@ -330,8 +438,11 @@ impl SetupBuilder for LpsBuilder {
         let last = ctx.last()?;
         // Trigger: bullish close above LPS pivot
         if last.close <= lps.price { return None; }
+        gate_trigger_bar(ctx, SetupDirection::Long, last)?;
+        gate_sos_sow(ctx, WyckoffSetupType::Lps, SetupDirection::Long, lps.bar_index)?;
 
         let sl = lps.price - ctx.cfg.lps_buffer_atr * ctx.atr;
+        let sl_wide = structural_sl(ctx, SetupDirection::Long);
         let entry = last.close;
         let target_proj = pnf_target(ctx, SetupDirection::Long);
         let creek = ctx.tracker.creek.unwrap_or(ctx.tracker.range_top);
@@ -348,6 +459,7 @@ impl SetupBuilder for LpsBuilder {
             pnf_target: target_proj,
             entry,
             sl,
+            sl_wide,
             tp_targets,
             trigger_event: WyckoffEvent::LPS,
             trigger_bar_index: lps.bar_index,
@@ -376,8 +488,11 @@ impl SetupBuilder for BuecBuilder {
         let creek = ctx.tracker.creek.unwrap_or(ctx.tracker.range_top);
         // Trigger: price retested creek and bounced (close > creek)
         if last.close <= creek { return None; }
+        gate_trigger_bar(ctx, SetupDirection::Long, last)?;
+        gate_sos_sow(ctx, WyckoffSetupType::Buec, SetupDirection::Long, buec.bar_index)?;
 
         let sl = creek - ctx.cfg.buec_buffer_atr * ctx.atr;
+        let sl_wide = structural_sl(ctx, SetupDirection::Long);
         let entry = last.close;
         let target_proj = pnf_target(ctx, SetupDirection::Long);
         let tp_targets = vec![ctx.tracker.range_top, target_proj];
@@ -391,7 +506,7 @@ impl SetupBuilder for BuecBuilder {
             range_bottom: ctx.tracker.range_bottom,
             range_height: ctx.range_height(),
             pnf_target: target_proj,
-            entry, sl, tp_targets,
+            entry, sl, sl_wide, tp_targets,
             trigger_event: WyckoffEvent::BUEC,
             trigger_bar_index: buec.bar_index,
             trigger_bar_ts_ms: last.ts_ms,
@@ -420,8 +535,10 @@ impl SetupBuilder for UtBuilder {
             .clone();
         let last = ctx.last()?;
         if last.close > ctx.tracker.range_top { return None; }   // failed back inside
+        gate_trigger_bar(ctx, SetupDirection::Short, last)?;
 
         let sl = ut.price + ctx.cfg.ut_buffer_atr * ctx.atr;
+        let sl_wide = structural_sl(ctx, SetupDirection::Short);
         let entry = last.close.min(ctx.tracker.range_top - ctx.atr * 0.1);
         let target_proj = pnf_target(ctx, SetupDirection::Short);
         let tp_targets = vec![ctx.tracker.range_bottom, target_proj];
@@ -435,7 +552,7 @@ impl SetupBuilder for UtBuilder {
             range_bottom: ctx.tracker.range_bottom,
             range_height: ctx.range_height(),
             pnf_target: target_proj,
-            entry, sl, tp_targets,
+            entry, sl, sl_wide, tp_targets,
             trigger_event: WyckoffEvent::UTAD,
             trigger_bar_index: ut.bar_index,
             trigger_bar_ts_ms: last.ts_ms,
@@ -461,8 +578,10 @@ impl SetupBuilder for UtadBuilder {
         let utad = ctx.last_event(WyckoffEvent::UTAD)?.clone();
         let last = ctx.last()?;
         if last.close >= ctx.tracker.range_top { return None; }
+        gate_trigger_bar(ctx, SetupDirection::Short, last)?;
 
         let sl = utad.price + ctx.cfg.ut_buffer_atr * ctx.atr;
+        let sl_wide = structural_sl(ctx, SetupDirection::Short);
         let entry = last.close;
         let target_proj = pnf_target(ctx, SetupDirection::Short);
         let ice = ctx.tracker.ice.unwrap_or(ctx.tracker.range_bottom);
@@ -477,7 +596,7 @@ impl SetupBuilder for UtadBuilder {
             range_bottom: ctx.tracker.range_bottom,
             range_height: ctx.range_height(),
             pnf_target: target_proj,
-            entry, sl, tp_targets,
+            entry, sl, sl_wide, tp_targets,
             trigger_event: WyckoffEvent::UTAD,
             trigger_bar_index: utad.bar_index,
             trigger_bar_ts_ms: last.ts_ms,
@@ -505,8 +624,11 @@ impl SetupBuilder for LpsyBuilder {
         let lpsy = ctx.last_event(WyckoffEvent::LPSY)?.clone();
         let last = ctx.last()?;
         if last.close >= lpsy.price { return None; }
+        gate_trigger_bar(ctx, SetupDirection::Short, last)?;
+        gate_sos_sow(ctx, WyckoffSetupType::Lpsy, SetupDirection::Short, lpsy.bar_index)?;
 
         let sl = lpsy.price + ctx.cfg.lpsy_buffer_atr * ctx.atr;
+        let sl_wide = structural_sl(ctx, SetupDirection::Short);
         let entry = last.close;
         let target_proj = pnf_target(ctx, SetupDirection::Short);
         let ice = ctx.tracker.ice.unwrap_or(ctx.tracker.range_bottom);
@@ -521,7 +643,7 @@ impl SetupBuilder for LpsyBuilder {
             range_bottom: ctx.tracker.range_bottom,
             range_height: ctx.range_height(),
             pnf_target: target_proj,
-            entry, sl, tp_targets,
+            entry, sl, sl_wide, tp_targets,
             trigger_event: WyckoffEvent::LPSY,
             trigger_bar_index: lpsy.bar_index,
             trigger_bar_ts_ms: last.ts_ms,
@@ -549,8 +671,11 @@ impl SetupBuilder for IceRetestBuilder {
         let ice = ctx.tracker.ice.unwrap_or(ctx.tracker.range_bottom);
         // Retest: price came back near ice and rejected (close < ice)
         if last.close >= ice { return None; }
+        gate_trigger_bar(ctx, SetupDirection::Short, last)?;
+        gate_sos_sow(ctx, WyckoffSetupType::IceRetest, SetupDirection::Short, bo.bar_index)?;
 
         let sl = ice + ctx.cfg.ice_retest_buffer_atr * ctx.atr;
+        let sl_wide = structural_sl(ctx, SetupDirection::Short);
         let entry = last.close;
         let target_proj = pnf_target(ctx, SetupDirection::Short);
         let tp_targets = vec![ctx.tracker.range_bottom, target_proj];
@@ -564,7 +689,7 @@ impl SetupBuilder for IceRetestBuilder {
             range_bottom: ctx.tracker.range_bottom,
             range_height: ctx.range_height(),
             pnf_target: target_proj,
-            entry, sl, tp_targets,
+            entry, sl, sl_wide, tp_targets,
             trigger_event: WyckoffEvent::BreakOfIce,
             trigger_bar_index: bo.bar_index,
             trigger_bar_ts_ms: last.ts_ms,
@@ -572,6 +697,71 @@ impl SetupBuilder for IceRetestBuilder {
             climax: ctx.climax_metrics(last),
             atr_at_trigger: ctx.atr,
             raw_score: bo.score.clamp(0.0, 100.0),
+        })
+    }
+}
+
+// =========================================================================
+// 8. JAC — Jump Across the Creek (Phase D accumulation breakout)
+//
+// Villahermosa §7.4.1: a wide-range bullish bar that closes decisively above
+// the creek on above-average volume. Distinct from BUEC (which is the *retest*
+// after the break) — JAC fires on the breakout bar itself.
+// =========================================================================
+pub struct JacBuilder;
+impl SetupBuilder for JacBuilder {
+    fn setup_type(&self) -> WyckoffSetupType { WyckoffSetupType::Jac }
+
+    fn try_build(&self, ctx: &SetupContext<'_>) -> Option<WyckoffSetupCandidate> {
+        gate_basic(ctx, WyckoffSetupType::Jac)?;
+        if !matches!(ctx.tracker.schematic,
+            WyckoffSchematic::Accumulation | WyckoffSchematic::ReAccumulation) { return None; }
+        if ctx.tracker.current_phase < WyckoffPhase::D { return None; }
+
+        let jac = ctx.last_event(WyckoffEvent::JAC)?.clone();
+        let last = ctx.last()?;
+        let creek = ctx.tracker.creek.unwrap_or(ctx.tracker.range_top);
+
+        // Breakout bar must close above the creek.
+        if last.close <= creek { return None; }
+
+        // Volume filter: breakout bar must be ≥ jac_min_volume_ratio × vol_avg_20.
+        if ctx.vol_avg_20 > 0.0 {
+            let vr = last.volume / ctx.vol_avg_20;
+            if vr < ctx.cfg.jac_min_volume_ratio { return None; }
+        }
+        // Range filter: wide bar per Villahermosa.
+        if ctx.atr > 0.0 {
+            let rng = last.high - last.low;
+            if rng < ctx.cfg.jac_min_range_atr * ctx.atr { return None; }
+        }
+
+        gate_trigger_bar(ctx, SetupDirection::Long, last)?;
+        gate_sos_sow(ctx, WyckoffSetupType::Jac, SetupDirection::Long, jac.bar_index)?;
+
+        let sl = creek - ctx.cfg.jac_buffer_atr * ctx.atr;
+        let sl_wide = structural_sl(ctx, SetupDirection::Long);
+        let entry = last.close;
+        let target_proj = pnf_target(ctx, SetupDirection::Long);
+        let tp_targets = vec![ctx.tracker.range_top, target_proj];
+
+        Some(WyckoffSetupCandidate {
+            setup_type: WyckoffSetupType::Jac,
+            direction: SetupDirection::Long,
+            phase: ctx.tracker.current_phase,
+            schematic: ctx.tracker.schematic,
+            range_top: ctx.tracker.range_top,
+            range_bottom: ctx.tracker.range_bottom,
+            range_height: ctx.range_height(),
+            pnf_target: target_proj,
+            entry, sl, sl_wide, tp_targets,
+            trigger_event: WyckoffEvent::JAC,
+            trigger_bar_index: jac.bar_index,
+            trigger_bar_ts_ms: last.ts_ms,
+            trigger_price: jac.price,
+            climax: ctx.climax_metrics(last),
+            atr_at_trigger: ctx.atr,
+            raw_score: jac.score.clamp(0.0, 100.0),
         })
     }
 }
@@ -639,6 +829,30 @@ mod test {
         assert_eq!(cand.direction, SetupDirection::Short);
         assert!(cand.sl > cand.entry);
         assert!(cand.tp_targets.iter().all(|t| *t < cand.entry));
+    }
+
+    #[test]
+    fn lps_requires_prior_sos() {
+        let mut tr = WyckoffStructureTracker::new(
+            WyckoffSchematic::Accumulation, 100.0, 90.0);
+        tr.current_phase = WyckoffPhase::D;
+        tr.record_event(WyckoffEvent::SC, 1, 89.0, 80.0);
+        tr.record_event(WyckoffEvent::AR, 5, 99.0, 70.0);
+        tr.record_event(WyckoffEvent::LPS, 40, 93.0, 75.0);
+
+        let bars: Vec<SetupBar> = (0..30)
+            .map(|i| mk_bar(i * 60_000, 94.0, 96.0, 92.0, 95.0, 1000.0))
+            .collect();
+        let cfg = WyckoffSetupConfig::default();
+        let ctx = SetupContext { tracker: &tr, bars: &bars, atr: 1.0, vol_avg_20: 1000.0, cfg: &cfg };
+        // No SOS yet — gate must block.
+        assert!(LpsBuilder.try_build(&ctx).is_none(), "LPS must require SOS");
+
+        // Add an SOS within the window — gate must pass.
+        let mut tr2 = tr.clone();
+        tr2.record_event(WyckoffEvent::SOS, 35, 97.0, 85.0);
+        let ctx2 = SetupContext { tracker: &tr2, bars: &bars, atr: 1.0, vol_avg_20: 1000.0, cfg: &cfg };
+        assert!(LpsBuilder.try_build(&ctx2).is_some(), "LPS should fire after SOS");
     }
 
     #[test]
