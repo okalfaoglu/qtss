@@ -14,12 +14,15 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use qtss_confluence::ConfluenceReading;
+use qtss_confluence::{
+    ConfluenceDirection, ConfluenceInputs, ConfluenceReading, ConfluenceWeights, DetectionVote,
+};
 use qtss_indicators::{atr, ema};
 use qtss_setup_engine::{
-    check_allocation, classify_alt_type, should_reverse_close, AllocatorContext, AllocatorLimits,
-    CloseReason, Direction, OpenSetupSummary, PositionGuard, PositionGuardConfig, Profile,
-    RejectReason, SetupState, StructuralTarget, VenueClass,
+    check_allocation, classify_alt_type, confluence_gate_should_open_with_reading,
+    should_reverse_close, AllocatorContext, AllocatorLimits, CloseReason, Direction, GateConfig,
+    GateContext, OpenSetupSummary, PositionGuard, PositionGuardConfig, Profile, RejectReason,
+    SetupState, StructuralTarget, VenueClass,
 };
 use qtss_storage::v2_confluence::fetch_latest_v2_confluence;
 use qtss_storage::{
@@ -49,6 +52,17 @@ struct LoopConfig {
     tp_override_enabled: bool,
     tp_override_guven_threshold: f64,
     tp_override_max_extension_r: f64,
+    gate: GateLimits,
+}
+
+#[derive(Debug, Clone)]
+struct GateLimits {
+    enabled: bool,
+    min_score: f64,
+    min_direction_votes: u8,
+    reject_on_regimes: Vec<String>,
+    kill_switch_on: bool,
+    news_blackout_on: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -179,6 +193,8 @@ async fn load_config(pool: &PgPool) -> LoopConfig {
     let tp_override_max_extension_r =
         resolve_system_f64(pool, "setup", "tp_override.max_extension_r", "", 3.0).await;
 
+    let gate = load_gate_limits(pool).await;
+
     LoopConfig {
         enabled,
         tick_interval_s,
@@ -189,6 +205,41 @@ async fn load_config(pool: &PgPool) -> LoopConfig {
         tp_override_enabled,
         tp_override_guven_threshold,
         tp_override_max_extension_r,
+        gate,
+    }
+}
+
+async fn load_gate_limits(pool: &PgPool) -> GateLimits {
+    let enabled =
+        resolve_system_u64(pool, "setup", "confluence_gate.enabled", "", 1, 0, 1).await == 1;
+    let min_score =
+        resolve_system_f64(pool, "setup", "confluence_gate.min_score", "", 0.55).await;
+    let min_direction_votes =
+        resolve_system_u64(pool, "setup", "confluence_gate.min_direction_votes", "", 2, 0, 10)
+            .await as u8;
+    let kill_switch_on =
+        resolve_system_u64(pool, "setup", "confluence_gate.kill_switch_on", "", 0, 0, 1).await
+            == 1;
+    let news_blackout_on =
+        resolve_system_u64(pool, "setup", "confluence_gate.news_blackout_on", "", 0, 0, 1).await
+            == 1;
+    // reject_on_regimes stored as JSON array of strings.
+    let reject_on_regimes: Vec<String> = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT value FROM system_config WHERE module='setup' AND config_key='confluence_gate.reject_on_regimes' LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+    .unwrap_or_default();
+    GateLimits {
+        enabled,
+        min_score,
+        min_direction_votes,
+        reject_on_regimes,
+        kill_switch_on,
+        news_blackout_on,
     }
 }
 
@@ -224,6 +275,54 @@ fn direction_from_str(s: &str) -> Direction {
         "long" => Direction::Long,
         "short" => Direction::Short,
         _ => Direction::Neutral,
+    }
+}
+
+/// Infer a DetectionVote direction from `family` + `subkind`. Mirrors
+/// the heuristic used elsewhere in the loop (subkind contains bull/bear).
+fn vote_direction(det: &DetectionRow) -> ConfluenceDirection {
+    let s = det.subkind.as_str();
+    if s.contains("bull") || s.contains("long") || s.contains("bottom") || s.contains("accumulation") {
+        ConfluenceDirection::Long
+    } else if s.contains("bear") || s.contains("short") || s.contains("top") || s.contains("distribution") {
+        ConfluenceDirection::Short
+    } else {
+        ConfluenceDirection::Neutral
+    }
+}
+
+fn build_detection_votes(detections: &[DetectionRow]) -> Vec<DetectionVote> {
+    detections
+        .iter()
+        .filter(|d| d.state == "confirmed" || d.state == "forming")
+        .map(|d| DetectionVote {
+            family: d.family.clone(),
+            subkind: d.subkind.clone(),
+            direction: vote_direction(d),
+            structural_score: d.structural_score,
+        })
+        .collect()
+}
+
+/// Build a `ConfluenceReading` from the persisted `V2ConfluenceRow`.
+/// This keeps the gate in sync with whatever score the rest of the
+/// system already published — no double-scoring drift.
+fn reading_from_row(
+    guven: f32,
+    erken_uyari: f32,
+    direction: &str,
+    layer_count: i32,
+) -> ConfluenceReading {
+    ConfluenceReading {
+        erken_uyari: erken_uyari as f64,
+        guven: guven as f64,
+        direction: match direction {
+            "long" => ConfluenceDirection::Long,
+            "short" => ConfluenceDirection::Short,
+            _ => ConfluenceDirection::Neutral,
+        },
+        layer_count: layer_count.max(0) as u32,
+        details: vec![],
     }
 }
 
@@ -756,13 +855,12 @@ async fn try_arm_new_setup(
 
     // Try structural guard: use detection invalidation + target-engine
     // measured-move targets instead of ATR-based fallback.
+    let det_repo = V2DetectionRepository::new(pool.clone());
+    let detections = det_repo
+        .list_for_chart(&sym.exchange, &sym.symbol, &sym.interval, 10)
+        .await
+        .unwrap_or_default();
     let guard = {
-        let det_repo = V2DetectionRepository::new(pool.clone());
-        let detections = det_repo
-            .list_for_chart(&sym.exchange, &sym.symbol, &sym.interval, 10)
-            .await
-            .unwrap_or_default();
-
         // Find the best confirmed detection matching our direction.
         let best_det = detections.iter().find(|d| {
             let det_dir = match d.family.as_str() {
@@ -808,6 +906,49 @@ async fn try_arm_new_setup(
         risk_pct: pcfg.risk_pct,
         correlation_groups: groups.clone(),
     };
+
+    // Faz 9.1 — Classic confluence gate (veto + consensus + score).
+    // Pre-computed reading from the persisted `qtss_v2_confluence` row
+    // keeps the gate consistent with the published score.
+    if cfg.gate.enabled {
+        let votes = build_detection_votes(&detections);
+        let inputs = ConfluenceInputs {
+            tbm_score: None,
+            tbm_confidence: None,
+            detections: votes,
+            onchain: None,
+        };
+        let gctx = GateContext {
+            inputs,
+            regime_label: None,
+            kill_switch_on: cfg.gate.kill_switch_on,
+            stale_data: false,
+            news_blackout: cfg.gate.news_blackout_on,
+        };
+        let gcfg = GateConfig {
+            weights: ConfluenceWeights::default(),
+            min_score: cfg.gate.min_score,
+            min_direction_votes: cfg.gate.min_direction_votes,
+            reject_on_regimes: cfg.gate.reject_on_regimes.clone(),
+        };
+        let reading = reading_from_row(
+            conf.guven,
+            conf.erken_uyari,
+            &conf.direction,
+            conf.layer_count,
+        );
+        if let Err(rej) = confluence_gate_should_open_with_reading(&gctx, &gcfg, reading) {
+            let reason = RejectReason::from_veto_kind(rej.kind);
+            debug!(
+                symbol = %sym.symbol,
+                kind = rej.kind.as_str(),
+                detail = %rej.reason,
+                "confluence gate rejected"
+            );
+            record_rejection(pool, cfg, venue, profile, sym, direction, conf.id, reason).await?;
+            return Ok(());
+        }
+    }
 
     if let Err(reason) = check_allocation(&cfg.allocator, ctx, &candidate) {
         record_rejection(pool, cfg, venue, profile, sym, direction, conf.id, reason).await?;

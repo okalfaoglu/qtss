@@ -209,6 +209,19 @@ fn consensus_direction(
 // ---------------------------------------------------------------------------
 
 pub fn should_open(ctx: &GateContext, cfg: &GateConfig) -> GateDecision {
+    let reading = score_confluence(&ctx.inputs, &cfg.weights);
+    should_open_with_reading(ctx, cfg, reading)
+}
+
+/// Variant that uses a pre-computed `ConfluenceReading` (e.g. the
+/// `qtss_v2_confluence` row the worker already persisted). This keeps
+/// the gate deterministic against the same score the rest of the system
+/// sees — no double-scoring drift.
+pub fn should_open_with_reading(
+    ctx: &GateContext,
+    cfg: &GateConfig,
+    reading: ConfluenceReading,
+) -> GateDecision {
     // Layer 1 — veto dispatch.
     for rule in RULES {
         if let Some(msg) = rule.evaluate(ctx, cfg) {
@@ -235,9 +248,6 @@ pub fn should_open(ctx: &GateContext, cfg: &GateConfig) -> GateDecision {
                 });
             }
         };
-
-    // Layer 3 — weighted score via qtss-confluence.
-    let reading = score_confluence(&ctx.inputs, &cfg.weights);
 
     // Consensus direction & weighted direction must agree (bilateral
     // check — avoids TBM-only override flipping structural majority).

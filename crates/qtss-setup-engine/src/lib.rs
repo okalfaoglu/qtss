@@ -43,8 +43,9 @@ pub use allocator::{
 };
 pub use classifier::classify_alt_type;
 pub use confluence_gate::{
-    should_open as confluence_gate_should_open, GateApproval, GateConfig, GateContext,
-    GateDecision, GateRejection, VetoKind, VetoRule,
+    should_open as confluence_gate_should_open,
+    should_open_with_reading as confluence_gate_should_open_with_reading, GateApproval, GateConfig,
+    GateContext, GateDecision, GateRejection, VetoKind, VetoRule,
 };
 pub use guard::{PositionGuard, PositionGuardConfig, StructuralTarget};
 pub use reverse::should_reverse_close;

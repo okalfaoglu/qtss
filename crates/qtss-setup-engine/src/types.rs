@@ -255,6 +255,14 @@ pub enum RejectReason {
     MaxConcurrent,
     CorrelationCap,
     CommissionGate,
+    // Faz 9.1 — classic confluence gate vetoes.
+    GateKillSwitch,
+    GateStaleData,
+    GateNewsBlackout,
+    GateRegimeOpposite,
+    GateDirectionConsensus,
+    GateBelowMinScore,
+    GateNoDirection,
 }
 
 impl RejectReason {
@@ -264,6 +272,27 @@ impl RejectReason {
             RejectReason::MaxConcurrent => "max_concurrent",
             RejectReason::CorrelationCap => "correlation_cap",
             RejectReason::CommissionGate => "commission_gate",
+            RejectReason::GateKillSwitch => "gate_kill_switch",
+            RejectReason::GateStaleData => "gate_stale_data",
+            RejectReason::GateNewsBlackout => "gate_news_blackout",
+            RejectReason::GateRegimeOpposite => "gate_regime_opposite",
+            RejectReason::GateDirectionConsensus => "gate_direction_consensus",
+            RejectReason::GateBelowMinScore => "gate_below_min_score",
+            RejectReason::GateNoDirection => "gate_no_direction",
+        }
+    }
+
+    /// Map a Faz 9.1 `VetoKind` onto the persisted rejection slug.
+    pub fn from_veto_kind(kind: crate::confluence_gate::VetoKind) -> Self {
+        use crate::confluence_gate::VetoKind;
+        match kind {
+            VetoKind::KillSwitch => RejectReason::GateKillSwitch,
+            VetoKind::StaleData => RejectReason::GateStaleData,
+            VetoKind::NewsBlackout => RejectReason::GateNewsBlackout,
+            VetoKind::RegimeOpposite => RejectReason::GateRegimeOpposite,
+            VetoKind::DirectionConsensusFail => RejectReason::GateDirectionConsensus,
+            VetoKind::BelowMinScore => RejectReason::GateBelowMinScore,
+            VetoKind::NoDirection => RejectReason::GateNoDirection,
         }
     }
 }
