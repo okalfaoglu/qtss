@@ -9,6 +9,21 @@ import { apiFetch } from "../lib/api";
 
 type LabelBucket = { label: string; n: number };
 type FeatureCoverage = { source: string; n: number };
+type CloseReasonBucket = {
+  reason: string;
+  category: string | null;
+  n: number;
+};
+type PnlSummary = {
+  n_closed: number;
+  n_win: number;
+  n_loss: number;
+  n_other: number;
+  avg_rr: number | null;
+  avg_pnl_pct: number | null;
+  best_rr: number | null;
+  worst_rr: number | null;
+};
 
 type TrainingSetStats = {
   total_setups: number;
@@ -17,7 +32,30 @@ type TrainingSetStats = {
   setups_with_features: number;
   label_distribution: LabelBucket[];
   feature_coverage: FeatureCoverage[];
+  close_reasons: CloseReasonBucket[];
+  pnl: PnlSummary;
 };
+
+// Category → color. `take_profit` green, `stop_loss` red, everything
+// else neutral. Keeps the chip row scannable at a glance.
+function categoryClass(cat: string | null): string {
+  if (!cat) return "border-zinc-700 bg-zinc-800/60 text-zinc-300";
+  const c = cat.toLowerCase();
+  if (c.includes("take_profit") || c === "tp" || c === "win")
+    return "border-emerald-500/40 bg-emerald-500/15 text-emerald-300";
+  if (c.includes("stop") || c === "sl" || c === "loss")
+    return "border-red-500/40 bg-red-500/15 text-red-300";
+  if (c.includes("timeout") || c.includes("expire"))
+    return "border-amber-500/40 bg-amber-500/15 text-amber-300";
+  if (c.includes("invalid") || c.includes("manual"))
+    return "border-sky-500/40 bg-sky-500/15 text-sky-300";
+  return "border-zinc-700 bg-zinc-800/60 text-zinc-300";
+}
+
+function fmtNum(v: number | null | undefined, digits = 2): string {
+  if (v == null || Number.isNaN(v)) return "—";
+  return Number(v).toFixed(digits);
+}
 
 type Readiness = {
   min_closed: number;
@@ -137,6 +175,75 @@ export function TrainingSet() {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* PnL & close-reason summary — kâr/zarar/stop breakdown */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_2fr]">
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
+          <div className="mb-2 text-[10px] uppercase tracking-wide text-zinc-500">
+            PnL (closed slice, n={s.pnl.n_closed})
+          </div>
+          <div className="grid grid-cols-2 gap-y-1 text-xs">
+            <div className="text-zinc-500">Win / Loss / Other</div>
+            <div className="text-right font-mono">
+              <span className="text-emerald-300">{s.pnl.n_win}</span>
+              <span className="text-zinc-600"> / </span>
+              <span className="text-red-300">{s.pnl.n_loss}</span>
+              <span className="text-zinc-600"> / </span>
+              <span className="text-zinc-400">{s.pnl.n_other}</span>
+            </div>
+            <div className="text-zinc-500">Hit rate</div>
+            <div className="text-right font-mono text-zinc-100">
+              {s.pnl.n_closed > 0
+                ? `${((s.pnl.n_win / s.pnl.n_closed) * 100).toFixed(1)}%`
+                : "—"}
+            </div>
+            <div className="text-zinc-500">Avg realized R</div>
+            <div className="text-right font-mono text-zinc-100">
+              {fmtNum(s.pnl.avg_rr)}
+            </div>
+            <div className="text-zinc-500">Avg pnl %</div>
+            <div className="text-right font-mono text-zinc-100">
+              {fmtNum(s.pnl.avg_pnl_pct)}%
+            </div>
+            <div className="text-zinc-500">Best / Worst R</div>
+            <div className="text-right font-mono text-zinc-100">
+              <span className="text-emerald-300">{fmtNum(s.pnl.best_rr)}</span>
+              <span className="text-zinc-600"> / </span>
+              <span className="text-red-300">{fmtNum(s.pnl.worst_rr)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
+          <div className="mb-2 text-[10px] uppercase tracking-wide text-zinc-500">
+            Close reasons (kâr / zarar / stop / timeout)
+          </div>
+          {s.close_reasons.length === 0 ? (
+            <div className="text-xs text-zinc-500">
+              No closed setups yet — outcome labeler hasn't written any rows.
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {s.close_reasons.map((b) => (
+                <span
+                  key={`${b.reason}:${b.category ?? ""}`}
+                  className={`rounded border px-2 py-1 text-[11px] ${categoryClass(
+                    b.category,
+                  )}`}
+                  title={
+                    b.category
+                      ? `category = ${b.category}`
+                      : "no category — outcome labeler didn't tag"
+                  }
+                >
+                  <span className="font-mono">{b.reason}</span>
+                  <span className="ml-1.5 font-mono font-semibold">{b.n}</span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Label distribution */}
