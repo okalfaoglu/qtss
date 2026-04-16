@@ -3,6 +3,7 @@
 //! data simply means a channel returns `None` (no opinion) and drops
 //! out of the confidence blend.
 
+use qtss_domain::v2::bar::Bar;
 use qtss_domain::v2::detection::{Detection, PatternKind};
 use qtss_domain::v2::regime::RegimeKind;
 use qtss_domain::v2::timeframe::Timeframe;
@@ -22,6 +23,13 @@ pub struct ValidationContext {
     /// Multi-TF regime confluence (Faz 11). Populated from
     /// `regime_snapshots` by the orchestrator; `None` = not computed yet.
     pub multi_tf_regime: Option<MultiTfRegimeContext>,
+    /// Recent bars (oldest..newest) covering at least the pattern span
+    /// plus a trailing breakout window. Populated by the worker before
+    /// `validator.validate()`. Channels that need volume/ATR/bar geometry
+    /// read from here; when empty, those channels simply return `None`
+    /// (no opinion) and drop out of the blend. P2 — added for
+    /// classical breakout & volume channels.
+    pub recent_bars: Vec<Bar>,
 }
 
 /// Summary of multi-timeframe regime confluence, injected by the caller.

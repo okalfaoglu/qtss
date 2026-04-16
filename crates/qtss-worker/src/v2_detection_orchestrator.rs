@@ -138,12 +138,17 @@ impl DetectorRunner for ClassicalRunner {
     fn detect(
         &self,
         tree: &PivotTree,
-        _bars: &[Bar],
+        bars: &[Bar],
         instrument: &Instrument,
         timeframe: Timeframe,
         regime: &RegimeSnapshot,
     ) -> Vec<Detection> {
-        self.0.detect(tree, instrument, timeframe, regime).into_iter().collect()
+        // P5.2 — bars plumbed through so Flag / Pennant flagpole ATR
+        // checks have bar-level OHLC; bar-less shapes ignore the slice.
+        self.0
+            .detect_with_bars(tree, bars, instrument, timeframe, regime)
+            .into_iter()
+            .collect()
     }
 }
 
@@ -426,6 +431,159 @@ async fn resolve_harmonic_config(pool: &PgPool) -> HarmonicConfig {
     }
 }
 
+/// Resolve classical detector config from system_config (CLAUDE.md #2).
+/// Every threshold is tuneable from the Config Editor without restarts.
+async fn resolve_classical_config(pool: &PgPool) -> ClassicalConfig {
+    let level_str = resolve_system_string(
+        pool, "detection", "classical.pivot_level",
+        "QTSS_DETECTION_CLASSICAL_PIVOT_LEVEL", "L1",
+    ).await;
+    let min_score = resolve_system_f64(
+        pool, "detection", "classical.min_structural_score",
+        "QTSS_DETECTION_CLASSICAL_MIN_SCORE", 0.50,
+    ).await as f32;
+    let eq_tol = resolve_system_f64(
+        pool, "detection", "classical.equality_tolerance",
+        "QTSS_DETECTION_CLASSICAL_EQ_TOL", 0.03,
+    ).await;
+    let apex_h = resolve_system_u64(
+        pool, "detection", "classical.apex_horizon_bars",
+        "QTSS_DETECTION_CLASSICAL_APEX_HORIZON", 50, 1, 500,
+    ).await;
+    let flat_pct = resolve_system_f64(
+        pool, "detection", "classical.flatness_threshold_pct",
+        "QTSS_DETECTION_CLASSICAL_FLATNESS_PCT", 0.001,
+    ).await;
+    let flat_min = resolve_system_f64(
+        pool, "detection", "classical.flatness_min_score",
+        "QTSS_DETECTION_CLASSICAL_FLATNESS_MIN", 0.3,
+    ).await;
+    let neck_mult = resolve_system_f64(
+        pool, "detection", "classical.neckline_tolerance_mult",
+        "QTSS_DETECTION_CLASSICAL_NECK_MULT", 1.5,
+    ).await;
+    let tri_sym = resolve_system_f64(
+        pool, "detection", "classical.triangle_symmetry_tol",
+        "QTSS_DETECTION_CLASSICAL_TRI_SYM", 0.5,
+    ).await;
+    let hs_slope = resolve_system_f64(
+        pool, "detection", "classical.hs_max_neckline_slope_pct",
+        "QTSS_DETECTION_CLASSICAL_HS_SLOPE", 0.003,
+    ).await;
+    let hs_time = resolve_system_f64(
+        pool, "detection", "classical.hs_time_symmetry_tol",
+        "QTSS_DETECTION_CLASSICAL_HS_TIME_SYM", 0.5,
+    ).await;
+    let rect_slope = resolve_system_f64(
+        pool, "detection", "classical.rectangle_max_slope_pct",
+        "QTSS_DETECTION_CLASSICAL_RECT_SLOPE", 0.002,
+    ).await;
+    let rect_min_bars = resolve_system_u64(
+        pool, "detection", "classical.rectangle_min_bars",
+        "QTSS_DETECTION_CLASSICAL_RECT_MIN_BARS", 15, 1, 500,
+    ).await;
+    let flag_pole_atr = resolve_system_f64(
+        pool, "detection", "classical.flag_pole_min_move_atr",
+        "QTSS_DETECTION_CLASSICAL_FLAG_POLE_ATR", 3.0,
+    ).await;
+    let flag_pole_bars = resolve_system_u64(
+        pool, "detection", "classical.flag_pole_max_bars",
+        "QTSS_DETECTION_CLASSICAL_FLAG_POLE_BARS", 20, 1, 500,
+    ).await;
+    let flag_retrace = resolve_system_f64(
+        pool, "detection", "classical.flag_max_retrace_pct",
+        "QTSS_DETECTION_CLASSICAL_FLAG_RETRACE", 0.5,
+    ).await;
+    let flag_atr_period = resolve_system_u64(
+        pool, "detection", "classical.flag_atr_period",
+        "QTSS_DETECTION_CLASSICAL_FLAG_ATR_PERIOD", 14, 1, 500,
+    ).await;
+    let flag_parallel = resolve_system_f64(
+        pool, "detection", "classical.flag_parallelism_tol",
+        "QTSS_DETECTION_CLASSICAL_FLAG_PARALLEL", 0.3,
+    ).await;
+    let pennant_height = resolve_system_f64(
+        pool, "detection", "classical.pennant_max_height_pct_of_pole",
+        "QTSS_DETECTION_CLASSICAL_PENNANT_HEIGHT", 0.4,
+    ).await;
+    let chan_parallel = resolve_system_f64(
+        pool, "detection", "classical.channel_parallelism_tol",
+        "QTSS_DETECTION_CLASSICAL_CHAN_PARALLEL", 0.15,
+    ).await;
+    let chan_min_bars = resolve_system_u64(
+        pool, "detection", "classical.channel_min_bars",
+        "QTSS_DETECTION_CLASSICAL_CHAN_MIN_BARS", 20, 1, 500,
+    ).await;
+    let chan_min_slope = resolve_system_f64(
+        pool, "detection", "classical.channel_min_slope_pct",
+        "QTSS_DETECTION_CLASSICAL_CHAN_MIN_SLOPE", 0.001,
+    ).await;
+    let cup_min_bars = resolve_system_u64(
+        pool, "detection", "classical.cup_min_bars",
+        "QTSS_DETECTION_CLASSICAL_CUP_MIN_BARS", 30, 1, 1000,
+    ).await;
+    let cup_rim_eq = resolve_system_f64(
+        pool, "detection", "classical.cup_rim_equality_tol",
+        "QTSS_DETECTION_CLASSICAL_CUP_RIM_EQ", 0.03,
+    ).await;
+    let cup_min_depth = resolve_system_f64(
+        pool, "detection", "classical.cup_min_depth_pct",
+        "QTSS_DETECTION_CLASSICAL_CUP_MIN_DEPTH", 0.12,
+    ).await;
+    let cup_max_depth = resolve_system_f64(
+        pool, "detection", "classical.cup_max_depth_pct",
+        "QTSS_DETECTION_CLASSICAL_CUP_MAX_DEPTH", 0.50,
+    ).await;
+    let cup_r2 = resolve_system_f64(
+        pool, "detection", "classical.cup_roundness_r2",
+        "QTSS_DETECTION_CLASSICAL_CUP_R2", 0.6,
+    ).await;
+    let handle_max_depth = resolve_system_f64(
+        pool, "detection", "classical.handle_max_depth_pct_of_cup",
+        "QTSS_DETECTION_CLASSICAL_HANDLE_MAX", 0.5,
+    ).await;
+    let rounding_min_bars = resolve_system_u64(
+        pool, "detection", "classical.rounding_min_bars",
+        "QTSS_DETECTION_CLASSICAL_ROUND_MIN_BARS", 40, 1, 1000,
+    ).await;
+    let rounding_r2 = resolve_system_f64(
+        pool, "detection", "classical.rounding_roundness_r2",
+        "QTSS_DETECTION_CLASSICAL_ROUND_R2", 0.65,
+    ).await;
+
+    ClassicalConfig {
+        pivot_level: parse_pivot_level(&level_str),
+        min_structural_score: min_score.clamp(0.0, 1.0),
+        equality_tolerance: eq_tol.clamp(0.0, 0.25),
+        apex_horizon_bars: apex_h,
+        flatness_threshold_pct: flat_pct.clamp(0.0, 0.1),
+        flatness_min_score: flat_min.clamp(0.0, 1.0),
+        neckline_tolerance_mult: neck_mult.clamp(1.0, 3.0),
+        triangle_symmetry_tol: tri_sym.clamp(0.0, 2.0),
+        hs_max_neckline_slope_pct: hs_slope.clamp(0.0, 0.05),
+        hs_time_symmetry_tol: hs_time.clamp(0.0, 2.0),
+        rectangle_max_slope_pct: rect_slope.clamp(0.0, 0.1),
+        rectangle_min_bars: rect_min_bars,
+        flag_pole_min_move_atr: flag_pole_atr.clamp(0.0, 20.0),
+        flag_pole_max_bars: flag_pole_bars,
+        flag_max_retrace_pct: flag_retrace.clamp(0.0, 1.0),
+        flag_atr_period: flag_atr_period,
+        flag_parallelism_tol: flag_parallel.clamp(0.0, 2.0),
+        pennant_max_height_pct_of_pole: pennant_height.clamp(0.0, 1.0),
+        channel_parallelism_tol: chan_parallel.clamp(0.0, 2.0),
+        channel_min_bars: chan_min_bars,
+        channel_min_slope_pct: chan_min_slope.clamp(0.0, 0.1),
+        cup_min_bars,
+        cup_rim_equality_tol: cup_rim_eq.clamp(0.0, 0.25),
+        cup_min_depth_pct: cup_min_depth.clamp(0.0, 1.0),
+        cup_max_depth_pct: cup_max_depth.clamp(0.0, 1.0),
+        cup_roundness_r2: cup_r2.clamp(0.0, 1.0),
+        handle_max_depth_pct_of_cup: handle_max_depth.clamp(0.0, 1.0),
+        rounding_min_bars,
+        rounding_roundness_r2: rounding_r2.clamp(0.0, 1.0),
+    }
+}
+
 /// Resolve wyckoff detector config from system_config (CLAUDE.md #2).
 async fn resolve_wyckoff_config(pool: &PgPool) -> WyckoffConfig {
     let level_str = resolve_system_string(
@@ -648,7 +806,8 @@ pub(crate) async fn build_runners(pool: &PgPool) -> Vec<Box<dyn DetectorRunner>>
     )
     .await
     {
-        match ClassicalDetector::new(ClassicalConfig::defaults()) {
+        let classical_cfg = resolve_classical_config(pool).await;
+        match ClassicalDetector::new(classical_cfg) {
             Ok(d) => runners.push(Box::new(ClassicalRunner(d))),
             Err(e) => warn!(?e, "classical detector init failed"),
         }
@@ -1667,7 +1826,23 @@ pub(crate) async fn upsert_wyckoff_structure_from_detection(
             let cap = resolve_system_f64(pool, "detector", &cap_key, "", default_cap_by_tf).await;
             let mid = (tracker.range_top + tracker.range_bottom) * 0.5;
             if mid > 0.0 {
-                let h_over_mid = (tracker.range_top - tracker.range_bottom) / mid;
+                // Reject inverted ranges outright (resistance <= support).
+                // Can happen if a late AR/BC mutation in structure.rs writes a
+                // price below the prior support — the structure is corrupt
+                // and cannot be repaired downstream.
+                let raw = tracker.range_top - tracker.range_bottom;
+                if raw <= 0.0 {
+                    tracing::info!(
+                        symbol = %symbol,
+                        interval = %interval,
+                        event = %wy_event.as_str(),
+                        range_bottom = %tracker.range_bottom,
+                        range_top = %tracker.range_top,
+                        "wyckoff: rejected structure birth — inverted/zero range",
+                    );
+                    return Ok(());
+                }
+                let h_over_mid = raw / mid;
                 if h_over_mid > cap {
                     tracing::info!(
                         symbol = %symbol,

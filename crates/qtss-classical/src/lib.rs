@@ -35,4 +35,4 @@ mod tests;
 pub use config::ClassicalConfig;
 pub use detector::ClassicalDetector;
 pub use error::{ClassicalError, ClassicalResult};
-pub use shapes::{ShapeMatch, ShapeSpec, SHAPES};
+pub use shapes::{ShapeMatch, ShapeSpec, ShapeSpecBars, SHAPES, SHAPES_WITH_BARS};

@@ -13,4 +13,4 @@ UPDATE system_config
 
 UPDATE config_schema
    SET default_value = '20'::jsonb
- WHERE key_name = 'wyckoff.pivot_window';
+ WHERE key = 'wyckoff.pivot_window';

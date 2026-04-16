@@ -23,19 +23,20 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use qtss_domain::v2::bar::Bar;
 use qtss_domain::v2::detection::{
     Detection, PatternKind, PatternState, PivotRef, ValidatedDetection,
 };
 use qtss_domain::v2::regime::RegimeSnapshot;
 use qtss_eventbus::{topics::PATTERN_VALIDATED, EventBus, InProcessBus};
 use qtss_storage::{
-    resolve_system_f64, resolve_system_u64, resolve_worker_enabled_flag,
+    list_recent_bars, resolve_system_f64, resolve_system_u64, resolve_worker_enabled_flag,
     DetectionFilter, DetectionOutcomeRepository, DetectionRow, V2DetectionRepository,
 };
 use qtss_validator::{
-    is_higher_timeframe, HistoricalHitRate, HitRateStat, MultiTfRegimeConfluence,
-    MultiTfRegimeContext, MultiTimeframeConfluence, RegimeAlignment,
-    ValidationContext, Validator, ValidatorConfig,
+    is_higher_timeframe, BreakoutBodyAtr, BreakoutCloseQuality, HistoricalHitRate, HitRateStat,
+    MultiTfRegimeConfluence, MultiTfRegimeContext, MultiTimeframeConfluence, RegimeAlignment,
+    RetestQuality, ValidationContext, Validator, ValidatorConfig, VolumeConfirmation,
 };
 use std::collections::HashMap;
 use serde_json::json;
@@ -148,10 +149,20 @@ async fn run_pass(
         let higher_tf_detections =
             load_higher_tf_detections(repo.as_ref(), &row, &detection, htf_lookup_limit).await;
         let multi_tf_regime = load_multi_tf_regime(pool, &row.symbol).await;
+        // P2 — load recent bars only for families that actually consume
+        // them (currently classical breakout/volume channels). Other
+        // families' channels just return `None` without bar data, so we
+        // save the roundtrip.
+        let recent_bars = if row.family == "classical" {
+            load_recent_bars_for_validation(pool, &row).await
+        } else {
+            Vec::new()
+        };
         let ctx = ValidationContext {
             higher_tf_detections,
             hit_rates: hit_rates.clone(),
             multi_tf_regime,
+            recent_bars,
         };
         match validator.validate(detection, &ctx) {
             Some(mut v) => {
@@ -247,6 +258,52 @@ async fn load_hit_rates(repo: &V2DetectionRepository, pool: &PgPool) -> HashMap<
 /// further by family/direction; this loop just makes sure it has
 /// something to look at. Failures degrade gracefully to an empty list
 /// — the channel will simply abstain.
+/// Load the trailing bar window used by the P2 classical validation
+/// channels (breakout close, body/ATR, volume). Returns oldest..newest.
+/// Failure or missing data degrades to an empty vec — the channels
+/// simply abstain.
+async fn load_recent_bars_for_validation(pool: &PgPool, row: &DetectionRow) -> Vec<Bar> {
+    // 60 bars covers a 14-period ATR + enough pattern history for the
+    // volume-contraction check without being wasteful.
+    const LIMIT: i64 = 60;
+    let segment = "futures"; // same default as the orchestrator birth path
+    let rows = match list_recent_bars(pool, &row.exchange, segment, &row.symbol, &row.timeframe, LIMIT)
+        .await
+    {
+        Ok(rs) => rs,
+        Err(e) => {
+            debug!(%e, symbol = %row.symbol, tf = %row.timeframe, "load_recent_bars failed");
+            return Vec::new();
+        }
+    };
+    let tf = match parse_timeframe(&row.timeframe) {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+    let instrument = build_instrument(&row.exchange, segment, &row.symbol);
+    // market_bars is returned newest-first; reverse so channels get
+    // oldest..newest (matches Bar ordering conventions).
+    let mut bars: Vec<Bar> = rows
+        .into_iter()
+        .rev()
+        .map(|r| Bar {
+            instrument: instrument.clone(),
+            timeframe: tf,
+            open_time: r.open_time,
+            open: r.open,
+            high: r.high,
+            low: r.low,
+            close: r.close,
+            volume: r.volume,
+            closed: true,
+        })
+        .collect();
+    // Guard: drop any future-stamped bars (shouldn't happen, defensive).
+    let now = chrono::Utc::now();
+    bars.retain(|b| b.open_time <= now);
+    bars
+}
+
 async fn load_higher_tf_detections(
     repo: &V2DetectionRepository,
     row: &DetectionRow,
@@ -342,9 +399,57 @@ async fn build_validator(pool: &PgPool) -> anyhow::Result<Validator> {
     )
     .await as u32;
 
+    // P2 — classical breakout / volume channels (config-driven knobs).
+    let atr_period = resolve_system_u64(
+        pool, "detection", "validator.classical.atr_period",
+        "QTSS_DETECTION_VALIDATOR_ATR_PERIOD", 14, 2, 200,
+    )
+    .await as usize;
+    let min_body_atr = resolve_system_f64(
+        pool, "detection", "validator.classical.min_body_atr_mult",
+        "QTSS_DETECTION_VALIDATOR_MIN_BODY_ATR", 1.0,
+    )
+    .await;
+    let max_body_atr = resolve_system_f64(
+        pool, "detection", "validator.classical.max_body_atr_mult",
+        "QTSS_DETECTION_VALIDATOR_MAX_BODY_ATR", 3.0,
+    )
+    .await;
+    let min_bo_vol = resolve_system_f64(
+        pool, "detection", "validator.classical.min_breakout_vol_mult",
+        "QTSS_DETECTION_VALIDATOR_MIN_BREAKOUT_VOL", 1.5,
+    )
+    .await;
+    let max_late_early = resolve_system_f64(
+        pool, "detection", "validator.classical.max_late_to_early_vol_ratio",
+        "QTSS_DETECTION_VALIDATOR_MAX_LATE_EARLY_VOL", 1.0,
+    )
+    .await;
+    // P6 — retest channel.
+    let retest_tol = resolve_system_f64(
+        pool, "detection", "validator.classical.retest_tolerance_pct",
+        "QTSS_DETECTION_VALIDATOR_RETEST_TOL", 0.005,
+    )
+    .await;
+    let retest_max_bars = resolve_system_u64(
+        pool, "detection", "validator.classical.retest_max_bars_after_breakout",
+        "QTSS_DETECTION_VALIDATOR_RETEST_MAX_BARS", 30, 1, 500,
+    )
+    .await as usize;
+
     let mut cfg = ValidatorConfig::defaults();
     cfg.min_confidence = min_conf.clamp(0.0, 1.0);
     cfg.structural_weight = structural_weight.clamp(0.0, 1.0);
+    // Default weights for the new channels; operators can override via
+    // system_config per key `detection.validator.weight.<channel_name>`
+    // (wiring planned in a follow-up patch).
+    cfg.channel_weights.push(("breakout_close_quality".into(), 1.0));
+    cfg.channel_weights.push(("breakout_body_atr".into(), 0.75));
+    cfg.channel_weights.push(("volume_confirmation".into(), 1.0));
+    // P6 — retest is a strong continuation confirmation; same weight as
+    // the breakout-close channel so a clean retest meaningfully bumps
+    // confidence on top of the initial break score.
+    cfg.channel_weights.push(("retest_quality".into(), 1.0));
 
     let mut validator = Validator::new(cfg)
         .map_err(|e| anyhow::anyhow!("validator config invalid: {e}"))?;
@@ -353,6 +458,20 @@ async fn build_validator(pool: &PgPool) -> anyhow::Result<Validator> {
     validator.register(Arc::new(MultiTfRegimeConfluence));
     validator.register(Arc::new(HistoricalHitRate {
         min_samples: hit_rate_min_samples,
+    }));
+    validator.register(Arc::new(BreakoutCloseQuality));
+    validator.register(Arc::new(BreakoutBodyAtr {
+        atr_period,
+        min_body_atr_mult: min_body_atr.max(0.1),
+        max_body_atr_mult: max_body_atr.max(min_body_atr + 0.1),
+    }));
+    validator.register(Arc::new(VolumeConfirmation {
+        min_breakout_vol_mult: min_bo_vol.max(1.0),
+        max_late_to_early_ratio: max_late_early.max(0.1),
+    }));
+    validator.register(Arc::new(RetestQuality {
+        tolerance_pct: retest_tol.clamp(0.0, 0.1),
+        max_bars_after_breakout: retest_max_bars.max(1),
     }));
     Ok(validator)
 }

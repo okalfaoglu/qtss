@@ -31,8 +31,9 @@ mod error;
 mod tests;
 
 pub use channels::{
-    ConfirmationChannel, HistoricalHitRate, MultiTfRegimeConfluence, MultiTimeframeConfluence,
-    RegimeAlignment,
+    BreakoutBodyAtr, BreakoutCloseQuality, ConfirmationChannel, HistoricalHitRate,
+    MultiTfRegimeConfluence, MultiTimeframeConfluence, RegimeAlignment, RetestQuality,
+    VolumeConfirmation,
 };
 pub use config::ValidatorConfig;
 pub use context::{is_higher_timeframe, pattern_key, HitRateStat, MultiTfRegimeContext, ValidationContext};

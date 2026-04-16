@@ -369,3 +369,81 @@ impl TargetMethodCalc for WyckoffRangeMethod {
         ]
     }
 }
+
+// ---------------------------------------------------------------------------
+// Triangle measured-move (classical P4)
+// ---------------------------------------------------------------------------
+//
+// Bulkowski / Edwards & Magee: for asc/desc/sym triangles the canonical
+// projection is `breakout_price ± base_height`, where the base is the
+// widest part of the triangle (first high minus first low). We also add
+// a 1.618 extension.
+//
+// * Ascending  — direction = Long,  breakout = max(pivot highs) (flat top)
+// * Descending — direction = Short, breakout = min(pivot lows)  (flat base)
+// * Symmetrical — direction unknown until breakout; skipped here and
+//   picked up by a downstream resolver once the break occurs. (Could be
+//   added later by inspecting recent bars; out of scope for the geometry
+//   engine.)
+
+pub struct TriangleTargetMethod;
+
+impl TargetMethodCalc for TriangleTargetMethod {
+    fn name(&self) -> &'static str {
+        "triangle_measured_move"
+    }
+
+    fn project(&self, det: &Detection) -> Vec<Target> {
+        let subkind = match &det.kind {
+            PatternKind::Classical(name) => name.as_str(),
+            _ => return Vec::new(),
+        };
+        let is_ascending = subkind.contains("ascending_triangle");
+        let is_descending = subkind.contains("descending_triangle");
+        if !(is_ascending || is_descending) {
+            return Vec::new();
+        }
+        let dir = if is_ascending {
+            Direction::Long
+        } else {
+            Direction::Short
+        };
+
+        // Need four pivots (P1..P4).
+        if det.anchors.len() < 4 {
+            return Vec::new();
+        }
+        let mut hi = f64::MIN;
+        let mut lo = f64::MAX;
+        for a in &det.anchors {
+            let v = match a.price.to_f64() {
+                Some(v) => v,
+                None => return Vec::new(),
+            };
+            hi = hi.max(v);
+            lo = lo.min(v);
+        }
+        let height = hi - lo;
+        if height <= 0.0 {
+            return Vec::new();
+        }
+        // Breakout reference = the flat edge of the triangle.
+        let breakout = if is_ascending { hi } else { lo };
+        let t1 = project_price(breakout, height, dir);
+        let t2 = project_price(breakout, height * 1.618, dir);
+        vec![
+            Target {
+                price: d(t1),
+                method: TargetMethod::MeasuredMove,
+                weight: 0.8,
+                label: Some("triangle 1.0x".into()),
+            },
+            Target {
+                price: d(t2),
+                method: TargetMethod::MeasuredMove,
+                weight: 0.5,
+                label: Some("triangle 1.618x".into()),
+            },
+        ]
+    }
+}

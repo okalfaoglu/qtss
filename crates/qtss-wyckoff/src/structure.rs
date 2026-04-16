@@ -352,21 +352,34 @@ impl WyckoffStructureTracker {
         // this method, subsequent climax/AR-like events become purely
         // informational (stored in `events` for audit).
         let in_phase_a = self.current_phase == WyckoffPhase::A;
+        // Invariant: resistance > support. A mutation that would invert
+        // the range is almost certainly a mis-labelled event (e.g. an AR
+        // price below current SC). Refuse it rather than persist a
+        // corrupt structure (ETHUSDT/BTCUSDT had rows with negative h/mid
+        // in prod because AR=37010 overwrote range_top=73449).
         match event {
             WyckoffEvent::SC if in_phase_a => {
-                self.range_bottom = price;
+                if price < self.range_top {
+                    self.range_bottom = price;
+                }
             }
             WyckoffEvent::BC if in_phase_a => {
-                self.range_top = price;
+                if price > self.range_bottom {
+                    self.range_top = price;
+                }
             }
             WyckoffEvent::AR if in_phase_a => match self.schematic {
                 WyckoffSchematic::Accumulation | WyckoffSchematic::ReAccumulation => {
-                    self.range_top = price;
-                    self.creek = Some(price);
+                    if price > self.range_bottom {
+                        self.range_top = price;
+                        self.creek = Some(price);
+                    }
                 }
                 WyckoffSchematic::Distribution | WyckoffSchematic::ReDistribution => {
-                    self.range_bottom = price;
-                    self.ice = Some(price);
+                    if price < self.range_top {
+                        self.range_bottom = price;
+                        self.ice = Some(price);
+                    }
                 }
             },
             // Creek/Ice are allowed to move in Phase D — that's the point

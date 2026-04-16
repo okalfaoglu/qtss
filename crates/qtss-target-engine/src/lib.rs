@@ -18,6 +18,7 @@
 //! - `FibExtensionMethod`        — Elliott impulse 1.0 / 1.618 / 2.618
 //! - `HarmonicRetracementMethod` — XABCD AD-leg 0.382 / 0.618 / 1.0
 //! - `WyckoffRangeMethod`        — spring / upthrust 0.5x / 1.0x of range
+//! - `TriangleTargetMethod`      — asc/desc triangle 1.0x / 1.618x of base
 //!
 //! ## Clustering
 //!
@@ -39,5 +40,5 @@ pub use engine::TargetEngine;
 pub use error::{TargetEngineError, TargetEngineResult};
 pub use methods::{
     direction_of, Direction, FibExtensionMethod, HarmonicRetracementMethod, MeasuredMoveMethod,
-    TargetMethodCalc, WyckoffRangeMethod,
+    TargetMethodCalc, TriangleTargetMethod, WyckoffRangeMethod,
 };

@@ -72,6 +72,60 @@ const RANGE_SUBKIND_COLORS: Record<string, string> = {
   equal_lows: "#c084fc",
 };
 
+// P5 — human-readable classical subkind labels for chart markers.
+// Falls back to raw subkind when not listed.
+const CLASSICAL_SUBKIND_LABELS: Record<string, string> = {
+  // existing
+  double_top_bear: "Double Top",
+  double_bottom_bull: "Double Bottom",
+  head_and_shoulders_bear: "H&S",
+  inverse_head_and_shoulders_bull: "Inv H&S",
+  ascending_triangle_bull: "Asc Triangle",
+  descending_triangle_bear: "Desc Triangle",
+  symmetrical_triangle_neutral: "Sym Triangle",
+  // P5.1
+  rectangle_neutral: "Rectangle",
+  // P5.2
+  bull_flag: "Bull Flag",
+  bear_flag: "Bear Flag",
+  pennant_bull: "Bull Pennant",
+  pennant_bear: "Bear Pennant",
+  // P5.3
+  rising_wedge_bear: "Rising Wedge",
+  falling_wedge_bull: "Falling Wedge",
+  // P5.4
+  ascending_channel_bull: "Asc Channel",
+  descending_channel_bear: "Desc Channel",
+  // P5.5
+  cup_and_handle_bull: "Cup & Handle",
+  inverse_cup_and_handle_bear: "Inv Cup & Handle",
+  rounding_bottom_bull: "Rounding Bottom",
+  rounding_top_bear: "Rounding Top",
+  // P5.6
+  diamond_top_bear: "Diamond Top",
+  diamond_bottom_bull: "Diamond Bottom",
+};
+
+function classicalSubkindLabel(subkind: string): string {
+  return CLASSICAL_SUBKIND_LABELS[subkind] ?? subkind.replace(/_/g, " ");
+}
+
+// P5 — patterns whose two trendlines (upper / lower) should render as
+// SEPARATE polylines instead of a single zigzag through alternating
+// pivots. Detected by subkind prefix.
+const TWO_TRENDLINE_PREFIXES = [
+  "rectangle",
+  "ascending_triangle", "descending_triangle", "symmetrical_triangle",
+  "rising_wedge", "falling_wedge",
+  "ascending_channel", "descending_channel",
+  "bull_flag", "bear_flag",
+  "pennant",
+  "diamond_top", "diamond_bottom",
+];
+function isTwoTrendlinePattern(subkind: string): boolean {
+  return TWO_TRENDLINE_PREFIXES.some((p) => subkind.startsWith(p));
+}
+
 const ZONE_BOX_SUBKINDS = new Set([
   "bullish_fvg", "bearish_fvg",
   "bullish_ob", "bearish_ob",
@@ -819,24 +873,71 @@ export function Chart() {
       // Wyckoff has its own box + event overlay below — skip the generic
       // anchor-connecting polyline (purple zigzag) that adds noise.
       if (d.anchors.length >= 2 && !isZone && d.family !== "wyckoff") {
-        // Main formation polyline — solid, thick
-        const formLine = chart.addSeries(LineSeries, {
-          color: color,
-          lineWidth: isInvalidated ? 1 : 3,
-          lineStyle: isInvalidated ? LineStyle.Dotted : LineStyle.Solid,
-          crosshairMarkerVisible: false,
-          lastValueVisible: false,
-          priceLineVisible: false,
-          pointMarkersVisible: true,
-          pointMarkersRadius: 3,
-        });
+        // P5 — for two-trendline classical patterns (rectangle, channel,
+        // wedge, triangle, flag, pennant, diamond), split alternating
+        // anchors into UPPER and LOWER polylines so the chart shows
+        // proper trendlines instead of a zigzag through all pivots.
+        const useTwoLines =
+          d.family === "classical" &&
+          d.anchors.length >= 4 &&
+          isTwoTrendlinePattern(d.subkind);
 
-        const lineData = d.anchors.map((a) => ({
-          time: isoToUnix(a.time),
-          value: Number(a.price),
-        }));
-        formLine.setData(dedupeLineData(lineData));
-        overlayLinesRef.current.push(formLine);
+        if (useTwoLines) {
+          // Partition anchors into highs / lows based on price relative
+          // to local neighbour. For 4 alternating pivots, the higher of
+          // each adjacent pair belongs to the upper band.
+          const upper: { time: Time; value: number }[] = [];
+          const lower: { time: Time; value: number }[] = [];
+          for (let i = 0; i < d.anchors.length; i++) {
+            const a = d.anchors[i];
+            const prev = d.anchors[i - 1];
+            const next = d.anchors[i + 1];
+            const ref =
+              prev !== undefined ? Number(prev.price)
+              : next !== undefined ? Number(next.price)
+              : Number(a.price);
+            const point = { time: isoToUnix(a.time), value: Number(a.price) };
+            if (Number(a.price) >= ref) upper.push(point);
+            else lower.push(point);
+          }
+          const mkLine = (pts: { time: Time; value: number }[]) => {
+            if (pts.length < 2) return;
+            const ln = chart.addSeries(LineSeries, {
+              color: color,
+              lineWidth: isInvalidated ? 1 : 2,
+              lineStyle: isInvalidated ? LineStyle.Dotted : LineStyle.Solid,
+              crosshairMarkerVisible: false,
+              lastValueVisible: false,
+              priceLineVisible: false,
+              pointMarkersVisible: true,
+              pointMarkersRadius: 3,
+            });
+            ln.setData(dedupeLineData(pts));
+            overlayLinesRef.current.push(ln);
+          };
+          mkLine(upper);
+          mkLine(lower);
+        } else {
+          // Default — single polyline through all anchors (double_top,
+          // H&S, harmonic XABCD, elliott impulse, cup&handle, rounding).
+          const formLine = chart.addSeries(LineSeries, {
+            color: color,
+            lineWidth: isInvalidated ? 1 : 3,
+            lineStyle: isInvalidated ? LineStyle.Dotted : LineStyle.Solid,
+            crosshairMarkerVisible: false,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            pointMarkersVisible: true,
+            pointMarkersRadius: 3,
+          });
+
+          const lineData = d.anchors.map((a) => ({
+            time: isoToUnix(a.time),
+            value: Number(a.price),
+          }));
+          formLine.setData(dedupeLineData(lineData));
+          overlayLinesRef.current.push(formLine);
+        }
 
         // Projected anchors — only when measured_move layer enabled
         if (showDetail && layers.has("measured_move") && d.projected_anchors && d.projected_anchors.length > 0) {
@@ -1181,7 +1282,11 @@ export function Chart() {
               position: "aboveBar" as const,
               color,
               shape: "square" as const,
-              text: `${d.has_children ? "＋ " : ""}${d.subkind}${confPct}`,
+              text: `${d.has_children ? "＋ " : ""}${
+                d.family === "classical"
+                  ? classicalSubkindLabel(d.subkind)
+                  : d.subkind
+              }${confPct}`,
             });
           }
         }
@@ -1771,7 +1876,7 @@ export function Chart() {
               ? ((wo.range.top - wo.range.bottom) / wo.range.bottom * 100).toFixed(1) + "%"
               : "—";
             return (
-              <div className="pointer-events-none absolute right-2 top-2 z-10 rounded border border-zinc-700 bg-zinc-900/90 text-[10px] backdrop-blur-sm">
+              <div className="pointer-events-none absolute left-2 top-2 z-10 rounded border border-zinc-700 bg-zinc-900/90 text-[10px] backdrop-blur-sm">
                 <div className="flex items-center gap-2 border-b border-zinc-700 px-3 py-1">
                   <span className="text-[11px] font-bold text-zinc-300">MARKET PHASE</span>
                   <span className="font-bold" style={{ color: phaseColor }}>{phaseText}</span>
