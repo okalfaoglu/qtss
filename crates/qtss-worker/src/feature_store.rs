@@ -172,6 +172,9 @@ impl<'a> FeatureStore<'a> {
                 continue;
             }
             let (features_json, meta_json) = snap.clone().into_json();
+            // Unique index `uq_features_snap_detection_source` was
+            // rewritten non-partial in migration 0120 so PG can match
+            // the ON CONFLICT target cleanly.
             let res = sqlx::query(
                 r#"
                 INSERT INTO qtss_features_snapshot
