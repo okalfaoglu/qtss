@@ -29,6 +29,7 @@ const NAV_ENTRIES: NavEntry[] = [
   { label: "Confluence Inspector", to: "/v2/setup-rejections", enabled: true },
   { label: "Training Set", to: "/v2/training-set", enabled: true },
   { label: "Models", to: "/v2/models", enabled: true },
+  { label: "AI Shadow", to: "/v2/ai-shadow", enabled: true },
   { label: "Reconcile", to: "/v2/reconcile", enabled: true },
   { label: "Config", to: "/v2/config", enabled: true },
   { label: "AI Decisions", to: "/v2/ai-decisions", enabled: true },

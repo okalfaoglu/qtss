@@ -1015,6 +1015,11 @@ async fn try_arm_new_setup(
 
     let alt_type = classify_alt_type(direction, ema50, ema200, price);
 
+    // Faz 9.4.3 — evaluate circuit breaker before inference. If open,
+    // skip the AI gate entirely (equivalent to gate_enabled=false).
+    let breaker = crate::ai_inference::evaluate_circuit_breaker(pool).await;
+    let breaker_open = breaker.state == "open";
+
     // Faz 9.3.3 + 9.3.5 — ask the inference sidecar for P(win) and
     // persist a full telemetry row to `qtss_ml_predictions`. `None` on
     // any soft failure keeps the setup path alive (shadow mode). The
@@ -1022,10 +1027,17 @@ async fn try_arm_new_setup(
     // sidecar returned an actual score below `min_score`.
     let ai_cfg = crate::ai_inference::InferenceConfig::load(pool).await;
 
+    // Faz 9.4.4 — traffic ramp: gate_pct controls what fraction of
+    // setups actually go through the gate vs shadow.
+    let effective_gate = ai_cfg.gate_enabled && !breaker_open && {
+        let pct = resolve_system_f64(pool, "ai", "inference.gate_pct", "", 0.0).await;
+        pct >= 1.0 || rand::random::<f64>() < pct
+    };
+
     // Shadow kill-switch: skip sidecar entirely if gate is off AND
     // operator disabled shadow logging (CLAUDE.md #2).
     let should_call_sidecar =
-        ai_cfg.enabled && (ai_cfg.gate_enabled || ai_cfg.log_shadow_predictions);
+        ai_cfg.enabled && (effective_gate || ai_cfg.log_shadow_predictions);
 
     let ai_window_minutes = 15;
     let features_by_source = if should_call_sidecar {
@@ -1068,7 +1080,7 @@ async fn try_arm_new_setup(
 
     // Determine decision for the prediction row.
     let ai_decision = ai_response.as_ref().map(|r| {
-        if !ai_cfg.gate_enabled {
+        if !effective_gate {
             "shadow"
         } else if r.score >= ai_cfg.min_score {
             "pass"
@@ -1094,7 +1106,7 @@ async fn try_arm_new_setup(
                 feature_hash: feat_hash.clone(),
                 score: r.score as f32,
                 threshold: ai_cfg.min_score as f32,
-                gate_enabled: ai_cfg.gate_enabled,
+                gate_enabled: effective_gate,
                 decision: ai_decision.unwrap_or("shadow").to_string(),
                 shap_top10: shap_json,
                 latency_ms: inference_latency_ms,
@@ -1112,7 +1124,7 @@ async fn try_arm_new_setup(
     };
 
     let ai_score = ai_response.as_ref().map(|r| r.score as f32);
-    if ai_cfg.gate_enabled {
+    if effective_gate {
         if let Some(r) = ai_response.as_ref() {
             if r.score < ai_cfg.min_score {
                 debug!(

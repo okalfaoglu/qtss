@@ -54,6 +54,7 @@ tokio-tungstenite.workspace = true
 plotters = { version = "0.3.7", default-features = false, features = ["ab_glyph", "bitmap_backend", "bitmap_encoder", "image", "ttf"] }
 tempfile = "3"
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
+rand.workspace = true
 
 [[bin]]
 name = "qtss-worker"

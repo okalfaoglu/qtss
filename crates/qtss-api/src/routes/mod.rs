@@ -48,6 +48,7 @@ mod v2_q_radar;
 mod v2_models;
 mod v2_setup_rejections;
 mod v2_setups;
+mod v2_ml_predictions;
 mod v2_training_set;
 mod v2_users;
 mod v2_wave_projections;
@@ -78,6 +79,7 @@ pub use v2_q_radar::v2_q_radar_router;
 pub use v2_models::v2_models_router;
 pub use v2_setup_rejections::v2_setup_rejections_router;
 pub use v2_setups::v2_setups_router;
+pub use v2_ml_predictions::v2_ml_predictions_router;
 pub use v2_training_set::v2_training_set_router;
 pub use v2_users::v2_users_router;
 pub use v2_wave_projections::v2_wave_projections_router;
@@ -132,6 +134,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_setups_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_setup_rejections_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_training_set_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_ml_predictions_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_models_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_q_radar_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_engine_symbols_router().layer(from_fn(require_admin)))

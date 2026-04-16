@@ -51,6 +51,7 @@ pub mod v2_detections;
 pub mod v2_onchain_metrics;
 pub mod v2_setup_events;
 pub mod ml_predictions;
+pub mod ml_prediction_stats;
 pub mod models_registry;
 pub mod training_set;
 pub mod v2_setup_rejections;
@@ -71,6 +72,11 @@ pub use v2_setup_events::{
     mark_setup_event_delivered, mark_setup_event_failed, V2SetupEventInsert, V2SetupEventRow,
 };
 pub use ml_predictions::{attach_setup_id as attach_ml_prediction_setup_id, insert_ml_prediction, MlPredictionInsert};
+pub use ml_prediction_stats::{
+    fetch_prediction_feed, fetch_prediction_summary, fetch_score_distribution,
+    fetch_latest_drift, fetch_latest_drift_model_version, DriftEntry,
+    PredictionRow, PredictionSummary, ScoreBucket,
+};
 pub use models_registry::{activate_model, active_model, list_models, ModelRow};
 pub use training_set::{
     fetch_latest_features_by_source, fetch_training_set_stats, CloseReasonBucket, DirectionBucket,

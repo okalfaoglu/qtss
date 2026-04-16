@@ -20,6 +20,7 @@ Design rules (CLAUDE.md):
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from pathlib import Path
@@ -45,6 +46,7 @@ _STATE: dict[str, Any] = {
     "feature_spec_version": None,
     "metrics": None,
     "artifact_path": None,
+    "meta": {},  # Faz 9.4.2: loaded from meta.json beside artifact; holds training_distributions
 }
 
 
@@ -80,6 +82,14 @@ def _load_active() -> None:
     if not path.exists():
         raise FileNotFoundError(f"artifact missing on disk: {path}")
     booster = lgb.Booster(model_file=str(path))
+    # Faz 9.4.2: load meta.json (training_distributions) from beside the artifact.
+    meta: dict[str, Any] = {}
+    meta_path = path.with_suffix(".meta.json")
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text())
+        except Exception:
+            log.warning("failed to parse %s — drift endpoint will 422", meta_path)
     with _LOCK:
         _STATE.update(
             booster=booster,
@@ -89,6 +99,7 @@ def _load_active() -> None:
             feature_spec_version=active["feature_spec_version"],
             metrics=active["metrics_json"],
             artifact_path=str(path),
+            meta=meta,
         )
     log.info(
         "loaded model %s/%s (%d features)",
@@ -287,6 +298,172 @@ def main() -> None:
         host = str(resolve_config(conn, "ai", "inference.bind_host", "127.0.0.1"))
         port = int(resolve_config(conn, "ai", "inference.bind_port", 8790))
     uvicorn.run(app, host=host, port=port, log_level="info")
+
+
+class DriftFeatureEntry(BaseModel):
+    feature: str
+    psi: float
+    status: str  # "ok" | "warning" | "critical"
+    buckets: list[dict[str, Any]]
+
+
+class DriftResponse(BaseModel):
+    features: list[DriftFeatureEntry]
+    model_version: str
+    computed_at: str
+
+
+def _compute_psi_buckets(
+    expected_counts: list[int],
+    actual_values: list[float],
+    bin_edges: list[float],
+) -> tuple[float, list[dict[str, Any]]]:
+    """Compute PSI for one feature given training bin edges/counts and live values.
+
+    Returns (psi_total, bucket_details).
+    """
+    n_expected = sum(expected_counts)
+    if n_expected == 0:
+        return 0.0, []
+
+    n_actual = len(actual_values)
+    if n_actual == 0:
+        return 0.0, []
+
+    actual_arr = np.array(actual_values, dtype=np.float64)
+    actual_hist, _ = np.histogram(actual_arr, bins=bin_edges)
+
+    eps = 1e-6
+    details: list[dict[str, Any]] = []
+    psi_total = 0.0
+    for i in range(len(expected_counts)):
+        exp_pct = max(expected_counts[i] / n_expected, eps)
+        act_pct = max(int(actual_hist[i]) / n_actual, eps)
+        component = (act_pct - exp_pct) * float(np.log(act_pct / exp_pct))
+        psi_total += component
+        details.append({
+            "lo": float(bin_edges[i]),
+            "hi": float(bin_edges[i + 1]),
+            "expected_pct": round(exp_pct, 6),
+            "actual_pct": round(act_pct, 6),
+            "psi_component": round(component, 6),
+        })
+    return round(psi_total, 6), details
+
+
+@app.get("/drift/psi", response_model=DriftResponse)
+def drift_psi() -> DriftResponse:
+    """Faz 9.4.2 — Compute per-feature PSI comparing live feature
+    distributions against training-time distributions.
+
+    Requires `_STATE["meta"]` to contain `training_distributions`:
+        { "feature_name": { "bin_edges": [...], "counts": [...] } }
+
+    Live features are pulled from `qtss_features_snapshot` for the last
+    N hours (configured via `ai.drift.compute_interval_hours`).
+    """
+    import datetime
+
+    with _LOCK:
+        booster = _STATE["booster"]
+        feature_names = list(_STATE["feature_names"])
+        model_version = _STATE["model_version"] or ""
+        meta = _STATE.get("meta") or {}
+
+    if booster is None:
+        raise HTTPException(status_code=503, detail="no active model loaded")
+
+    training_dists = meta.get("training_distributions")
+    if not training_dists:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "no_training_distributions",
+                "message": (
+                    "meta.json missing training_distributions "
+                    "— retrain with --save-distributions"
+                ),
+            },
+        )
+
+    with connect() as conn:
+        window_hours = float(resolve_config(conn, "ai", "drift.compute_interval_hours", 6.0))
+        psi_warn = float(resolve_config(conn, "ai", "drift.psi_warning_threshold", 0.1))
+        psi_crit = float(resolve_config(conn, "ai", "drift.psi_critical_threshold", 0.25))
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT features_json
+                FROM qtss_features_snapshot
+                WHERE created_at >= NOW() - (%s || ' hours')::interval
+                """,
+                (str(window_hours),),
+            )
+            rows = cur.fetchall()
+
+    # Collect live feature values per feature name.
+    live_values: dict[str, list[float]] = {fn: [] for fn in feature_names}
+    for (fj,) in rows:
+        if not isinstance(fj, dict):
+            continue
+        for source, feats in fj.items():
+            if not isinstance(feats, dict):
+                continue
+            for name, val in feats.items():
+                key = f"{source}.{name}"
+                if key in live_values:
+                    try:
+                        live_values[key].append(float(val))
+                    except (TypeError, ValueError):
+                        pass
+
+    entries: list[DriftFeatureEntry] = []
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    # Also persist to qtss_ml_drift_snapshots for the Rust API to read.
+    insert_rows: list[tuple] = []
+
+    for fn in feature_names:
+        dist = training_dists.get(fn)
+        if not dist:
+            continue
+        bin_edges = dist.get("bin_edges", [])
+        counts = dist.get("counts", [])
+        if len(bin_edges) < 2 or len(counts) != len(bin_edges) - 1:
+            continue
+
+        vals = live_values.get(fn, [])
+        psi_val, buckets = _compute_psi_buckets(counts, vals, bin_edges)
+
+        status = "ok"
+        if psi_val >= psi_crit:
+            status = "critical"
+        elif psi_val >= psi_warn:
+            status = "warning"
+
+        entries.append(DriftFeatureEntry(
+            feature=fn, psi=psi_val, status=status, buckets=buckets,
+        ))
+        insert_rows.append((model_version, fn, psi_val, json.dumps(buckets)))
+
+    # Persist snapshots.
+    if insert_rows:
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO qtss_ml_drift_snapshots
+                        (model_version, feature_name, psi, bucket_detail)
+                    VALUES (%s, %s, %s, %s::jsonb)
+                    """,
+                    insert_rows,
+                )
+            conn.commit()
+
+    return DriftResponse(
+        features=entries, model_version=model_version, computed_at=now_iso,
+    )
 
 
 if __name__ == "__main__":

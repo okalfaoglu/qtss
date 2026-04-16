@@ -390,3 +390,42 @@ export interface DashboardSnapshot {
   equity_curve: EquityPoint[];
   generated_at: string;
 }
+
+// Faz 9.4.1 — AI Shadow observation types.
+
+export interface PredictionRow {
+  id: string;
+  setup_id: string | null;
+  exchange: string;
+  symbol: string;
+  timeframe: string;
+  model_version: string;
+  score: number;
+  threshold: number;
+  gate_enabled: boolean;
+  decision: "pass" | "block" | "shadow";
+  shap_top10: { feature: string; value: number; contribution: number }[] | null;
+  latency_ms: number;
+  inference_ts: string;
+}
+
+export interface PredictionSummary {
+  total: number;
+  n_pass: number;
+  n_block: number;
+  n_shadow: number;
+  avg_score: number | null;
+  avg_latency_ms: number | null;
+  avg_pnl_pass: number | null;
+  avg_pnl_block: number | null;
+  block_wouldve_won: number;
+  block_with_outcome: number;
+}
+
+export interface ScoreBucket {
+  bucket: number;
+  n: number;
+  n_pass: number;
+  n_block: number;
+  n_shadow: number;
+}

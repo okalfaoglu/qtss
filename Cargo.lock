@@ -2866,6 +2866,7 @@ dependencies = [
  "qtss-tbm",
  "qtss-validator",
  "qtss-wyckoff",
+ "rand 0.8.5",
  "reqwest",
  "rust_decimal",
  "serde",
