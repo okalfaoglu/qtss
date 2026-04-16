@@ -25,6 +25,23 @@ type PnlSummary = {
   worst_rr: number | null;
 };
 
+type SymbolBucket = {
+  exchange: string;
+  symbol: string;
+  timeframe: string;
+  n: number;
+  n_win: number;
+  n_loss: number;
+  avg_pnl_pct: number | null;
+};
+type DirectionBucket = {
+  direction: string;
+  n: number;
+  n_win: number;
+  n_loss: number;
+  hit_rate: number | null;
+};
+
 type TrainingSetStats = {
   total_setups: number;
   closed_setups: number;
@@ -34,6 +51,8 @@ type TrainingSetStats = {
   feature_coverage: FeatureCoverage[];
   close_reasons: CloseReasonBucket[];
   pnl: PnlSummary;
+  per_symbol: SymbolBucket[];
+  per_direction: DirectionBucket[];
 };
 
 // Category → color. `take_profit` green, `stop_loss` red, everything
@@ -244,6 +263,133 @@ export function TrainingSet() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Long vs short balance — guards against directional bias in
+          the training set (model learning a trend rather than confluence). */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
+        <div className="mb-2 text-[10px] uppercase tracking-wide text-zinc-500">
+          Direction balance (long / short)
+        </div>
+        {s.per_direction.length === 0 ? (
+          <div className="text-xs text-zinc-500">
+            No closed setups yet.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {s.per_direction.map((d) => {
+              const pct = s.closed_setups > 0 ? (d.n / s.closed_setups) * 100 : 0;
+              const sideClass =
+                d.direction === "long"
+                  ? "text-emerald-300"
+                  : d.direction === "short"
+                    ? "text-red-300"
+                    : "text-zinc-300";
+              return (
+                <div
+                  key={d.direction}
+                  className="rounded border border-zinc-800 bg-zinc-950/40 p-2"
+                >
+                  <div className="flex items-baseline justify-between">
+                    <span className={`text-xs font-semibold uppercase ${sideClass}`}>
+                      {d.direction}
+                    </span>
+                    <span className="font-mono text-[11px] text-zinc-500">
+                      {pct.toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="mt-1 flex items-baseline gap-3 text-xs">
+                    <span className="font-mono text-zinc-100">{d.n}</span>
+                    <span className="font-mono text-emerald-300">
+                      {d.n_win}W
+                    </span>
+                    <span className="font-mono text-red-300">{d.n_loss}L</span>
+                    <span className="ml-auto font-mono text-zinc-400">
+                      hit {d.hit_rate == null ? "—" : `${(d.hit_rate * 100).toFixed(1)}%`}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Per-market breakdown — flags single-symbol overfit risk. */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
+        <div className="mb-2 flex items-baseline justify-between">
+          <div className="text-[10px] uppercase tracking-wide text-zinc-500">
+            Per-market breakdown
+          </div>
+          <div className="text-[10px] text-zinc-500">
+            {s.per_symbol.length} market{s.per_symbol.length === 1 ? "" : "s"}
+          </div>
+        </div>
+        {s.per_symbol.length === 0 ? (
+          <div className="text-xs text-zinc-500">No closed setups yet.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-[10px] uppercase tracking-wide text-zinc-500">
+                  <th className="py-1 pr-3">Market</th>
+                  <th className="py-1 pr-3">TF</th>
+                  <th className="py-1 pr-3 text-right">N</th>
+                  <th className="py-1 pr-3 text-right">W</th>
+                  <th className="py-1 pr-3 text-right">L</th>
+                  <th className="py-1 pr-3 text-right">Hit %</th>
+                  <th className="py-1 pr-3 text-right">Avg pnl %</th>
+                  <th className="py-1 pr-3 text-right">Share</th>
+                </tr>
+              </thead>
+              <tbody>
+                {s.per_symbol.map((m) => {
+                  const decisive = m.n_win + m.n_loss;
+                  const hit = decisive > 0 ? (m.n_win / decisive) * 100 : null;
+                  const share =
+                    s.closed_setups > 0 ? (m.n / s.closed_setups) * 100 : 0;
+                  // Highlight a single-symbol >50% concentration so the
+                  // operator notices before the trainer overfits it.
+                  const heavy = share > 50;
+                  return (
+                    <tr
+                      key={`${m.exchange}:${m.symbol}:${m.timeframe}`}
+                      className={`border-t border-zinc-800/60 ${
+                        heavy ? "bg-amber-900/10" : ""
+                      }`}
+                    >
+                      <td className="py-1 pr-3 font-mono text-zinc-100">
+                        <span className="text-zinc-500">{m.exchange}:</span>
+                        {m.symbol}
+                      </td>
+                      <td className="py-1 pr-3 font-mono text-zinc-400">
+                        {m.timeframe}
+                      </td>
+                      <td className="py-1 pr-3 text-right font-mono text-zinc-100">
+                        {m.n}
+                      </td>
+                      <td className="py-1 pr-3 text-right font-mono text-emerald-300">
+                        {m.n_win}
+                      </td>
+                      <td className="py-1 pr-3 text-right font-mono text-red-300">
+                        {m.n_loss}
+                      </td>
+                      <td className="py-1 pr-3 text-right font-mono text-zinc-100">
+                        {hit == null ? "—" : hit.toFixed(1)}
+                      </td>
+                      <td className="py-1 pr-3 text-right font-mono text-zinc-100">
+                        {fmtNum(m.avg_pnl_pct)}
+                      </td>
+                      <td className="py-1 pr-3 text-right font-mono text-zinc-400">
+                        {share.toFixed(1)}%
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Label distribution */}

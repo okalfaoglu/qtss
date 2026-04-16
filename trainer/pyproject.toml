@@ -13,10 +13,13 @@ dependencies = [
     "scikit-learn>=1.4",
     "pydantic>=2.6",
     "tomli>=2.0",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
 ]
 
 [project.scripts]
 qtss-trainer = "qtss_trainer.__main__:main"
+qtss-inference = "qtss_trainer.server:main"
 
 [build-system]
 requires = ["setuptools>=68"]

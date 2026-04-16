@@ -48,6 +48,31 @@ pub struct PnlSummary {
     pub worst_rr: Option<f64>,
 }
 
+/// Per-market breakdown so the operator can see which symbols dominate
+/// the training set + how they split between win/loss. Helps catch
+/// single-symbol overfit before it reaches the LightGBM booster.
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct SymbolBucket {
+    pub exchange: String,
+    pub symbol: String,
+    pub timeframe: String,
+    pub n: i64,
+    pub n_win: i64,
+    pub n_loss: i64,
+    pub avg_pnl_pct: Option<f64>,
+}
+
+/// Long vs short balance — if the training set is 90% long, the model
+/// will learn a directional bias rather than real structural signals.
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct DirectionBucket {
+    pub direction: String,
+    pub n: i64,
+    pub n_win: i64,
+    pub n_loss: i64,
+    pub hit_rate: Option<f64>,
+}
+
 /// One-shot stats bundle consumed by `GET /v2/training-set/stats`.
 #[derive(Debug, Clone, Serialize)]
 pub struct TrainingSetStats {
@@ -59,6 +84,8 @@ pub struct TrainingSetStats {
     pub feature_coverage: Vec<FeatureCoverage>,
     pub close_reasons: Vec<CloseReasonBucket>,
     pub pnl: PnlSummary,
+    pub per_symbol: Vec<SymbolBucket>,
+    pub per_direction: Vec<DirectionBucket>,
 }
 
 /// Produce the full stats payload for the training-set monitor.
@@ -140,6 +167,49 @@ pub async fn fetch_training_set_stats(pool: &PgPool) -> Result<TrainingSetStats,
     .fetch_one(pool)
     .await?;
 
+    // Per-market breakdown over closed rows. Win/loss is read off the
+    // outcome label so the counts line up with `pnl` + close_reasons.
+    let per_symbol: Vec<SymbolBucket> = sqlx::query_as::<_, SymbolBucket>(
+        r#"
+        SELECT
+            exchange,
+            symbol,
+            timeframe,
+            COUNT(*)::BIGINT                                   AS n,
+            COUNT(*) FILTER (WHERE label = 'win')::BIGINT      AS n_win,
+            COUNT(*) FILTER (WHERE label = 'loss')::BIGINT     AS n_loss,
+            AVG(outcome_pnl_pct)::FLOAT8                       AS avg_pnl_pct
+        FROM v_qtss_training_set
+        WHERE closed_at IS NOT NULL
+        GROUP BY exchange, symbol, timeframe
+        ORDER BY n DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    // Long vs short so the operator spots directional imbalance before
+    // LightGBM fits a trend bias instead of real confluence signal.
+    let per_direction: Vec<DirectionBucket> = sqlx::query_as::<_, DirectionBucket>(
+        r#"
+        SELECT
+            COALESCE(direction, 'unknown')                     AS direction,
+            COUNT(*)::BIGINT                                   AS n,
+            COUNT(*) FILTER (WHERE label = 'win')::BIGINT      AS n_win,
+            COUNT(*) FILTER (WHERE label = 'loss')::BIGINT     AS n_loss,
+            CASE WHEN COUNT(*) FILTER (WHERE label IN ('win','loss')) > 0
+                 THEN (COUNT(*) FILTER (WHERE label = 'win'))::FLOAT8
+                      / (COUNT(*) FILTER (WHERE label IN ('win','loss')))::FLOAT8
+                 ELSE NULL END                                 AS hit_rate
+        FROM v_qtss_training_set
+        WHERE closed_at IS NOT NULL
+        GROUP BY 1
+        ORDER BY n DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
     Ok(TrainingSetStats {
         total_setups: totals.0,
         closed_setups: totals.1,
@@ -149,5 +219,7 @@ pub async fn fetch_training_set_stats(pool: &PgPool) -> Result<TrainingSetStats,
         feature_coverage,
         close_reasons,
         pnl,
+        per_symbol,
+        per_direction,
     })
 }
