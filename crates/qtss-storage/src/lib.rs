@@ -50,6 +50,7 @@ pub mod v2_detection_outcomes;
 pub mod v2_detections;
 pub mod v2_onchain_metrics;
 pub mod v2_setup_events;
+pub mod training_set;
 pub mod v2_setup_rejections;
 pub mod v2_setups;
 pub mod wyckoff_signals;
@@ -66,6 +67,9 @@ pub use v2_correlation_groups::{
 pub use v2_setup_events::{
     insert_v2_setup_event, list_events_for_setup, list_pending_setup_events,
     mark_setup_event_delivered, mark_setup_event_failed, V2SetupEventInsert, V2SetupEventRow,
+};
+pub use training_set::{
+    fetch_training_set_stats, FeatureCoverage, LabelBucket, TrainingSetStats,
 };
 pub use v2_setup_rejections::{
     insert_v2_setup_rejection, list_recent_setup_rejections, list_setup_rejections_filtered,
