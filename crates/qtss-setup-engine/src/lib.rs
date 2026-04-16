@@ -32,6 +32,7 @@
 
 pub mod allocator;
 pub mod classifier;
+pub mod confluence_gate;
 pub mod guard;
 pub mod reverse;
 pub mod sharing;
@@ -41,6 +42,10 @@ pub use allocator::{
     check_allocation, AllocatorContext, AllocatorLimits, OpenSetupSummary,
 };
 pub use classifier::classify_alt_type;
+pub use confluence_gate::{
+    should_open as confluence_gate_should_open, GateApproval, GateConfig, GateContext,
+    GateDecision, GateRejection, VetoKind, VetoRule,
+};
 pub use guard::{PositionGuard, PositionGuardConfig, StructuralTarget};
 pub use reverse::should_reverse_close;
 pub use sharing::{evaluate_sharing, QRadarShareInfo, SharingChannel, SharingConfig, SharingDecision};
