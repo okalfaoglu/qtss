@@ -13,3 +13,8 @@ web/dist/
 
 # Windows artifact: a mis-typed redirect under web/ can create a file named `nul`
 web/nul
+trainer/.venv/
+artifacts/
+trainer/src/qtss_trainer.egg-info/
+__pycache__/
+*.pyc

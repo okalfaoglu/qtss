@@ -1,0 +1,26 @@
+[project]
+name = "qtss-trainer"
+version = "0.1.0"
+description = "QTSS Faz 9.3 — LightGBM pipeline for meta-classifier over v_qtss_training_set_closed."
+requires-python = ">=3.11"
+dependencies = [
+    "lightgbm>=4.3",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "polars>=0.20",
+    "psycopg[binary]>=3.2",
+    "pyarrow>=15.0",
+    "scikit-learn>=1.4",
+    "pydantic>=2.6",
+    "tomli>=2.0",
+]
+
+[project.scripts]
+qtss-trainer = "qtss_trainer.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

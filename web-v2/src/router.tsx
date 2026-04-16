@@ -9,6 +9,7 @@ import { Blotter } from "./pages/Blotter";
 import { Setups } from "./pages/Setups";
 import { SetupRejections } from "./pages/SetupRejections";
 import { TrainingSet } from "./pages/TrainingSet";
+import { Models } from "./pages/Models";
 import { MonteCarlo } from "./pages/MonteCarlo";
 import { Regime } from "./pages/Regime";
 import { Chart } from "./pages/Chart";
@@ -53,6 +54,7 @@ export const router = createBrowserRouter([
       { path: "setups", element: <Setups /> },
       { path: "setup-rejections", element: <SetupRejections /> },
       { path: "training-set", element: <TrainingSet /> },
+      { path: "models", element: <Models /> },
       { path: "montecarlo", element: <MonteCarlo /> },
       { path: "regime", element: <Regime /> },
       { path: "chart", element: <Chart /> },

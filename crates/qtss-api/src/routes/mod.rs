@@ -45,6 +45,7 @@ mod v2_confluence;
 mod v2_engine_symbols;
 mod v2_events_stream;
 mod v2_q_radar;
+mod v2_models;
 mod v2_setup_rejections;
 mod v2_setups;
 mod v2_training_set;
@@ -74,6 +75,7 @@ pub use v2_confluence::v2_confluence_router;
 pub use v2_engine_symbols::v2_engine_symbols_router;
 pub use v2_events_stream::v2_events_stream_router;
 pub use v2_q_radar::v2_q_radar_router;
+pub use v2_models::v2_models_router;
 pub use v2_setup_rejections::v2_setup_rejections_router;
 pub use v2_setups::v2_setups_router;
 pub use v2_training_set::v2_training_set_router;
@@ -130,6 +132,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_setups_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_setup_rejections_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_training_set_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_models_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_q_radar_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_engine_symbols_router().layer(from_fn(require_admin)))
         .merge(v2_events_stream_router().layer(from_fn(require_dashboard_roles)))
