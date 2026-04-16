@@ -282,7 +282,12 @@ async fn replay_group(
                     act.tracker.schematic,
                     WyckoffSchematic::Accumulation | WyckoffSchematic::ReAccumulation,
                 );
-                let family_flipped = was_bull != now_bull;
+                // Mirror the orchestrator's schematic-lock delay: only
+                // call a family flip a failure once the structure has
+                // actually reached Phase C (Spring/UTAD territory). Keep
+                // replay output aligned with production so reports match.
+                let family_flipped = was_bull != now_bull
+                    && act.tracker.current_phase >= WyckoffPhase::C;
                 let events_json = serde_json::to_value(&act.tracker.events)?;
 
                 if !dry_run {

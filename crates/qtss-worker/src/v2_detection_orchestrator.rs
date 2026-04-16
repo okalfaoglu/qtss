@@ -1762,7 +1762,30 @@ pub(crate) async fn upsert_wyckoff_structure_from_detection(
                 tracker.schematic,
                 WyckoffSchematic::Accumulation | WyckoffSchematic::ReAccumulation
             );
-            let family_flipped = was_bull != now_bull;
+            // Faz 10 pre-step — schematic-lock delay. Production data
+            // showed Phase A/B flips dominating the FAILED bucket
+            // (screenshot: distribution → reaccumulation via LPS while
+            // still on Phase A). Wyckoff literature defers the real
+            // directional commitment to Phase C (Spring / UTAD). Before
+            // the lock phase, let auto_reclassify mutate the schematic
+            // silently — only flag as FAILED once the structure was
+            // already past the configured lock phase when the flip
+            // happened. Lock phase is config-driven (CLAUDE.md #2).
+            let lock_phase_str = qtss_storage::resolve_system_string(
+                pool, "detector", "wyckoff.schematic_lock_phase",
+                "", "C",
+            )
+            .await;
+            let lock_phase = match lock_phase_str.to_ascii_uppercase().as_str() {
+                "A" => WyckoffPhase::A,
+                "B" => WyckoffPhase::B,
+                "C" => WyckoffPhase::C,
+                "D" => WyckoffPhase::D,
+                "E" => WyckoffPhase::E,
+                _ => WyckoffPhase::C,
+            };
+            let phase_locked = tracker.current_phase >= lock_phase;
+            let family_flipped = was_bull != now_bull && phase_locked;
 
             let events_json = serde_json::to_value(&tracker.events)?;
             update_wyckoff_structure(
