@@ -266,6 +266,9 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(binance_public_ws::liquidation_stream_loop(liq_pool));
         let cvd_pool = pool.clone();
         tokio::spawn(binance_public_ws::aggtrade_cvd_loop(cvd_pool));
+        // Faz 9.6 — Binance orderbook depth stream.
+        let depth_pool = pool.clone();
+        tokio::spawn(binance_public_ws::depth_stream_loop(depth_pool));
         // Faz 9.0.1 — outcome labeler (AI training substrate).
         let ol_pool = pool.clone();
         tokio::spawn(outcome_labeler_loop::outcome_labeler_loop(ol_pool));

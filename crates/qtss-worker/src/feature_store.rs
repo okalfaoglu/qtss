@@ -24,6 +24,7 @@ use crate::feature_sources;
 pub static FEATURE_SOURCES: &[&dyn ConfluenceSource] = &[
     &feature_sources::wyckoff::WyckoffSource,
     &feature_sources::derivatives::DerivativesSource,
+    &feature_sources::orderbook::OrderbookSource,
 ];
 
 /// DB-backed impl of the confluence `SourceQuery` port.

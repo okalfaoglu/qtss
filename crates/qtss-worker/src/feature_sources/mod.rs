@@ -6,4 +6,5 @@
 //!   3. migration 0116'daki config key listesine `<name>.enabled` ekle.
 
 pub mod derivatives;
+pub mod orderbook;
 pub mod wyckoff;

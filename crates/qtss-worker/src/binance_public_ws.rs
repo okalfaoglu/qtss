@@ -462,6 +462,261 @@ pub async fn aggtrade_cvd_loop(pool: PgPool) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Orderbook depth (Faz 9.6)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+struct DepthLevel {
+    price: f64,
+    qty: f64,
+}
+
+#[derive(Debug, Clone)]
+struct DepthSnapshot {
+    bids: Vec<DepthLevel>,
+    asks: Vec<DepthLevel>,
+    ts_ms: i64,
+}
+
+type DepthBuffer = Arc<Mutex<HashMap<String, DepthSnapshot>>>;
+
+fn parse_depth_message(text: &str) -> Option<(String, DepthSnapshot)> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    let stream = v.get("stream").and_then(|s| s.as_str())?;
+    // stream format: "btcusdt@depth20@100ms"
+    let symbol = stream.split('@').next()?.to_uppercase();
+    let data = v.get("data")?;
+
+    let parse_levels = |key: &str| -> Vec<DepthLevel> {
+        data.get(key)
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|row| {
+                        let pair = row.as_array()?;
+                        let price = pair.first()?.as_str()?.parse::<f64>().ok()?;
+                        let qty = pair.get(1)?.as_str()?.parse::<f64>().ok()?;
+                        Some(DepthLevel { price, qty })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    let bids = parse_levels("bids");
+    let asks = parse_levels("asks");
+    if bids.is_empty() && asks.is_empty() {
+        return None;
+    }
+    Some((
+        symbol,
+        DepthSnapshot {
+            bids,
+            asks,
+            ts_ms: Utc::now().timestamp_millis(),
+        },
+    ))
+}
+
+fn compute_depth_summary(snap: &DepthSnapshot, imbalance_levels: usize, depth_pct: f64) -> Value {
+    let best_bid = snap.bids.first().map(|l| l.price).unwrap_or(0.0);
+    let best_ask = snap.asks.first().map(|l| l.price).unwrap_or(0.0);
+    let mid = (best_bid + best_ask) / 2.0;
+    let spread_bps = if mid > 0.0 {
+        (best_ask - best_bid) / mid * 10_000.0
+    } else {
+        0.0
+    };
+
+    // Depth within depth_pct of mid
+    let bid_depth_pct: f64 = snap
+        .bids
+        .iter()
+        .filter(|l| mid > 0.0 && (mid - l.price) / mid <= depth_pct)
+        .map(|l| l.qty)
+        .sum();
+    let ask_depth_pct: f64 = snap
+        .asks
+        .iter()
+        .filter(|l| mid > 0.0 && (l.price - mid) / mid <= depth_pct)
+        .map(|l| l.qty)
+        .sum();
+
+    // Imbalance top N
+    let bid_vol_top_n: f64 = snap.bids.iter().take(imbalance_levels).map(|l| l.qty).sum();
+    let ask_vol_top_n: f64 = snap.asks.iter().take(imbalance_levels).map(|l| l.qty).sum();
+    let total_top_n = bid_vol_top_n + ask_vol_top_n;
+    let imbalance_top_n = if total_top_n > 0.0 {
+        (bid_vol_top_n - ask_vol_top_n) / total_top_n
+    } else {
+        0.0
+    };
+
+    // Walls
+    let bid_wall = snap
+        .bids
+        .iter()
+        .map(|l| l.qty)
+        .fold(0.0f64, f64::max);
+    let ask_wall = snap
+        .asks
+        .iter()
+        .map(|l| l.qty)
+        .fold(0.0f64, f64::max);
+
+    // VWAP top 5
+    let vwap = |levels: &[DepthLevel], n: usize| -> f64 {
+        let slice = &levels[..levels.len().min(n)];
+        let total_qty: f64 = slice.iter().map(|l| l.qty).sum();
+        if total_qty > 0.0 {
+            slice.iter().map(|l| l.price * l.qty).sum::<f64>() / total_qty
+        } else {
+            0.0
+        }
+    };
+    let vwap_bid_5 = vwap(&snap.bids, 5);
+    let vwap_ask_5 = vwap(&snap.asks, 5);
+
+    json!({
+        "mid_price": mid,
+        "spread_bps": spread_bps,
+        "bid_depth_pct": bid_depth_pct,
+        "ask_depth_pct": ask_depth_pct,
+        "imbalance_top_n": imbalance_top_n,
+        "bid_wall": bid_wall,
+        "ask_wall": ask_wall,
+        "vwap_bid_5": vwap_bid_5,
+        "vwap_ask_5": vwap_ask_5,
+        "ts_ms": snap.ts_ms,
+    })
+}
+
+async fn flush_depth(
+    pool: &PgPool,
+    buf: &DepthBuffer,
+    imbalance_levels: usize,
+    depth_pct: f64,
+) -> Result<(), qtss_storage::StorageError> {
+    let guard = buf.lock().await;
+    for (sym, snap) in guard.iter() {
+        let key = format!("binance_depth_{}", sym.to_lowercase());
+        let summary = compute_depth_summary(snap, imbalance_levels, depth_pct);
+        let request = json!({"stream": format!("{}@depth20@100ms", sym.to_lowercase())});
+        upsert_data_snapshot(pool, &key, &request, Some(&summary), None, None).await?;
+    }
+    debug!(symbols = guard.len(), "depth flushed");
+    Ok(())
+}
+
+pub async fn depth_stream_loop(pool: PgPool) {
+    info!("binance_depth_stream loop spawned");
+    loop {
+        let enabled = resolve_worker_enabled_flag(
+            &pool,
+            "binance_ws",
+            "depth_stream.enabled",
+            "QTSS_BINANCE_DEPTH_WS_ENABLED",
+            true,
+        )
+        .await;
+        if !enabled {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            continue;
+        }
+
+        let flush_secs = resolve_worker_tick_secs(
+            &pool,
+            "binance_ws",
+            "depth_stream.flush_secs",
+            "QTSS_BINANCE_DEPTH_FLUSH_SECS",
+            30,
+            5,
+        )
+        .await;
+
+        let imbalance_levels = resolve_worker_tick_secs(
+            &pool,
+            "features",
+            "orderbook.imbalance_levels",
+            "QTSS_OB_IMBALANCE_LEVELS",
+            10,
+            1,
+        )
+        .await as usize;
+
+        let depth_pct = qtss_storage::resolve_system_f64(
+            &pool,
+            "features",
+            "orderbook.depth_pct",
+            "QTSS_OB_DEPTH_PCT",
+            0.02,
+        )
+        .await;
+
+        let symbols = match list_enabled_engine_symbols(&pool).await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(%e, "depth_stream: engine_symbols read");
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                continue;
+            }
+        };
+        let pairs = active_futures_pairs_lower(&symbols);
+        if pairs.is_empty() {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            continue;
+        }
+        let url = combined_url(&pairs, "depth20@100ms");
+        info!(streams = pairs.len(), %flush_secs, "depth_stream connecting");
+
+        let buf: DepthBuffer = Arc::new(Mutex::new(HashMap::new()));
+        let flush_buf = buf.clone();
+        let flush_pool = pool.clone();
+        let flusher = tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(flush_secs));
+            tick.tick().await; // burn immediate
+            loop {
+                tick.tick().await;
+                if let Err(e) =
+                    flush_depth(&flush_pool, &flush_buf, imbalance_levels, depth_pct).await
+                {
+                    warn!(%e, "depth_stream flush");
+                }
+            }
+        });
+
+        match connect_url(&url).await {
+            Ok(mut ws) => {
+                info!("depth_stream ws connected");
+                while let Some(msg) = ws.next().await {
+                    match msg {
+                        Ok(Message::Text(t)) => {
+                            if let Some((sym, snap)) = parse_depth_message(&t) {
+                                let mut g = buf.lock().await;
+                                g.insert(sym, snap);
+                            }
+                        }
+                        Ok(Message::Ping(p)) => {
+                            let _ = ws.send(Message::Pong(p)).await;
+                        }
+                        Ok(Message::Close(_)) => break,
+                        Err(e) => {
+                            warn!(%e, "depth_stream ws read");
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                warn!("depth_stream ws closed");
+            }
+            Err(e) => warn!(%e, "depth_stream connect"),
+        }
+        flusher.abort();
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,5 +754,42 @@ mod tests {
         assert!(u.contains("btcusdt@forceOrder"));
         assert!(u.contains("ethusdt@forceOrder"));
         assert!(u.starts_with("wss://fstream.binance.com/stream?streams="));
+    }
+
+    #[test]
+    fn parse_depth_message_basic() {
+        let t = r#"{"stream":"btcusdt@depth20@100ms","data":{"bids":[["65000.0","1.5"],["64999.0","2.0"]],"asks":[["65001.0","0.8"],["65002.0","1.2"]]}}"#;
+        let (sym, snap) = parse_depth_message(t).unwrap();
+        assert_eq!(sym, "BTCUSDT");
+        assert_eq!(snap.bids.len(), 2);
+        assert_eq!(snap.asks.len(), 2);
+        assert!((snap.bids[0].price - 65000.0).abs() < 1e-9);
+        assert!((snap.bids[0].qty - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_depth_summary_basic() {
+        let snap = DepthSnapshot {
+            bids: vec![
+                DepthLevel { price: 100.0, qty: 10.0 },
+                DepthLevel { price: 99.0, qty: 20.0 },
+                DepthLevel { price: 98.0, qty: 5.0 },
+            ],
+            asks: vec![
+                DepthLevel { price: 101.0, qty: 8.0 },
+                DepthLevel { price: 102.0, qty: 12.0 },
+                DepthLevel { price: 103.0, qty: 3.0 },
+            ],
+            ts_ms: 1700000000000,
+        };
+        let summary = compute_depth_summary(&snap, 10, 0.02);
+        let mid = summary["mid_price"].as_f64().unwrap();
+        assert!((mid - 100.5).abs() < 1e-9);
+        let spread = summary["spread_bps"].as_f64().unwrap();
+        assert!(spread > 0.0);
+        let imb = summary["imbalance_top_n"].as_f64().unwrap();
+        // bids total 35, asks total 23 → positive imbalance
+        assert!(imb > 0.0);
+        assert!(summary["bid_wall"].as_f64().unwrap() > 0.0);
     }
 }
