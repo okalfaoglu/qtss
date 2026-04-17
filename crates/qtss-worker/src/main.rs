@@ -63,6 +63,7 @@ mod wyckoff_setup_invalidation_loop;
 mod regime_deep_loop;
 mod pivot_historical_backfill;
 mod historical_progressive_scan;
+mod data_health_report;
 
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -404,6 +405,8 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(
             historical_progressive_scan::historical_progressive_scan_loop(hps_pool),
         );
+        let health_pool = pool.clone();
+        tokio::spawn(data_health_report::data_health_report_loop(health_pool));
         binance_user_stream::spawn_binance_user_stream_tasks(&pool).await;
         Some(pool)
     } else {
