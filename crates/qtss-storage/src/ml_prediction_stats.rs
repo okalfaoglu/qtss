@@ -159,6 +159,127 @@ pub async fn fetch_latest_drift_model_version(
     Ok(v)
 }
 
+// ── Feature Inspector types ─────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct SourceCoverage {
+    pub source: String,
+    pub spec_version: String,
+    pub n_snapshots: i64,
+    pub first_at: Option<DateTime<Utc>>,
+    pub last_at: Option<DateTime<Utc>>,
+    pub n_features: i64,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct FeatureSnapshotRow {
+    pub id: Uuid,
+    pub detection_id: Option<Uuid>,
+    pub source: String,
+    pub feature_spec_version: String,
+    pub features_json: JsonValue,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct FeatureStat {
+    pub feature: String,
+    pub n: i64,
+    pub mean: Option<f64>,
+    pub min_val: Option<f64>,
+    pub max_val: Option<f64>,
+    pub stddev: Option<f64>,
+}
+
+// ── Feature Inspector queries ───────────────────────────────────────
+
+/// Coverage per source within a time window.
+pub async fn fetch_feature_coverage(
+    pool: &PgPool,
+    hours_window: i64,
+) -> Result<Vec<SourceCoverage>, StorageError> {
+    let rows = sqlx::query_as::<_, SourceCoverage>(
+        r#"
+        SELECT fs.source,
+               fs.feature_spec_version AS spec_version,
+               COUNT(*)::bigint AS n_snapshots,
+               MIN(fs.created_at) AS first_at,
+               MAX(fs.created_at) AS last_at,
+               (SELECT COUNT(DISTINCT k)::bigint
+                  FROM qtss_features_snapshot fs2,
+                       LATERAL jsonb_object_keys(fs2.features_json) k
+                 WHERE fs2.source = fs.source
+                   AND fs2.created_at >= NOW() - ($1 || ' hours')::interval
+               ) AS n_features
+          FROM qtss_features_snapshot fs
+         WHERE fs.created_at >= NOW() - ($1 || ' hours')::interval
+         GROUP BY fs.source, fs.feature_spec_version
+         ORDER BY fs.source
+        "#,
+    )
+    .bind(hours_window.to_string())
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Recent feature snapshots, optionally filtered by source.
+pub async fn fetch_recent_snapshots(
+    pool: &PgPool,
+    source: Option<&str>,
+    limit: i64,
+) -> Result<Vec<FeatureSnapshotRow>, StorageError> {
+    let rows = sqlx::query_as::<_, FeatureSnapshotRow>(
+        r#"
+        SELECT id, detection_id, source, feature_spec_version,
+               features_json, created_at
+          FROM qtss_features_snapshot
+         WHERE ($1::text IS NULL OR source = $1)
+         ORDER BY created_at DESC
+         LIMIT $2
+        "#,
+    )
+    .bind(source)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Per-feature min/max/mean/stddev for a given source within a window.
+pub async fn fetch_feature_stats(
+    pool: &PgPool,
+    source: &str,
+    hours_window: i64,
+) -> Result<Vec<FeatureStat>, StorageError> {
+    let rows = sqlx::query_as::<_, FeatureStat>(
+        r#"
+        WITH kv AS (
+            SELECT k AS feature, v::text::float8 AS val
+              FROM qtss_features_snapshot,
+                   LATERAL jsonb_each(features_json) AS j(k, v)
+             WHERE source = $1
+               AND created_at >= NOW() - ($2 || ' hours')::interval
+               AND jsonb_typeof(v) = 'number'
+        )
+        SELECT feature,
+               COUNT(*)::bigint AS n,
+               AVG(val) AS mean,
+               MIN(val) AS min_val,
+               MAX(val) AS max_val,
+               STDDEV(val) AS stddev
+          FROM kv
+         GROUP BY feature
+         ORDER BY feature
+        "#,
+    )
+    .bind(source)
+    .bind(hours_window.to_string())
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Score histogram in 0.05-width buckets for the distribution chart.
 pub async fn fetch_score_distribution(
     pool: &PgPool,

@@ -30,6 +30,7 @@ const NAV_ENTRIES: NavEntry[] = [
   { label: "Training Set", to: "/v2/training-set", enabled: true },
   { label: "Models", to: "/v2/models", enabled: true },
   { label: "AI Shadow", to: "/v2/ai-shadow", enabled: true },
+  { label: "Features", to: "/v2/feature-inspector", enabled: true },
   { label: "Reconcile", to: "/v2/reconcile", enabled: true },
   { label: "Config", to: "/v2/config", enabled: true },
   { label: "AI Decisions", to: "/v2/ai-decisions", enabled: true },

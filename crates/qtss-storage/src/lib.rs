@@ -79,6 +79,8 @@ pub use ml_prediction_stats::{
     fetch_prediction_feed, fetch_prediction_summary, fetch_score_distribution,
     fetch_latest_drift, fetch_latest_drift_model_version, DriftEntry,
     PredictionRow, PredictionSummary, ScoreBucket,
+    fetch_feature_coverage, fetch_recent_snapshots, fetch_feature_stats,
+    SourceCoverage, FeatureSnapshotRow, FeatureStat,
 };
 pub use models_registry::{activate_model, active_model, list_models, ModelRow};
 pub use training_set::{

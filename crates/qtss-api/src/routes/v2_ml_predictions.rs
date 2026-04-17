@@ -20,6 +20,8 @@ use qtss_storage::{
     fetch_prediction_feed, fetch_prediction_summary,
     fetch_score_distribution, resolve_system_string,
     DriftEntry, PredictionRow, PredictionSummary, ScoreBucket,
+    fetch_feature_coverage, fetch_recent_snapshots, fetch_feature_stats,
+    SourceCoverage, FeatureSnapshotRow, FeatureStat,
 };
 
 use crate::error::ApiError;
@@ -84,6 +86,9 @@ pub fn v2_ml_predictions_router() -> Router<SharedState> {
         .route("/v2/ml/predictions/distribution", get(distribution))
         .route("/v2/ml/predictions/drift", get(drift))
         .route("/v2/ml/predictions/breaker", get(breaker))
+        .route("/v2/ml/features/coverage", get(features_coverage))
+        .route("/v2/ml/features/snapshots", get(features_snapshots))
+        .route("/v2/ml/features/stats", get(features_stats))
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────
@@ -154,6 +159,40 @@ async fn drift(
     }))
 }
 
+// ── Feature Inspector query params ──────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct SnapshotQuery {
+    pub source: Option<String>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FeatureStatsQuery {
+    pub source: String,
+    pub hours: Option<i64>,
+}
+
+// ── Feature Inspector response envelopes ────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct CoveragePayload {
+    pub generated_at: DateTime<Utc>,
+    pub sources: Vec<SourceCoverage>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SnapshotsPayload {
+    pub generated_at: DateTime<Utc>,
+    pub snapshots: Vec<FeatureSnapshotRow>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FeatureStatsPayload {
+    pub generated_at: DateTime<Utc>,
+    pub stats: Vec<FeatureStat>,
+}
+
 /// Faz 9.4.3 / 9.4.4 — circuit breaker status + gate ramp percentage.
 async fn breaker(
     State(st): State<SharedState>,
@@ -168,5 +207,48 @@ async fn breaker(
         generated_at: Utc::now(),
         state,
         gate_pct,
+    }))
+}
+
+// ── Feature Inspector handlers ──────────────────────────────────────
+
+async fn features_coverage(
+    State(st): State<SharedState>,
+    Query(q): Query<WindowQuery>,
+) -> Result<Json<CoveragePayload>, ApiError> {
+    let hours = q.hours.unwrap_or(24);
+    let sources = fetch_feature_coverage(&st.pool, hours).await?;
+    Ok(Json(CoveragePayload {
+        generated_at: Utc::now(),
+        sources,
+    }))
+}
+
+async fn features_snapshots(
+    State(st): State<SharedState>,
+    Query(q): Query<SnapshotQuery>,
+) -> Result<Json<SnapshotsPayload>, ApiError> {
+    let limit = q.limit.unwrap_or(50);
+    let snapshots = fetch_recent_snapshots(
+        &st.pool,
+        q.source.as_deref(),
+        limit,
+    )
+    .await?;
+    Ok(Json(SnapshotsPayload {
+        generated_at: Utc::now(),
+        snapshots,
+    }))
+}
+
+async fn features_stats(
+    State(st): State<SharedState>,
+    Query(q): Query<FeatureStatsQuery>,
+) -> Result<Json<FeatureStatsPayload>, ApiError> {
+    let hours = q.hours.unwrap_or(24);
+    let stats = fetch_feature_stats(&st.pool, &q.source, hours).await?;
+    Ok(Json(FeatureStatsPayload {
+        generated_at: Utc::now(),
+        stats,
     }))
 }

@@ -429,3 +429,32 @@ export interface ScoreBucket {
   n_block: number;
   n_shadow: number;
 }
+
+// ── Feature Inspector ───────────────────────────────────────────────
+
+export interface SourceCoverage {
+  source: string;
+  spec_version: string;
+  n_snapshots: number;
+  first_at: string | null;
+  last_at: string | null;
+  n_features: number;
+}
+
+export interface FeatureStat {
+  feature: string;
+  n: number;
+  mean: number | null;
+  min_val: number | null;
+  max_val: number | null;
+  stddev: number | null;
+}
+
+export interface FeatureSnapshotRow {
+  id: string;
+  detection_id: string | null;
+  source: string;
+  feature_spec_version: string;
+  features_json: Record<string, number | string | null>;
+  created_at: string;
+}
