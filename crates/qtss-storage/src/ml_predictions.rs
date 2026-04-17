@@ -87,6 +87,53 @@ pub async fn insert_ml_prediction(
     Ok(id)
 }
 
+// ─── LLM Verdicts (Faz 9.5) ──────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct LlmVerdictInsert {
+    pub prediction_id: Uuid,
+    pub provider: String,
+    pub model: String,
+    pub prompt_version: String,
+    pub verdict: String,
+    pub confidence: Option<f32>,
+    pub reasoning: Option<String>,
+    pub input_tokens: Option<i32>,
+    pub output_tokens: Option<i32>,
+    pub latency_ms: i32,
+    pub raw_response: JsonValue,
+}
+
+pub async fn insert_llm_verdict(
+    pool: &PgPool,
+    v: &LlmVerdictInsert,
+) -> Result<Uuid, StorageError> {
+    let row: (Uuid,) = sqlx::query_as(
+        r#"
+        INSERT INTO qtss_llm_verdicts
+            (prediction_id, provider, model, prompt_version, verdict,
+             confidence, reasoning, input_tokens, output_tokens,
+             latency_ms, raw_response)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        RETURNING id
+        "#,
+    )
+    .bind(v.prediction_id)
+    .bind(&v.provider)
+    .bind(&v.model)
+    .bind(&v.prompt_version)
+    .bind(&v.verdict)
+    .bind(v.confidence)
+    .bind(&v.reasoning)
+    .bind(v.input_tokens)
+    .bind(v.output_tokens)
+    .bind(v.latency_ms)
+    .bind(&v.raw_response)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
 /// Back-fill `setup_id` onto a prediction row once the owning setup is
 /// finally inserted. Soft-fail: the caller logs and moves on — the
 /// prediction row is still valid without the link.

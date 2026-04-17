@@ -265,6 +265,8 @@ pub enum RejectReason {
     GateNoDirection,
     // Faz 9.3.3 — LightGBM inference sidecar veto (gate_enabled=true).
     AiGate,
+    // Faz 9.5 — LLM tiebreaker veto (uncertain zone + LLM says block).
+    LlmBlock,
 }
 
 impl RejectReason {
@@ -282,6 +284,7 @@ impl RejectReason {
             RejectReason::GateBelowMinScore => "gate_below_min_score",
             RejectReason::GateNoDirection => "gate_no_direction",
             RejectReason::AiGate => "ai_gate",
+            RejectReason::LlmBlock => "llm_block",
         }
     }
 

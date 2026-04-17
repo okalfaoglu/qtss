@@ -1108,7 +1108,7 @@ async fn try_arm_new_setup(
                 threshold: ai_cfg.min_score as f32,
                 gate_enabled: effective_gate,
                 decision: ai_decision.unwrap_or("shadow").to_string(),
-                shap_top10: shap_json,
+                shap_top10: shap_json.clone(),
                 latency_ms: inference_latency_ms,
                 sidecar_url: ai_cfg.sidecar_url.clone(),
             };
@@ -1141,6 +1141,87 @@ async fn try_arm_new_setup(
                 return Ok(());
             }
         }
+    }
+
+    // Faz 9.5 — LLM tiebreaker for the uncertain zone.
+    let llm_cfg = crate::llm_judge::LlmConfig::load(pool).await;
+    let llm_verdict = if llm_cfg.enabled {
+        if let Some(r) = ai_response.as_ref() {
+            if llm_cfg.score_in_uncertain_zone(r.score) {
+                // Build context from available detections + SHAP.
+                let best_det = detections.iter().find(|d| {
+                    (d.state == "confirmed" || d.state == "forming")
+                        && d.structural_score >= 0.50
+                });
+                let shap_top5: Vec<crate::llm_judge::ShapEntry> = shap_json
+                    .as_ref()
+                    .and_then(|v| serde_json::from_value::<Vec<crate::llm_judge::ShapEntry>>(v.clone()).ok())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .take(5)
+                    .collect();
+                let ctx = crate::llm_judge::SetupContext {
+                    symbol: sym.symbol.clone(),
+                    timeframe: sym.interval.clone(),
+                    family: best_det.map(|d| d.family.clone()).unwrap_or_default(),
+                    subkind: best_det.map(|d| d.subkind.clone()).unwrap_or_default(),
+                    ai_score: r.score,
+                    shap_top5,
+                    regime: best_det
+                        .and_then(|d| d.regime.as_str().map(|s| s.to_string()))
+                        .unwrap_or_else(|| "unknown".into()),
+                    structural_score: best_det.map(|d| d.structural_score as f64).unwrap_or(0.0),
+                    confidence: best_det.and_then(|d| d.confidence.map(|c| c as f64)).unwrap_or(0.0),
+                };
+                crate::llm_judge::judge(&llm_cfg, &ctx).await
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Persist LLM verdict if obtained.
+    if let (Some(verdict), Some(pred_id)) = (&llm_verdict, prediction_id) {
+        let _ = qtss_storage::insert_llm_verdict(
+            pool,
+            &qtss_storage::LlmVerdictInsert {
+                prediction_id: pred_id,
+                provider: llm_cfg.provider.clone(),
+                model: llm_cfg.model.clone(),
+                prompt_version: llm_cfg.prompt_version.clone(),
+                verdict: verdict.verdict.clone(),
+                confidence: Some(verdict.confidence as f32),
+                reasoning: Some(verdict.reasoning.clone()),
+                input_tokens: verdict.input_tokens,
+                output_tokens: verdict.output_tokens,
+                latency_ms: verdict.latency_ms as i32,
+                raw_response: verdict.raw_response.clone(),
+            },
+        )
+        .await;
+    }
+
+    // Apply LLM verdict if it has a blocking opinion.
+    if let Some(ref v) = llm_verdict {
+        if v.verdict == "block" {
+            debug!(
+                symbol = %sym.symbol,
+                confidence = v.confidence,
+                reasoning = %v.reasoning,
+                "llm_tiebreaker rejected setup"
+            );
+            record_rejection(
+                pool, cfg, venue, profile, sym, direction, conf.id,
+                RejectReason::LlmBlock,
+            )
+            .await?;
+            return Ok(());
+        }
+        // "pass" → proceed, "abstain" → fall through to classic gate
     }
 
     let row = V2SetupInsert {

@@ -3,6 +3,7 @@
 
 mod ai_engine;
 mod ai_inference;
+mod llm_judge;
 mod detection_stats_refresh;
 mod binance_catalog_sync_loop;
 mod binance_futures_reconcile;
