@@ -146,6 +146,7 @@ pub struct ShapEntry {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // base_value / model_version are deserialized for log + future use.
 pub struct ExplainResponse {
     pub shap_top10: Vec<ShapEntry>,
     pub base_value: f64,
