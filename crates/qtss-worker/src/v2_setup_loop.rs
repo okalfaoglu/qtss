@@ -1279,6 +1279,15 @@ async fn try_arm_new_setup(
         }
     }
 
+    // Faz 9.7.8 — enqueue a public-broadcast outbox row. Failure here
+    // is non-fatal: the setup itself is already persisted, and the
+    // publisher loop tolerates a missing outbox entry (it only ships
+    // what's actually enqueued). Keeping it non-fatal preserves the
+    // setup engine's forward progress if notify gets wedged.
+    if let Err(e) = qtss_storage::enqueue_setup_broadcast(pool, id).await {
+        warn!(%e, setup_id = %id, "enqueue_setup_broadcast failed (non-fatal)");
+    }
+
     insert_v2_setup_event(
         pool,
         &V2SetupEventInsert {

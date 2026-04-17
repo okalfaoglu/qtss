@@ -33,6 +33,36 @@ impl SetupDirection {
     }
 }
 
+/// Faz 9.7.8 — Optional AI rationale carried on a new-setup broadcast.
+///
+/// Populated by the caller from `qtss_ml_predictions` (score-level
+/// signal) and the AI decision layer (action + free-form reasoning).
+/// Mirror of the AI fields already carried on `LifecycleContext` so
+/// the initial broadcast and subsequent lifecycle updates read
+/// consistently across channels.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AiBrief {
+    /// e.g. "Enter", "Watch", "Skip" — short verb from the decision layer.
+    pub action: Option<String>,
+    /// 1-2 sentence human rationale (Turkish when the LLM tiebreaker
+    /// is enabled). Rendered as-is after HTML escaping.
+    pub reasoning: Option<String>,
+    /// [0, 1] — confidence reported by the decision layer.
+    pub confidence: Option<f64>,
+    /// Top feature names driving the score (capped at 3 by the caller).
+    #[serde(default)]
+    pub top_features: Vec<String>,
+}
+
+impl AiBrief {
+    pub fn is_empty(&self) -> bool {
+        self.action.is_none()
+            && self.reasoning.is_none()
+            && self.confidence.is_none()
+            && self.top_features.is_empty()
+    }
+}
+
 /// Input to the card builder. Callers populate this from `qtss_v2_setups`
 /// joined with `qtss_ml_predictions`.
 #[derive(Debug, Clone)]
@@ -54,6 +84,10 @@ pub struct SetupSnapshot {
     pub tp3_price: Option<Decimal>,
     pub current_price: Option<Decimal>,
     pub created_at: DateTime<Utc>,
+    /// Faz 9.7.8 — optional AI rationale. Callers pass `None` when the
+    /// decision layer is offline or below the confidence gate.
+    #[doc(hidden)]
+    pub ai_brief: Option<AiBrief>,
 }
 
 /// Fully rendered public card — channel-independent.
@@ -78,6 +112,10 @@ pub struct PublicCard {
     /// Primary R:R derived from (entry - stop) vs (first target - entry).
     pub risk_reward: Option<f64>,
     pub created_at: DateTime<Utc>,
+    /// Faz 9.7.8 — AI rationale threaded from the snapshot. `None` when
+    /// the caller didn't populate one (degraded mode).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_brief: Option<AiBrief>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,6 +176,9 @@ impl PublicCard {
             .current_price
             .map(|cp| pct_from_entry(entry_f, to_f64(cp)));
         let pattern_label = format_pattern(&snapshot.pattern_family, snapshot.pattern_subkind.as_deref());
+        let ai_brief = snapshot
+            .ai_brief
+            .filter(|b| !b.is_empty());
         Self {
             setup_id: snapshot.setup_id,
             symbol: snapshot.symbol,
@@ -155,6 +196,7 @@ impl PublicCard {
             targets,
             risk_reward,
             created_at: snapshot.created_at,
+            ai_brief,
         }
     }
 
@@ -244,6 +286,7 @@ mod tests {
             tp3_price: None,
             current_price: Some(dec!(82_950)),
             created_at: Utc::now(),
+            ai_brief: None,
         }
     }
 

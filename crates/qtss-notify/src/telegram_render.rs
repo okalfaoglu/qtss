@@ -80,6 +80,35 @@ pub fn render_public_card(card: &PublicCard) -> Notification {
         ));
     }
 
+    // Faz 9.7.8 — AI rationale block. Rendered only when at least one
+    // field is populated; missing pieces degrade gracefully.
+    if let Some(ai) = &card.ai_brief {
+        html.push_str("\n\n🤖 <b>AI</b>");
+        if let Some(action) = &ai.action {
+            html.push_str(&format!(" · <b>{}</b>", escape_telegram_html(action)));
+        }
+        if let Some(conf) = ai.confidence {
+            html.push_str(&format!(" (<i>{:.0}%</i>)", conf * 100.0));
+        }
+        html.push('\n');
+        if let Some(reasoning) = &ai.reasoning {
+            html.push_str(&format!(
+                "<i>{}</i>\n",
+                escape_telegram_html(reasoning),
+            ));
+        }
+        if !ai.top_features.is_empty() {
+            let feats = ai
+                .top_features
+                .iter()
+                .take(3)
+                .map(|f| escape_telegram_html(f))
+                .collect::<Vec<_>>()
+                .join(", ");
+            html.push_str(&format!("<i>Öne çıkan: {}</i>\n", feats));
+        }
+    }
+
     let body_plain = html_to_plain(&html);
     Notification::new(title, body_plain).with_telegram_html_message(html)
 }
@@ -300,6 +329,12 @@ mod tests {
                 tp3_price: None,
                 current_price: Some(dec!(82_950)),
                 created_at: Utc::now(),
+                ai_brief: Some(crate::card::AiBrief {
+                    action: Some("Enter".into()),
+                    reasoning: Some("Hacim + yapısal uyum güçlü.".into()),
+                    confidence: Some(0.81),
+                    top_features: vec!["hacim_burst".into(), "mtf_uyum".into()],
+                }),
             },
             TierThresholds::FALLBACK,
             AssetCategory::MegaCap,
@@ -319,6 +354,47 @@ mod tests {
         assert!(html.contains("Stop"));
         assert!(html.contains("R:R"));
         assert_eq!(n.telegram_parse_mode.as_deref(), Some("HTML"));
+    }
+
+    #[test]
+    fn public_card_renders_ai_block_when_present() {
+        let c = sample_card();
+        let n = render_public_card(&c);
+        let html = n.telegram_text.as_deref().unwrap_or_default();
+        assert!(html.contains("🤖"));
+        assert!(html.contains("Enter"));
+        assert!(html.contains("81%"));
+        assert!(html.contains("Hacim"));
+        assert!(html.contains("Öne çıkan"));
+    }
+
+    #[test]
+    fn public_card_omits_ai_block_when_none() {
+        let mut snap = SetupSnapshot {
+            setup_id: Uuid::new_v4(),
+            exchange: "binance".into(),
+            symbol: "BTCUSDT".into(),
+            timeframe: "1h".into(),
+            venue_class: "crypto".into(),
+            market_cap_rank: Some(1),
+            direction: SetupDirection::Long,
+            pattern_family: "wyckoff".into(),
+            pattern_subkind: Some("spring".into()),
+            ai_score: 0.82,
+            entry_price: dec!(82_400),
+            stop_price: dec!(81_100),
+            tp1_price: Some(dec!(85_200)),
+            tp2_price: None,
+            tp3_price: None,
+            current_price: Some(dec!(82_950)),
+            created_at: Utc::now(),
+            ai_brief: None,
+        };
+        snap.ai_brief = None;
+        let c = PublicCard::build_from_parts(snap, TierThresholds::FALLBACK, AssetCategory::MegaCap);
+        let n = render_public_card(&c);
+        let html = n.telegram_text.as_deref().unwrap_or_default();
+        assert!(!html.contains("🤖"));
     }
 
     #[test]

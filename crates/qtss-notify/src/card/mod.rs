@@ -11,6 +11,6 @@ pub mod category;
 pub mod config;
 pub mod tier;
 
-pub use builder::{PublicCard, SetupDirection, SetupSnapshot, TargetPoint};
+pub use builder::{AiBrief, PublicCard, SetupDirection, SetupSnapshot, TargetPoint};
 pub use category::{AssetCategory, CategoryThresholds, ResolveContext};
 pub use tier::{ScoreTier, TierBadge, TierThresholds};

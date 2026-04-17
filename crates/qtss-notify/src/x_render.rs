@@ -41,9 +41,29 @@ pub fn render_public_card_x(card: &PublicCard) -> String {
     if let Some(rr) = card.risk_reward {
         lines.push(format!("R:R {:.2}", rr));
     }
+    // Faz 9.7.8 — AI line. Priority above category/pattern so if the
+    // 280-limit trimmer drops trailing lines, AI is preserved.
+    if let Some(ai) = &card.ai_brief {
+        if let Some(line) = fmt_ai_line(ai) {
+            lines.push(line);
+        }
+    }
     lines.push(format!("{} · {}", card.category_label, card.pattern_label));
 
     assemble_under_limit(&lines)
+}
+
+/// Compose a single-line AI summary for X. Returns None when the brief
+/// carries no renderable field.
+fn fmt_ai_line(ai: &crate::card::AiBrief) -> Option<String> {
+    let action = ai.action.as_deref().unwrap_or("");
+    let conf = ai.confidence;
+    match (action.is_empty(), conf) {
+        (false, Some(c)) => Some(format!("🤖 {} ({:.0}%)", action, c * 100.0)),
+        (false, None) => Some(format!("🤖 {}", action)),
+        (true, Some(c)) => Some(format!("🤖 Güven {:.0}%", c * 100.0)),
+        (true, None) => None,
+    }
 }
 
 /// Render a lifecycle event for X — single tweet, PnL + headline + AI hint.
@@ -172,6 +192,12 @@ mod tests {
                 tp3_price: None,
                 current_price: Some(dec!(82_950)),
                 created_at: Utc::now(),
+                ai_brief: Some(crate::card::AiBrief {
+                    action: Some("Enter".into()),
+                    reasoning: None,
+                    confidence: Some(0.81),
+                    top_features: vec![],
+                }),
             },
             TierThresholds::FALLBACK,
             AssetCategory::MegaCap,
@@ -220,6 +246,15 @@ mod tests {
         assert!(body.contains("Son hedef"));
         assert!(body.contains("+6.20%"));
         assert!(body.contains("AI: Exit"));
+    }
+
+    #[test]
+    fn public_card_x_includes_ai_line_within_limit() {
+        let body = render_public_card_x(&sample_card());
+        assert!(body.chars().count() <= X_MAX_CHARS);
+        assert!(body.contains("🤖"));
+        assert!(body.contains("Enter"));
+        assert!(body.contains("81%"));
     }
 
     #[test]

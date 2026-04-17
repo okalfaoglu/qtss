@@ -51,6 +51,7 @@ pub mod v2_detections;
 pub mod v2_onchain_metrics;
 pub mod digest;
 pub mod setup_lifecycle;
+pub mod setup_broadcast_outbox;
 pub mod x_outbox;
 pub mod v2_setup_events;
 pub mod ml_predictions;
@@ -82,6 +83,11 @@ pub use digest::{
 pub use x_outbox::{
     claim_x_outbox_batch, count_sent_today_utc, enqueue_x_outbox, mark_x_failed, mark_x_sent,
     XOutboxInsert, XOutboxRow,
+};
+pub use setup_broadcast_outbox::{
+    claim_batch as claim_setup_broadcast_batch, enqueue as enqueue_setup_broadcast,
+    mark_failed as mark_setup_broadcast_failed, mark_sent as mark_setup_broadcast_sent,
+    SetupBroadcastRow,
 };
 pub use v2_setup_events::{
     insert_v2_setup_event, list_events_for_setup, list_pending_setup_events,

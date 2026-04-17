@@ -38,6 +38,13 @@ mod error;
 mod sizing;
 mod state;
 
+// Faz 9.8 — post-trade tick-driven modules.
+pub mod liquidation_guard;
+pub mod live_position_store;
+pub mod ratchet;
+pub mod scale_manager;
+pub mod tp_engine;
+
 #[cfg(test)]
 mod tests;
 
@@ -53,3 +60,15 @@ pub use sizing::{
     VolTargetSizer,
 };
 pub use state::AccountState;
+
+// Faz 9.8 re-exports (skeleton — full logic across 9.8.3/9.8.5/9.8.6/9.8.7).
+pub use liquidation_guard::{
+    assess as assess_liquidation, LiquidationAction, LiquidationAssessment, LiquidationGuardConfig,
+    LiquidationSeverity,
+};
+pub use live_position_store::{
+    ExecutionMode, LivePositionState, LivePositionStore, PositionId, PositionSide, TickKey, TpLeg,
+};
+pub use ratchet::{tighten_only, RatchetDecision, RatchetKind};
+pub use scale_manager::{ScaleDecision, ScaleDecisionKind, ScaleManagerConfig};
+pub use tp_engine::TpTrigger;

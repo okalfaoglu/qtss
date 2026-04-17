@@ -35,6 +35,7 @@ mod price_tick_ws;
 mod setup_watcher;
 mod x_publisher;
 mod digest_loop;
+mod setup_publisher;
 mod range_signal_execute_loop;
 mod setup_scan_engine;
 mod signal_scorer;
@@ -289,6 +290,9 @@ async fn main() -> anyhow::Result<()> {
         // Faz 9.7.7 — per-user daily digest.
         let digest_pool = pool.clone();
         tokio::spawn(digest_loop::digest_loop(digest_pool));
+        // Faz 9.7.8 — new-setup public broadcast (Telegram + x_outbox).
+        let setup_pub_pool = pool.clone();
+        tokio::spawn(setup_publisher::setup_publisher_loop(setup_pub_pool));
         // Faz 9.0.1 — outcome labeler (AI training substrate).
         let ol_pool = pool.clone();
         tokio::spawn(outcome_labeler_loop::outcome_labeler_loop(ol_pool));
