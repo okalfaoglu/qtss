@@ -1344,7 +1344,9 @@ export function Chart() {
       };
 
       // Overlap prevention (like AlphaExtract's hasNearbyLabel)
-      const minSpacing = 5; // minimum bars between labels
+      // P-chart-fix — widened spacing and per-type cap to prevent marker
+      // pileups (e.g. 9× s_c markers stacked on consecutive bars).
+      const minSpacing = 10; // minimum bars between labels
       const placed: Array<{ idx: number; price: number }> = [];
 
       const hasNearbyLabel = (idx: number, price: number): boolean => {
@@ -1422,8 +1424,17 @@ export function Chart() {
         }
       }
 
-      // Merge backend + frontend events, sort by score
-      const allWyckEvts = [...wEvts, ...frontendEvts];
+      // P-chart-fix — cap frontend events to 3 per type to avoid flooding
+      // the chart with low-confidence duplicates.
+      const MAX_PER_TYPE = 3;
+      const feCountMap: Record<string, number> = {};
+      const cappedFrontend = frontendEvts.filter((e) => {
+        feCountMap[e.event] = (feCountMap[e.event] ?? 0) + 1;
+        return feCountMap[e.event] <= MAX_PER_TYPE;
+      });
+
+      // Merge backend + frontend events, sort by score (backend first)
+      const allWyckEvts = [...wEvts, ...cappedFrontend];
       const sortedEvts = allWyckEvts.sort((a, b) => b.score - a.score);
 
       // Event horizontal lines (like AlphaExtract's box.new for each event)
@@ -1516,7 +1527,14 @@ export function Chart() {
       const barsSpan = barsFromStart >= 0 ? merged.candles.length - barsFromStart : 0;
       const boxTooThin = barsSpan < 5;
       const boxTooTall = lastPrice > 0 && rangeHeight / lastPrice > 0.25;
-      const boxValid = !boxTooThin && !boxTooTall;
+      // P-chart-fix — "DISTRIBUTION floating below price" bug: if current
+      // price has moved >15% beyond the range, the structure is stale /
+      // completed and drawing the box is misleading.
+      const boxDisconnected =
+        lastPrice > 0 &&
+        ((wRange.top ?? 0) > 0 && lastPrice > (wRange.top ?? 0) * 1.15) ||
+        ((wRange.bottom ?? 0) > 0 && lastPrice < (wRange.bottom ?? 0) * 0.85);
+      const boxValid = !boxTooThin && !boxTooTall && !boxDisconnected;
 
       if (wRange.top != null && wRange.bottom != null && boxValid) {
         const schematicColor: Record<string, { fill: string; border: string; label: string }> = {
@@ -1868,8 +1886,15 @@ export function Chart() {
             const wo = wyckoffQuery.data.overlay;
             if (!wo) return null;
             const isAcc = wo.schematic === "accumulation" || wo.schematic === "reaccumulation";
-            const phaseColor = isAcc ? "#22c55e" : wo.schematic === "distribution" || wo.schematic === "redistribution" ? "#ef4444" : "#9ca3af";
-            const phaseText = isAcc ? "ACCUMULATION" : wo.schematic === "distribution" || wo.schematic === "redistribution" ? "DISTRIBUTION" : "NEUTRAL";
+            // P-chart-fix — Phase A/B schematic is provisional (mirrors
+            // Wyckoff.tsx logic). Only Phase C+ commits the family call.
+            const phaseLocked = ["C", "D", "E"].includes((wo.phase ?? "").toUpperCase());
+            const phaseColor = phaseLocked
+              ? (isAcc ? "#22c55e" : "#ef4444")
+              : "#9ca3af";
+            const phaseText = phaseLocked
+              ? (isAcc ? "ACCUMULATION" : "DISTRIBUTION")
+              : `RANGE · ${wo.schematic}?`;
             const conf = wo.confidence ? (wo.confidence * 100).toFixed(0) : "?";
             const strength = Number(conf) > 70 ? "STRONG" : Number(conf) > 40 ? "MODERATE" : "WEAK";
             const rangeP = wo.range.top && wo.range.bottom
