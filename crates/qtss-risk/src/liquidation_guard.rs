@@ -64,6 +64,12 @@ pub fn assess(
     state: &LivePositionState,
     cfg: &LiquidationGuardConfig,
 ) -> Option<LiquidationAssessment> {
+    // Spot can never liquidate — short-circuit so misconfigured
+    // `liquidation_price` values on spot positions don't trigger
+    // panic-closes.
+    if !state.segment.can_liquidate() {
+        return None;
+    }
     let mark = state.last_mark?;
     let liq = state.liquidation_price?;
     if mark <= Decimal::ZERO || liq <= Decimal::ZERO {

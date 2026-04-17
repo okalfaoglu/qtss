@@ -68,13 +68,15 @@ pub use liquidation_guard::{
     LiquidationSeverity,
 };
 pub use live_position_store::{
-    ExecutionMode, LivePositionState, LivePositionStore, PositionId, PositionSide, TickKey, TpLeg,
+    ExecutionMode, LivePositionState, LivePositionStore, MarketSegment, PositionId, PositionSide,
+    TickKey, TpLeg,
 };
 pub use ratchet::{tighten_only, RatchetDecision, RatchetKind};
 pub use scale_manager::{ScaleDecision, ScaleDecisionKind, ScaleManagerConfig};
 pub use selector::{
     Direction as SelectorDirection, LiquidationCooldownFilter, MaxRiskPctFilter,
     MinAiScoreFilter, MinRiskRewardFilter, MinTierFilter, OpenPositionCapFilter, RankedOutcome,
-    SelectionOutcome, SelectorConfig, SelectorFilter, SelectorRegistry, SetupCandidate,
+    SegmentOverrides, SelectionOutcome, SelectorConfig, SelectorConfigOverride, SelectorFilter,
+    SelectorRegistry, SetupCandidate,
 };
 pub use tp_engine::TpTrigger;

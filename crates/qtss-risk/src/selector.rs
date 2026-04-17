@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
+use crate::live_position_store::MarketSegment;
+
 /// Inputs the selector reasons about. The caller fills these from
 /// `qtss_v2_setups` (+ joined ai_score) plus external signals (open
 /// position count on the venue, cooldown state, etc.).
@@ -21,6 +23,9 @@ use uuid::Uuid;
 pub struct SetupCandidate {
     pub setup_id: Uuid,
     pub exchange: String,
+    /// Venue segment — gates segment-specific filters (e.g. leverage
+    /// cap only applies on futures/margin; spot is never liquidated).
+    pub segment: MarketSegment,
     pub symbol: String,
     pub timeframe: String,
     pub profile: String,
@@ -50,6 +55,25 @@ pub enum Direction {
 
 /// Config snapshot the selector reads. Every field maps to a
 /// `qtss_config` key (CLAUDE.md #2) — the DB loader composes this.
+/// Per-segment override bundle — callers optionally supply tighter
+/// thresholds for futures/margin vs spot. Empty map → global defaults
+/// apply everywhere.
+#[derive(Debug, Clone, Default)]
+pub struct SegmentOverrides {
+    /// `segment → override`. Only non-None fields win over the base.
+    pub by_segment:
+        std::collections::HashMap<MarketSegment, SelectorConfigOverride>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SelectorConfigOverride {
+    pub min_risk_reward: Option<f64>,
+    pub min_ai_score: Option<f64>,
+    pub max_risk_pct: Option<f64>,
+    pub min_tier: Option<u8>,
+    pub max_open_positions_per_symbol: Option<u32>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SelectorConfig {
     pub min_risk_reward: f64,
@@ -57,6 +81,29 @@ pub struct SelectorConfig {
     pub max_risk_pct: f64,
     pub min_tier: u8,
     pub max_open_positions_per_symbol: u32,
+    /// Optional per-segment overrides. Lookup is cheap; empty map
+    /// is the common case.
+    pub segment_overrides: SegmentOverrides,
+}
+
+impl SelectorConfig {
+    /// Resolve the effective config for a candidate by layering any
+    /// segment-specific override on top of the global base.
+    pub fn resolve_for(&self, segment: MarketSegment) -> SelectorConfig {
+        let Some(ov) = self.segment_overrides.by_segment.get(&segment) else {
+            return self.clone();
+        };
+        SelectorConfig {
+            min_risk_reward: ov.min_risk_reward.unwrap_or(self.min_risk_reward),
+            min_ai_score: ov.min_ai_score.unwrap_or(self.min_ai_score),
+            max_risk_pct: ov.max_risk_pct.unwrap_or(self.max_risk_pct),
+            min_tier: ov.min_tier.unwrap_or(self.min_tier),
+            max_open_positions_per_symbol: ov
+                .max_open_positions_per_symbol
+                .unwrap_or(self.max_open_positions_per_symbol),
+            segment_overrides: SegmentOverrides::default(),
+        }
+    }
 }
 
 impl Default for SelectorConfig {
@@ -67,6 +114,7 @@ impl Default for SelectorConfig {
             max_risk_pct: 0.02,     // 2%
             min_tier: 6,
             max_open_positions_per_symbol: 1,
+            segment_overrides: SegmentOverrides::default(),
         }
     }
 }
@@ -264,13 +312,17 @@ impl SelectorRegistry {
     }
 
     /// Walk filters in order; short-circuit on first rejection.
+    /// Segment-aware: the config is resolved against the candidate's
+    /// segment before evaluation so futures/margin can run tighter
+    /// thresholds than spot without per-call plumbing.
     pub fn evaluate(
         &self,
         candidate: &SetupCandidate,
         cfg: &SelectorConfig,
     ) -> SelectionOutcome {
+        let effective = cfg.resolve_for(candidate.segment);
         for f in &self.filters {
-            if let Some(reason) = f.evaluate(candidate, cfg) {
+            if let Some(reason) = f.evaluate(candidate, &effective) {
                 return SelectionOutcome::Rejected {
                     setup_id: candidate.setup_id,
                     filter: f.tag(),
@@ -368,6 +420,7 @@ mod tests {
         SetupCandidate {
             setup_id: Uuid::new_v4(),
             exchange: "binance".into(),
+            segment: MarketSegment::Futures,
             symbol: "BTCUSDT".into(),
             timeframe: "1h".into(),
             profile: "d".into(),
@@ -481,5 +534,64 @@ mod tests {
     fn registry_order_is_insertion_order() {
         let r = SelectorRegistry::with_defaults();
         assert_eq!(r.len(), 6);
+    }
+
+    #[test]
+    fn segment_override_tightens_thresholds() {
+        // Spot override demands ai_score >= 0.90; a 0.80 candidate
+        // that passes on futures (base 0.55) must be rejected on spot.
+        let mut overrides = SegmentOverrides::default();
+        overrides.by_segment.insert(
+            MarketSegment::Spot,
+            SelectorConfigOverride {
+                min_ai_score: Some(0.90),
+                ..Default::default()
+            },
+        );
+        let cfg = SelectorConfig {
+            segment_overrides: overrides,
+            ..Default::default()
+        };
+        let mut spot = long_candidate();
+        spot.segment = MarketSegment::Spot;
+        let r = SelectorRegistry::with_defaults();
+        let out = r.evaluate(&spot, &cfg);
+        match out {
+            SelectionOutcome::Rejected { filter, .. } => assert_eq!(filter, "min_ai_score"),
+            other => panic!("expected spot rejection, got {other:?}"),
+        }
+        // Same candidate as futures still passes.
+        let mut futures = long_candidate();
+        futures.segment = MarketSegment::Futures;
+        assert!(r.evaluate(&futures, &cfg).is_selected());
+    }
+
+    #[test]
+    fn spot_segment_has_no_liquidation_assessment() {
+        use crate::liquidation_guard::{assess, LiquidationGuardConfig};
+        use crate::live_position_store::{LivePositionState, MarketSegment, PositionSide};
+        use chrono::Utc;
+        let state = LivePositionState {
+            id: Uuid::new_v4(),
+            setup_id: None,
+            mode: crate::live_position_store::ExecutionMode::Dry,
+            exchange: "binance".into(),
+            segment: MarketSegment::Spot,
+            symbol: "BTCUSDT".into(),
+            side: PositionSide::Buy,
+            leverage: 1,
+            entry_avg: dec!(100),
+            qty_filled: dec!(1),
+            qty_remaining: dec!(1),
+            current_sl: Some(dec!(95)),
+            tp_ladder: Vec::new(),
+            liquidation_price: Some(dec!(90)), // misconfigured
+            maint_margin_ratio: None,
+            funding_rate_next: None,
+            last_mark: Some(dec!(91)), // would trip breach if evaluated
+            last_tick_at: Some(Utc::now()),
+            opened_at: Utc::now(),
+        };
+        assert!(assess(&state, &LiquidationGuardConfig::default()).is_none());
     }
 }

@@ -32,6 +32,45 @@ pub enum PositionSide {
     Sell,
 }
 
+/// Market segment — spot has no liquidation / leverage; futures does.
+/// Several guards branch on this (liquidation_guard skips spot, the
+/// scale manager sizes differently on futures, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MarketSegment {
+    Spot,
+    Futures,
+    Margin,
+    Options,
+}
+
+impl MarketSegment {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Spot => "spot",
+            Self::Futures => "futures",
+            Self::Margin => "margin",
+            Self::Options => "options",
+        }
+    }
+
+    /// `true` when the segment can be liquidated (has maintenance
+    /// margin). Spot never liquidates.
+    pub fn can_liquidate(self) -> bool {
+        matches!(self, Self::Futures | Self::Margin | Self::Options)
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "spot" => Some(Self::Spot),
+            "futures" | "perp" | "perpetual" => Some(Self::Futures),
+            "margin" => Some(Self::Margin),
+            "options" => Some(Self::Options),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TpLeg {
     pub price: Decimal,
@@ -46,7 +85,7 @@ pub struct LivePositionState {
     pub setup_id: Option<Uuid>,
     pub mode: ExecutionMode,
     pub exchange: String,
-    pub segment: String,
+    pub segment: MarketSegment,
     pub symbol: String,
     pub side: PositionSide,
     pub leverage: u8,
@@ -64,12 +103,16 @@ pub struct LivePositionState {
 }
 
 /// Key under which positions are indexed for tick fan-out. A single
-/// (mode, exchange, symbol) may host multiple positions (e.g. split
-/// between several setups sharing the same venue symbol).
+/// `(mode, exchange, segment, symbol)` may host multiple positions
+/// (e.g. split between several setups sharing the same venue symbol).
+/// `segment` is part of the key because BTCUSDT spot and BTCUSDT
+/// futures are independent venues with distinct liquidation / margin
+/// mechanics — ticks from one must not update the other.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TickKey {
     pub mode: ExecutionMode,
     pub exchange: String,
+    pub segment: MarketSegment,
     pub symbol: String,
 }
 
@@ -91,6 +134,7 @@ impl LivePositionStore {
         let key = TickKey {
             mode: state.mode,
             exchange: state.exchange.clone(),
+            segment: state.segment,
             symbol: state.symbol.clone(),
         };
         let id = state.id;
@@ -142,6 +186,7 @@ impl LivePositionStore {
             let key = TickKey {
                 mode: s.mode,
                 exchange: s.exchange,
+                segment: s.segment,
                 symbol: s.symbol,
             };
             let mut idx = self.by_tick.write().expect("live_position_store poisoned");
