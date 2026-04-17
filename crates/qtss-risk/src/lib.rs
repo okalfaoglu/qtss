@@ -43,6 +43,7 @@ pub mod liquidation_guard;
 pub mod live_position_store;
 pub mod ratchet;
 pub mod scale_manager;
+pub mod selector;
 pub mod tp_engine;
 
 #[cfg(test)]
@@ -71,4 +72,9 @@ pub use live_position_store::{
 };
 pub use ratchet::{tighten_only, RatchetDecision, RatchetKind};
 pub use scale_manager::{ScaleDecision, ScaleDecisionKind, ScaleManagerConfig};
+pub use selector::{
+    Direction as SelectorDirection, LiquidationCooldownFilter, MaxRiskPctFilter,
+    MinAiScoreFilter, MinRiskRewardFilter, MinTierFilter, OpenPositionCapFilter, RankedOutcome,
+    SelectionOutcome, SelectorConfig, SelectorFilter, SelectorRegistry, SetupCandidate,
+};
 pub use tp_engine::TpTrigger;
