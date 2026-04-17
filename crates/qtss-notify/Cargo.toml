@@ -9,6 +9,13 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
+chrono.workspace = true
+rust_decimal = "1.36"
+sqlx.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+qtss-storage = { path = "../qtss-storage" }
+async-trait = { workspace = true }
 base64 = "0.22"
 lettre = { version = "0.11", default-features = false, features = [
     "tokio1",
@@ -16,3 +23,7 @@ lettre = { version = "0.11", default-features = false, features = [
     "builder",
     "tokio1-rustls-tls",
 ] }
+
+[dev-dependencies]
+rust_decimal_macros = "1.36"
+tokio = { workspace = true, features = ["macros", "rt"] }

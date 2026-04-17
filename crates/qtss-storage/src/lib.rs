@@ -49,6 +49,9 @@ pub mod v2_correlation_groups;
 pub mod v2_detection_outcomes;
 pub mod v2_detections;
 pub mod v2_onchain_metrics;
+pub mod digest;
+pub mod setup_lifecycle;
+pub mod x_outbox;
 pub mod v2_setup_events;
 pub mod ml_predictions;
 pub mod ml_prediction_stats;
@@ -66,6 +69,19 @@ pub use v2_detections::{
 };
 pub use v2_correlation_groups::{
     count_open_setups_in_group, list_groups_for_symbol, CorrelationGroupRow,
+};
+pub use setup_lifecycle::{
+    apply_ratchet_update, close_setup, insert_health_snapshot, insert_lifecycle_event,
+    list_lifecycle_events_for_setup, list_watcher_rows, mark_entry_touched, set_tp_hit_bit,
+    HealthSnapshotInsert, LifecycleEventInsert, LifecycleEventRow, RatchetUpdate, SetupCloseUpdate,
+    WatcherSetupRow,
+};
+pub use digest::{
+    aggregate_digest, list_digest_candidates, stamp_digest_sent, DigestAggregate, DigestUserRow,
+};
+pub use x_outbox::{
+    claim_x_outbox_batch, count_sent_today_utc, enqueue_x_outbox, mark_x_failed, mark_x_sent,
+    XOutboxInsert, XOutboxRow,
 };
 pub use v2_setup_events::{
     insert_v2_setup_event, list_events_for_setup, list_pending_setup_events,

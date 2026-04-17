@@ -2532,12 +2532,21 @@ dependencies = [
 name = "qtss-notify"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64",
+ "chrono",
  "lettre",
+ "qtss-storage",
  "reqwest",
+ "rust_decimal",
+ "rust_decimal_macros",
  "serde",
  "serde_json",
+ "sqlx",
  "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

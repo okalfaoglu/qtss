@@ -21,7 +21,7 @@ mod engines;
 mod feature_sources;
 mod feature_store;
 mod kill_switch;
-mod live_position_notify;
+// Faz 9.7.8 — live_position_notify removed.
 mod nansen_credit_monitor;
 mod nansen_engine;
 mod nansen_extended;
@@ -29,8 +29,12 @@ mod nansen_query;
 mod notify_outbox;
 mod onchain_signal_scorer;
 mod outcome_labeler_loop;
-mod paper_fill_notify;
+// Faz 9.7.8 — paper_fill_notify removed.
 mod position_manager;
+mod price_tick_ws;
+mod setup_watcher;
+mod x_publisher;
+mod digest_loop;
 mod range_signal_execute_loop;
 mod setup_scan_engine;
 mod signal_scorer;
@@ -43,7 +47,7 @@ mod intake_playbook_engine;
 mod lifecycle_manager;
 #[allow(dead_code, unused_variables, unused_imports)]
 mod nansen_symbol_lifecycle;
-mod position_status_notify;
+// Faz 9.7.8 — position_status_notify removed.
 mod v2_detection_orchestrator;
 mod v2_detection_sweeper;
 mod v2_projection_loop;
@@ -55,9 +59,9 @@ mod v2_tbm_detector;
 mod v2_onchain_loop;
 mod v2_onchain_bridge;
 mod v2_confluence_loop;
-mod setup_chart;
+// Faz 9.7.8 — setup_chart removed (consumer v2_setup_telegram_loop gone).
 mod v2_setup_loop;
-mod v2_setup_telegram_loop;
+// Faz 9.7.8 — v2_setup_telegram_loop removed.
 mod wyckoff_setup_loop;
 mod wyckoff_setup_invalidation_loop;
 mod regime_deep_loop;
@@ -270,6 +274,21 @@ async fn main() -> anyhow::Result<()> {
         // Faz 9.6 — Binance orderbook depth stream.
         let depth_pool = pool.clone();
         tokio::spawn(binance_public_ws::depth_stream_loop(depth_pool));
+        // Faz 9.7.2 — Binance bookTicker stream → shared PriceTickStore.
+        // Store is kept alive for the lifetime of the worker; the setup
+        // watcher (9.7.3) will clone this Arc for read access.
+        let price_store = qtss_notify::PriceTickStore::new();
+        let tick_pool = pool.clone();
+        tokio::spawn(price_tick_ws::price_tick_ws_loop(tick_pool, price_store.clone()));
+        // Faz 9.7.3 — setup watcher (lifecycle dispatch + health).
+        let watcher_pool = pool.clone();
+        tokio::spawn(setup_watcher::setup_watcher_loop(watcher_pool, price_store.clone()));
+        // Faz 9.7.6 — x_outbox publisher.
+        let xpub_pool = pool.clone();
+        tokio::spawn(x_publisher::x_publisher_loop(xpub_pool));
+        // Faz 9.7.7 — per-user daily digest.
+        let digest_pool = pool.clone();
+        tokio::spawn(digest_loop::digest_loop(digest_pool));
         // Faz 9.0.1 — outcome labeler (AI training substrate).
         let ol_pool = pool.clone();
         tokio::spawn(outcome_labeler_loop::outcome_labeler_loop(ol_pool));
@@ -281,20 +300,18 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(engines::external_misc_loop(misc_pool));
         let onchain_pool = pool.clone();
         tokio::spawn(onchain_signal_scorer::onchain_signal_loop(onchain_pool));
-        let paper_notify_pool = pool.clone();
-        tokio::spawn(paper_fill_notify::paper_position_notify_loop(
-            paper_notify_pool,
-        ));
+        // Faz 9.7.8 — legacy notify loops removed.
+        // `paper_fill_notify`, `live_position_notify`,
+        // `position_status_notify`, and `v2_setup_telegram_loop` have
+        // all been superseded by the Faz 9.7.x pipeline:
+        //   * price_tick_ws  → shared PriceTickStore
+        //   * setup_watcher  → lifecycle router (DbPersist + Telegram + XOutbox)
+        //   * x_publisher    → drains x_outbox
+        //   * digest_loop    → per-user daily digest
+        // `notify_outbox_loop` stays — it still powers non-setup
+        // notifications (auth, audit, etc.).
         let outbox_pool = pool.clone();
         tokio::spawn(notify_outbox::notify_outbox_loop(outbox_pool));
-        let live_notify_pool = pool.clone();
-        tokio::spawn(live_position_notify::live_position_notify_loop(
-            live_notify_pool,
-        ));
-        let pos_status_pool = pool.clone();
-        tokio::spawn(position_status_notify::position_status_notify_loop(
-            pos_status_pool,
-        ));
         let ks_pool = pool.clone();
         tokio::spawn(kill_switch::kill_switch_loop(ks_pool));
         let pm_pool = pool.clone();
@@ -354,10 +371,8 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(commission_sync_loop::commission_sync_loop(
             commission_sync_pool,
         ));
-        let v2_setup_tg_pool = pool.clone();
-        tokio::spawn(v2_setup_telegram_loop::v2_setup_telegram_loop(
-            v2_setup_tg_pool,
-        ));
+        // Faz 9.7.8 — v2_setup_telegram_loop removed (replaced by
+        // TelegramLifecycleHandler + XOutboxHandler on the setup watcher).
         let v2_val_pool = pool.clone();
         // Shared in-process event bus: the validator publishes
         // PATTERN_VALIDATED here, strategy providers subscribe.

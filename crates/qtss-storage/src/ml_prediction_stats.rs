@@ -164,7 +164,7 @@ pub async fn fetch_latest_drift_model_version(
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct SourceCoverage {
     pub source: String,
-    pub spec_version: String,
+    pub spec_version: i32,
     pub n_snapshots: i64,
     pub first_at: Option<DateTime<Utc>>,
     pub last_at: Option<DateTime<Utc>>,
@@ -176,9 +176,9 @@ pub struct FeatureSnapshotRow {
     pub id: Uuid,
     pub detection_id: Option<Uuid>,
     pub source: String,
-    pub feature_spec_version: String,
+    pub feature_spec_version: i32,
     pub features_json: JsonValue,
-    pub created_at: DateTime<Utc>,
+    pub computed_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -203,16 +203,16 @@ pub async fn fetch_feature_coverage(
         SELECT fs.source,
                fs.feature_spec_version AS spec_version,
                COUNT(*)::bigint AS n_snapshots,
-               MIN(fs.created_at) AS first_at,
-               MAX(fs.created_at) AS last_at,
+               MIN(fs.computed_at) AS first_at,
+               MAX(fs.computed_at) AS last_at,
                (SELECT COUNT(DISTINCT k)::bigint
                   FROM qtss_features_snapshot fs2,
                        LATERAL jsonb_object_keys(fs2.features_json) k
                  WHERE fs2.source = fs.source
-                   AND fs2.created_at >= NOW() - ($1 || ' hours')::interval
+                   AND fs2.computed_at >= NOW() - ($1 || ' hours')::interval
                ) AS n_features
           FROM qtss_features_snapshot fs
-         WHERE fs.created_at >= NOW() - ($1 || ' hours')::interval
+         WHERE fs.computed_at >= NOW() - ($1 || ' hours')::interval
          GROUP BY fs.source, fs.feature_spec_version
          ORDER BY fs.source
         "#,
@@ -232,10 +232,10 @@ pub async fn fetch_recent_snapshots(
     let rows = sqlx::query_as::<_, FeatureSnapshotRow>(
         r#"
         SELECT id, detection_id, source, feature_spec_version,
-               features_json, created_at
+               features_json, computed_at
           FROM qtss_features_snapshot
          WHERE ($1::text IS NULL OR source = $1)
-         ORDER BY created_at DESC
+         ORDER BY computed_at DESC
          LIMIT $2
         "#,
     )
@@ -259,7 +259,7 @@ pub async fn fetch_feature_stats(
               FROM qtss_features_snapshot,
                    LATERAL jsonb_each(features_json) AS j(k, v)
              WHERE source = $1
-               AND created_at >= NOW() - ($2 || ' hours')::interval
+               AND computed_at >= NOW() - ($2 || ' hours')::interval
                AND jsonb_typeof(v) = 'number'
         )
         SELECT feature,

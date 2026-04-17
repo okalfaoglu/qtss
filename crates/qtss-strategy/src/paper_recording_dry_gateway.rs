@@ -65,7 +65,7 @@ fn side_code(side: OrderSide) -> &'static str {
     }
 }
 
-/// Persists dry-run fills to PostgreSQL for dashboards and `paper_fill_notify`.
+/// Persists dry-run fills to PostgreSQL for dashboards and downstream notify consumers.
 pub struct PaperRecordingDryGateway {
     dry: Arc<DryRunGateway>,
     pool: PgPool,
