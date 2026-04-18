@@ -26,6 +26,12 @@ pub struct CandleConfig {
     pub trend_context_min_pct: f64,
     /// Minimum structural score for emission.
     pub min_structural_score: f32,
+    /// Minimum timeframe (in seconds) on which candle detections are
+    /// considered meaningful. Sub-threshold timeframes produce too much
+    /// noise (e.g. morning_star on 1m is statistically indistinguishable
+    /// from random). Default 900 (= 15m). DB-tunable via
+    /// `detection.candle.min_timeframe_seconds`.
+    pub min_timeframe_seconds: i64,
 }
 
 impl Default for CandleConfig {
@@ -40,6 +46,7 @@ impl Default for CandleConfig {
             trend_context_bars: 5,
             trend_context_min_pct: 0.015,
             min_structural_score: 0.5,
+            min_timeframe_seconds: 900,
         }
     }
 }
@@ -64,6 +71,11 @@ impl CandleConfig {
         if self.trend_context_bars < 2 {
             return Err(CandleError::InvalidConfig(
                 "trend_context_bars must be >= 2".into(),
+            ));
+        }
+        if self.min_timeframe_seconds < 0 {
+            return Err(CandleError::InvalidConfig(
+                "min_timeframe_seconds must be >= 0".into(),
             ));
         }
         Ok(())

@@ -1402,15 +1402,52 @@ async fn record_rejection(
 }
 
 // ── Structural target extraction from detection anchors ─────────
+//
+// Convention (CRITICAL):
+//   * `sign = direction.sign()` → +1.0 for Long, -1.0 for Short.
+//   * Target formula is always `anchor_price + sign * offset`.
+//     For Long → target > anchor (up), for Short → target < anchor (down).
+//   * `new_structural()` re-validates target side vs entry and falls
+//     back to ATR if wrong — but silent fallback hides formula bugs, so
+//     every handler below is unit-testable-side-correct by construction.
+//
+// Handler dispatch (first match wins):
+//   classical:  double_top/bottom → MM; head_and_shoulders → neckline
+//                MM; wedge/flag/channel/rectangle/diamond/broadening/
+//                triangle/cup_handle/rounding → pattern-height projection.
+//   harmonic:   XABCD family → AD-retracement targets.
+//   elliott:    impulse → wave-1 projection; zigzag → 1.272×C-leg trend
+//                resumption; flat → 0.618×C-leg; triangle → width thrust;
+//                leading_diagonal → 1×range continuation; ending_diagonal
+//                → full retrace to wedge origin.
+//   candle:     pattern-height projection (1×, 2×).
+//   gap:        gap-size projection (1×, 2.618×).
+//   wyckoff:    spring/upthrust → range projection.
+
+/// Classical pattern families that share the "pattern height → breakout
+/// projection" target model. Listed most-specific first.
+const CLASSICAL_HEIGHT_PREFIXES: &[&str] = &[
+    "rising_wedge", "falling_wedge",
+    "bull_flag", "bear_flag", "pennant",
+    "ascending_channel", "descending_channel",
+    "ascending_triangle", "descending_triangle", "symmetrical_triangle",
+    "rectangle",
+    "diamond_top", "diamond_bottom",
+    "broadening",
+    "cup_and_handle", "rounding_top", "rounding_bottom",
+];
 
 /// Extract measured-move targets from a detection's anchors.
-/// Works for classical (double_top/bottom, H&S), harmonic, and Elliott.
+/// Covers every formation family with at least two fallback tiers; no
+/// scattered match arms (CLAUDE.md #1). Returns empty vec only when the
+/// anchors are structurally unusable — the caller then falls back to
+/// ATR-based PositionGuard.
 fn compute_structural_targets(det: &DetectionRow, direction: Direction) -> Vec<StructuralTarget> {
     let anchors: Vec<serde_json::Value> = match serde_json::from_value(det.anchors.clone()) {
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };
-    if anchors.len() < 3 {
+    if anchors.is_empty() {
         return Vec::new();
     }
 
@@ -1423,87 +1460,231 @@ fn compute_structural_targets(det: &DetectionRow, direction: Direction) -> Vec<S
     };
 
     let subkind = det.subkind.as_str();
+    let family = det.family.as_str();
     let sign = direction.sign();
+    if sign == 0.0 {
+        return Vec::new();
+    }
+    let inv_price = det.invalidation_price.to_f64().unwrap_or(0.0);
 
-    // Double top/bottom: 3 anchors [H1/L1, T, H2/L2]
-    if subkind.starts_with("double_top") || subkind.starts_with("double_bottom") {
+    // ---------------- classical: double top / bottom ----------------
+    // 3 anchors [H1/L1, T/N, H2/L2]. Measured move projects *from the
+    // neckline* (T = anchors[1]) by pattern height, in the trade's
+    // direction. Fixed sign convention — previous revision used
+    // `neck - sign*h` which produced wrong-side targets for both
+    // variants and silently ATR-fell-back.
+    if anchors.len() >= 3
+        && (subkind.starts_with("double_top") || subkind.starts_with("double_bottom"))
+    {
         if let (Some(extreme), Some(neck)) = (price_of(&anchors[0]), price_of(&anchors[1])) {
             let height = (extreme - neck).abs();
-            let t1 = neck - sign * height;         // 1.0× measured move
-            let t2 = neck - sign * height * 1.618;  // 1.618× extension
-            return vec![
-                StructuralTarget { price: t1, weight: 0.80, label: "MM 1.0x" },
-                StructuralTarget { price: t2, weight: 0.50, label: "MM 1.618x" },
-            ];
-        }
-    }
-
-    // Head & shoulders / inverse: 5 anchors [S1, N1, H, N2, S2]
-    if subkind.contains("head_and_shoulders") {
-        if anchors.len() >= 5 {
-            if let (Some(head), Some(neck1), Some(neck2)) =
-                (price_of(&anchors[2]), price_of(&anchors[1]), price_of(&anchors[3]))
-            {
-                let neckline = (neck1 + neck2) / 2.0;
-                let height = (head - neckline).abs();
-                let t1 = neckline - sign * height;
-                let t2 = neckline - sign * height * 1.618;
+            if height > 0.0 {
                 return vec![
-                    StructuralTarget { price: t1, weight: 0.80, label: "MM 1.0x" },
-                    StructuralTarget { price: t2, weight: 0.50, label: "MM 1.618x" },
+                    StructuralTarget { price: neck + sign * height,         weight: 0.80, label: "MM 1.0x" },
+                    StructuralTarget { price: neck + sign * height * 1.618, weight: 0.50, label: "MM 1.618x" },
                 ];
             }
         }
     }
 
-    // Harmonic patterns (butterfly, gartley, bat, crab): XABCD
-    if matches!(det.family.as_str(), "harmonic") {
-        if anchors.len() >= 5 {
-            if let (Some(a_price), Some(d_price)) =
-                (price_of(&anchors[1]), price_of(&anchors[4]))
-            {
-                let ad_range = (a_price - d_price).abs();
-                // Retracement targets of AD leg
-                let t1 = d_price + sign * ad_range * 0.382;
-                let t2 = d_price + sign * ad_range * 0.618;
+    // ---------------- classical: head & shoulders -------------------
+    // 5 anchors [S1, N1, H, N2, S2]. Same sign fix as above.
+    if anchors.len() >= 5 && subkind.contains("head_and_shoulders") {
+        if let (Some(head), Some(n1), Some(n2)) =
+            (price_of(&anchors[2]), price_of(&anchors[1]), price_of(&anchors[3]))
+        {
+            let neckline = (n1 + n2) / 2.0;
+            let height = (head - neckline).abs();
+            if height > 0.0 {
                 return vec![
-                    StructuralTarget { price: t1, weight: 0.70, label: "AD 0.382" },
-                    StructuralTarget { price: t2, weight: 0.85, label: "AD 0.618" },
+                    StructuralTarget { price: neckline + sign * height,         weight: 0.80, label: "MM 1.0x" },
+                    StructuralTarget { price: neckline + sign * height * 1.618, weight: 0.50, label: "MM 1.618x" },
                 ];
             }
         }
     }
 
-    // Elliott impulse: 6 pivots [0,1,2,3,4,5]
+    // ---------------- classical: v-spike reversals ------------------
+    // v_top/v_bottom: 3 anchors. SL at extreme, target = recent pivot
+    // reclaim distance projected in direction.
+    if anchors.len() >= 3 && (subkind.starts_with("v_top") || subkind.starts_with("v_bottom")) {
+        if let (Some(tip), Some(neck)) = (price_of(&anchors[1]), price_of(&anchors[0])) {
+            let height = (tip - neck).abs();
+            if height > 0.0 {
+                return vec![
+                    StructuralTarget { price: neck + sign * height * 0.618, weight: 0.65, label: "V 0.618x" },
+                    StructuralTarget { price: neck + sign * height * 1.0,   weight: 0.45, label: "V 1.0x" },
+                ];
+            }
+        }
+    }
+
+    // ---------------- classical: generic pattern-height ------------
+    // Wedges, flags, channels, rectangles, diamonds, broadening, cup &
+    // handle, rounding. All share the same "project pattern height in
+    // breakout direction from the invalidation edge" semantics.
+    if family == "classical"
+        && CLASSICAL_HEIGHT_PREFIXES.iter().any(|p| subkind.starts_with(p))
+    {
+        let prices: Vec<f64> = anchors.iter().filter_map(|a| price_of(a)).collect();
+        if prices.len() >= 2 {
+            let max = prices.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let min = prices.iter().cloned().fold(f64::INFINITY, f64::min);
+            let height = max - min;
+            if height > 0.0 && inv_price > 0.0 {
+                // Project from the invalidation edge — that is the
+                // structural pivot the pattern breaks at.
+                return vec![
+                    StructuralTarget { price: inv_price + sign * height,         weight: 0.70, label: "Pat 1.0x" },
+                    StructuralTarget { price: inv_price + sign * height * 1.618, weight: 0.45, label: "Pat 1.618x" },
+                ];
+            }
+        }
+    }
+
+    // ---------------- harmonic: XABCD family -----------------------
+    // Generic handler covers gartley, butterfly, bat, crab, cypher,
+    // shark, five_0, ab=cd, three_drives (min 5 pivots; AD = first→last).
+    if family == "harmonic" && anchors.len() >= 5 {
+        let a_price = price_of(&anchors[1]);
+        let d_price = price_of(anchors.last().unwrap());
+        if let (Some(a), Some(d)) = (a_price, d_price) {
+            let ad = (a - d).abs();
+            if ad > 0.0 {
+                return vec![
+                    StructuralTarget { price: d + sign * ad * 0.382, weight: 0.70, label: "AD 0.382" },
+                    StructuralTarget { price: d + sign * ad * 0.618, weight: 0.85, label: "AD 0.618" },
+                    StructuralTarget { price: d + sign * ad * 1.000, weight: 0.55, label: "AD 1.000" },
+                ];
+            }
+        }
+    }
+
+    // ---------------- elliott: impulse 1-2-3-4-5 -------------------
     if subkind.contains("impulse") && anchors.len() >= 6 {
         if let (Some(p0), Some(p1), Some(p4)) =
             (price_of(&anchors[0]), price_of(&anchors[1]), price_of(&anchors[4]))
         {
-            let w1_height = (p1 - p0).abs();
-            let t1 = p4 + sign * w1_height * 1.0;
-            let t2 = p4 + sign * w1_height * 1.618;
-            return vec![
-                StructuralTarget { price: t1, weight: 0.70, label: "Fib 1.0x" },
-                StructuralTarget { price: t2, weight: 0.85, label: "Fib 1.618x" },
-            ];
+            let w1 = (p1 - p0).abs();
+            if w1 > 0.0 {
+                return vec![
+                    StructuralTarget { price: p4 + sign * w1 * 1.000, weight: 0.70, label: "Fib 1.0x" },
+                    StructuralTarget { price: p4 + sign * w1 * 1.618, weight: 0.85, label: "Fib 1.618x" },
+                ];
+            }
         }
     }
 
-    // Wyckoff spring/upthrust
+    // ---------------- elliott: zigzag/flat corrections --------------
+    // 4 anchors [0, A, B, C]. After C, trend RESUMES in the broader
+    // direction — confluence `direction` already reflects that. Zigzag
+    // implies sharper pullback so targets are larger than flat.
+    if anchors.len() >= 4
+        && (subkind.starts_with("zigzag") || subkind.starts_with("flat_"))
+    {
+        if let (Some(c_start), Some(c_end)) = (price_of(&anchors[2]), price_of(&anchors[3])) {
+            let c_leg = (c_end - c_start).abs();
+            if c_leg > 0.0 {
+                let mult = if subkind.starts_with("zigzag") { 1.272 } else { 0.618 };
+                return vec![
+                    StructuralTarget { price: c_end + sign * c_leg * mult,           weight: 0.60, label: "C-leg mm" },
+                    StructuralTarget { price: c_end + sign * c_leg * (mult + 0.618), weight: 0.40, label: "C-leg ext" },
+                ];
+            }
+        }
+    }
+
+    // ---------------- elliott: triangle thrust ---------------------
+    // 6 anchors. Thrust magnitude = widest point of triangle, projected
+    // from E in the pattern's breakout direction.
+    if subkind.starts_with("triangle_") && anchors.len() >= 6 {
+        let prices: Vec<f64> = anchors.iter().filter_map(|a| price_of(a)).collect();
+        if prices.len() >= 6 {
+            let max = prices.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let min = prices.iter().cloned().fold(f64::INFINITY, f64::min);
+            let width = max - min;
+            let e = prices[5];
+            if width > 0.0 {
+                return vec![
+                    StructuralTarget { price: e + sign * width * 0.618, weight: 0.55, label: "Thrust 0.618x" },
+                    StructuralTarget { price: e + sign * width * 1.000, weight: 0.75, label: "Thrust 1.0x" },
+                ];
+            }
+        }
+    }
+
+    // ---------------- elliott: diagonals ---------------------------
+    if subkind.starts_with("leading_diagonal") && anchors.len() >= 6 {
+        if let (Some(p0), Some(p5)) = (price_of(&anchors[0]), price_of(&anchors[5])) {
+            let range = (p5 - p0).abs();
+            if range > 0.0 {
+                return vec![
+                    StructuralTarget { price: p5 + sign * range * 0.618, weight: 0.60, label: "Cont 0.618x" },
+                    StructuralTarget { price: p5 + sign * range * 1.000, weight: 0.75, label: "Cont 1.0x" },
+                ];
+            }
+        }
+    }
+    if subkind.starts_with("ending_diagonal") && anchors.len() >= 6 {
+        if let (Some(p0), Some(p5)) = (price_of(&anchors[0]), price_of(&anchors[5])) {
+            let range = (p5 - p0).abs();
+            if range > 0.0 {
+                // Sharp reversal: full retrace back to wedge start, then
+                // 1.618× extension beyond. Direction flips vs formation.
+                return vec![
+                    StructuralTarget { price: p0,                       weight: 0.75, label: "Retrace p0" },
+                    StructuralTarget { price: p0 - sign * range * 0.618, weight: 0.45, label: "Retrace ext" },
+                ];
+            }
+        }
+    }
+
+    // ---------------- candle: single/multi-bar patterns ------------
+    // Anchors: [open_first, close_last]. Pattern height = |close - inv|
+    // where inv = pattern extreme. Candle targets carry lower weight
+    // (less structural basis than swing patterns).
+    if family == "candle" && anchors.len() >= 2 {
+        if let Some(close) = price_of(anchors.last().unwrap()) {
+            let height = (close - inv_price).abs();
+            if height > 0.0 {
+                return vec![
+                    StructuralTarget { price: close + sign * height * 1.0, weight: 0.50, label: "Candle 1.0x" },
+                    StructuralTarget { price: close + sign * height * 2.0, weight: 0.30, label: "Candle 2.0x" },
+                ];
+            }
+        }
+    }
+
+    // ---------------- gap family -----------------------------------
+    // Anchors: [pre_gap_close, post_gap_open] (or equivalent). Gap size
+    // drives continuation projection. Exhaustion gaps are still
+    // handled here — direction comes from confluence which already
+    // accounts for exhaustion reversal semantics.
+    if family == "gap" && anchors.len() >= 2 {
+        if let (Some(a), Some(b)) = (price_of(&anchors[0]), price_of(&anchors[1])) {
+            let gap = (b - a).abs();
+            if gap > 0.0 {
+                return vec![
+                    StructuralTarget { price: b + sign * gap * 1.000, weight: 0.65, label: "Gap 1.0x" },
+                    StructuralTarget { price: b + sign * gap * 2.618, weight: 0.40, label: "Gap 2.618x" },
+                ];
+            }
+        }
+    }
+
+    // ---------------- wyckoff: spring / upthrust --------------------
     if subkind.contains("spring") || subkind.contains("upthrust") {
-        // Use detection's raw_meta for range if available
         if let (Some(top), Some(bot)) = (
             det.raw_meta.get("range_top").and_then(|v| v.as_f64()),
             det.raw_meta.get("range_bottom").and_then(|v| v.as_f64()),
         ) {
             let range_h = (top - bot).abs();
-            let base = det.invalidation_price.to_f64().unwrap_or(0.0);
-            let t1 = base + sign * range_h * 0.5;
-            let t2 = base + sign * range_h * 1.0;
-            return vec![
-                StructuralTarget { price: t1, weight: 0.70, label: "Range 0.5x" },
-                StructuralTarget { price: t2, weight: 0.85, label: "Range 1.0x" },
-            ];
+            if range_h > 0.0 && inv_price > 0.0 {
+                return vec![
+                    StructuralTarget { price: inv_price + sign * range_h * 0.5, weight: 0.70, label: "Range 0.5x" },
+                    StructuralTarget { price: inv_price + sign * range_h * 1.0, weight: 0.85, label: "Range 1.0x" },
+                ];
+            }
         }
     }
 

@@ -32,6 +32,13 @@ impl CandleDetector {
         timeframe: Timeframe,
         regime: &RegimeSnapshot,
     ) -> Option<Detection> {
+        // Timeframe gate: candle patterns emit too much noise on
+        // sub-threshold timeframes. Threshold is DB-tunable — a 5m
+        // morning_star has near-random hit rate; a 1h one is usable.
+        if timeframe.seconds() < self.config.min_timeframe_seconds {
+            return None;
+        }
+
         // Need enough bars for trend-context lookbacks.
         let min_bars = self.config.trend_context_bars + 3;
         if bars.len() < min_bars {

@@ -583,6 +583,10 @@ async fn resolve_candle_config(pool: &PgPool) -> CandleConfig {
         pool, "detection", "candle.min_structural_score",
         "QTSS_DETECTION_CANDLE_MIN_SCORE", 0.50,
     ).await as f32;
+    let min_timeframe_seconds = resolve_system_u64(
+        pool, "detection", "candle.min_timeframe_seconds",
+        "QTSS_DETECTION_CANDLE_MIN_TF_SEC", 900, 0, 86_400,
+    ).await as i64;
     CandleConfig {
         doji_body_ratio_max,
         marubozu_shadow_ratio_max,
@@ -593,6 +597,7 @@ async fn resolve_candle_config(pool: &PgPool) -> CandleConfig {
         trend_context_bars,
         trend_context_min_pct,
         min_structural_score,
+        min_timeframe_seconds,
     }
 }
 
