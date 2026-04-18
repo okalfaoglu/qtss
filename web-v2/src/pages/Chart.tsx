@@ -46,6 +46,7 @@ const FAMILY_COLORS: Record<string, string> = {
   range: "#5eead4",
   tbm: "#fb923c",
   candle: "#fca5a5",
+  gap: "#38bdf8",
   custom: "#d4d4d8",
 };
 
@@ -60,6 +61,7 @@ const FAMILY_DISPLAY: Record<string, string> = {
   range: "zones",
   tbm: "tbm",
   candle: "mum",
+  gap: "boşluk",
   custom: "custom",
 };
 
