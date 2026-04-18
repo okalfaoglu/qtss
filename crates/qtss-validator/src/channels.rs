@@ -472,3 +472,106 @@ impl ConfirmationChannel for MultiTfRegimeConfluence {
         Some(score)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Family quality guard — Faz D
+// ---------------------------------------------------------------------------
+
+/// Structural sanity checks run AFTER the detector has already emitted.
+/// Detectors are generally right-shaped but not all encode every
+/// canonical rule (e.g. Elliott wave-2 cannot fully retrace wave-1).
+/// This channel is a final safety net: it inspects the detection's
+/// anchors and applies family-specific rules, returning a 0.0 score to
+/// tank the blended confidence when a rule is violated.
+///
+/// Every threshold is config-tunable (CLAUDE.md #2) — the worker loads
+/// values from `system_config` and constructs this channel with them.
+pub struct FamilyQualityGuard {
+    /// Minimum anchor count required for a harmonic XABCD detection.
+    /// Gartley/butterfly/bat/crab/cypher/shark all need 5 pivots.
+    pub min_anchors_harmonic: usize,
+    /// Elliott impulse needs 6 pivots (0,1,2,3,4,5).
+    pub min_anchors_elliott_impulse: usize,
+    /// Elliott corrections (zigzag/flat) need 4, triangles need 6.
+    pub min_anchors_elliott_correction: usize,
+    /// Classical patterns — min 3 for double_top/bottom/H&S base.
+    pub min_anchors_classical: usize,
+    /// Candle patterns — open + close anchors.
+    pub min_anchors_candle: usize,
+    /// Gap — pre/post anchors.
+    pub min_anchors_gap: usize,
+    /// When true, apply Elliott wave-2/wave-4 alternation check on
+    /// impulse detections. Canonical Prechter rule: wave-2 cannot
+    /// retrace 100% of wave-1; wave-4 cannot overlap wave-1 territory.
+    pub elliott_alternation_enabled: bool,
+}
+
+impl ConfirmationChannel for FamilyQualityGuard {
+    fn name(&self) -> &'static str {
+        "family_quality_guard"
+    }
+
+    fn evaluate(&self, det: &Detection, _ctx: &ValidationContext) -> Option<f64> {
+        let n = det.anchors.len();
+        let kind = &det.kind;
+
+        // Minimum anchor count per family — a structurally incomplete
+        // detection cannot possibly be valid, regardless of score.
+        let min_needed = match kind {
+            PatternKind::Harmonic(_) => self.min_anchors_harmonic,
+            PatternKind::Elliott(sub) => {
+                if sub.contains("impulse") || sub.contains("diagonal") || sub.starts_with("triangle") {
+                    self.min_anchors_elliott_impulse
+                } else {
+                    self.min_anchors_elliott_correction
+                }
+            }
+            PatternKind::Classical(_) => self.min_anchors_classical,
+            PatternKind::Candle(_) => self.min_anchors_candle,
+            PatternKind::Gap(_) => self.min_anchors_gap,
+            // Wyckoff / Range / Custom have highly variable anchor
+            // counts; skip the check and let the detector decide.
+            _ => 1,
+        };
+        if n < min_needed {
+            return Some(0.0);
+        }
+
+        // Elliott wave alternation — applied only to impulse patterns
+        // whose anchor layout is known (0,1,2,3,4,5). Violation here
+        // means the detector emitted an *invalid* impulse count even
+        // though its own score cleared the floor — common when pivots
+        // are noisy and the detector's local checks don't cover the
+        // full Prechter rule set.
+        if self.elliott_alternation_enabled {
+            if let PatternKind::Elliott(sub) = kind {
+                if sub.contains("impulse") && n >= 6 {
+                    let prices: Vec<f64> = det
+                        .anchors
+                        .iter()
+                        .take(6)
+                        .map(|a| a.price.to_f64().unwrap_or(0.0))
+                        .collect();
+                    let w1 = (prices[1] - prices[0]).abs();
+                    let w2 = (prices[2] - prices[1]).abs();
+                    let w3 = (prices[3] - prices[2]).abs();
+                    let w4 = (prices[4] - prices[3]).abs();
+                    // Rule 1: wave-2 never retraces more than 100% of wave-1.
+                    // Rule 2: wave-4 should not retrace more than wave-3
+                    //         in magnitude (soft version of the "no-overlap"
+                    //         rule — strict overlap test requires checking
+                    //         wave-4 end vs wave-1 end; this is a cheaper
+                    //         proxy that still catches obvious violations).
+                    if w1 > 0.0 && w2 >= w1 {
+                        return Some(0.0);
+                    }
+                    if w3 > 0.0 && w4 >= w3 {
+                        return Some(0.0);
+                    }
+                }
+            }
+        }
+
+        Some(1.0)
+    }
+}

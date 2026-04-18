@@ -34,9 +34,10 @@ use qtss_storage::{
     DetectionFilter, DetectionOutcomeRepository, DetectionRow, V2DetectionRepository,
 };
 use qtss_validator::{
-    is_higher_timeframe, BreakoutBodyAtr, BreakoutCloseQuality, HistoricalHitRate, HitRateStat,
-    MultiTfRegimeConfluence, MultiTfRegimeContext, MultiTimeframeConfluence, RegimeAlignment,
-    RetestQuality, ValidationContext, Validator, ValidatorConfig, VolumeConfirmation,
+    is_higher_timeframe, BreakoutBodyAtr, BreakoutCloseQuality, FamilyQualityGuard,
+    HistoricalHitRate, HitRateStat, MultiTfRegimeConfluence, MultiTfRegimeContext,
+    MultiTimeframeConfluence, RegimeAlignment, RetestQuality, ValidationContext, Validator,
+    ValidatorConfig, VolumeConfirmation,
 };
 use std::collections::HashMap;
 use serde_json::json;
@@ -437,6 +438,40 @@ async fn build_validator(pool: &PgPool) -> anyhow::Result<Validator> {
     )
     .await as usize;
 
+    // Faz D — FamilyQualityGuard thresholds.
+    let fq_harmonic = resolve_system_u64(
+        pool, "detection", "validator.family_guard.harmonic_min_anchors",
+        "QTSS_DETECTION_VALIDATOR_FQ_HARMONIC_MIN", 5, 2, 20,
+    ).await as usize;
+    let fq_impulse = resolve_system_u64(
+        pool, "detection", "validator.family_guard.elliott_impulse_min_anchors",
+        "QTSS_DETECTION_VALIDATOR_FQ_IMPULSE_MIN", 6, 2, 20,
+    ).await as usize;
+    let fq_correction = resolve_system_u64(
+        pool, "detection", "validator.family_guard.elliott_correction_min_anchors",
+        "QTSS_DETECTION_VALIDATOR_FQ_CORRECTION_MIN", 4, 2, 20,
+    ).await as usize;
+    let fq_classical = resolve_system_u64(
+        pool, "detection", "validator.family_guard.classical_min_anchors",
+        "QTSS_DETECTION_VALIDATOR_FQ_CLASSICAL_MIN", 3, 2, 20,
+    ).await as usize;
+    let fq_candle = resolve_system_u64(
+        pool, "detection", "validator.family_guard.candle_min_anchors",
+        "QTSS_DETECTION_VALIDATOR_FQ_CANDLE_MIN", 2, 1, 20,
+    ).await as usize;
+    let fq_gap = resolve_system_u64(
+        pool, "detection", "validator.family_guard.gap_min_anchors",
+        "QTSS_DETECTION_VALIDATOR_FQ_GAP_MIN", 2, 1, 20,
+    ).await as usize;
+    let fq_alt = resolve_system_f64(
+        pool, "detection", "validator.family_guard.elliott_alternation_enabled",
+        "QTSS_DETECTION_VALIDATOR_FQ_ELLIOTT_ALT", 1.0,
+    ).await >= 0.5;
+    let fq_weight = resolve_system_f64(
+        pool, "detection", "validator.family_guard.weight",
+        "QTSS_DETECTION_VALIDATOR_FQ_WEIGHT", 2.0,
+    ).await as f32;
+
     let mut cfg = ValidatorConfig::defaults();
     cfg.min_confidence = min_conf.clamp(0.0, 1.0);
     cfg.structural_weight = structural_weight.clamp(0.0, 1.0);
@@ -450,6 +485,10 @@ async fn build_validator(pool: &PgPool) -> anyhow::Result<Validator> {
     // the breakout-close channel so a clean retest meaningfully bumps
     // confidence on top of the initial break score.
     cfg.channel_weights.push(("retest_quality".into(), 1.0));
+    // Faz D — family quality guard weight tunable from system_config.
+    // Default 2.0 gives a violation (score=0.0) meaningful pull-down
+    // on blended confidence without making a single-channel veto.
+    cfg.channel_weights.push(("family_quality_guard".into(), fq_weight));
 
     let mut validator = Validator::new(cfg)
         .map_err(|e| anyhow::anyhow!("validator config invalid: {e}"))?;
@@ -472,6 +511,15 @@ async fn build_validator(pool: &PgPool) -> anyhow::Result<Validator> {
     validator.register(Arc::new(RetestQuality {
         tolerance_pct: retest_tol.clamp(0.0, 0.1),
         max_bars_after_breakout: retest_max_bars.max(1),
+    }));
+    validator.register(Arc::new(FamilyQualityGuard {
+        min_anchors_harmonic: fq_harmonic,
+        min_anchors_elliott_impulse: fq_impulse,
+        min_anchors_elliott_correction: fq_correction,
+        min_anchors_classical: fq_classical,
+        min_anchors_candle: fq_candle,
+        min_anchors_gap: fq_gap,
+        elliott_alternation_enabled: fq_alt,
     }));
     Ok(validator)
 }
