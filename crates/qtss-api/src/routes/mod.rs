@@ -27,6 +27,9 @@ mod system_config_admin;
 mod telegram_setup_analysis;
 mod user_permissions_admin;
 mod v2_ai_decisions;
+mod v2_live_positions;
+mod v2_position_events;
+mod v2_selected_candidates;
 mod v2_audit;
 mod v2_blotter;
 mod v2_chart;
@@ -56,6 +59,9 @@ mod v2_wave_tree;
 mod v2_wyckoff;
 
 pub use v2_ai_decisions::v2_ai_decisions_router;
+pub use v2_live_positions::v2_live_positions_router;
+pub use v2_position_events::v2_position_events_router;
+pub use v2_selected_candidates::v2_selected_candidates_router;
 pub use v2_audit::v2_audit_router;
 pub use v2_blotter::v2_blotter_router;
 pub use v2_chart::v2_chart_router;
@@ -148,6 +154,9 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_wyckoff_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_reconcile_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_blotter_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_live_positions_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_selected_candidates_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_position_events_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_strategies_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_strategies_admin_router().layer(from_fn(require_admin)))
         .merge(v2_config_router().layer(from_fn(require_dashboard_roles)))
