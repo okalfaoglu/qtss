@@ -43,6 +43,7 @@ pub mod allocator;
 pub mod liquidation_guard;
 pub mod live_position_store;
 pub mod ratchet;
+pub mod reconcile;
 pub mod scale_manager;
 pub mod selector;
 pub mod tick_dispatcher;
@@ -94,6 +95,10 @@ pub use selector::{
     MinAiScoreFilter, MinRiskRewardFilter, MinTierFilter, OpenPositionCapFilter, RankedOutcome,
     SegmentOverrides, SelectionOutcome, SelectorConfig, SelectorConfigOverride, SelectorFilter,
     SelectorRegistry, SetupCandidate,
+};
+pub use reconcile::{
+    diff as reconcile_diff, diff_with_ids as reconcile_diff_with_ids, BrokerPositionSnapshot,
+    ReconcileAction, ReconcileConfig, ReconcileSeverity,
 };
 pub use tick_dispatcher::{
     actionable_ids, evaluate_position as evaluate_position_tick, evaluate_tick,
