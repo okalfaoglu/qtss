@@ -53,6 +53,7 @@ pub mod digest;
 pub mod setup_lifecycle;
 pub mod liquidation_guard_events;
 pub mod live_positions;
+pub mod position_scale_events;
 pub mod selected_candidates;
 pub mod setup_broadcast_outbox;
 pub mod x_outbox;
@@ -91,6 +92,14 @@ pub use live_positions::{
     close as close_live_position, insert as insert_live_position,
     list_open as list_open_live_positions, update_mark as update_live_position_mark,
     InsertLivePosition, LivePositionRow,
+};
+pub use liquidation_guard_events::{
+    insert as insert_liquidation_guard_event, recent_for_position as recent_liquidation_events,
+    InsertLiquidationEvent, LiquidationGuardEventRow,
+};
+pub use position_scale_events::{
+    insert as insert_position_scale_event,
+    recent_for_position as recent_position_scale_events, InsertScaleEvent, PositionScaleEventRow,
 };
 pub use selected_candidates::{
     claim_pending as claim_selected_candidates, existing_setup_ids as existing_selected_setup_ids,

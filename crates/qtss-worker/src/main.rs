@@ -38,6 +38,7 @@ mod digest_loop;
 mod selector_loop;
 mod execution_bridge;
 mod trainer_cron;
+mod tick_dispatcher_loop;
 mod setup_publisher;
 mod range_signal_execute_loop;
 mod setup_scan_engine;
@@ -307,6 +308,15 @@ async fn main() -> anyhow::Result<()> {
         // Faz 9.8.12 — weekly trainer cron + AI sidecar health probe.
         let tr_pool = pool.clone();
         tokio::spawn(trainer_cron::trainer_cron_loop(tr_pool));
+        // Faz 9.8.14 — tick dispatcher: hydrates LivePositionStore from DB,
+        // polls PriceTickStore, runs evaluate_tick, persists outcomes.
+        let lp_store = std::sync::Arc::new(qtss_risk::LivePositionStore::new());
+        let td_pool = pool.clone();
+        tokio::spawn(tick_dispatcher_loop::tick_dispatcher_loop(
+            td_pool,
+            lp_store.clone(),
+            price_store.clone(),
+        ));
         let cg_pool = pool.clone();
         tokio::spawn(engines::external_coinglass_loop(cg_pool));
         let hl_pool = pool.clone();

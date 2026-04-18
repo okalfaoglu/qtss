@@ -205,4 +205,26 @@ impl LivePositionStore {
             .expect("live_position_store poisoned")
             .len()
     }
+
+    /// Snapshot of every `TickKey` currently registered. The tick
+    /// dispatcher loop iterates these to poll its price source.
+    pub fn tick_keys(&self) -> Vec<TickKey> {
+        self.by_tick
+            .read()
+            .expect("live_position_store poisoned")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    /// Snapshot of every open position id. Used by the dispatcher loop
+    /// to reconcile the store against the DB on periodic re-hydrate.
+    pub fn all_ids(&self) -> Vec<PositionId> {
+        self.by_id
+            .read()
+            .expect("live_position_store poisoned")
+            .keys()
+            .copied()
+            .collect()
+    }
 }
