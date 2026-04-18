@@ -27,14 +27,14 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use qtss_notify::PriceTickStore;
 use qtss_risk::{
-    evaluate_tick, ExecutionMode, LivePositionState, LivePositionStore, MarketSegment,
-    PositionSide, PositionTickOutcomes, RatchetKind, ScaleDecisionKind, TickContext,
-    TickDispatcherConfig, TpLeg,
+    evaluate_tick, ExecutionMode, LiquidationAction, LivePositionState, LivePositionStore,
+    MarketSegment, PositionSide, PositionTickOutcomes, RatchetKind, ScaleDecisionKind,
+    TickContext, TickDispatcherConfig, TpLeg,
 };
 use qtss_storage::{
-    insert_liquidation_guard_event, insert_position_scale_event, list_open_live_positions,
-    resolve_system_u64, resolve_worker_enabled_flag, update_live_position_mark,
-    InsertLiquidationEvent, InsertScaleEvent, LivePositionRow,
+    close_live_position, insert_liquidation_guard_event, insert_position_scale_event,
+    list_open_live_positions, resolve_system_u64, resolve_worker_enabled_flag,
+    update_live_position_mark, InsertLiquidationEvent, InsertScaleEvent, LivePositionRow,
 };
 use rust_decimal::Decimal;
 use serde_json::json;
@@ -114,12 +114,86 @@ async fn run_sweep(
                 warn!(id = %pos.position_id, error = %e, "update_live_position_mark");
             }
             if !pos.has_action() {
+                // Even with no guard action, check SL cross — the guard
+                // fires only for liquidation/ratchet/tp/scale; a naive
+                // SL breach on the current mark is *our* job to detect.
+                if let Some(reason) = sl_close_reason(store, pos.position_id, mid) {
+                    close_position(pool, store, pos.position_id, reason, mid).await;
+                }
                 continue;
             }
             persist_outcome(pool, pos, mid, tick.received_at).await;
+
+            // Faz 9.8.19 — decide whether this tick closes the position.
+            if let Some(reason) = close_reason_for(pos, store, mid) {
+                close_position(pool, store, pos.position_id, reason, mid).await;
+            }
         }
     }
     Ok(())
+}
+
+/// Faz 9.8.19 — did this position just hit a terminal condition?
+///
+/// Priority: liquidation panic > SL breach > all TPs filled. Anything
+/// else (ratchet, partial TP, scale) keeps the position open.
+fn close_reason_for(
+    pos: &PositionTickOutcomes,
+    store: &LivePositionStore,
+    mark: Decimal,
+) -> Option<&'static str> {
+    if let Some(liq) = &pos.liquidation {
+        if matches!(liq.action, LiquidationAction::PanicClose) {
+            return Some("liquidation_panic");
+        }
+    }
+    if let Some(reason) = sl_close_reason(store, pos.position_id, mark) {
+        return Some(reason);
+    }
+    // Full-ladder TP completion: qty_remaining after the partials on
+    // this tick would be zero. evaluate_tick already mutated the store
+    // (tp_triggers subtracted), so read the fresh state and check.
+    if let Some(state) = store.get(pos.position_id) {
+        if state.qty_remaining <= Decimal::ZERO && state.qty_filled > Decimal::ZERO {
+            return Some("tp_complete");
+        }
+    }
+    None
+}
+
+/// Detect an SL breach based on the current stop price and mark.
+/// `None` if no SL, or the mark hasn't crossed yet.
+fn sl_close_reason(
+    store: &LivePositionStore,
+    id: uuid::Uuid,
+    mark: Decimal,
+) -> Option<&'static str> {
+    let state = store.get(id)?;
+    let sl = state.current_sl?;
+    let breached = match state.side {
+        PositionSide::Buy => mark <= sl,
+        PositionSide::Sell => mark >= sl,
+    };
+    breached.then_some("sl_hit")
+}
+
+/// Persist closure + evict from store so no future tick processes it.
+/// Realized PnL is left NULL — a follow-up phase wires the PnL engine
+/// off position_scale_events; this phase's job is the terminal state.
+async fn close_position(
+    pool: &PgPool,
+    store: &LivePositionStore,
+    id: uuid::Uuid,
+    reason: &str,
+    mark: Decimal,
+) {
+    match close_live_position(pool, id, reason, None).await {
+        Ok(()) => {
+            info!(position = %id, %reason, mark = %mark, "position closed");
+            store.remove(id);
+        }
+        Err(e) => warn!(position = %id, error = %e, "close_live_position"),
+    }
 }
 
 async fn persist_outcome(
