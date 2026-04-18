@@ -72,6 +72,7 @@ const SUCCESSORS: &[(&str, Successor)] = &[
     ("triangle_contracting",    succeed_triangle),
     ("triangle_expanding",      succeed_triangle),
     ("triangle_barrier",        succeed_triangle),
+    ("triangle_running",        succeed_triangle),
     // Diagonals
     ("leading_diagonal_5_3_5",  succeed_leading_diagonal),
     ("ending_diagonal_3_3_3",   succeed_ending_diagonal),

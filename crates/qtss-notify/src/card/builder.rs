@@ -359,6 +359,9 @@ fn pretty_subkind(raw: &str) -> String {
         ("tri_star_bear_bear", "Tri-Star (Bear)"),
         ("rising_three_methods_bull", "Rising Three Methods"),
         ("falling_three_methods_bear", "Falling Three Methods"),
+        // Faz 10 Aşama 4 — Elliott running triangle.
+        ("triangle_running_bull", "Triangle (Running, Bull)"),
+        ("triangle_running_bear", "Triangle (Running, Bear)"),
     ];
     for (k, v) in EXACT {
         if *k == s {

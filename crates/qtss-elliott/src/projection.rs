@@ -59,6 +59,7 @@ const PROJECTORS: &[(&str, Projector)] = &[
     ("triangle_contracting", project_triangle),
     ("triangle_expanding", project_triangle),
     ("triangle_barrier", project_triangle),
+    ("triangle_running", project_triangle),
     ("leading_diagonal_5_3_5", project_leading_diagonal),
     ("ending_diagonal_3_3_3", project_ending_diagonal),
 ];

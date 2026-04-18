@@ -64,6 +64,23 @@ fn is_expanding(top_ratio: f64, bot_ratio: f64) -> bool {
     top_ratio > 1.0 && bot_ratio > 1.0
 }
 
+/// Running triangle check: E overshoots C in C's direction. For a
+/// bear-direction triangle (first leg down), C is a low (raw[3]) and
+/// E (raw[5]) is also a low — E < C means the final low penetrated
+/// further than the intermediate low. Mirror for bull-direction.
+fn is_running(raw: &[f64], first_leg: f64) -> bool {
+    if raw.len() < 6 {
+        return false;
+    }
+    let c = raw[3];
+    let e = raw[5];
+    if first_leg < 0.0 {
+        e < c
+    } else {
+        e > c
+    }
+}
+
 fn is_barrier(top_ratio: f64, bot_ratio: f64) -> bool {
     let top_flat = (top_ratio - 1.0).abs() < BARRIER_FLAT_TOL;
     let bot_flat = (bot_ratio - 1.0).abs() < BARRIER_FLAT_TOL;
@@ -123,7 +140,17 @@ impl FormationDetector for TriangleDetector {
             let subtype = SUBTYPES
                 .iter()
                 .find_map(|(label, pred)| pred(top_ratio, bot_ratio).then_some(*label));
-            let Some(subtype) = subtype else { continue; };
+            let Some(mut subtype) = subtype else { continue; };
+
+            // "Running" variant: a contracting triangle whose wave E
+            // penetrates past wave C's extreme — the price breaks the
+            // contraction envelope at the very end. Prechter treats it
+            // as a distinct sub-type because its thrust projection is
+            // more aggressive. We only promote contracting → running;
+            // expanding/barrier keep their base label.
+            if subtype == "contracting" && is_running(&raw, first_leg) {
+                subtype = "running";
+            }
 
             let s_top = nearest_fib_score(top_ratio, &[0.618, 1.0, 1.618]);
             let s_bot = nearest_fib_score(bot_ratio, &[0.618, 1.0, 1.618]);
