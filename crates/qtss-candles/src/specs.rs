@@ -56,6 +56,18 @@ pub static CANDLE_SPECS: &[CandleSpec] = &[
     CandleSpec { name: "shooting_star",       bars_needed: 1, eval: eval_shooting_star },
     CandleSpec { name: "marubozu",            bars_needed: 1, eval: eval_marubozu },
     CandleSpec { name: "spinning_top",        bars_needed: 1, eval: eval_spinning_top },
+    // 2-bar bearish continuations (Faz 10 — neck family, weaker than dark_cloud)
+    CandleSpec { name: "on_neck",             bars_needed: 2, eval: eval_on_neck },
+    CandleSpec { name: "in_neck",             bars_needed: 2, eval: eval_in_neck },
+    CandleSpec { name: "thrusting_line",      bars_needed: 2, eval: eval_thrusting_line },
+    // 3-bar reversals with gaps (Faz 10 — abandoned baby, tri-star)
+    CandleSpec { name: "abandoned_baby_bull", bars_needed: 3, eval: eval_abandoned_baby_bull },
+    CandleSpec { name: "abandoned_baby_bear", bars_needed: 3, eval: eval_abandoned_baby_bear },
+    CandleSpec { name: "tri_star_bull",       bars_needed: 3, eval: eval_tri_star_bull },
+    CandleSpec { name: "tri_star_bear",       bars_needed: 3, eval: eval_tri_star_bear },
+    // 5-bar continuations (Faz 10 — three methods)
+    CandleSpec { name: "rising_three_methods", bars_needed: 5, eval: eval_rising_three_methods },
+    CandleSpec { name: "falling_three_methods", bars_needed: 5, eval: eval_falling_three_methods },
 ];
 
 // ---------------------------------------------------------------------------
@@ -650,4 +662,292 @@ fn eval_three_outside_down(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMat
         return None;
     }
     Some(CandleMatch { score: 0.85, variant: "bear", start_idx: bars.len() - 3, end_idx: bars.len() - 1 })
+}
+
+// ---------------------------------------------------------------------------
+// Faz 10 — neck family (2-bar bearish continuation)
+//
+// Shared geometry: prior bar is a big bear, current bar is a small bull
+// that gaps down to open below prev.low then closes *back inside* prev
+// body to varying depths:
+//   * on_neck        → close ≈ prev.low            (weakest bounce)
+//   * in_neck        → close just *into* prev body (≤ ~5%)
+//   * thrusting_line → close further in but below mid-body (piercing
+//                     above 50% would be piercing_line instead)
+// All three suggest the downtrend is intact — buyers couldn't reclaim
+// mid-body. Needs a prior downtrend context (reversal pattern family).
+// ---------------------------------------------------------------------------
+
+fn eval_on_neck(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let (a, b) = last_two(bars)?;
+    if !a.is_bear() || !b.is_bull() {
+        return None;
+    }
+    if b.open >= a.low {
+        return None;
+    }
+    // Close within `tweezer_price_tol` of prev.low — riding the neck.
+    if !pct_eq(b.close, a.low, cfg.tweezer_price_tol.max(0.005)) {
+        return None;
+    }
+    if !has_prior_downtrend(bars, bars.len() - 1, cfg) {
+        return None;
+    }
+    Some(CandleMatch {
+        score: 0.65,
+        variant: "bear",
+        start_idx: bars.len() - 2,
+        end_idx: bars.len() - 1,
+    })
+}
+
+fn eval_in_neck(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let (a, b) = last_two(bars)?;
+    if !a.is_bear() || !b.is_bull() {
+        return None;
+    }
+    if b.open >= a.low {
+        return None;
+    }
+    // Close just inside prev body: slightly above prev.close, well
+    // below mid. Upper bound ~5% into body; lower bound = prev.close.
+    let prev_close = a.close;
+    let body = (a.open - a.close).abs().max(f64::EPSILON);
+    let top_limit = prev_close + body * 0.05;
+    if b.close <= prev_close || b.close > top_limit {
+        return None;
+    }
+    if !has_prior_downtrend(bars, bars.len() - 1, cfg) {
+        return None;
+    }
+    Some(CandleMatch {
+        score: 0.7,
+        variant: "bear",
+        start_idx: bars.len() - 2,
+        end_idx: bars.len() - 1,
+    })
+}
+
+fn eval_thrusting_line(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let (a, b) = last_two(bars)?;
+    if !a.is_bear() || !b.is_bull() {
+        return None;
+    }
+    if b.open >= a.low {
+        return None;
+    }
+    // Close between prev body mid-point and upper boundary of "in_neck"
+    // zone. Deeper than in_neck but shallower than piercing_line (which
+    // demands close > mid).
+    let prev_close = a.close;
+    let body = (a.open - a.close).abs().max(f64::EPSILON);
+    let lower = prev_close + body * 0.05;
+    let mid = (a.open + a.close) * 0.5;
+    if b.close <= lower || b.close >= mid {
+        return None;
+    }
+    if !has_prior_downtrend(bars, bars.len() - 1, cfg) {
+        return None;
+    }
+    Some(CandleMatch {
+        score: 0.72,
+        variant: "bear",
+        start_idx: bars.len() - 2,
+        end_idx: bars.len() - 1,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Faz 10 — abandoned baby (3-bar gap reversal)
+//
+// Classic rare reversal: trend bar, gap-isolated doji (island), trend
+// bar the other way. Distinguishes itself from morning/evening star by
+// demanding true gaps on both sides of the doji — the middle bar shares
+// no price with either neighbor.
+// ---------------------------------------------------------------------------
+
+fn eval_abandoned_baby_bull(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let (a, b, c) = last_three(bars)?;
+    if !a.is_bear() || !c.is_bull() {
+        return None;
+    }
+    if b.body_ratio() > cfg.doji_body_ratio_max {
+        return None;
+    }
+    // Gap-down on b, gap-up on c (no wick overlap).
+    if b.high >= a.low || c.low <= b.high {
+        return None;
+    }
+    if !has_prior_downtrend(bars, bars.len() - 2, cfg) {
+        return None;
+    }
+    Some(CandleMatch {
+        score: 0.92,
+        variant: "bull",
+        start_idx: bars.len() - 3,
+        end_idx: bars.len() - 1,
+    })
+}
+
+fn eval_abandoned_baby_bear(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let (a, b, c) = last_three(bars)?;
+    if !a.is_bull() || !c.is_bear() {
+        return None;
+    }
+    if b.body_ratio() > cfg.doji_body_ratio_max {
+        return None;
+    }
+    if b.low <= a.high || c.high >= b.low {
+        return None;
+    }
+    if !has_prior_uptrend(bars, bars.len() - 2, cfg) {
+        return None;
+    }
+    Some(CandleMatch {
+        score: 0.92,
+        variant: "bear",
+        start_idx: bars.len() - 3,
+        end_idx: bars.len() - 1,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Faz 10 — tri-star (3 dojis at extreme)
+//
+// Three consecutive doji bars at trend exhaustion. Directional bias
+// comes from the gap between dojis 2 and 3 (away from prior trend).
+// Low-frequency but high-weight reversal signal.
+// ---------------------------------------------------------------------------
+
+fn eval_tri_star_bull(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let (a, b, c) = last_three(bars)?;
+    let all_doji = a.body_ratio() <= cfg.doji_body_ratio_max
+        && b.body_ratio() <= cfg.doji_body_ratio_max
+        && c.body_ratio() <= cfg.doji_body_ratio_max;
+    if !all_doji {
+        return None;
+    }
+    // Middle doji gapped down, third gapped up — bullish reversal.
+    if b.high >= a.low || c.low <= b.high {
+        return None;
+    }
+    if !has_prior_downtrend(bars, bars.len() - 2, cfg) {
+        return None;
+    }
+    Some(CandleMatch {
+        score: 0.88,
+        variant: "bull",
+        start_idx: bars.len() - 3,
+        end_idx: bars.len() - 1,
+    })
+}
+
+fn eval_tri_star_bear(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let (a, b, c) = last_three(bars)?;
+    let all_doji = a.body_ratio() <= cfg.doji_body_ratio_max
+        && b.body_ratio() <= cfg.doji_body_ratio_max
+        && c.body_ratio() <= cfg.doji_body_ratio_max;
+    if !all_doji {
+        return None;
+    }
+    if b.low <= a.high || c.high >= b.low {
+        return None;
+    }
+    if !has_prior_uptrend(bars, bars.len() - 2, cfg) {
+        return None;
+    }
+    Some(CandleMatch {
+        score: 0.88,
+        variant: "bear",
+        start_idx: bars.len() - 3,
+        end_idx: bars.len() - 1,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Faz 10 — rising / falling three methods (5-bar continuations)
+//
+// Geometry:
+//   bar 1: strong trend bar (big body in trend direction)
+//   bars 2-4: three small counter-trend bars contained inside bar 1's range
+//   bar 5: strong trend bar closing beyond bar 1's close
+// The three pullback bars never close outside bar 1, confirming the
+// trend absorbed the rest attempt. Prior-trend guard keeps it honest.
+// ---------------------------------------------------------------------------
+
+fn last_five(bars: &[Bar]) -> Option<[Geom; 5]> {
+    if bars.len() < 5 {
+        return None;
+    }
+    let n = bars.len();
+    Some([
+        Geom::from(&bars[n - 5]),
+        Geom::from(&bars[n - 4]),
+        Geom::from(&bars[n - 3]),
+        Geom::from(&bars[n - 2]),
+        Geom::from(&bars[n - 1]),
+    ])
+}
+
+fn eval_rising_three_methods(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let g = last_five(bars)?;
+    let [b1, b2, b3, b4, b5] = g;
+    if !b1.is_bull() || !b5.is_bull() {
+        return None;
+    }
+    if b1.body_ratio() < 0.5 || b5.body_ratio() < 0.5 {
+        return None;
+    }
+    // Three middle bars: small bodies, contained inside b1's high/low.
+    for m in [&b2, &b3, &b4] {
+        if m.high > b1.high || m.low < b1.low {
+            return None;
+        }
+        if m.body_ratio() > cfg.spinning_top_body_ratio_max {
+            return None;
+        }
+    }
+    if b5.close <= b1.close {
+        return None;
+    }
+    if !has_prior_uptrend(bars, bars.len() - 4, cfg) {
+        return None;
+    }
+    Some(CandleMatch {
+        score: 0.86,
+        variant: "bull",
+        start_idx: bars.len() - 5,
+        end_idx: bars.len() - 1,
+    })
+}
+
+fn eval_falling_three_methods(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let g = last_five(bars)?;
+    let [b1, b2, b3, b4, b5] = g;
+    if !b1.is_bear() || !b5.is_bear() {
+        return None;
+    }
+    if b1.body_ratio() < 0.5 || b5.body_ratio() < 0.5 {
+        return None;
+    }
+    for m in [&b2, &b3, &b4] {
+        if m.high > b1.high || m.low < b1.low {
+            return None;
+        }
+        if m.body_ratio() > cfg.spinning_top_body_ratio_max {
+            return None;
+        }
+    }
+    if b5.close >= b1.close {
+        return None;
+    }
+    if !has_prior_downtrend(bars, bars.len() - 4, cfg) {
+        return None;
+    }
+    Some(CandleMatch {
+        score: 0.86,
+        variant: "bear",
+        start_idx: bars.len() - 5,
+        end_idx: bars.len() - 1,
+    })
 }

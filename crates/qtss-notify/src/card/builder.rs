@@ -349,6 +349,16 @@ fn pretty_subkind(raw: &str) -> String {
         // Faz 10 Aşama 4 — Scallop.
         ("scallop_bullish_bull", "Scallop (Bull)"),
         ("scallop_bearish_bear", "Scallop (Bear)"),
+        // Faz 10 Aşama 3 — neck family, abandoned baby, tri-star, three methods.
+        ("on_neck_bear", "On-Neck Line (Bear)"),
+        ("in_neck_bear", "In-Neck Line (Bear)"),
+        ("thrusting_line_bear", "Thrusting Line (Bear)"),
+        ("abandoned_baby_bull_bull", "Abandoned Baby (Bull)"),
+        ("abandoned_baby_bear_bear", "Abandoned Baby (Bear)"),
+        ("tri_star_bull_bull", "Tri-Star (Bull)"),
+        ("tri_star_bear_bear", "Tri-Star (Bear)"),
+        ("rising_three_methods_bull", "Rising Three Methods"),
+        ("falling_three_methods_bear", "Falling Three Methods"),
     ];
     for (k, v) in EXACT {
         if *k == s {

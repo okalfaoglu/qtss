@@ -42,6 +42,16 @@ const CANDLE_TABLE: &[(&str, f64)] = &[
     ("shooting_star", 4.0),
     ("marubozu", 5.0),
     ("spinning_top", 6.0),
+    // Faz 10 additions — keep ordinals contiguous within family bucket.
+    ("on_neck", 26.0),
+    ("in_neck", 27.0),
+    ("thrusting_line", 28.0),
+    ("abandoned_baby_bull", 38.0),
+    ("abandoned_baby_bear", 39.0),
+    ("tri_star_bull", 40.0),
+    ("tri_star_bear", 41.0),
+    ("rising_three_methods", 50.0),
+    ("falling_three_methods", 51.0),
 ];
 
 #[async_trait]
