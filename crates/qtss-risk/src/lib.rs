@@ -79,7 +79,11 @@ pub use live_position_store::{
     ExecutionMode, LivePositionState, LivePositionStore, MarketSegment, PositionId, PositionSide,
     TickKey, TpLeg,
 };
-pub use ratchet::{tighten_only, RatchetDecision, RatchetKind};
+pub use ratchet::{
+    evaluate_with_context as evaluate_ratchet_with_context, tighten_only, BreakevenPolicy,
+    ChandelierPolicy, RatchetConfig, RatchetDecision, RatchetKind, RatchetPolicy, RatchetRegistry,
+    TrailingAtrPolicy,
+};
 pub use scale_manager::{
     evaluate_with_context as evaluate_scale_with_context, unrealised_r, AddOnDipRule,
     PyramidInRule, ScaleContext, ScaleDecision, ScaleDecisionKind, ScaleManagerConfig, ScaleOutRule,
@@ -95,4 +99,7 @@ pub use tick_dispatcher::{
     actionable_ids, evaluate_position as evaluate_position_tick, evaluate_tick,
     PositionTickOutcomes, TickContext, TickDispatcherConfig, TickOutcomes,
 };
-pub use tp_engine::TpTrigger;
+pub use tp_engine::{
+    evaluate as evaluate_tp, record_partial_fill as record_tp_partial_fill,
+    remaining_qty as tp_remaining_qty, trail_last_leg as trail_last_tp_leg, TpTrigger,
+};
