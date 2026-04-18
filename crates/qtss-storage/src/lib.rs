@@ -76,8 +76,9 @@ pub use v2_correlation_groups::{
     count_open_setups_in_group, list_groups_for_symbol, CorrelationGroupRow,
 };
 pub use setup_lifecycle::{
-    apply_ratchet_update, close_setup, insert_health_snapshot, insert_lifecycle_event,
-    list_lifecycle_events_for_setup, list_watcher_rows, mark_entry_touched, set_tp_hit_bit,
+    apply_ratchet_update, apply_trail_advance, apply_trail_enable, close_setup,
+    insert_health_snapshot, insert_lifecycle_event, list_lifecycle_events_for_setup,
+    list_watcher_rows, mark_ai_advised, mark_entry_touched, set_tp_hit_bit,
     HealthSnapshotInsert, LifecycleEventInsert, LifecycleEventRow, RatchetUpdate, SetupCloseUpdate,
     WatcherSetupRow,
 };

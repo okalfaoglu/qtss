@@ -40,9 +40,11 @@ pub use poz_koruma::{
 };
 pub use price_tick::{PriceKey, PriceTick, PriceTickStore};
 pub use smart_target::{
-    decide as decide_smart_target, load_config as load_smart_target_config, rule_evaluate,
-    DefaultLlmJudge, LlmJudge, SmartTargetAction, SmartTargetCfg, SmartTargetDecision,
-    SmartTargetEvaluatorKind, SmartTargetInput,
+    decide as decide_smart_target, decide_on_approach,
+    load_approach_config, load_config as load_smart_target_config,
+    rule_evaluate, rule_evaluate_approach, ApproachCfg, DefaultLlmJudge, LlmJudge,
+    SmartTargetAction, SmartTargetCfg, SmartTargetDecision, SmartTargetEvaluatorKind,
+    SmartTargetInput,
 };
 pub use dispatch::NotificationDispatcher;
 pub use error::{NotifyError, NotifyResult};

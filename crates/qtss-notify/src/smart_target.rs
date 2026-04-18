@@ -41,6 +41,10 @@ pub enum SmartTargetAction {
     /// Move SL tighter (entry or current price minus buffer). No
     /// partial taken.
     Tighten,
+    /// Activate trailing-stop mode: cancel the TP bracket and let the
+    /// position ride while advancing SL on every new extreme. Used at
+    /// TP-approach, not at TP-hit.
+    Trail,
 }
 
 impl SmartTargetAction {
@@ -50,6 +54,7 @@ impl SmartTargetAction {
             Self::Scale => "scale",
             Self::Exit => "exit",
             Self::Tighten => "tighten",
+            Self::Trail => "trail",
         }
     }
 }
@@ -90,6 +95,29 @@ pub struct SmartTargetCfg {
 
 impl SmartTargetCfg {
     pub const FALLBACK: Self = Self { rule_below: 50.0, llm_below: 30.0 };
+}
+
+/// TP-approach / trailing-stop config. Loaded alongside [`SmartTargetCfg`].
+#[derive(Debug, Clone, Copy)]
+pub struct ApproachCfg {
+    pub enabled: bool,
+    /// Fraction of the TP price — price within this band (`|tp - px| / tp`)
+    /// counts as "approaching TP".
+    pub approach_pct: f64,
+    /// Trailing SL = anchor * (1 ± trail_buffer_pct). Monotonic ratchet.
+    pub trail_buffer_pct: f64,
+    /// If true, only the last TP can flip to Trail (earlier TPs still
+    /// follow Ride/Scale/Tighten). Matches "son hedefe kadar götür" akışı.
+    pub trail_on_last_tp_only: bool,
+}
+
+impl ApproachCfg {
+    pub const FALLBACK: Self = Self {
+        enabled: true,
+        approach_pct: 0.003,
+        trail_buffer_pct: 0.008,
+        trail_on_last_tp_only: true,
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -196,6 +224,86 @@ pub async fn decide<J: LlmJudge + ?Sized>(
         },
         SmartTargetEvaluatorKind::DefaultRide,
     )
+}
+
+/// Approach-specific rule table. Differs from [`rule_evaluate`] on one
+/// axis: at the last TP with Healthy band, we recommend **Trail** so the
+/// position can keep running while an ATR-style stop climbs behind it.
+/// Other bands still map to the conservative defaults.
+pub fn rule_evaluate_approach(input: &SmartTargetInput, cfg: &ApproachCfg) -> SmartTargetDecision {
+    let is_last_tp = input.tp_index >= input.total_tps;
+    // Trail only makes sense with a clearly healthy position and a
+    // last-TP approach (or always-on if operator disabled the gate).
+    let trail_eligible = match input.health.band {
+        HealthBand::Healthy => !cfg.trail_on_last_tp_only || is_last_tp,
+        _ => false,
+    };
+    if trail_eligible {
+        return SmartTargetDecision {
+            action: SmartTargetAction::Trail,
+            confidence: 0.75,
+            reasoning: if is_last_tp {
+                "Son hedef yakın, sağlık güçlü — trailing stop'a geç."
+            } else {
+                "Hedefe yaklaşıldı, trend güçlü — trailing stop aktif."
+            }
+            .to_string(),
+        };
+    }
+    // Other bands fall through to the existing (hit-time) rule table.
+    rule_evaluate(input)
+}
+
+/// Approach dispatcher. Same evaluator-pick rules as [`decide`] but
+/// the rule/LLM branches call the *approach* variant so Trail becomes
+/// reachable.
+pub async fn decide_on_approach<J: LlmJudge + ?Sized>(
+    input: &SmartTargetInput,
+    cfg: &SmartTargetCfg,
+    acfg: &ApproachCfg,
+    llm: &J,
+) -> (SmartTargetDecision, SmartTargetEvaluatorKind) {
+    let h = input.health.total;
+    if h < cfg.llm_below {
+        // LLM stub falls back to rule_evaluate (hit-time) — callers
+        // that want Trail must either short-circuit here or wait for
+        // a real judge impl. Tag reasoning so operators see it.
+        let mut d = llm.evaluate(input).await;
+        if !matches!(d.action, SmartTargetAction::Trail) {
+            d.reasoning = format!("{} (approach)", d.reasoning);
+        }
+        return (d, SmartTargetEvaluatorKind::Llm);
+    }
+    if h < cfg.rule_below {
+        return (rule_evaluate_approach(input, acfg), SmartTargetEvaluatorKind::Rule);
+    }
+    // Healthy band → use the approach rule directly (Trail on last TP,
+    // Ride otherwise). This replaces the naive "default ride" so the
+    // approach path can surface Trail without an LLM roundtrip.
+    let d = rule_evaluate_approach(input, acfg);
+    (d, SmartTargetEvaluatorKind::DefaultRide)
+}
+
+pub async fn load_approach_config(pool: &PgPool) -> ApproachCfg {
+    let f = ApproachCfg::FALLBACK;
+    ApproachCfg {
+        enabled: qtss_storage::resolve_worker_enabled_flag(
+            pool, MODULE, "smart_target.approach_enabled",
+            "QTSS_SMART_TARGET_APPROACH_ENABLED", f.enabled,
+        ).await,
+        approach_pct: qtss_storage::resolve_system_f64(
+            pool, MODULE, "smart_target.tp_approach_pct",
+            "QTSS_SMART_TARGET_TP_APPROACH_PCT", f.approach_pct,
+        ).await,
+        trail_buffer_pct: qtss_storage::resolve_system_f64(
+            pool, MODULE, "smart_target.trail_buffer_pct",
+            "QTSS_SMART_TARGET_TRAIL_BUFFER_PCT", f.trail_buffer_pct,
+        ).await,
+        trail_on_last_tp_only: qtss_storage::resolve_worker_enabled_flag(
+            pool, MODULE, "smart_target.trail_on_last_tp_only",
+            "QTSS_SMART_TARGET_TRAIL_LAST_ONLY", f.trail_on_last_tp_only,
+        ).await,
+    }
 }
 
 pub async fn load_config(pool: &PgPool) -> SmartTargetCfg {

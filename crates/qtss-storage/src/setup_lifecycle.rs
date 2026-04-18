@@ -70,6 +70,11 @@ pub struct WatcherSetupRow {
     pub ratchet_reference_price: Option<Decimal>,
     pub ratchet_cumulative_pct: Option<Decimal>,
     pub ratchet_last_update_at: Option<DateTime<Utc>>,
+    // Faz 9.7.5 — TP-approach AI advisory + trailing stop.
+    pub trail_mode: bool,
+    pub trail_anchor: Option<Decimal>,
+    pub ai_advised_tp_idx: Option<i16>,
+    pub ai_advised_at: Option<DateTime<Utc>>,
 }
 
 pub async fn list_watcher_rows(
@@ -79,7 +84,8 @@ pub async fn list_watcher_rows(
         r#"SELECT id, created_at, venue_class, exchange, symbol, direction,
                   entry_price, entry_sl, koruma, current_sl, raw_meta,
                   entry_touched_at, tp_hits_bitmap,
-                  ratchet_reference_price, ratchet_cumulative_pct, ratchet_last_update_at
+                  ratchet_reference_price, ratchet_cumulative_pct, ratchet_last_update_at,
+                  trail_mode, trail_anchor, ai_advised_tp_idx, ai_advised_at
              FROM qtss_setups
             WHERE state IN ('armed','active') AND closed_at IS NULL"#,
     )
@@ -280,6 +286,87 @@ pub async fn apply_ratchet_update(
     .bind(u.ratchet_reference_price)
     .bind(u.ratchet_cumulative_pct)
     .bind(u.ratchet_last_update_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Enable trailing stop mode on a setup. Sets the anchor (current
+/// extreme price used as the trail pivot) and tightens `current_sl`
+/// to the initial trail-stop price. Also tags which TP triggered the
+/// advisory so the watcher doesn't re-ask the AI for the same level.
+pub async fn apply_trail_enable(
+    pool: &PgPool,
+    setup_id: Uuid,
+    anchor: Decimal,
+    new_sl: Decimal,
+    tp_idx: i16,
+    at: DateTime<Utc>,
+) -> Result<(), StorageError> {
+    sqlx::query(
+        r#"UPDATE qtss_setups SET
+              trail_mode        = TRUE,
+              trail_anchor      = $2,
+              current_sl        = $3,
+              koruma            = $3::numeric::real,
+              ai_advised_tp_idx = $4,
+              ai_advised_at     = $5,
+              updated_at        = NOW()
+           WHERE id = $1"#,
+    )
+    .bind(setup_id)
+    .bind(anchor)
+    .bind(new_sl)
+    .bind(tp_idx)
+    .bind(at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Advance the trail: new extreme → new anchor + tightened SL.
+/// Monotonic: caller must guarantee the SL only moves in the
+/// favourable direction (for LONG: up, for SHORT: down).
+pub async fn apply_trail_advance(
+    pool: &PgPool,
+    setup_id: Uuid,
+    new_anchor: Decimal,
+    new_sl: Decimal,
+) -> Result<(), StorageError> {
+    sqlx::query(
+        r#"UPDATE qtss_setups SET
+              trail_anchor = $2,
+              current_sl   = $3,
+              koruma       = $3::numeric::real,
+              updated_at   = NOW()
+           WHERE id = $1"#,
+    )
+    .bind(setup_id)
+    .bind(new_anchor)
+    .bind(new_sl)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Record that the AI has been consulted for a given TP level so the
+/// watcher debounces further calls for the same TP.
+pub async fn mark_ai_advised(
+    pool: &PgPool,
+    setup_id: Uuid,
+    tp_idx: i16,
+    at: DateTime<Utc>,
+) -> Result<(), StorageError> {
+    sqlx::query(
+        r#"UPDATE qtss_setups SET
+              ai_advised_tp_idx = $2,
+              ai_advised_at     = $3,
+              updated_at        = NOW()
+           WHERE id = $1"#,
+    )
+    .bind(setup_id)
+    .bind(tp_idx)
+    .bind(at)
     .execute(pool)
     .await?;
     Ok(())

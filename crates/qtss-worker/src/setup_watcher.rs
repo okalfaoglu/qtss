@@ -24,18 +24,18 @@ use std::time::Duration;
 
 use chrono::Utc;
 use qtss_notify::{
-    compute_health, decide_smart_target, detect_transitions, evaluate_poz_koruma,
-    load_health_bands, load_health_weights, load_poz_koruma_config, load_smart_target_config,
-    make_context, promote_tp_hit, DbPersistHandler, DefaultLlmJudge, HealthBand,
-    NotificationDispatcher, TelegramLifecycleHandler, XOutboxHandler,
-    HealthComponents, HealthScore, LifecycleDecision, LifecycleEventKind,
-    LifecycleRouter, PriceTickStore, RatchetInput, RatchetOutcome, SetupDirection,
-    SmartTargetAction, SmartTargetInput, WatcherSetupState,
+    compute_health, decide_on_approach, decide_smart_target, detect_transitions,
+    evaluate_poz_koruma, load_approach_config, load_health_bands, load_health_weights,
+    load_poz_koruma_config, load_smart_target_config, make_context, promote_tp_hit, ApproachCfg,
+    DbPersistHandler, DefaultLlmJudge, HealthBand, NotificationDispatcher,
+    TelegramLifecycleHandler, XOutboxHandler, HealthComponents, HealthScore, LifecycleDecision,
+    LifecycleEventKind, LifecycleRouter, PriceTickStore, RatchetInput, RatchetOutcome,
+    SetupDirection, SmartTargetAction, SmartTargetInput, WatcherSetupState,
 };
 use qtss_storage::{
-    apply_ratchet_update, insert_health_snapshot, list_watcher_rows,
-    resolve_worker_enabled_flag, resolve_worker_tick_secs, HealthSnapshotInsert, RatchetUpdate,
-    WatcherSetupRow,
+    apply_ratchet_update, apply_trail_advance, apply_trail_enable, insert_health_snapshot,
+    list_watcher_rows, mark_ai_advised, resolve_worker_enabled_flag, resolve_worker_tick_secs,
+    HealthSnapshotInsert, RatchetUpdate, WatcherSetupRow,
 };
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
@@ -131,7 +131,179 @@ fn action_to_kind(action: SmartTargetAction) -> LifecycleEventKind {
         SmartTargetAction::Ride => LifecycleEventKind::TpHit,
         SmartTargetAction::Scale => LifecycleEventKind::TpPartial,
         SmartTargetAction::Exit => LifecycleEventKind::TpFinal,
-        SmartTargetAction::Tighten => LifecycleEventKind::SlRatcheted,
+        // Trail = new SL regime; reuse the ratchet event kind.
+        SmartTargetAction::Tighten | SmartTargetAction::Trail => LifecycleEventKind::SlRatcheted,
+    }
+}
+
+/// Returns Some(tp_idx) (1-based) if price is within `approach_pct`
+/// of an *unhit* TP on the favourable side, else None. Scans TPs in
+/// order so the closest un-touched target wins.
+fn approaching_tp(
+    state: &WatcherSetupState,
+    price: Decimal,
+    approach_pct: f64,
+) -> Option<u8> {
+    let px = price.to_f64().unwrap_or(0.0);
+    for (i, tp) in state.tp_prices.iter().enumerate() {
+        let Some(tp_price) = tp else { continue };
+        let idx = (i as u8) + 1;
+        let bit = 1u8 << (idx - 1);
+        if state.tp_hits_bitmap & bit != 0 {
+            continue; // already hit
+        }
+        let tp_f = tp_price.to_f64().unwrap_or(0.0);
+        if tp_f <= 0.0 {
+            continue;
+        }
+        let dist = (tp_f - px).abs() / tp_f;
+        if dist > approach_pct {
+            continue;
+        }
+        // Must still be below (long) / above (short) the TP — once
+        // crossed, the TpHit path owns the decision.
+        let on_approach_side = match state.direction {
+            SetupDirection::Long => px < tp_f,
+            SetupDirection::Short => px > tp_f,
+        };
+        if on_approach_side {
+            return Some(idx);
+        }
+    }
+    None
+}
+
+/// Compute the initial / advancing trail SL from an anchor price.
+/// buffer_pct is a fraction of the anchor (e.g. 0.008 → 0.8%).
+fn trail_sl_from_anchor(
+    direction: SetupDirection,
+    anchor: Decimal,
+    buffer_pct: f64,
+) -> Decimal {
+    let a = anchor.to_f64().unwrap_or(0.0);
+    let sl = match direction {
+        SetupDirection::Long => a * (1.0 - buffer_pct),
+        SetupDirection::Short => a * (1.0 + buffer_pct),
+    };
+    Decimal::from_f64(sl).unwrap_or(anchor)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_tp_approach(
+    pool: &PgPool,
+    router: &LifecycleRouter,
+    row: &WatcherSetupRow,
+    state: &WatcherSetupState,
+    price: Decimal,
+    tp_idx: u8,
+    health: HealthScore,
+    prev_band: Option<HealthBand>,
+    smart_cfg: &qtss_notify::SmartTargetCfg,
+    approach_cfg: &ApproachCfg,
+    llm: &DefaultLlmJudge,
+) {
+    // Debounce: one AI call per TP level per setup.
+    if row.ai_advised_tp_idx.map(|v| v as u8) >= Some(tp_idx) {
+        return;
+    }
+    let s_input = SmartTargetInput {
+        tp_index: tp_idx,
+        total_tps: total_tps(state),
+        health,
+        price,
+        pnl_pct: None,
+    };
+    let (decision, kind_used) =
+        decide_on_approach(&s_input, smart_cfg, approach_cfg, llm).await;
+    let now = Utc::now();
+    debug!(
+        setup_id=%state.setup_id, tp=tp_idx,
+        action=%decision.action.code(), evaluator=?kind_used,
+        "tp_approach decision"
+    );
+
+    match decision.action {
+        SmartTargetAction::Trail => {
+            let new_sl = trail_sl_from_anchor(state.direction, price, approach_cfg.trail_buffer_pct);
+            // Only enable if the new SL is actually better than current.
+            let improves = match state.direction {
+                SetupDirection::Long => new_sl > state.current_sl,
+                SetupDirection::Short => new_sl < state.current_sl,
+            };
+            if !improves {
+                // Treat as a no-op; still mark the TP as advised so we
+                // don't loop on the AI call.
+                if let Err(e) = mark_ai_advised(pool, row.id, tp_idx as i16, now).await {
+                    warn!(%e, setup_id=%row.id, "mark_ai_advised");
+                }
+                return;
+            }
+            if let Err(e) = apply_trail_enable(pool, row.id, price, new_sl, tp_idx as i16, now).await
+            {
+                warn!(%e, setup_id=%row.id, "apply_trail_enable");
+                return;
+            }
+            // Emit SlRatcheted with AI reasoning so GUI/TG see the switch.
+            let lc = LifecycleDecision {
+                kind: LifecycleEventKind::SlRatcheted,
+                tp_index: Some(tp_idx),
+                price: new_sl,
+            };
+            let mut ctx = make_context(state, &lc, Some(health), prev_band, now);
+            ctx.ai_action = Some(decision.action.code().to_string());
+            ctx.ai_reasoning = Some(format!("[trail] {}", decision.reasoning));
+            ctx.ai_confidence = Some(decision.confidence);
+            router.dispatch(&ctx).await;
+        }
+        _ => {
+            // Non-trail approach decisions are advisory only at this
+            // stage — we record them and let the actual TpHit flow
+            // (handle_tp_hit) execute the action on touch. This keeps
+            // the existing semantics intact for Ride/Scale/Exit/Tighten.
+            if let Err(e) = mark_ai_advised(pool, row.id, tp_idx as i16, now).await {
+                warn!(%e, setup_id=%row.id, "mark_ai_advised");
+            }
+        }
+    }
+}
+
+/// Advance the trailing stop if price makes a new favourable extreme.
+/// Monotonic: SL only tightens. Emits no event on each advance (too
+/// chatty) — existing SlHit detection will fire when price touches the
+/// ratcheted SL.
+async fn run_trail_advance(
+    pool: &PgPool,
+    row: &WatcherSetupRow,
+    state: &WatcherSetupState,
+    price: Decimal,
+    approach_cfg: &ApproachCfg,
+) {
+    if !row.trail_mode {
+        return;
+    }
+    let Some(prev_anchor) = row.trail_anchor else { return };
+    let improves_anchor = match state.direction {
+        SetupDirection::Long => price > prev_anchor,
+        SetupDirection::Short => price < prev_anchor,
+    };
+    if !improves_anchor {
+        return;
+    }
+    let new_sl = trail_sl_from_anchor(state.direction, price, approach_cfg.trail_buffer_pct);
+    let tighter = match state.direction {
+        SetupDirection::Long => new_sl > state.current_sl,
+        SetupDirection::Short => new_sl < state.current_sl,
+    };
+    if !tighter {
+        // Anchor advanced but buffer still leaves SL unchanged —
+        // persist anchor only (no SL move) to keep state coherent.
+        if let Err(e) = apply_trail_advance(pool, row.id, price, state.current_sl).await {
+            warn!(%e, setup_id=%row.id, "trail anchor-only advance");
+        }
+        return;
+    }
+    if let Err(e) = apply_trail_advance(pool, row.id, price, new_sl).await {
+        warn!(%e, setup_id=%row.id, "apply_trail_advance");
     }
 }
 
@@ -298,6 +470,7 @@ async fn tick_once(
     bands: &qtss_notify::HealthBands,
     poz_cfg: &qtss_notify::PozKorumaConfig,
     smart_cfg: &qtss_notify::SmartTargetCfg,
+    approach_cfg: &ApproachCfg,
     llm: &DefaultLlmJudge,
     band_delta_min: u8,
 ) -> Result<usize, qtss_storage::StorageError> {
@@ -321,8 +494,26 @@ async fn tick_once(
             g.get(&row.id).and_then(|m| m.last_band)
         };
 
+        // --- Trail advance (9.7.5): if trail_mode on, tighten SL on new HH/LL
+        // before poz_koruma so the two ratchets don't fight. Trail is the
+        // stronger signal once AI has enabled it.
+        run_trail_advance(pool, row, &state, mid, approach_cfg).await;
+
         // --- Poz Koruma --------------------------------------------
         run_poz_koruma(pool, router, row, &state, mid, poz_cfg, &health).await;
+
+        // --- TP-approach AI advisory (9.7.5) -----------------------
+        // Fires once per unhit TP when price enters the approach band.
+        // May flip the setup into trail_mode (→ SL tightens via trail).
+        if approach_cfg.enabled && !row.trail_mode {
+            if let Some(tp_idx) = approaching_tp(&state, mid, approach_cfg.approach_pct) {
+                handle_tp_approach(
+                    pool, router, row, &state, mid, tp_idx, health, prev_band,
+                    smart_cfg, approach_cfg, llm,
+                )
+                .await;
+            }
+        }
 
         // --- Transitions + Smart Target ----------------------------
         let decisions = detect_transitions(&state, &tick);
@@ -418,10 +609,11 @@ pub async fn setup_watcher_loop(pool: PgPool, store: Arc<PriceTickStore>) {
         let bands = load_health_bands(&pool).await;
         let poz_cfg = load_poz_koruma_config(&pool).await;
         let smart_cfg = load_smart_target_config(&pool).await;
+        let approach_cfg = load_approach_config(&pool).await;
 
         match tick_once(
-            &pool, &store, &memos, &router, &weights, &bands, &poz_cfg, &smart_cfg, &llm,
-            band_delta_min,
+            &pool, &store, &memos, &router, &weights, &bands, &poz_cfg, &smart_cfg,
+            &approach_cfg, &llm, band_delta_min,
         )
         .await
         {
