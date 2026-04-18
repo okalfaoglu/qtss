@@ -133,6 +133,19 @@ pub struct ClassicalConfig {
     pub abcd_d_projection_tol: f64,
     /// ABCD: her bacak min bar sayısı.
     pub abcd_min_bars_per_leg: u64,
+
+    // ------------------------------------------------------------------
+    // Faz 10 Aşama 4 — Scallop (J-şekilli bull/bear reversal).
+    // ------------------------------------------------------------------
+    /// Scallop minimum süresi (rim_left → rim_right bar farkı). Rounding
+    /// bottom'dan kısa olabilir. Default 20.
+    pub scallop_min_bars: u64,
+    /// Scallop rim progress: bull için rim_r - rim_l > rim_l * tol
+    /// (breakout ayaklık). Default 0.02 (rim_r rim_l'den en az %2 yukarıda).
+    pub scallop_min_rim_progress_pct: f64,
+    /// Scallop parabolic fit R² eşiği. Rounding'den biraz daha gevşek
+    /// (scallop curve'ü asimetrik). Default 0.55.
+    pub scallop_roundness_r2: f64,
 }
 
 impl ClassicalConfig {
@@ -180,6 +193,10 @@ impl ClassicalConfig {
             abcd_c_max_retrace: 0.886,
             abcd_d_projection_tol: 0.15,
             abcd_min_bars_per_leg: 3,
+
+            scallop_min_bars: 20,
+            scallop_min_rim_progress_pct: 0.02,
+            scallop_roundness_r2: 0.55,
         }
     }
 
@@ -382,6 +399,21 @@ impl ClassicalConfig {
         if self.abcd_min_bars_per_leg == 0 {
             return Err(ClassicalError::InvalidConfig(
                 "abcd_min_bars_per_leg must be > 0".into(),
+            ));
+        }
+        if self.scallop_min_bars == 0 {
+            return Err(ClassicalError::InvalidConfig(
+                "scallop_min_bars must be > 0".into(),
+            ));
+        }
+        if !(0.0..=0.5).contains(&self.scallop_min_rim_progress_pct) {
+            return Err(ClassicalError::InvalidConfig(
+                "scallop_min_rim_progress_pct must be in 0..=0.5".into(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.scallop_roundness_r2) {
+            return Err(ClassicalError::InvalidConfig(
+                "scallop_roundness_r2 must be in 0..=1".into(),
             ));
         }
         Ok(())

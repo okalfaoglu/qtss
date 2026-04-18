@@ -346,6 +346,9 @@ fn pretty_subkind(raw: &str) -> String {
         ("three_inside_down_bear", "Three Inside Down"),
         ("three_outside_up_bull", "Three Outside Up"),
         ("three_outside_down_bear", "Three Outside Down"),
+        // Faz 10 Aşama 4 — Scallop.
+        ("scallop_bullish_bull", "Scallop (Bull)"),
+        ("scallop_bearish_bear", "Scallop (Bear)"),
     ];
     for (k, v) in EXACT {
         if *k == s {

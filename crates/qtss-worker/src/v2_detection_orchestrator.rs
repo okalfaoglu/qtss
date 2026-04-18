@@ -762,6 +762,19 @@ async fn resolve_classical_config(pool: &PgPool) -> ClassicalConfig {
         pool, "detection", "classical.abcd_min_bars_per_leg",
         "QTSS_DETECTION_CLASSICAL_ABCD_MIN_LEG", 3, 1, 200,
     ).await;
+    // Faz 10 Aşama 4 — Scallop.
+    let scallop_min_bars = resolve_system_u64(
+        pool, "detection", "classical.scallop_min_bars",
+        "QTSS_DETECTION_CLASSICAL_SCALLOP_MIN_BARS", 20, 1, 500,
+    ).await;
+    let scallop_progress = resolve_system_f64(
+        pool, "detection", "classical.scallop_min_rim_progress_pct",
+        "QTSS_DETECTION_CLASSICAL_SCALLOP_PROGRESS", 0.02,
+    ).await;
+    let scallop_r2 = resolve_system_f64(
+        pool, "detection", "classical.scallop_roundness_r2",
+        "QTSS_DETECTION_CLASSICAL_SCALLOP_R2", 0.55,
+    ).await;
 
     ClassicalConfig {
         pivot_level: parse_pivot_level(&level_str),
@@ -805,6 +818,9 @@ async fn resolve_classical_config(pool: &PgPool) -> ClassicalConfig {
         abcd_c_max_retrace: abcd_c_max.clamp(0.0, 1.0),
         abcd_d_projection_tol: abcd_d_tol.clamp(0.0, 1.0),
         abcd_min_bars_per_leg: abcd_min_leg,
+        scallop_min_bars,
+        scallop_min_rim_progress_pct: scallop_progress.clamp(0.0, 0.5),
+        scallop_roundness_r2: scallop_r2.clamp(0.0, 1.0),
     }
 }
 

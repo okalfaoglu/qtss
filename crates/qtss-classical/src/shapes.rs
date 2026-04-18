@@ -1263,6 +1263,21 @@ pub const SHAPES_WITH_BARS: &[ShapeSpecBars] = &[
         bars_needed: 45,
         eval: eval_rounding_top,
     },
+    // Faz 10 Aşama 4 — Scallop (Bulkowski): asimetrik J şekli. 3 pivot:
+    // rim_left, apex (low/high), rim_right; rim_right rim_left'in ötesinde
+    // olmalı (bull: rim_r > rim_l * (1+progress); bear: mirror).
+    ShapeSpecBars {
+        name: "scallop_bullish",
+        pivots_needed: 3,
+        bars_needed: 25,
+        eval: eval_scallop_bullish,
+    },
+    ShapeSpecBars {
+        name: "scallop_bearish",
+        pivots_needed: 3,
+        bars_needed: 25,
+        eval: eval_scallop_bearish,
+    },
 ];
 
 // ---- parabolic fit (R²) helper for cup / rounding curvature ---------------
@@ -1484,6 +1499,93 @@ fn eval_rounding_bottom(
 
 fn eval_rounding_top(pivots: &[Pivot], bars: &[Bar], cfg: &ClassicalConfig) -> Option<ShapeMatch> {
     eval_rounding_side(pivots, bars, cfg, false)
+}
+
+// ---- Scallop (Bulkowski J-shape) ------------------------------------------
+//
+// Bullish scallop  : [High0, Low, High1]  with High1 > High0 * (1 + progress)
+// Bearish scallop  : [Low0,  High, Low1]  with Low1  < Low0  * (1 - progress)
+//
+// The curve between rim_left and rim_right must have positive parabolic R²
+// (same helper used by cup / rounding). The distinguishing feature vs.
+// rounding_bottom is the asymmetric rim: breakout side extends beyond the
+// entry side rather than returning to equality.
+
+fn eval_scallop_side(
+    pivots: &[Pivot],
+    bars: &[Bar],
+    cfg: &ClassicalConfig,
+    bull: bool,
+) -> Option<ShapeMatch> {
+    if pivots.len() != 3 {
+        return None;
+    }
+    let expected = if bull {
+        [PivotKind::High, PivotKind::Low, PivotKind::High]
+    } else {
+        [PivotKind::Low, PivotKind::High, PivotKind::Low]
+    };
+    if !require_kinds(pivots, &expected) {
+        return None;
+    }
+    let rim_l = p(&pivots[0])?;
+    let apex = p(&pivots[1])?;
+    let rim_r = p(&pivots[2])?;
+    let span = pivots[2].bar_index.saturating_sub(pivots[0].bar_index);
+    if span < cfg.scallop_min_bars {
+        return None;
+    }
+    // Geometry: apex must be on the opposite side of both rims.
+    let valid_geom = if bull { apex < rim_l && apex < rim_r } else { apex > rim_l && apex > rim_r };
+    if !valid_geom {
+        return None;
+    }
+    // Rim progression (breakout side exceeds entry side). This is what
+    // separates a scallop from a rounding bottom (which demands equality).
+    let progress = if bull {
+        (rim_r - rim_l) / rim_l.abs().max(1e-9)
+    } else {
+        (rim_l - rim_r) / rim_l.abs().max(1e-9)
+    };
+    if progress < cfg.scallop_min_rim_progress_pct {
+        return None;
+    }
+    // Parabolic R² on closes between the rims — same curvature proof used
+    // by cup / rounding. Slightly looser threshold because scallops are
+    // asymmetric (steep left leg, gentle right leg).
+    let closes = closes_between(bars, pivots[0].bar_index, pivots[2].bar_index)?;
+    let r2 = parabolic_r2(&closes)?;
+    if r2 < cfg.scallop_roundness_r2 {
+        return None;
+    }
+    let s_round = ((r2 - cfg.scallop_roundness_r2) / (1.0 - cfg.scallop_roundness_r2).max(1e-9))
+        .clamp(0.0, 1.0);
+    let s_progress = (progress / cfg.scallop_min_rim_progress_pct - 1.0).clamp(0.0, 1.0);
+    // Invalidation: bull → apex (price breaks below the J-bottom);
+    // bear → apex (price breaks above the J-top).
+    let invalidation = pivots[1].price;
+    Some(ShapeMatch {
+        score: (s_round + s_progress) / 2.0,
+        invalidation,
+        anchor_labels: vec!["RimL", "Apex", "RimR"],
+        variant: if bull { "bull" } else { "bear" },
+    })
+}
+
+fn eval_scallop_bullish(
+    pivots: &[Pivot],
+    bars: &[Bar],
+    cfg: &ClassicalConfig,
+) -> Option<ShapeMatch> {
+    eval_scallop_side(pivots, bars, cfg, true)
+}
+
+fn eval_scallop_bearish(
+    pivots: &[Pivot],
+    bars: &[Bar],
+    cfg: &ClassicalConfig,
+) -> Option<ShapeMatch> {
+    eval_scallop_side(pivots, bars, cfg, false)
 }
 
 // ---- bar helpers (ATR + flagpole detection) ------------------------------
