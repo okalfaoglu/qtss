@@ -27,7 +27,7 @@ use qtss_notify::{
     compute_health, decide_on_approach, decide_smart_target, detect_transitions,
     evaluate_poz_koruma, load_approach_config, load_health_bands, load_health_weights,
     load_poz_koruma_config, load_smart_target_config, make_context, promote_tp_hit, ApproachCfg,
-    DbPersistHandler, DefaultLlmJudge, HealthBand, NotificationDispatcher,
+    DbPersistHandler, DefaultLlmJudge, HealthBand, LlmJudge, NotificationDispatcher,
     TelegramLifecycleHandler, XOutboxHandler, HealthComponents, HealthScore, LifecycleDecision,
     LifecycleEventKind, LifecycleRouter, PriceTickStore, RatchetInput, RatchetOutcome,
     SetupDirection, SmartTargetAction, SmartTargetInput, WatcherSetupState,
@@ -200,7 +200,7 @@ async fn handle_tp_approach(
     prev_band: Option<HealthBand>,
     smart_cfg: &qtss_notify::SmartTargetCfg,
     approach_cfg: &ApproachCfg,
-    llm: &DefaultLlmJudge,
+    llm: &dyn LlmJudge,
 ) {
     // Debounce: one AI call per TP level per setup.
     if row.ai_advised_tp_idx.map(|v| v as u8) >= Some(tp_idx) {
@@ -385,7 +385,7 @@ async fn handle_tp_hit(
     health: HealthScore,
     prev_band: Option<HealthBand>,
     smart_cfg: &qtss_notify::SmartTargetCfg,
-    llm: &DefaultLlmJudge,
+    llm: &dyn LlmJudge,
 ) {
     let Some(idx) = decision.tp_index else { return };
     let s_input = SmartTargetInput {
@@ -471,7 +471,7 @@ async fn tick_once(
     poz_cfg: &qtss_notify::PozKorumaConfig,
     smart_cfg: &qtss_notify::SmartTargetCfg,
     approach_cfg: &ApproachCfg,
-    llm: &DefaultLlmJudge,
+    llm: &dyn LlmJudge,
     band_delta_min: u8,
 ) -> Result<usize, qtss_storage::StorageError> {
     let rows = list_watcher_rows(pool).await?;
@@ -574,7 +574,20 @@ pub async fn setup_watcher_loop(pool: PgPool, store: Arc<PriceTickStore>) {
         handlers.push(Arc::new(XOutboxHandler::new(pool.clone())));
     }
     let router = LifecycleRouter::new(handlers);
-    let llm = DefaultLlmJudge;
+    // Prefer a real LLM-backed judge; fall back to the deterministic
+    // stub when the AI engine is disabled / misconfigured so the
+    // watcher keeps running (Faz 9.7.5 task b).
+    let llm: Arc<dyn LlmJudge> =
+        match qtss_ai::SmartTargetLlmJudge::try_build(&pool).await {
+            Some(j) => {
+                info!(judge = j.name(), "setup_watcher: LLM judge active");
+                j
+            }
+            None => {
+                info!("setup_watcher: LLM judge disabled → DefaultLlmJudge stub");
+                Arc::new(DefaultLlmJudge)
+            }
+        };
     info!(handlers = ?router.handler_names(), "setup_watcher router ready");
 
     loop {
@@ -617,7 +630,7 @@ pub async fn setup_watcher_loop(pool: PgPool, store: Arc<PriceTickStore>) {
 
         match tick_once(
             &pool, &store, &memos, &router, &weights, &bands, &poz_cfg, &smart_cfg,
-            &approach_cfg, &llm, band_delta_min,
+            &approach_cfg, llm.as_ref(), band_delta_min,
         )
         .await
         {

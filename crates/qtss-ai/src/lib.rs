@@ -24,7 +24,10 @@ pub mod parser;
 mod provider_secrets;
 pub mod providers;
 pub mod safety;
+pub mod smart_target_judge;
 pub mod storage;
+
+pub use smart_target_judge::SmartTargetLlmJudge;
 
 pub use client::{
     hash_context, run_operational_sweep, run_strategic_sweep, run_tactical_sweep, AiRuntime,
