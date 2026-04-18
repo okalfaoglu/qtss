@@ -45,6 +45,7 @@ const FAMILY_COLORS: Record<string, string> = {
   wyckoff: "#a78bfa",
   range: "#5eead4",
   tbm: "#fb923c",
+  candle: "#fca5a5",
   custom: "#d4d4d8",
 };
 
@@ -58,6 +59,7 @@ const FAMILY_DISPLAY: Record<string, string> = {
   wyckoff: "wyckoff",
   range: "zones",
   tbm: "tbm",
+  candle: "mum",
   custom: "custom",
 };
 
