@@ -367,18 +367,26 @@ fn eval_engulfing(bars: &[Bar], _cfg: &CandleConfig) -> Option<CandleMatch> {
     None
 }
 
-fn eval_harami(bars: &[Bar], _cfg: &CandleConfig) -> Option<CandleMatch> {
+fn eval_harami(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
     let (a, b) = last_two(bars)?;
     let start = bars.len() - 2;
     let end = bars.len() - 1;
-    // Prev body must contain curr body entirely, with opposite colours.
-    if b.body_low() >= a.body_low() && b.body_high() <= a.body_high() && b.body() < a.body() * 0.7 {
-        if a.is_bear() && b.is_bull() {
-            return Some(CandleMatch { score: 0.7, variant: "bull", start_idx: start, end_idx: end });
-        }
-        if a.is_bull() && b.is_bear() {
-            return Some(CandleMatch { score: 0.7, variant: "bear", start_idx: start, end_idx: end });
-        }
+    // Geometry: prev body contains curr body entirely; curr body
+    // meaningfully smaller (<70% of prev) — the classical inside bar.
+    let contained = b.body_low() >= a.body_low()
+        && b.body_high() <= a.body_high()
+        && b.body() < a.body() * 0.7;
+    if !contained {
+        return None;
+    }
+    // Semantic: harami is a *reversal* pattern. Without a prior trend
+    // in the opposite direction, the inside bar is just consolidation.
+    // Prior context guard matches engulfing / piercing / dark-cloud.
+    if a.is_bear() && b.is_bull() && has_prior_downtrend(bars, bars.len() - 1, cfg) {
+        return Some(CandleMatch { score: 0.7, variant: "bull", start_idx: start, end_idx: end });
+    }
+    if a.is_bull() && b.is_bear() && has_prior_uptrend(bars, bars.len() - 1, cfg) {
+        return Some(CandleMatch { score: 0.7, variant: "bear", start_idx: start, end_idx: end });
     }
     None
 }

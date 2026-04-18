@@ -49,13 +49,11 @@ impl ClassicalDetector {
     ) -> Option<Detection> {
         let pivots = tree.at_level(self.config.pivot_level);
 
-        // Best = (name, pivots_needed, anchor_labels, ShapeMatch)
-        let mut best: Option<(&'static str, usize, ShapeMatch)> = None;
-        let mut consider = |name: &'static str, needed: usize, m: ShapeMatch| {
-            if best.as_ref().map(|(_, _, b)| m.score > b.score).unwrap_or(true) {
-                best = Some((name, needed, m));
-            }
-        };
+        // Collect every match, then apply disambiguation rules before
+        // picking the highest scorer. V-reversals share pivot-kind
+        // sequences with double_top/double_bottom; when both land, we
+        // suppress the V counterpart so the classical double wins.
+        let mut matches: Vec<(&'static str, usize, ShapeMatch)> = Vec::new();
 
         for spec in SHAPES {
             if pivots.len() < spec.pivots_needed {
@@ -63,7 +61,7 @@ impl ClassicalDetector {
             }
             let tail = &pivots[pivots.len() - spec.pivots_needed..];
             if let Some(m) = (spec.eval)(tail, &self.config) {
-                consider(spec.name, spec.pivots_needed, m);
+                matches.push((spec.name, spec.pivots_needed, m));
             }
         }
         for spec in SHAPES_WITH_BARS {
@@ -72,11 +70,19 @@ impl ClassicalDetector {
             }
             let tail = &pivots[pivots.len() - spec.pivots_needed..];
             if let Some(m) = (spec.eval)(tail, bars, &self.config) {
-                consider(spec.name, spec.pivots_needed, m);
+                matches.push((spec.name, spec.pivots_needed, m));
             }
         }
 
-        let (name, needed, m) = best?;
+        let has_double_bottom = matches.iter().any(|(n, _, _)| *n == "double_bottom");
+        let has_double_top = matches.iter().any(|(n, _, _)| *n == "double_top");
+        matches.retain(|(n, _, _)| {
+            !((*n == "v_top" && has_double_bottom) || (*n == "v_bottom" && has_double_top))
+        });
+
+        let (name, needed, m) = matches
+            .into_iter()
+            .max_by(|a, b| a.2.score.partial_cmp(&b.2.score).unwrap_or(std::cmp::Ordering::Equal))?;
         if (m.score as f32) < self.config.min_structural_score {
             return None;
         }

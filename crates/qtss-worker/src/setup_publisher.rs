@@ -165,7 +165,10 @@ fn build_snapshot(setup: &V2SetupRow) -> SetupSnapshot {
         direction,
         pattern_family,
         pattern_subkind,
-        ai_score: setup.ai_score.map(|s| s as f64).unwrap_or(0.0),
+        ai_score: setup
+            .ai_score
+            .map(|s| s as f64)
+            .unwrap_or_else(|| structural_fallback_score(setup)),
         entry_price: entry,
         stop_price: stop,
         tp1_price: tp1,
@@ -227,6 +230,49 @@ fn decimal_from_meta(meta: &JsonValue, key: &str) -> Option<Decimal> {
         .and_then(|v| v.as_f64())
         .filter(|v| v.is_finite())
         .and_then(|v| Decimal::from_str(&format!("{v}")).ok())
+}
+
+/// Faz 9.7.9 — deterministic structural score used when the LightGBM
+/// inference sidecar hasn't produced an `ai_score` yet (model not
+/// loaded, sidecar 503, timeout, etc). Without this fallback every
+/// un-scored setup lands on `ai_score = 0.0` → Zayif → "3/10", which
+/// is misleading once the setup engine itself already has strong
+/// structural signals. Formula: detector confidence (`raw_meta.guven`)
+/// weighted with the R:R ratio clamped against a 3:1 anchor.
+///
+/// CLAUDE.md #2: weights live on constants marked for config
+/// migration. Move to `system_config.notify.fallback_score.*` once
+/// the real AI score is producing calibrated outputs.
+const FALLBACK_W_GUVEN: f64 = 0.6;
+const FALLBACK_W_RR: f64 = 0.4;
+const FALLBACK_RR_ANCHOR: f64 = 3.0;
+
+fn structural_fallback_score(setup: &V2SetupRow) -> f64 {
+    let guven = setup
+        .raw_meta
+        .get("guven")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.5)
+        .clamp(0.0, 1.0);
+    let rr_norm = setup_rr(setup)
+        .map(|rr| (rr / FALLBACK_RR_ANCHOR).clamp(0.0, 1.0))
+        .unwrap_or(0.5);
+    (FALLBACK_W_GUVEN * guven + FALLBACK_W_RR * rr_norm).clamp(0.0, 1.0)
+}
+
+fn setup_rr(setup: &V2SetupRow) -> Option<f64> {
+    let entry = setup.entry_price? as f64;
+    let stop = setup.entry_sl? as f64;
+    let tp = setup.target_ref? as f64;
+    let is_long = !setup.direction.eq_ignore_ascii_case("short");
+    let (risk, reward) = match is_long {
+        true => (entry - stop, tp - entry),
+        false => (stop - entry, entry - tp),
+    };
+    if risk <= 0.0 || reward <= 0.0 {
+        return None;
+    }
+    Some(reward / risk)
 }
 
 fn str_from_meta(meta: &JsonValue, key: &str) -> Option<String> {

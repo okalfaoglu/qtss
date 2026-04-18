@@ -75,7 +75,17 @@ async fn run_trainer(pool: &PgPool) {
         return;
     };
 
-    let out = Command::new(head).args(tail).output().await;
+    // Trainer reads `QTSS_DATABASE_URL`; worker/.env only exports
+    // `DATABASE_URL`. Bridge it here so the subprocess finds the DB
+    // without requiring a duplicate entry in .env.
+    let mut command = Command::new(head);
+    command.args(tail);
+    if std::env::var_os("QTSS_DATABASE_URL").is_none() {
+        if let Ok(url) = std::env::var("DATABASE_URL") {
+            command.env("QTSS_DATABASE_URL", url);
+        }
+    }
+    let out = command.output().await;
     match out {
         Ok(o) if o.status.success() => {
             info!(
