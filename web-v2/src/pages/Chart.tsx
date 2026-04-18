@@ -895,7 +895,11 @@ export function Chart() {
 
       // Wyckoff has its own box + event overlay below — skip the generic
       // anchor-connecting polyline (purple zigzag) that adds noise.
-      if (d.anchors.length >= 2 && !isZone && d.family !== "wyckoff") {
+      // Candle / gap render as highlight bands (block further down), not
+      // polylines — a line through [open, close] is visually useless for
+      // 2-bar patterns.
+      const isBandFamily = d.family === "candle" || d.family === "gap";
+      if (d.anchors.length >= 2 && !isZone && d.family !== "wyckoff" && !isBandFamily) {
         // P5 — for two-trendline classical patterns (rectangle, channel,
         // wedge, triangle, flag, pennant, diamond), split alternating
         // anchors into UPPER and LOWER polylines so the chart shows
@@ -1056,6 +1060,43 @@ export function Chart() {
           borderColor: `${color}80`,    // ~50% alpha
           borderWidth: 1,
           label: (d.subkind ?? "zone").replace(/_/g, " ").toUpperCase(),
+          labelColor: color,
+          labelSize: 9,
+        });
+        candleSeries.attachPrimitive(prim);
+        rectanglePrimitivesRef.current.push(prim);
+      }
+
+      // Candle / gap highlight band — a filled rectangle covering the
+      // pattern's bar span with the family/subkind color. Candles span
+      // [open_first, close_last]; gaps span [pre_gap, post_gap]. Both
+      // extend vertically to include invalidation_price (pattern extreme).
+      if (isBandFamily && d.anchors.length >= 2) {
+        const startTime = isoToUnix(d.anchors[0].time);
+        const endTime = isoToUnix(d.anchors[d.anchors.length - 1].time);
+        const prices = d.anchors.map((a) => Number(a.price));
+        const inv = Number(d.invalidation_price);
+        if (Number.isFinite(inv) && inv > 0) prices.push(inv);
+        let top = Math.max(...prices);
+        let bot = Math.min(...prices);
+        if (top === bot) {
+          // Degenerate band — spread by 0.1% so the rect is visible.
+          const pad = top * 0.001;
+          top += pad;
+          bot -= pad;
+        }
+        const label = d.family === "gap"
+          ? `GAP ${(d.subkind ?? "").replace(/_/g, " ").toUpperCase()}`
+          : (d.subkind ?? d.family).replace(/_/g, " ").toUpperCase();
+        const prim = new RectanglePrimitive({
+          time1: startTime,
+          time2: endTime,
+          priceTop: top,
+          priceBottom: bot,
+          fillColor: `${color}26`,      // ~15% alpha
+          borderColor: `${color}99`,    // ~60% alpha
+          borderWidth: 1,
+          label,
           labelColor: color,
           labelSize: 9,
         });
