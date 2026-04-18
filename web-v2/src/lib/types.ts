@@ -359,6 +359,8 @@ export interface SetupEntry {
   risk_mode: string | null;
   /** Faz 9.3.3 — P(win) stamped at open by the inference sidecar, or null. */
   ai_score: number | null;
+  /** Faz 9.7.5 — true once the watcher has armed trailing-stop mode. */
+  trail_mode: boolean | null;
   confluence_id: string | null;
   raw_meta: unknown;
 }

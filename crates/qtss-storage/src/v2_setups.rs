@@ -45,6 +45,10 @@ pub struct V2SetupRow {
     pub risk_mode: Option<String>,
     /// Faz 9.3.3 — P(win) from the LightGBM inference sidecar at open.
     pub ai_score: Option<f32>,
+    /// Faz 9.7.5 — true once the setup watcher has flipped this setup
+    /// into trailing-stop mode (either approaching the last TP or
+    /// running beyond final TP). SL then ratchets via `apply_trail_advance`.
+    pub trail_mode: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -178,7 +182,7 @@ pub async fn fetch_v2_setup(
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
-                  pnl_pct, risk_mode, ai_score
+                  pnl_pct, risk_mode, ai_score, trail_mode
              FROM qtss_setups
             WHERE id = $1"#,
     )
@@ -197,7 +201,7 @@ pub async fn list_open_v2_setups(
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
-                  pnl_pct, risk_mode, ai_score
+                  pnl_pct, risk_mode, ai_score, trail_mode
              FROM qtss_setups
             WHERE state IN ('armed','active')
               AND ($1::text IS NULL OR venue_class = $1)
@@ -233,7 +237,7 @@ pub async fn list_v2_setups_filtered(
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
-                  pnl_pct, risk_mode, ai_score
+                  pnl_pct, risk_mode, ai_score, trail_mode
              FROM qtss_setups
             WHERE 1=1"#,
     );
@@ -288,7 +292,7 @@ pub async fn list_recent_v2_setups(
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
-                  pnl_pct, risk_mode, ai_score
+                  pnl_pct, risk_mode, ai_score, trail_mode
              FROM qtss_setups
             ORDER BY created_at DESC
             LIMIT $1"#,

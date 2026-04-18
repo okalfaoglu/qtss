@@ -115,6 +115,14 @@ function SetupRow({
         >
           {s.state}
         </span>
+        {s.trail_mode && (
+          <span
+            title="Trailing stop aktif — SL ratchet ediyor"
+            className="ml-1 rounded border border-amber-500/60 bg-amber-500/10 px-1 py-0.5 text-[9px] font-semibold uppercase text-amber-300"
+          >
+            🧲 trail
+          </span>
+        )}
       </td>
       <td className={`px-2 py-1.5 uppercase ${DIRECTION_COLOR[s.direction] ?? "text-zinc-400"}`}>
         {s.direction}
@@ -349,12 +357,26 @@ export function Setups() {
                     <div className="text-right">
                       <AiScoreChip score={selectedEntry.ai_score} />
                     </div>
+                    <div className="text-zinc-500">Trail mode</div>
+                    <div className="text-right">
+                      {selectedEntry.trail_mode ? (
+                        <span className="rounded border border-amber-500/60 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-300">
+                          🧲 aktif
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-zinc-600">—</span>
+                      )}
+                    </div>
                     {selectedEntry.close_reason && (
                       <>
                         <div className="text-zinc-500">Close</div>
                         <div className="text-right font-mono text-zinc-300">
-                          {selectedEntry.close_reason} @{" "}
-                          {fmtNum(selectedEntry.close_price, 4)}
+                          {selectedEntry.close_reason === "trail_stop" ? (
+                            <span className="text-amber-300">🧲 trail_stop</span>
+                          ) : (
+                            selectedEntry.close_reason
+                          )}{" "}
+                          @ {fmtNum(selectedEntry.close_price, 4)}
                         </div>
                       </>
                     )}

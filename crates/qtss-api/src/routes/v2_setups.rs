@@ -65,6 +65,9 @@ pub struct SetupEntry {
     /// the inference sidecar was disabled/unreachable or no active
     /// model was loaded.
     pub ai_score: Option<f32>,
+    /// Faz 9.7.5 — `true` once the setup watcher has flipped this
+    /// setup into trailing-stop mode (SL ratchets on each new extreme).
+    pub trail_mode: Option<bool>,
     pub confluence_id: Option<Uuid>,
     pub raw_meta: serde_json::Value,
 }
@@ -165,6 +168,7 @@ fn row_to_entry(row: V2SetupRow) -> SetupEntry {
         pnl_pct: row.pnl_pct,
         risk_mode: row.risk_mode,
         ai_score: row.ai_score,
+        trail_mode: row.trail_mode,
         confluence_id: row.confluence_id,
         raw_meta: row.raw_meta,
     }
