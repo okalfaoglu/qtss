@@ -37,6 +37,7 @@ mod x_publisher;
 mod digest_loop;
 mod selector_loop;
 mod execution_bridge;
+mod trainer_cron;
 mod setup_publisher;
 mod range_signal_execute_loop;
 mod setup_scan_engine;
@@ -303,6 +304,9 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(selector_loop::selector_loop(sel_pool));
         let exb_pool = pool.clone();
         tokio::spawn(execution_bridge::execution_bridge_loop(exb_pool));
+        // Faz 9.8.12 — weekly trainer cron + AI sidecar health probe.
+        let tr_pool = pool.clone();
+        tokio::spawn(trainer_cron::trainer_cron_loop(tr_pool));
         let cg_pool = pool.clone();
         tokio::spawn(engines::external_coinglass_loop(cg_pool));
         let hl_pool = pool.clone();

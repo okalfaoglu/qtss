@@ -390,7 +390,8 @@
       "Bash(grep -rn 'createBrowserRouter\\\\|Routes\\\\|Route' web-v2/src/*.tsx)",
       "Bash(ls /app/qtss/crates/qtss-worker/src/*.rs)",
       "Bash(PGPASSWORD=\"24Qwert12!\" psql -h 127.0.0.1 -U qtss -d qtss -f migrations/0132_faz9_data_health_report.sql)",
-      "Bash(cat C:\\\\\\\\Users\\\\\\\\oguzk\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\--wsl-localhost-Ubuntu-app-qtss\\\\\\\\aa0c15a3-0a7d-4a9b-9e30-8a54cfb02a2f\\\\\\\\tasks\\\\\\\\b5iwzhnjx.output)"
+      "Bash(cat C:\\\\\\\\Users\\\\\\\\oguzk\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\--wsl-localhost-Ubuntu-app-qtss\\\\\\\\aa0c15a3-0a7d-4a9b-9e30-8a54cfb02a2f\\\\\\\\tasks\\\\\\\\b5iwzhnjx.output)",
+      "Bash(ls -la \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\")"
     ]
   }
 }
