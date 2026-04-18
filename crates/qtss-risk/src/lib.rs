@@ -80,7 +80,11 @@ pub use live_position_store::{
     TickKey, TpLeg,
 };
 pub use ratchet::{tighten_only, RatchetDecision, RatchetKind};
-pub use scale_manager::{ScaleDecision, ScaleDecisionKind, ScaleManagerConfig};
+pub use scale_manager::{
+    evaluate_with_context as evaluate_scale_with_context, unrealised_r, AddOnDipRule,
+    PyramidInRule, ScaleContext, ScaleDecision, ScaleDecisionKind, ScaleManagerConfig, ScaleOutRule,
+    ScaleRule, ScaleRuleRegistry,
+};
 pub use selector::{
     Direction as SelectorDirection, LiquidationCooldownFilter, MaxRiskPctFilter,
     MinAiScoreFilter, MinRiskRewardFilter, MinTierFilter, OpenPositionCapFilter, RankedOutcome,
