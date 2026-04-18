@@ -196,6 +196,7 @@ fn compute_pool_score(touches: usize, sweep_reclaim: bool) -> f64 {
 mod tests {
     use super::*;
 
+    #[allow(dead_code)]
     fn bar(i: i64, o: f64, h: f64, l: f64, c: f64) -> OhlcBar {
         OhlcBar { open: o, high: h, low: l, close: c, bar_index: i, volume: Some(1000.0) }
     }
