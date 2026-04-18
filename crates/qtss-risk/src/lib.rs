@@ -40,6 +40,7 @@ mod state;
 
 // Faz 9.8 — post-trade tick-driven modules.
 pub mod allocator;
+pub mod drift_guard;
 pub mod liquidation_guard;
 pub mod live_position_store;
 pub mod ratchet;
@@ -66,6 +67,10 @@ pub use sizing::{
 pub use state::AccountState;
 
 // Faz 9.8 re-exports (skeleton — full logic across 9.8.3/9.8.5/9.8.6/9.8.7).
+pub use drift_guard::{
+    assess_funding, assess_price_drift, assess_slippage, DriftConfig, FundingConfig,
+    GuardOutcome, GuardSeverity, SlippageConfig,
+};
 pub use allocator::{
     AllocationInput, AllocationOutcome, Allocator, AllocatorConfig, AllocatorGate,
     CommissionGate, CommissionRates, DrawdownGate, EquityFloorGate, MaxExposureGate,
