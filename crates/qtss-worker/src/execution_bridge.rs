@@ -22,13 +22,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use qtss_binance::{BinanceClient, BinanceClientConfig};
+use qtss_domain::exchange::{ExchangeId, MarketSegment as DomainSegment};
+use qtss_domain::orders::{
+    FuturesExecutionExtras, OrderIntent, OrderSide, OrderType, TimeInForce,
+};
+use qtss_domain::symbol::InstrumentId;
+use qtss_execution::BinanceLiveGateway;
 use qtss_risk::{
     ExecutionMode, LivePositionState, LivePositionStore, MarketSegment, PositionSide, TpLeg,
 };
 use qtss_storage::{
     claim_selected_candidates, insert_live_position, mark_selected_errored, mark_selected_placed,
-    resolve_system_string, resolve_system_u64, resolve_worker_enabled_flag, InsertLivePosition,
-    SelectedCandidateRow,
+    resolve_system_string, resolve_system_u64, resolve_worker_enabled_flag,
+    ExchangeAccountRepository, ExchangeOrderRepository, InsertLivePosition, SelectedCandidateRow,
 };
 use sqlx::PgPool;
 use tracing::{debug, info, warn};
@@ -96,7 +103,7 @@ async fn dispatch(
     match row.mode.as_str() {
         "dry" if dry_enabled => dispatch_dry(pool, store, row).await,
         "dry" => Err("dry execution disabled via config".into()),
-        "live" if live_enabled => Err("live execution adapter not yet wired (Faz 9.8.15)".into()),
+        "live" if live_enabled => dispatch_live(pool, store, row).await,
         "live" => Err("live execution disabled via config".into()),
         "backtest" => Ok(()), // backtest rows are consumed by the backtest runner, not the bridge
         other => Err(format!("unknown mode: {other}").into()),
@@ -121,7 +128,7 @@ async fn dispatch_dry(
     // On success we also upsert into the in-memory LivePositionStore so
     // the tick dispatcher can start evaluating it on the very next
     // sweep, without waiting for the 60s re-hydrate cadence.
-    if let Some(live) = build_live_position(pool, row).await {
+    if let Some(live) = build_live_position_for_mode(pool, row, "dry").await {
         match insert_live_position(pool, &live).await {
             Ok(lp_id) => {
                 debug!(setup = %row.setup_id, live_pos = %lp_id, "dry live_positions ok");
@@ -137,6 +144,123 @@ async fn dispatch_dry(
 
     debug!(setup = %row.setup_id, "dry dispatch ok");
     Ok(())
+}
+
+/// Faz 9.8.17 — live dispatch: place a real order via Binance gateway,
+/// persist `exchange_orders` + `live_positions(mode='live')`, and mirror
+/// into the in-memory store so the tick dispatcher starts tracking it
+/// on the next sweep.
+///
+/// Design notes:
+/// - Credentials come from `exchange_accounts` keyed by (user_id,
+///   'binance', <segment>). The default user/org are config keys — on
+///   multi-tenant deploys the selector will carry a concrete user_id
+///   on the candidate row; single-tenant dev deploys fall back to the
+///   configured default.
+/// - Quantity is a placeholder (0.01) — upstream sizing (risk allocator)
+///   is the authoritative source once the live adapter is exercised by
+///   real setups. Faz 9.8.18 will plumb `risk_pct` → qty.
+/// - Order type is Market for now; OCO SL/TP legs are a later step.
+async fn dispatch_live(
+    pool: &PgPool,
+    store: &LivePositionStore,
+    row: &SelectedCandidateRow,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let live = build_live_position_for_mode(pool, row, "live")
+        .await
+        .ok_or_else(|| "live dispatch: system org/user unresolved".to_string())?;
+
+    // Credentials
+    let accounts = ExchangeAccountRepository::new(pool.clone());
+    let creds = accounts
+        .binance_for_user(live.user_id, &live.segment)
+        .await?
+        .ok_or_else(|| {
+            format!(
+                "no exchange_accounts row for user={} exchange=binance segment={}",
+                live.user_id, live.segment
+            )
+        })?;
+
+    // Gateway
+    let client_cfg = BinanceClientConfig::mainnet_with_keys(creds.api_key, creds.api_secret);
+    let client = std::sync::Arc::new(BinanceClient::new(client_cfg)?);
+    let gateway = BinanceLiveGateway::new(client);
+
+    // OrderIntent
+    let intent = build_order_intent(&live)?;
+
+    // Place
+    let (client_order_id, venue_response) = gateway.place_with_venue_response(intent.clone()).await?;
+    let venue_order_id = venue_response
+        .get("orderId")
+        .and_then(|v| v.as_i64());
+
+    // Persist exchange_orders
+    let orders = ExchangeOrderRepository::new(pool.clone());
+    orders
+        .insert_submitted(
+            live.org_id,
+            live.user_id,
+            &live.exchange,
+            &live.segment,
+            &live.symbol,
+            client_order_id,
+            &intent,
+            venue_order_id,
+            Some(venue_response),
+        )
+        .await?;
+
+    // Persist live_positions + upsert store
+    match insert_live_position(pool, &live).await {
+        Ok(lp_id) => {
+            info!(setup = %row.setup_id, live_pos = %lp_id, cid = %client_order_id, "live order placed");
+            if let Some(state) = build_live_state(lp_id, &live) {
+                store.upsert(state);
+            }
+        }
+        Err(e) => warn!(setup = %row.setup_id, error = %e, "live_positions insert failed"),
+    }
+    Ok(())
+}
+
+fn build_order_intent(
+    live: &InsertLivePosition,
+) -> Result<OrderIntent, Box<dyn std::error::Error + Send + Sync>> {
+    let segment = match live.segment.as_str() {
+        "spot" => DomainSegment::Spot,
+        "futures" => DomainSegment::Futures,
+        "margin" => DomainSegment::Margin,
+        "options" => DomainSegment::Options,
+        other => return Err(format!("unsupported segment for live: {other}").into()),
+    };
+    let side = match live.side {
+        "BUY" | "buy" => OrderSide::Buy,
+        "SELL" | "sell" => OrderSide::Sell,
+        other => return Err(format!("unknown side: {other}").into()),
+    };
+    let futures_extras = if matches!(segment, DomainSegment::Futures) {
+        Some(FuturesExecutionExtras {
+            position_side: None, // one-way mode; hedge support later
+            reduce_only: Some(false),
+        })
+    } else {
+        None
+    };
+    Ok(OrderIntent {
+        instrument: InstrumentId {
+            exchange: ExchangeId::Binance,
+            segment,
+            symbol: live.symbol.clone(),
+        },
+        side,
+        quantity: live.qty_filled,
+        order_type: OrderType::Market,
+        time_in_force: TimeInForce::Gtc,
+        requires_human_approval: false,
+        futures: futures_extras,
+    })
 }
 
 fn build_live_state(id: Uuid, p: &InsertLivePosition) -> Option<LivePositionState> {
@@ -176,15 +300,30 @@ fn build_live_state(id: Uuid, p: &InsertLivePosition) -> Option<LivePositionStat
     })
 }
 
-async fn build_live_position(pool: &PgPool, row: &SelectedCandidateRow) -> Option<InsertLivePosition> {
-    let org_raw = resolve_system_string(
-        pool, MODULE, "dry.default_org_id", "QTSS_DRY_ORG_ID", "",
-    )
-    .await;
-    let user_raw = resolve_system_string(
-        pool, MODULE, "dry.default_user_id", "QTSS_DRY_USER_ID", "",
-    )
-    .await;
+async fn build_live_position_for_mode(
+    pool: &PgPool,
+    row: &SelectedCandidateRow,
+    mode: &'static str,
+) -> Option<InsertLivePosition> {
+    // Per-mode identity keys: dry deploys use the system shadow user,
+    // live deploys use the real operator's UUID (separate key so ops can
+    // flip live to a sub-account without touching the paper trail).
+    let (org_key, org_env, user_key, user_env) = match mode {
+        "live" => (
+            "live.default_org_id",
+            "QTSS_LIVE_ORG_ID",
+            "live.default_user_id",
+            "QTSS_LIVE_USER_ID",
+        ),
+        _ => (
+            "dry.default_org_id",
+            "QTSS_DRY_ORG_ID",
+            "dry.default_user_id",
+            "QTSS_DRY_USER_ID",
+        ),
+    };
+    let org_raw = resolve_system_string(pool, MODULE, org_key, org_env, "").await;
+    let user_raw = resolve_system_string(pool, MODULE, user_key, user_env, "").await;
     let org_id = Uuid::parse_str(org_raw.trim()).ok()?;
     let user_id = Uuid::parse_str(user_raw.trim()).ok()?;
 
@@ -219,7 +358,7 @@ async fn build_live_position(pool: &PgPool, row: &SelectedCandidateRow) -> Optio
         org_id,
         user_id,
         setup_id: Some(row.setup_id),
-        mode: "dry",
+        mode,
         exchange: row.exchange.clone(),
         segment,
         symbol: row.symbol.clone(),
