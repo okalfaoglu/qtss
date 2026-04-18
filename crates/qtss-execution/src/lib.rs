@@ -16,6 +16,7 @@ mod okx_live;
 mod dry;
 mod gateway;
 mod live;
+mod manager;
 mod reconcile;
 mod unsupported_live;
 
@@ -30,6 +31,7 @@ pub use dry::{
 };
 pub use gateway::{ExecutionError, ExecutionGateway, FillEvent};
 pub use live::LiveGateway;
+pub use manager::{ExecutionContext, ExecutionManager, PlaceOutcome};
 pub use reconcile::{
     reconcile_binance_futures_open_orders, reconcile_binance_spot_open_orders,
     venue_order_ids_submitted_not_on_open_list, ExchangeOrderVenueSnapshot, ReconcileReport,
