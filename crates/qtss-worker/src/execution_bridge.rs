@@ -167,8 +167,8 @@ fn build_live_state(id: Uuid, p: &InsertLivePosition) -> Option<LivePositionStat
         qty_remaining: p.qty_remaining,
         current_sl: p.current_sl,
         tp_ladder,
-        liquidation_price: None,
-        maint_margin_ratio: None,
+        liquidation_price: p.liquidation_price,
+        maint_margin_ratio: p.maint_margin_ratio,
         funding_rate_next: None,
         last_mark: p.last_mark,
         last_tick_at: None,
@@ -188,6 +188,32 @@ async fn build_live_position(pool: &PgPool, row: &SelectedCandidateRow) -> Optio
     let org_id = Uuid::parse_str(org_raw.trim()).ok()?;
     let user_id = Uuid::parse_str(user_raw.trim()).ok()?;
 
+    let default_segment = resolve_system_string(
+        pool, MODULE, "dry.default_segment", "QTSS_DRY_SEGMENT", "futures",
+    )
+    .await;
+    let segment = segment_from_row(&row.selector_meta, &default_segment);
+
+    let leverage_u = resolve_system_u64(
+        pool, MODULE, "dry.default_leverage", "QTSS_DRY_LEVERAGE", 10, 1, 125,
+    )
+    .await;
+    let leverage = i16::try_from(leverage_u).unwrap_or(10);
+
+    // Maint margin ratio — read as string (config_tick has no f64
+    // helper for arbitrary precision decimals; parse the JSON-ish
+    // string). Default 0.005 (50 bps) — Binance USDT-M majors.
+    let mmr_raw = resolve_system_string(
+        pool, MODULE, "dry.maint_margin_ratio", "QTSS_DRY_MMR", "0.005",
+    )
+    .await;
+    let mmr = rust_decimal::Decimal::from_str_exact(mmr_raw.trim())
+        .ok()
+        .unwrap_or_else(|| rust_decimal::Decimal::new(5, 3));
+
+    let side = live_side(&row.direction);
+    let liq_price = liquidation_price(&segment, side, row.entry_price, leverage, mmr);
+
     let qty = rust_decimal::Decimal::new(1, 2); // 0.01 placeholder — sizing upstream
     Some(InsertLivePosition {
         org_id,
@@ -195,23 +221,68 @@ async fn build_live_position(pool: &PgPool, row: &SelectedCandidateRow) -> Optio
         setup_id: Some(row.setup_id),
         mode: "dry",
         exchange: row.exchange.clone(),
-        segment: "spot".to_string(),
+        segment,
         symbol: row.symbol.clone(),
-        side: live_side(&row.direction),
-        leverage: 1,
+        side,
+        leverage,
         entry_avg: row.entry_price,
         qty_filled: qty,
         qty_remaining: qty,
         current_sl: Some(row.sl_price),
         tp_ladder: row.tp_ladder.clone(),
+        liquidation_price: liq_price,
+        maint_margin_ratio: Some(mmr),
         last_mark: Some(row.entry_price),
         metadata: serde_json::json!({
             "selected_candidate_id": row.id,
             "setup_id": row.setup_id.to_string(),
             "timeframe": row.timeframe,
             "risk_pct": row.risk_pct.to_string(),
+            "leverage": leverage,
         }),
     })
+}
+
+/// Map `selector_meta.venue_class` → canonical market segment.
+/// v2 pipeline writes 'crypto' for Binance perps today; treat that as
+/// 'futures' so the liquidation guard engages. Unknown values fall
+/// back to `default_segment` from config.
+fn segment_from_row(meta: &serde_json::Value, default_segment: &str) -> String {
+    let raw = meta
+        .get("venue_class")
+        .and_then(|v| v.as_str())
+        .unwrap_or(default_segment)
+        .to_ascii_lowercase();
+    match raw.as_str() {
+        "futures" | "perp" | "perpetual" | "crypto" => "futures".to_string(),
+        "spot" => "spot".to_string(),
+        "margin" => "margin".to_string(),
+        "options" => "options".to_string(),
+        _ => default_segment.to_string(),
+    }
+}
+
+/// Isolated-margin liquidation price approximation.
+///   long:  entry * (1 - 1/lev + mmr)
+///   short: entry * (1 + 1/lev - mmr)
+/// Returns `None` for spot (never liquidates) or bad leverage.
+fn liquidation_price(
+    segment: &str,
+    side: &str,
+    entry: rust_decimal::Decimal,
+    leverage: i16,
+    mmr: rust_decimal::Decimal,
+) -> Option<rust_decimal::Decimal> {
+    if segment == "spot" || leverage <= 0 {
+        return None;
+    }
+    let inv_lev = rust_decimal::Decimal::ONE / rust_decimal::Decimal::from(leverage);
+    let factor = match side {
+        "BUY" => rust_decimal::Decimal::ONE - inv_lev + mmr,
+        "SELL" => rust_decimal::Decimal::ONE + inv_lev - mmr,
+        _ => return None,
+    };
+    Some(entry * factor)
 }
 
 fn live_side(d: &str) -> &'static str {

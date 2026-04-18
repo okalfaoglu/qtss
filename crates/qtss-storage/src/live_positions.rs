@@ -31,6 +31,8 @@ pub struct InsertLivePosition {
     pub qty_remaining: Decimal,
     pub current_sl: Option<Decimal>,
     pub tp_ladder: JsonValue,
+    pub liquidation_price: Option<Decimal>,
+    pub maint_margin_ratio: Option<Decimal>,
     pub last_mark: Option<Decimal>,
     pub metadata: JsonValue,
 }
@@ -71,8 +73,10 @@ pub async fn insert(pool: &PgPool, p: &InsertLivePosition) -> Result<Uuid, Stora
             org_id, user_id, setup_id, mode,
             exchange, segment, symbol, side, leverage,
             entry_avg, qty_filled, qty_remaining,
-            current_sl, tp_ladder, last_mark, metadata
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+            current_sl, tp_ladder,
+            liquidation_price, maint_margin_ratio,
+            last_mark, metadata
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
         RETURNING id
         "#,
     )
@@ -90,6 +94,8 @@ pub async fn insert(pool: &PgPool, p: &InsertLivePosition) -> Result<Uuid, Stora
     .bind(p.qty_remaining)
     .bind(p.current_sl)
     .bind(&p.tp_ladder)
+    .bind(p.liquidation_price)
+    .bind(p.maint_margin_ratio)
     .bind(p.last_mark)
     .bind(&p.metadata)
     .fetch_one(pool)
