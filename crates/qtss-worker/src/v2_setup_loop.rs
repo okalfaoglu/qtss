@@ -882,8 +882,12 @@ async fn try_arm_new_setup(
     // Try structural guard: use detection invalidation + target-engine
     // measured-move targets instead of ATR-based fallback.
     let det_repo = V2DetectionRepository::new(pool.clone());
+    // Faz 9.8.25 — widen from 10 to 100 so structural vote tally has
+    // enough signal. Elliott commonly emits bull + bear patterns in the
+    // same window; with only 10 rows the vote often splits 5/5 and the
+    // consensus layer rejects every setup.
     let detections = det_repo
-        .list_for_chart(&sym.exchange, &sym.symbol, &sym.interval, 10)
+        .list_for_chart(&sym.exchange, &sym.symbol, &sym.interval, 100)
         .await
         .unwrap_or_default();
     let guard = {
@@ -937,7 +941,26 @@ async fn try_arm_new_setup(
     // Pre-computed reading from the persisted `qtss_v2_confluence` row
     // keeps the gate consistent with the published score.
     if cfg.gate.enabled {
-        let votes = build_detection_votes(&detections);
+        // Faz 9.8.25 — pre-filter structural votes to the direction the
+        // confluence row already decided on. `score_confluence` already
+        // did the weighted tally when it wrote the `qtss_v2_confluence`
+        // row, so the gate's Layer-2 consensus should only verify that
+        // *at least one* structural pattern supports that direction, not
+        // re-tally a split bull/bear window.
+        let reading_dir = match conf.direction.as_str() {
+            "long" => ConfluenceDirection::Long,
+            "short" => ConfluenceDirection::Short,
+            _ => ConfluenceDirection::Neutral,
+        };
+        let all_votes = build_detection_votes(&detections);
+        let votes: Vec<DetectionVote> = if reading_dir == ConfluenceDirection::Neutral {
+            all_votes
+        } else {
+            all_votes
+                .into_iter()
+                .filter(|v| v.direction == reading_dir)
+                .collect()
+        };
         let inputs = ConfluenceInputs {
             tbm_score: None,
             tbm_confidence: None,
