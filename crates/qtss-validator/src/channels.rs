@@ -53,6 +53,7 @@ fn preferred_regime(kind: &PatternKind) -> PreferredRegime {
         PatternKind::Wyckoff(_) => PreferredRegime::Ranging,
         PatternKind::Range(_) => PreferredRegime::Ranging,
         PatternKind::Gap(_) => PreferredRegime::Either,
+        PatternKind::Candle(_) => PreferredRegime::Either,
         PatternKind::Custom(_) => PreferredRegime::Either,
     }
 }
@@ -102,6 +103,7 @@ fn family_label(kind: &PatternKind) -> &'static str {
         PatternKind::Wyckoff(_) => "wyckoff",
         PatternKind::Range(_) => "range",
         PatternKind::Gap(_) => "gap",
+        PatternKind::Candle(_) => "candle",
         PatternKind::Custom(_) => "custom",
     }
 }

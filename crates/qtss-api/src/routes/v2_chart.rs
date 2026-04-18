@@ -56,7 +56,64 @@ pub struct ChartQuery {
 }
 
 pub fn v2_chart_router() -> Router<SharedState> {
-    Router::new().route("/v2/chart/{venue}/{symbol}/{tf}", get(get_chart))
+    Router::new()
+        .route("/v2/chart/{venue}/{symbol}/{tf}", get(get_chart))
+        // Faz 9.8.x — chart toolbar combobox source: distinct
+        // (exchange, segment) pairs that are enabled in engine_symbols,
+        // each with their symbol + interval list. Nothing hardcoded
+        // on the frontend (CLAUDE.md #2).
+        .route("/v2/chart/venues", get(list_chart_venues))
+}
+
+#[derive(Debug, serde::Serialize)]
+struct ChartVenueOption {
+    exchange: String,
+    segment: String,
+    symbols: Vec<String>,
+    intervals: Vec<String>,
+}
+
+async fn list_chart_venues(
+    State(st): State<SharedState>,
+) -> Result<Json<Vec<ChartVenueOption>>, ApiError> {
+    // One round-trip that the frontend can group by (exchange, segment)
+    // into chained dropdowns. `enabled = true` filters out discovery
+    // ghosts that the operator has not confirmed.
+    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        r#"
+        SELECT exchange, segment, symbol, "interval"
+          FROM engine_symbols
+         WHERE enabled = true
+         ORDER BY exchange, segment, sort_order, symbol, "interval"
+        "#,
+    )
+    .fetch_all(&st.pool)
+    .await
+    .map_err(|e| ApiError::new(axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    use std::collections::BTreeMap;
+    let mut grouped: BTreeMap<(String, String), (Vec<String>, Vec<String>)> = BTreeMap::new();
+    for (exchange, segment, symbol, interval) in rows {
+        let entry = grouped.entry((exchange, segment)).or_default();
+        if !entry.0.contains(&symbol) {
+            entry.0.push(symbol);
+        }
+        if !entry.1.contains(&interval) {
+            entry.1.push(interval);
+        }
+    }
+
+    Ok(Json(
+        grouped
+            .into_iter()
+            .map(|((exchange, segment), (symbols, intervals))| ChartVenueOption {
+                exchange,
+                segment,
+                symbols,
+                intervals,
+            })
+            .collect(),
+    ))
 }
 
 async fn get_chart(

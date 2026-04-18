@@ -1,7 +1,7 @@
 //! Faz 9.7.8 — New-setup public broadcast publisher.
 //!
 //! Polls `setup_broadcast_outbox` for pending rows, loads the setup
-//! from `qtss_v2_setups`, builds a [`PublicCard`] with AI brief
+//! from `qtss_setups`, builds a [`PublicCard`] with AI brief
 //! populated from `raw_meta.ai` + `ai_score`, dispatches the Telegram
 //! body via the shared [`NotificationDispatcher`], and enqueues the
 //! X-compatible body into `x_outbox` for the X publisher to pick up.
@@ -238,7 +238,11 @@ fn str_from_meta(meta: &JsonValue, key: &str) -> Option<String> {
 
 pub async fn setup_publisher_loop(pool: PgPool) {
     info!("setup_publisher loop spawned");
-    let dispatcher = NotificationDispatcher::from_env();
+    // CLAUDE.md #2: business config (bot_token, chat_id) lives in system_config, not env.
+    // `load_notify_config_merged` reads `notify.dispatcher_config` then overlays
+    // `notify.telegram_bot_token` + `notify.telegram_chat_id` from DB.
+    let ncfg = qtss_ai::notify_telegram_config::load_notify_config_merged(&pool).await;
+    let dispatcher = NotificationDispatcher::new(ncfg);
     loop {
         let enabled = resolve_worker_enabled_flag(
             &pool,

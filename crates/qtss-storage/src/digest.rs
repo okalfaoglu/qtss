@@ -112,7 +112,7 @@ pub async fn aggregate_digest(
                               AND s.closed_at < $2)                                        AS cancelled,
           COALESCE(SUM(s.realized_pnl_pct) FILTER (WHERE s.closed_at >= $1
                                                        AND s.closed_at < $2), 0.0)::float8 AS total_pnl_pct
-          FROM qtss_v2_setups s
+          FROM qtss_setups s
         "#,
     )
     .bind(from)
@@ -123,7 +123,7 @@ pub async fn aggregate_digest(
     let avg_open_health: Option<f64> = sqlx::query_scalar(
         r#"SELECT AVG(health_score)::float8
              FROM qtss_position_health_snapshots h
-             JOIN qtss_v2_setups s ON s.id = h.setup_id
+             JOIN qtss_setups s ON s.id = h.setup_id
             WHERE s.closed_at IS NULL
               AND h.captured_at >= $1"#,
     )

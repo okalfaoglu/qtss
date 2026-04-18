@@ -80,7 +80,7 @@ pub async fn list_watcher_rows(
                   entry_price, entry_sl, koruma, current_sl, raw_meta,
                   entry_touched_at, tp_hits_bitmap,
                   ratchet_reference_price, ratchet_cumulative_pct, ratchet_last_update_at
-             FROM qtss_v2_setups
+             FROM qtss_setups
             WHERE state IN ('armed','active') AND closed_at IS NULL"#,
     )
     .fetch_all(pool)
@@ -207,7 +207,7 @@ pub async fn close_setup(
 ) -> Result<(), StorageError> {
     sqlx::query(
         r#"
-        UPDATE qtss_v2_setups SET
+        UPDATE qtss_setups SET
             state            = 'closed',
             close_reason     = $2,
             close_price      = $3,
@@ -234,7 +234,7 @@ pub async fn mark_entry_touched(
     at: DateTime<Utc>,
 ) -> Result<(), StorageError> {
     sqlx::query(
-        r#"UPDATE qtss_v2_setups
+        r#"UPDATE qtss_setups
               SET entry_touched_at = COALESCE(entry_touched_at, $2),
                   updated_at = NOW()
             WHERE id = $1"#,
@@ -265,7 +265,7 @@ pub async fn apply_ratchet_update(
 ) -> Result<(), StorageError> {
     sqlx::query(
         r#"
-        UPDATE qtss_v2_setups SET
+        UPDATE qtss_setups SET
             current_sl                 = COALESCE($2, current_sl),
             koruma                     = COALESCE($2::numeric::real, koruma),
             ratchet_reference_price    = $3,
@@ -293,7 +293,7 @@ pub async fn set_tp_hit_bit(
     // tp_index is 1-based (1=TP1, 2=TP2, 3=TP3).
     let bit: i32 = 1 << (tp_index.saturating_sub(1) as i32);
     sqlx::query(
-        r#"UPDATE qtss_v2_setups
+        r#"UPDATE qtss_setups
               SET tp_hits_bitmap = tp_hits_bitmap | $2,
                   updated_at = NOW()
             WHERE id = $1"#,

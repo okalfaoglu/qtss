@@ -84,7 +84,7 @@ impl Default for EmitterConfig {
 }
 
 // =========================================================================
-// Emitted signal — the final object the worker upserts into qtss_v2_setups
+// Emitted signal — the final object the worker upserts into qtss_setups
 // =========================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

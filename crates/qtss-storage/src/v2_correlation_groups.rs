@@ -47,7 +47,7 @@ pub async fn count_open_setups_in_group(
     let n: i64 = sqlx::query_scalar(
         r#"
         SELECT COUNT(*)::bigint
-          FROM qtss_v2_setups s
+          FROM qtss_setups s
           JOIN qtss_v2_correlation_groups g
             ON g.venue_class = s.venue_class
            AND g.symbol      = s.symbol

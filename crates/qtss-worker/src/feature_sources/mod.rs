@@ -5,6 +5,7 @@
 //!   2. `crate::feature_store::FEATURE_SOURCES` array'ine satır ekle.
 //!   3. migration 0116'daki config key listesine `<name>.enabled` ekle.
 
+pub mod candle;
 pub mod classical;
 pub mod derivatives;
 pub mod elliott;

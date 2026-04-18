@@ -41,7 +41,7 @@ pub async fn regime_performance(
                      LIMIT 1),
                     'uncertain'
                 ) as regime
-            FROM qtss_v2_setups s
+            FROM qtss_setups s
             WHERE s.created_at > now() - make_interval(days => $1)
               AND s.state IN ('closed', 'closed_win', 'closed_loss', 'closed_manual')
         )

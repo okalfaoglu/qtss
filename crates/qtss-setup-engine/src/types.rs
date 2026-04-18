@@ -226,7 +226,7 @@ impl VenueClass {
 
 /// Reason a setup transitions to `Closed`. Written into
 /// `setup_events.payload` and the `close_reason` column on
-/// `qtss_v2_setups`.
+/// `qtss_setups`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CloseReason {

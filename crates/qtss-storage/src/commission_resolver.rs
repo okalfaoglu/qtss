@@ -40,7 +40,7 @@ impl CommissionSide {
 
 /// Resolve a single-side commission in basis points. See module docs
 /// for the precedence ladder. `venue_class` is the same string written
-/// into `qtss_v2_setups.venue_class` (e.g. `binance_futures`).
+/// into `qtss_setups.venue_class` (e.g. `binance_futures`).
 pub async fn resolve_commission_bps(
     pool: &PgPool,
     venue_class: &str,

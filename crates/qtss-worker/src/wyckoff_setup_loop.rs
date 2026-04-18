@@ -9,7 +9,7 @@
 //!   4. Run `signal_emitter::emit()` → 0..N `WyckoffSignal`s passing the
 //!      composite score gate.
 //!   5. For every mode in `wyckoff.scan.modes` (dry|live|backtest), upsert
-//!      a row into `qtss_v2_setups` keyed by the deterministic
+//!      a row into `qtss_setups` keyed by the deterministic
 //!      `idempotency_key` (migration 0064).
 //!
 //! CLAUDE.md compliance:

@@ -1,4 +1,4 @@
-//! Faz 8.0 — `qtss_v2_setups` repo.
+//! Faz 8.0 — `qtss_setups` repo.
 //!
 //! One row per setup lifecycle instance. The Setup Engine inserts
 //! with state='armed', updates `koruma`/state as the setup runs, and
@@ -68,6 +68,11 @@ pub struct V2SetupInsert {
     /// inference sidecar. `None` when the sidecar is disabled / unreachable
     /// / errored; shadow-only until `ai.inference.gate_enabled` flips true.
     pub ai_score: Option<f32>,
+    /// Faz 9.8.AI-1 — primary detection that tipped the confluence gate.
+    /// Required for the training-set view to join `qtss_features_snapshot`
+    /// rows (which are keyed by `detection_id`). `None` only for legacy rows
+    /// created before this field existed.
+    pub detection_id: Option<Uuid>,
 }
 
 pub async fn insert_v2_setup(
@@ -76,12 +81,12 @@ pub async fn insert_v2_setup(
 ) -> Result<Uuid, StorageError> {
     let id = sqlx::query_scalar::<_, Uuid>(
         r#"
-        INSERT INTO qtss_v2_setups (
+        INSERT INTO qtss_setups (
             venue_class, exchange, symbol, timeframe, profile, alt_type,
             state, direction, confluence_id,
             entry_price, entry_sl, koruma, target_ref, risk_pct, raw_meta,
-            ai_score
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+            ai_score, detection_id
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
         -- P14 — matches migration 0078 `uq_open_setup_key`:
         -- one open setup per (exchange, symbol, timeframe, profile)
         -- regardless of direction, using the real state value
@@ -110,6 +115,7 @@ pub async fn insert_v2_setup(
     .bind(row.risk_pct)
     .bind(&row.raw_meta)
     .bind(row.ai_score)
+    .bind(row.detection_id)
     .fetch_optional(pool)
     .await?;
     match id {
@@ -142,7 +148,7 @@ pub async fn update_v2_setup_state(
     };
     sqlx::query(
         r#"
-        UPDATE qtss_v2_setups
+        UPDATE qtss_setups
            SET state        = $2,
                koruma       = COALESCE($3, koruma),
                close_reason = COALESCE($4, close_reason),
@@ -173,7 +179,7 @@ pub async fn fetch_v2_setup(
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
                   pnl_pct, risk_mode, ai_score
-             FROM qtss_v2_setups
+             FROM qtss_setups
             WHERE id = $1"#,
     )
     .bind(id)
@@ -192,7 +198,7 @@ pub async fn list_open_v2_setups(
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
                   pnl_pct, risk_mode, ai_score
-             FROM qtss_v2_setups
+             FROM qtss_setups
             WHERE state IN ('armed','active')
               AND ($1::text IS NULL OR venue_class = $1)
             ORDER BY created_at DESC"#,
@@ -228,7 +234,7 @@ pub async fn list_v2_setups_filtered(
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
                   pnl_pct, risk_mode, ai_score
-             FROM qtss_v2_setups
+             FROM qtss_setups
             WHERE 1=1"#,
     );
 
@@ -283,7 +289,7 @@ pub async fn list_recent_v2_setups(
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
                   pnl_pct, risk_mode, ai_score
-             FROM qtss_v2_setups
+             FROM qtss_setups
             ORDER BY created_at DESC
             LIMIT $1"#,
     )

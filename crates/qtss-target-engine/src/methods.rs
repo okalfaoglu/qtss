@@ -51,6 +51,7 @@ fn subkind_str(kind: &PatternKind) -> &str {
         PatternKind::Wyckoff(s) => s,
         PatternKind::Range(s) => s,
         PatternKind::Gap(s) => s,
+        PatternKind::Candle(s) => s,
         PatternKind::Custom(s) => s,
     }
 }

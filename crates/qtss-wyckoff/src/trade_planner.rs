@@ -139,7 +139,7 @@ impl Default for TradePlannerConfig {
 }
 
 // =========================================================================
-// Output: TradePlan — what the worker writes to qtss_v2_setups
+// Output: TradePlan — what the worker writes to qtss_setups
 // =========================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

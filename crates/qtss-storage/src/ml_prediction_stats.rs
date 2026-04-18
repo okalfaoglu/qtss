@@ -107,7 +107,7 @@ pub async fn fetch_prediction_summary(
             COUNT(*) FILTER (WHERE p.decision = 'block' AND s.pnl_pct > 0)            AS block_wouldve_won,
             COUNT(*) FILTER (WHERE p.decision = 'block' AND s.pnl_pct IS NOT NULL)     AS block_with_outcome
         FROM qtss_ml_predictions p
-        LEFT JOIN qtss_v2_setups s ON s.id = p.setup_id
+        LEFT JOIN qtss_setups s ON s.id = p.setup_id
         WHERE p.inference_ts >= NOW() - ($1 || ' hours')::interval
         "#,
     )

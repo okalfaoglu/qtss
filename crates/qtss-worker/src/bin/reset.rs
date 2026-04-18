@@ -159,7 +159,7 @@ const WIPE_TABLES: &[(&str, bool)] = &[
     ("market_confluence_snapshots", false),
     ("analysis_snapshots", false),
     // Setup
-    ("qtss_v2_setups", true),
+    ("qtss_setups", true),
     ("qtss_v2_setup_events", false),
     ("qtss_v2_setup_rejections", false),
     ("qtss_v2_correlation_groups", false),

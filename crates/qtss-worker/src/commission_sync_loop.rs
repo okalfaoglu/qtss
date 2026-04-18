@@ -37,7 +37,7 @@ use tracing::{debug, info, warn};
 /// One (venue_class, segment) tuple the loop refreshes. Kept as a table
 /// so adding a new exchange = one row, not a new match arm (CLAUDE.md #1).
 struct SyncTarget {
-    /// `venue_class` string written into `qtss_v2_setups` and read by the
+    /// `venue_class` string written into `qtss_setups` and read by the
     /// commission resolver; e.g. `binance_futures`.
     venue_class: &'static str,
     /// `exchange_accounts.segment` value used to select creds.

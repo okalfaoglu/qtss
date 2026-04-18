@@ -25,7 +25,7 @@ use crate::setup_builder::SetupDirection;
 use crate::signal_emitter::WyckoffSignal;
 use crate::trade_planner::Profile;
 
-/// Everything storage needs to materialise a `qtss_v2_setups` row for a
+/// Everything storage needs to materialise a `qtss_setups` row for a
 /// Wyckoff signal. Primitive fields only — no crate-local types — so that
 /// `qtss-storage` can consume without pulling `qtss-wyckoff`.
 #[derive(Debug, Clone)]

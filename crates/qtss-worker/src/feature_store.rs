@@ -30,6 +30,7 @@ pub static FEATURE_SOURCES: &[&dyn ConfluenceSource] = &[
     &feature_sources::harmonic::HarmonicSource,
     &feature_sources::classical::ClassicalSource,
     &feature_sources::gap::GapSource,
+    &feature_sources::candle::CandleSource,
     &feature_sources::range::RangeSource,
     &feature_sources::tbm::TbmSource,
 ];

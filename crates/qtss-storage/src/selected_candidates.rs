@@ -1,7 +1,7 @@
 //! Faz 9.8.11 — `selected_candidates` repo.
 //!
 //! Bridge table between the setup engine and the execution bridge.
-//! The selector worker reads armed `qtss_v2_setups` rows, applies the
+//! The selector worker reads armed `qtss_setups` rows, applies the
 //! filter registry (risk caps, cooldowns, liquidation distance, …)
 //! and writes one row here per *approved* candidate. The execution
 //! bridge worker then claims pending rows with

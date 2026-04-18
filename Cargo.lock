@@ -2304,6 +2304,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "qtss-candles"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "qtss-domain",
+ "rust_decimal",
+ "rust_decimal_macros",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "qtss-chart-patterns"
 version = "0.1.0"
 dependencies = [
@@ -2865,6 +2879,7 @@ dependencies = [
  "qtss-ai",
  "qtss-analysis",
  "qtss-binance",
+ "qtss-candles",
  "qtss-chart-patterns",
  "qtss-classical",
  "qtss-common",

@@ -2,7 +2,7 @@
 //!
 //! All renderers (Telegram, X, digest, GUI preview) consume this
 //! struct. The builder takes a `SetupSnapshot` (the data we already
-//! have in `qtss_v2_setups` + the AI score) and produces a PublicCard
+//! have in `qtss_setups` + the AI score) and produces a PublicCard
 //! with the tier badge + asset category already resolved.
 //!
 //! CLAUDE.md #3: this crate knows nothing about orders, strategy,
@@ -63,7 +63,7 @@ impl AiBrief {
     }
 }
 
-/// Input to the card builder. Callers populate this from `qtss_v2_setups`
+/// Input to the card builder. Callers populate this from `qtss_setups`
 /// joined with `qtss_ml_predictions`.
 #[derive(Debug, Clone)]
 pub struct SetupSnapshot {
@@ -318,6 +318,34 @@ fn pretty_subkind(raw: &str) -> String {
         ("exhaustion_gap_bear", "Exhaustion Gap (Bear)"),
         ("island_reversal_bull", "Island Reversal (Bull)"),
         ("island_reversal_bear", "Island Reversal (Bear)"),
+        // Faz 10 Aşama 3 — Japanese candlestick labels.
+        ("hammer_bull", "Hammer (Bull)"),
+        ("inverted_hammer_bull", "Inverted Hammer (Bull)"),
+        ("hanging_man_bear", "Hanging Man (Bear)"),
+        ("shooting_star_bear", "Shooting Star (Bear)"),
+        ("marubozu_bull", "Marubozu (Bull)"),
+        ("marubozu_bear", "Marubozu (Bear)"),
+        ("spinning_top", "Spinning Top"),
+        ("doji", "Doji"),
+        ("dragonfly_doji", "Dragonfly Doji"),
+        ("gravestone_doji", "Gravestone Doji"),
+        ("long_legged_doji", "Long-Legged Doji"),
+        ("engulfing_bull", "Engulfing (Bull)"),
+        ("engulfing_bear", "Engulfing (Bear)"),
+        ("harami_bull", "Harami (Bull)"),
+        ("harami_bear", "Harami (Bear)"),
+        ("piercing_line_bull", "Piercing Line (Bull)"),
+        ("dark_cloud_cover_bear", "Dark Cloud Cover (Bear)"),
+        ("tweezer_top_bear", "Tweezer Top (Bear)"),
+        ("tweezer_bottom_bull", "Tweezer Bottom (Bull)"),
+        ("morning_star_bull", "Morning Star (Bull)"),
+        ("evening_star_bear", "Evening Star (Bear)"),
+        ("three_white_soldiers_bull", "Three White Soldiers"),
+        ("three_black_crows_bear", "Three Black Crows"),
+        ("three_inside_up_bull", "Three Inside Up"),
+        ("three_inside_down_bear", "Three Inside Down"),
+        ("three_outside_up_bull", "Three Outside Up"),
+        ("three_outside_down_bear", "Three Outside Down"),
     ];
     for (k, v) in EXACT {
         if *k == s {

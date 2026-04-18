@@ -34,7 +34,7 @@ import { RectanglePrimitive, type RectangleOptions } from "../lib/rectangle-prim
 import type { CandleBar, ChartWorkspace, DetectionOverlay } from "../lib/types";
 
 // ─── Constants ───────────────────────────────────────────────────────
-const DEFAULTS = { venue: "binance", symbol: "BTCUSDT", timeframe: "1h" };
+const DEFAULTS = { venue: "binance", segment: "futures", symbol: "BTCUSDT", timeframe: "1h" };
 const PAGE_SIZE = 500;
 const PREFETCH_THRESHOLD = 50;
 
@@ -383,8 +383,18 @@ interface WyckoffOverlayData {
 // ─── Chart form state ────────────────────────────────────────────────
 interface ChartForm {
   venue: string;
+  segment: string;
   symbol: string;
   timeframe: string;
+}
+
+// Faz 9.8.x — chart venues list (populates Exchange/Segment/Symbol combos
+// from engine_symbols so the frontend never hardcodes names).
+interface ChartVenueOption {
+  exchange: string;
+  segment: string;
+  symbols: string[];
+  intervals: string[];
 }
 
 // ─── Compute Entry/TP/SL from detection geometry ─────────────────────
@@ -522,12 +532,21 @@ export function Chart() {
     setOlderPages([]);
   }, [debounced.venue, debounced.symbol, debounced.timeframe]);
 
+  // Faz 9.8.x — exchange/segment/symbol combobox source. Long cache
+  // because engine_symbols changes rarely.
+  const venuesQuery = useQuery({
+    queryKey: ["v2", "chart", "venues"],
+    queryFn: () => apiFetch<ChartVenueOption[]>("/v2/chart/venues"),
+    staleTime: 60_000,
+  });
+  const venueOptions = venuesQuery.data ?? [];
+
   // ─── Data queries ───────────────────────────────────────────────
   const query = useQuery({
     queryKey: ["v2", "chart", debounced],
     queryFn: () =>
       apiFetch<ChartWorkspace>(
-        `/v2/chart/${debounced.venue}/${debounced.symbol}/${debounced.timeframe}?limit=${PAGE_SIZE}`,
+        `/v2/chart/${debounced.venue}/${debounced.symbol}/${debounced.timeframe}?limit=${PAGE_SIZE}&segment=${debounced.segment}`,
       ),
     refetchInterval: 30_000,
     structuralSharing: true,
@@ -697,7 +716,7 @@ export function Chart() {
     try {
       const oldest = merged.candles[0].open_time;
       const page = await apiFetch<ChartWorkspace>(
-        `/v2/chart/${debounced.venue}/${debounced.symbol}/${debounced.timeframe}?limit=${PAGE_SIZE}&before=${encodeURIComponent(oldest)}`,
+        `/v2/chart/${debounced.venue}/${debounced.symbol}/${debounced.timeframe}?limit=${PAGE_SIZE}&segment=${debounced.segment}&before=${encodeURIComponent(oldest)}`,
       );
       if (page.candles.length > 0) {
         setOlderPages((prev) => [page, ...prev]);
@@ -1740,21 +1759,82 @@ export function Chart() {
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* ── Top Toolbar (single row, TV-style) ──────────────── */}
         <div className="flex items-center gap-2 border-b border-zinc-800 bg-zinc-950 px-3 py-1.5">
-          {/* Symbol */}
-          <div className="flex items-center gap-1">
-            <input
-              value={form.venue}
-              onChange={(e) => setForm({ ...form, venue: e.target.value })}
-              className="w-20 rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[11px] text-zinc-300"
-              placeholder="venue"
-            />
-            <input
-              value={form.symbol}
-              onChange={(e) => setForm({ ...form, symbol: e.target.value.toUpperCase() })}
-              className="w-24 rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-zinc-100"
-              placeholder="BTCUSDT"
-            />
-          </div>
+          {/* Exchange / Segment / Symbol — chained combos from engine_symbols */}
+          {(() => {
+            const exchanges = Array.from(new Set(venueOptions.map((v) => v.exchange)));
+            const segments = Array.from(
+              new Set(venueOptions.filter((v) => v.exchange === form.venue).map((v) => v.segment)),
+            );
+            const currentVenue = venueOptions.find(
+              (v) => v.exchange === form.venue && v.segment === form.segment,
+            );
+            const symbols = currentVenue?.symbols ?? [];
+            const selectCls =
+              "rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[11px] text-zinc-200 focus:outline-none focus:border-zinc-500";
+            return (
+              <div className="flex items-center gap-1">
+                <select
+                  className={`w-24 ${selectCls}`}
+                  value={form.venue}
+                  onChange={(e) => {
+                    const exch = e.target.value;
+                    // Pick a valid segment + symbol for the new exchange.
+                    const firstSeg =
+                      venueOptions.find((v) => v.exchange === exch)?.segment ?? form.segment;
+                    const firstSym =
+                      venueOptions.find((v) => v.exchange === exch && v.segment === firstSeg)
+                        ?.symbols[0] ?? form.symbol;
+                    setForm({ ...form, venue: exch, segment: firstSeg, symbol: firstSym });
+                  }}
+                  disabled={venuesQuery.isLoading || exchanges.length === 0}
+                  title="Exchange"
+                >
+                  {exchanges.length === 0 ? <option value={form.venue}>{form.venue}</option> : null}
+                  {exchanges.map((x) => (
+                    <option key={x} value={x}>
+                      {x}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className={`w-20 ${selectCls}`}
+                  value={form.segment}
+                  onChange={(e) => {
+                    const seg = e.target.value;
+                    const firstSym =
+                      venueOptions.find((v) => v.exchange === form.venue && v.segment === seg)
+                        ?.symbols[0] ?? form.symbol;
+                    setForm({ ...form, segment: seg, symbol: firstSym });
+                  }}
+                  disabled={segments.length === 0}
+                  title="Market type (spot / futures)"
+                >
+                  {segments.length === 0 ? (
+                    <option value={form.segment}>{form.segment}</option>
+                  ) : null}
+                  {segments.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className={`w-28 font-mono font-semibold ${selectCls}`}
+                  value={form.symbol}
+                  onChange={(e) => setForm({ ...form, symbol: e.target.value })}
+                  disabled={symbols.length === 0}
+                  title="Symbol"
+                >
+                  {symbols.length === 0 ? <option value={form.symbol}>{form.symbol}</option> : null}
+                  {symbols.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            );
+          })()}
 
           {/* Separator */}
           <div className="h-5 w-px bg-zinc-700" />

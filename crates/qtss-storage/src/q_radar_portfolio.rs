@@ -118,7 +118,7 @@ pub async fn open_position(
 ) -> Result<Uuid, sqlx::Error> {
     let row = sqlx::query_scalar::<_, Uuid>(
         r#"
-        INSERT INTO q_radar_positions
+        INSERT INTO qtss_positions
             (setup_id, symbol, direction, allocated_amount, quantity, avg_entry_price, total_bought_qty)
         VALUES ($1, $2, $3, $4, $5, $6, $5)
         RETURNING id
@@ -140,7 +140,7 @@ pub async fn fetch_open_position_for_setup(
     setup_id: Uuid,
 ) -> Result<Option<QRadarPositionRow>, sqlx::Error> {
     sqlx::query_as::<_, QRadarPositionRow>(
-        "SELECT * FROM q_radar_positions WHERE setup_id = $1 AND state = 'open'",
+        "SELECT * FROM qtss_positions WHERE setup_id = $1 AND state = 'open'",
     )
     .bind(setup_id)
     .fetch_optional(pool)
@@ -149,7 +149,7 @@ pub async fn fetch_open_position_for_setup(
 
 pub async fn list_open_positions(pool: &PgPool) -> Result<Vec<QRadarPositionRow>, sqlx::Error> {
     sqlx::query_as::<_, QRadarPositionRow>(
-        "SELECT * FROM q_radar_positions WHERE state = 'open' ORDER BY created_at DESC",
+        "SELECT * FROM qtss_positions WHERE state = 'open' ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await
@@ -164,7 +164,7 @@ pub async fn add_on_buy(
     // Update avg_entry_price weighted by quantities.
     sqlx::query(
         r#"
-        UPDATE q_radar_positions
+        UPDATE qtss_positions
         SET avg_entry_price = (avg_entry_price * quantity + $2 * $3) / (quantity + $2),
             quantity = quantity + $2,
             total_bought_qty = total_bought_qty + $2,
@@ -189,7 +189,7 @@ pub async fn partial_sell(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
-        UPDATE q_radar_positions
+        UPDATE qtss_positions
         SET quantity = quantity - $2,
             total_sold_qty = total_sold_qty + $2,
             realized_pnl = realized_pnl + $3,
@@ -212,7 +212,7 @@ pub async fn close_position(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
-        UPDATE q_radar_positions
+        UPDATE qtss_positions
         SET state = 'closed',
             closed_at = now(),
             quantity = 0,

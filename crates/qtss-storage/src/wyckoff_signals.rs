@@ -1,4 +1,4 @@
-//! Wyckoff signal persistence — idempotent upsert into `qtss_v2_setups`.
+//! Wyckoff signal persistence — idempotent upsert into `qtss_setups`.
 //!
 //! Callers pass a `WyckoffSetupPayload` (produced by
 //! `qtss_wyckoff::persistence::signal_to_payload`) to insert/update a row
@@ -55,7 +55,7 @@ pub async fn upsert_wyckoff_setup(
 ) -> Result<Uuid, StorageError> {
     let id = sqlx::query_scalar::<_, Uuid>(
         r#"
-        INSERT INTO qtss_v2_setups (
+        INSERT INTO qtss_setups (
             venue_class, exchange, symbol, timeframe, profile, alt_type,
             state, direction, mode,
             entry_price, entry_sl, target_ref,
@@ -75,7 +75,7 @@ pub async fn upsert_wyckoff_setup(
             tp_ladder       = EXCLUDED.tp_ladder,
             wyckoff_classic = EXCLUDED.wyckoff_classic,
             updated_at      = now()
-          WHERE qtss_v2_setups.state IN ('armed', 'active')
+          WHERE qtss_setups.state IN ('armed', 'active')
         RETURNING id
         "#,
     )
@@ -111,7 +111,7 @@ async fn fetch_id_by_key(
     key: &str,
 ) -> Result<Option<Uuid>, StorageError> {
     let id = sqlx::query_scalar::<_, Uuid>(
-        r#"SELECT id FROM qtss_v2_setups WHERE idempotency_key = $1 LIMIT 1"#,
+        r#"SELECT id FROM qtss_setups WHERE idempotency_key = $1 LIMIT 1"#,
     )
     .bind(key)
     .fetch_optional(pool)
@@ -130,7 +130,7 @@ pub async fn list_open_wyckoff_setups(
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
                   pnl_pct, risk_mode
-             FROM qtss_v2_setups
+             FROM qtss_setups
             WHERE state IN ('armed','active')
               AND alt_type LIKE 'wyckoff_%'
               AND ($1::text IS NULL OR mode = $1)

@@ -2,7 +2,7 @@
 //!
 //! At setup-open time the D/T/Q loop assembles `features_by_source`,
 //! forwards it to the sidecar, and stamps the returned P(win) on the
-//! setup row (`qtss_v2_setups.ai_score`). The client is deliberately
+//! setup row (`qtss_setups.ai_score`). The client is deliberately
 //! thin: it owns no state, returns `None` on any soft failure
 //! (disabled, unreachable, timeout, 5xx) so the setup path keeps
 //! running in shadow mode until operators are confident.

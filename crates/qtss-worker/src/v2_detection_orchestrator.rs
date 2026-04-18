@@ -39,6 +39,7 @@ use futures_util::stream::{self, StreamExt};
 use chrono::Utc;
 use qtss_chart_patterns::{analyze_trading_range, OhlcBar, TradingRangeParams};
 use qtss_classical::{ClassicalConfig, ClassicalDetector};
+use qtss_candles::{CandleConfig, CandleDetector};
 use qtss_gap::{GapConfig, GapDetector};
 use qtss_range::RangeDetectorConfig;
 use qtss_domain::v2::bar::Bar;
@@ -159,6 +160,29 @@ struct GapRunner(GapDetector);
 impl DetectorRunner for GapRunner {
     fn family(&self) -> &'static str {
         "gap"
+    }
+    fn detect(
+        &self,
+        _tree: &PivotTree,
+        bars: &[Bar],
+        instrument: &Instrument,
+        timeframe: Timeframe,
+        regime: &RegimeSnapshot,
+    ) -> Vec<Detection> {
+        self.0
+            .detect(bars, instrument, timeframe, regime)
+            .into_iter()
+            .collect()
+    }
+}
+
+/// Candle runner — wraps `qtss_candles::CandleDetector`. Pure bar-based;
+/// pivot tree is not consulted (candlestick classification is per-bar
+/// geometry + short trend context).
+struct CandleRunner(CandleDetector);
+impl DetectorRunner for CandleRunner {
+    fn family(&self) -> &'static str {
+        "candle"
     }
     fn detect(
         &self,
@@ -517,6 +541,57 @@ async fn resolve_gap_config(pool: &PgPool) -> GapConfig {
         runaway_trend_min_pct,
         exhaustion_reversal_bars,
         island_max_bars,
+        min_structural_score,
+    }
+}
+
+/// Candle detector config — every threshold tuneable from Config Editor.
+async fn resolve_candle_config(pool: &PgPool) -> CandleConfig {
+    let doji_body_ratio_max = resolve_system_f64(
+        pool, "detection", "candle.doji_body_ratio_max",
+        "QTSS_DETECTION_CANDLE_DOJI_BODY_MAX", 0.1,
+    ).await;
+    let marubozu_shadow_ratio_max = resolve_system_f64(
+        pool, "detection", "candle.marubozu_shadow_ratio_max",
+        "QTSS_DETECTION_CANDLE_MARUBOZU_SHADOW_MAX", 0.05,
+    ).await;
+    let hammer_lower_shadow_ratio_min = resolve_system_f64(
+        pool, "detection", "candle.hammer_lower_shadow_ratio_min",
+        "QTSS_DETECTION_CANDLE_HAMMER_LOWER_MIN", 2.0,
+    ).await;
+    let hammer_upper_shadow_ratio_max = resolve_system_f64(
+        pool, "detection", "candle.hammer_upper_shadow_ratio_max",
+        "QTSS_DETECTION_CANDLE_HAMMER_UPPER_MAX", 0.5,
+    ).await;
+    let spinning_top_body_ratio_max = resolve_system_f64(
+        pool, "detection", "candle.spinning_top_body_ratio_max",
+        "QTSS_DETECTION_CANDLE_SPINNING_BODY_MAX", 0.3,
+    ).await;
+    let tweezer_price_tol = resolve_system_f64(
+        pool, "detection", "candle.tweezer_price_tol",
+        "QTSS_DETECTION_CANDLE_TWEEZER_TOL", 0.002,
+    ).await;
+    let trend_context_bars = resolve_system_u64(
+        pool, "detection", "candle.trend_context_bars",
+        "QTSS_DETECTION_CANDLE_TREND_BARS", 5, 2, 200,
+    ).await as usize;
+    let trend_context_min_pct = resolve_system_f64(
+        pool, "detection", "candle.trend_context_min_pct",
+        "QTSS_DETECTION_CANDLE_TREND_MIN_PCT", 0.015,
+    ).await;
+    let min_structural_score = resolve_system_f64(
+        pool, "detection", "candle.min_structural_score",
+        "QTSS_DETECTION_CANDLE_MIN_SCORE", 0.50,
+    ).await as f32;
+    CandleConfig {
+        doji_body_ratio_max,
+        marubozu_shadow_ratio_max,
+        hammer_lower_shadow_ratio_min,
+        hammer_upper_shadow_ratio_max,
+        spinning_top_body_ratio_max,
+        tweezer_price_tol,
+        trend_context_bars,
+        trend_context_min_pct,
         min_structural_score,
     }
 }
@@ -989,6 +1064,21 @@ pub(crate) async fn build_runners(pool: &PgPool) -> Vec<Box<dyn DetectorRunner>>
         match GapDetector::new(gap_cfg) {
             Ok(d) => runners.push(Box::new(GapRunner(d))),
             Err(e) => warn!(?e, "gap detector init failed"),
+        }
+    }
+    if resolve_worker_enabled_flag(
+        pool,
+        "detection",
+        "candle.enabled",
+        "QTSS_DETECTION_CANDLE_ENABLED",
+        true,
+    )
+    .await
+    {
+        let candle_cfg = resolve_candle_config(pool).await;
+        match CandleDetector::new(candle_cfg) {
+            Ok(d) => runners.push(Box::new(CandleRunner(d))),
+            Err(e) => warn!(?e, "candle detector init failed"),
         }
     }
     if resolve_worker_enabled_flag(
@@ -2708,6 +2798,7 @@ pub(crate) fn split_pattern_kind(kind: &PatternKind) -> (&'static str, &str) {
         PatternKind::Wyckoff(s) => ("wyckoff", s.as_str()),
         PatternKind::Range(s) => ("range", s.as_str()),
         PatternKind::Gap(s) => ("gap", s.as_str()),
+        PatternKind::Candle(s) => ("candle", s.as_str()),
         PatternKind::Custom(s) => ("custom", s.as_str()),
     }
 }

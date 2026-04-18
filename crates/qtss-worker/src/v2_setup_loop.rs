@@ -700,7 +700,7 @@ async fn close_setup(
 
     // Write pnl_pct to the setup row.
     if let Some(pnl) = pnl_pct {
-        sqlx::query("UPDATE qtss_v2_setups SET pnl_pct = $1 WHERE id = $2")
+        sqlx::query("UPDATE qtss_setups SET pnl_pct = $1 WHERE id = $2")
             .bind(pnl)
             .bind(row.id)
             .execute(pool)
@@ -1247,6 +1247,29 @@ async fn try_arm_new_setup(
         // "pass" → proceed, "abstain" → fall through to classic gate
     }
 
+    // Faz 9.8.AI-1 — pick the primary detection whose direction matches the
+    // confluence reading and has the highest structural_score. This detection_id
+    // is what `qtss_features_snapshot.detection_id` is keyed by, so persisting
+    // it unblocks the `v_qtss_training_set` join and the LightGBM trainer.
+    let primary_detection_id: Option<Uuid> = detections
+        .iter()
+        .filter(|d| {
+            let det_dir = if d.subkind.contains("bull") {
+                Direction::Long
+            } else if d.subkind.contains("bear") {
+                Direction::Short
+            } else {
+                Direction::Neutral
+            };
+            det_dir == direction && (d.state == "confirmed" || d.state == "forming")
+        })
+        .max_by(|a, b| {
+            a.structural_score
+                .partial_cmp(&b.structural_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|d| d.id);
+
     let row = V2SetupInsert {
         venue_class: venue.as_str().to_string(),
         exchange: sym.exchange.clone(),
@@ -1284,6 +1307,7 @@ async fn try_arm_new_setup(
             })),
         }),
         ai_score,
+        detection_id: primary_detection_id,
     };
     let id: Uuid = match insert_v2_setup(pool, &row).await {
         Ok(id) => id,

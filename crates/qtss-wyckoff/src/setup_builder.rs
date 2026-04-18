@@ -4,7 +4,7 @@
 //! The L1 values (entry, sl, tp_targets, pnf_target) come from pattern geometry
 //! and are immutable per setup type. The Q-RADAR adaptive layer (L2) lives in
 //! `trade_planner.rs` and consumes these candidates to produce the final
-//! `tp_ladder` and `entry_sl` written to `qtss_v2_setups`.
+//! `tp_ladder` and `entry_sl` written to `qtss_setups`.
 //!
 //! CLAUDE.md compliance:
 //! - #1: each setup is its own `impl SetupBuilder` (no central match).

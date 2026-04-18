@@ -1,7 +1,7 @@
 //! Faz 9.8.1 — Setup selector (low-risk / high-reward filter dispatch).
 //!
 //! Between the setup engine (9.7) and the execution manager (9.8.4).
-//! Takes a candidate [`SetupCandidate`] (built from `qtss_v2_setups`
+//! Takes a candidate [`SetupCandidate`] (built from `qtss_setups`
 //! + external context) and walks a registered battery of filters.
 //! The first rejection short-circuits (CLAUDE.md #1 — every filter is
 //! a trait impl rather than an inline `if` branch).
@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::live_position_store::MarketSegment;
 
 /// Inputs the selector reasons about. The caller fills these from
-/// `qtss_v2_setups` (+ joined ai_score) plus external signals (open
+/// `qtss_setups` (+ joined ai_score) plus external signals (open
 /// position count on the venue, cooldown state, etc.).
 #[derive(Debug, Clone)]
 pub struct SetupCandidate {

@@ -391,7 +391,31 @@
       "Bash(ls /app/qtss/crates/qtss-worker/src/*.rs)",
       "Bash(PGPASSWORD=\"24Qwert12!\" psql -h 127.0.0.1 -U qtss -d qtss -f migrations/0132_faz9_data_health_report.sql)",
       "Bash(cat C:\\\\\\\\Users\\\\\\\\oguzk\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\--wsl-localhost-Ubuntu-app-qtss\\\\\\\\aa0c15a3-0a7d-4a9b-9e30-8a54cfb02a2f\\\\\\\\tasks\\\\\\\\b5iwzhnjx.output)",
-      "Bash(ls -la \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\")"
+      "Bash(ls -la \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\")",
+      "Bash(ls \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\crates\")",
+      "Bash(find \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\" -name \"execution_bridge.rs\")",
+      "Bash(ls -la \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\crates\\\\qtss-execution\\\\src\")",
+      "Bash(ls -la \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\crates\\\\qtss-binance\\\\src\")",
+      "Bash(find \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\" -path \"*/qtss-domain/*\" -name \"orders.rs\")",
+      "Bash(grep -r \"struct OrderIntent\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\crates\\\\qtss-domain\")",
+      "Bash(grep -r \"api.key\\\\|api_key\\\\|secret\\\\|BINANCE_KEY\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\crates\" --include=\"*.rs\")",
+      "Bash(grep -r \"place_order\\\\|place_live\\\\|BinanceClient\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\crates\\\\qtss-binance\" --include=\"*.rs\")",
+      "Bash(grep -r \"fapi_new_order\\\\|spot_new_order\\\\|place\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\crates\\\\qtss-binance\\\\src\" --include=\"*.rs\")",
+      "Bash(grep -rn \"BinanceLiveGateway\\\\|dispatch_live\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\" --include=\"*.rs\")",
+      "Bash(grep -rn \"max_notional\\\\|daily_loss\\\\|kill.switch\\\\|safety\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\" --include=\"*.rs\")",
+      "Bash(grep -rn \"LiveGateway\\\\|ExecutionManager\\\\|place_on\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\crates\\\\qtss-worker\" --include=\"*.rs\")",
+      "Bash(grep -rn \"SecretStore\\\\|get_secret\\\\|credentials\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\crates\\\\qtss-secrets\\\\src\" --include=\"*.rs\")",
+      "Bash(grep -rn \"check_\\\\|validate\\\\|guard\\\\|gate\\\\|risk\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\crates\\\\qtss-execution\" --include=\"*.rs\")",
+      "Bash(grep -rn \"max_notional\\\\|daily_loss\\\\|position_limit\\\\|notional\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\" --include=\"*.rs\")",
+      "Bash(grep -A 20 \"#\\\\[async_trait\\\\]\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\crates\\\\qtss-execution\\\\src\\\\binance_live.rs\")",
+      "Bash(grep -rn \"exchange_accounts\\\\|binance_for_user\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\crates\\\\qtss-storage\" --include=\"*.rs\")",
+      "Bash(grep -rn \"insert_submitted\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\crates\\\\qtss-storage\\\\src\" --include=\"*.rs\")",
+      "Bash(grep -rn \"struct SelectedCandidateRow\" \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\" --include=\"*.rs\")",
+      "Bash(find /app/qtss -name \"*.rs\" -exec grep -l \"SelectedCandidateRow\" {} \\\\;)",
+      "Bash(ls -1 \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\crates\\\\\" 2>/dev/null | head -20)",
+      "Bash(find . -name \"main.rs\" -path \"*/qtss-worker/*\" -exec grep -l \"outcome_labeler\\\\|tick_dispatcher\" {} \\\\;)",
+      "Bash(grep -E \"outcome_labeler_loop|tick_dispatcher_loop|position_manager\" \\\\\\\\wsl.localhost\\\\\\\\Ubuntu\\\\\\\\app\\\\\\\\qtss\\\\\\\\crates\\\\\\\\qtss-worker\\\\\\\\src\\\\\\\\main.rs)",
+      "Bash(ls -la \\\\\\\\wsl.localhost\\\\\\\\Ubuntu\\\\\\\\app\\\\\\\\qtss)"
     ]
   }
 }

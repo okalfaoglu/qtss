@@ -63,7 +63,7 @@ impl LifecycleEventKind {
         matches!(self, Self::TpFinal | Self::SlHit | Self::Invalidated | Self::Cancelled)
     }
 
-    /// The `close_reason` to stamp on `qtss_v2_setups` when terminal.
+    /// The `close_reason` to stamp on `qtss_setups` when terminal.
     /// Non-terminal kinds return `None`.
     pub fn close_reason(self) -> Option<&'static str> {
         match self {
@@ -80,7 +80,7 @@ impl LifecycleEventKind {
 // Setup state (watcher view)
 // ---------------------------------------------------------------------------
 
-/// Minimal view the detector needs. Built from `qtss_v2_setups` row +
+/// Minimal view the detector needs. Built from `qtss_setups` row +
 /// the last-seen price tick. `current_sl` reflects Poz Koruma ratchet
 /// when 9.7.4 lands; for 9.7.3 it's just the original SL.
 #[derive(Debug, Clone)]

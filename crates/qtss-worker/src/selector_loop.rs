@@ -2,7 +2,7 @@
 //!
 //! Bridges the setup engine to the execution layer. Each tick:
 //!
-//!   1. Read `qtss_v2_setups` rows in state `armed` that have a numeric
+//!   1. Read `qtss_setups` rows in state `armed` that have a numeric
 //!      entry + SL.
 //!   2. Drop the ones that already have a row in `selected_candidates`
 //!      for `mode='dry'` (idempotent).

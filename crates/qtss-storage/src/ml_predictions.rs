@@ -1,7 +1,7 @@
 //! Faz 9.3.5 — `qtss_ml_predictions` repo.
 //!
 //! One row per sidecar `/score` call. Lives independent of
-//! `qtss_v2_setups` — see migration 0125's top-of-file comment for the
+//! `qtss_setups` — see migration 0125's top-of-file comment for the
 //! full rationale.
 //!
 //! CLAUDE.md:

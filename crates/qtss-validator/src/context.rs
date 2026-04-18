@@ -58,6 +58,7 @@ pub fn pattern_key(det: &Detection) -> String {
         PatternKind::Wyckoff(s) => format!("wyckoff:{s}"),
         PatternKind::Range(s) => format!("range:{s}"),
         PatternKind::Gap(s) => format!("gap:{s}"),
+        PatternKind::Candle(s) => format!("candle:{s}"),
         PatternKind::Custom(s) => format!("custom:{s}"),
     };
     format!("{family}@{:?}", det.timeframe)

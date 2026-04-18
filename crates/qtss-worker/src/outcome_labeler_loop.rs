@@ -1,6 +1,6 @@
 //! Faz 9.0.1 — Outcome Labeler.
 //!
-//! Kapalı `qtss_v2_setups` satırlarını taramayla `qtss_setup_outcomes`
+//! Kapalı `qtss_setups` satırlarını taramayla `qtss_setup_outcomes`
 //! tablosuna değişmez etiketle yazar. Idempotent (primary key `setup_id`),
 //! retro-labeling ayrı script'e gerek bırakmaz — ilk açılışta mevcut tüm
 //! kapalı setup'ları batch halinde etiketler.
@@ -130,7 +130,7 @@ async fn sweep_once(pool: &PgPool, neutral_band: f32, batch: i64) -> Result<usiz
         SELECT s.id, s.state, s.close_reason, s.pnl_pct, s.risk_pct,
                s.max_favorable_r, s.max_adverse_r,
                s.bars_to_close, s.bars_to_first_tp, s.closed_at
-          FROM qtss_v2_setups s
+          FROM qtss_setups s
           LEFT JOIN qtss_setup_outcomes o ON o.setup_id = s.id
          WHERE o.setup_id IS NULL
            AND (s.state IN ('closed','closed_win','closed_loss','closed_manual')

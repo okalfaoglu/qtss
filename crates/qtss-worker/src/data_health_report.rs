@@ -230,21 +230,21 @@ async fn fetch_setup_stats(
 ) -> Result<SetupStats, Box<dyn std::error::Error + Send + Sync>> {
     // Opened in 24h
     let opened: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM qtss_v2_setups WHERE created_at >= NOW() - INTERVAL '24 hours'",
+        "SELECT COUNT(*) FROM qtss_setups WHERE created_at >= NOW() - INTERVAL '24 hours'",
     )
     .fetch_one(pool)
     .await?;
 
     // Closed in 24h
     let closed: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM qtss_v2_setups WHERE closed_at >= NOW() - INTERVAL '24 hours'",
+        "SELECT COUNT(*) FROM qtss_setups WHERE closed_at >= NOW() - INTERVAL '24 hours'",
     )
     .fetch_one(pool)
     .await?;
 
     // Currently active
     let active: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM qtss_v2_setups WHERE state IN ('armed', 'active')",
+        "SELECT COUNT(*) FROM qtss_setups WHERE state IN ('armed', 'active')",
     )
     .fetch_one(pool)
     .await?;
@@ -254,7 +254,7 @@ async fn fetch_setup_stats(
         r#"
         SELECT AVG(pnl_pct)::float8
         FROM qtss_setup_outcomes o
-        JOIN qtss_v2_setups s ON s.id = o.setup_id
+        JOIN qtss_setups s ON s.id = o.setup_id
         WHERE s.closed_at >= NOW() - INTERVAL '24 hours'
         "#,
     )
