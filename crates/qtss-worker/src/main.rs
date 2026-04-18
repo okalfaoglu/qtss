@@ -35,6 +35,8 @@ mod price_tick_ws;
 mod setup_watcher;
 mod x_publisher;
 mod digest_loop;
+mod selector_loop;
+mod execution_bridge;
 mod setup_publisher;
 mod range_signal_execute_loop;
 mod setup_scan_engine;
@@ -296,6 +298,11 @@ async fn main() -> anyhow::Result<()> {
         // Faz 9.0.1 — outcome labeler (AI training substrate).
         let ol_pool = pool.clone();
         tokio::spawn(outcome_labeler_loop::outcome_labeler_loop(ol_pool));
+        // Faz 9.8.11 — selector + execution bridge (setup → selected_candidates → placed).
+        let sel_pool = pool.clone();
+        tokio::spawn(selector_loop::selector_loop(sel_pool));
+        let exb_pool = pool.clone();
+        tokio::spawn(execution_bridge::execution_bridge_loop(exb_pool));
         let cg_pool = pool.clone();
         tokio::spawn(engines::external_coinglass_loop(cg_pool));
         let hl_pool = pool.clone();
