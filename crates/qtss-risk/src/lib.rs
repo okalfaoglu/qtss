@@ -69,8 +69,10 @@ pub use allocator::{
     CommissionGate, CommissionRates, DrawdownGate, EquityFloorGate, MaxExposureGate,
 };
 pub use liquidation_guard::{
-    assess as assess_liquidation, LiquidationAction, LiquidationAssessment, LiquidationGuardConfig,
-    LiquidationSeverity,
+    action_db_tag as liquidation_action_db_tag, assess as assess_liquidation,
+    assess_with_margin as assess_liquidation_with_margin, severity_db_tag as liquidation_severity_db_tag,
+    LiquidationAction, LiquidationAssessment, LiquidationEventDto, LiquidationGuardConfig,
+    LiquidationSeverity, MarginContext,
 };
 pub use live_position_store::{
     ExecutionMode, LivePositionState, LivePositionStore, MarketSegment, PositionId, PositionSide,

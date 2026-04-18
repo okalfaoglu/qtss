@@ -51,6 +51,7 @@ pub mod v2_detections;
 pub mod v2_onchain_metrics;
 pub mod digest;
 pub mod setup_lifecycle;
+pub mod liquidation_guard_events;
 pub mod setup_broadcast_outbox;
 pub mod x_outbox;
 pub mod v2_setup_events;
