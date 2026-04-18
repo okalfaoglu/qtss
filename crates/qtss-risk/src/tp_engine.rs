@@ -3,7 +3,9 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use crate::live_position_store::{LivePositionState, PositionSide, TpLeg};
+use crate::live_position_store::{LivePositionState, PositionSide};
+#[cfg(test)]
+use crate::live_position_store::TpLeg;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TpTrigger {
