@@ -39,6 +39,7 @@ use futures_util::stream::{self, StreamExt};
 use chrono::Utc;
 use qtss_chart_patterns::{analyze_trading_range, OhlcBar, TradingRangeParams};
 use qtss_classical::{ClassicalConfig, ClassicalDetector};
+use qtss_gap::{GapConfig, GapDetector};
 use qtss_range::RangeDetectorConfig;
 use qtss_domain::v2::bar::Bar;
 use qtss_domain::v2::detection::{Detection, PatternKind, PatternState, PivotRef};
@@ -147,6 +148,28 @@ impl DetectorRunner for ClassicalRunner {
         // checks have bar-level OHLC; bar-less shapes ignore the slice.
         self.0
             .detect_with_bars(tree, bars, instrument, timeframe, regime)
+            .into_iter()
+            .collect()
+    }
+}
+
+/// Gap runner — wraps `qtss_gap::GapDetector`. Consumes bars only
+/// (gap detection is price/volume based, no pivot tree required).
+struct GapRunner(GapDetector);
+impl DetectorRunner for GapRunner {
+    fn family(&self) -> &'static str {
+        "gap"
+    }
+    fn detect(
+        &self,
+        _tree: &PivotTree,
+        bars: &[Bar],
+        instrument: &Instrument,
+        timeframe: Timeframe,
+        regime: &RegimeSnapshot,
+    ) -> Vec<Detection> {
+        self.0
+            .detect(bars, instrument, timeframe, regime)
             .into_iter()
             .collect()
     }
@@ -433,6 +456,71 @@ async fn resolve_harmonic_config(pool: &PgPool) -> HarmonicConfig {
 
 /// Resolve classical detector config from system_config (CLAUDE.md #2).
 /// Every threshold is tuneable from the Config Editor without restarts.
+async fn resolve_gap_config(pool: &PgPool) -> GapConfig {
+    let min_gap_pct = resolve_system_f64(
+        pool, "detection", "gap.min_gap_pct",
+        "QTSS_DETECTION_GAP_MIN_PCT", 0.005,
+    ).await;
+    let volume_sma_bars = resolve_system_u64(
+        pool, "detection", "gap.volume_sma_bars",
+        "QTSS_DETECTION_GAP_VOL_SMA", 20, 2, 500,
+    ).await as usize;
+    let vol_mult_breakaway = resolve_system_f64(
+        pool, "detection", "gap.vol_mult_breakaway",
+        "QTSS_DETECTION_GAP_VOL_MULT_BREAKAWAY", 1.5,
+    ).await;
+    let vol_mult_runaway = resolve_system_f64(
+        pool, "detection", "gap.vol_mult_runaway",
+        "QTSS_DETECTION_GAP_VOL_MULT_RUNAWAY", 1.3,
+    ).await;
+    let vol_mult_exhaustion = resolve_system_f64(
+        pool, "detection", "gap.vol_mult_exhaustion",
+        "QTSS_DETECTION_GAP_VOL_MULT_EXHAUSTION", 1.8,
+    ).await;
+    let range_flat_pct = resolve_system_f64(
+        pool, "detection", "gap.range_flat_pct",
+        "QTSS_DETECTION_GAP_RANGE_FLAT_PCT", 0.02,
+    ).await;
+    let consolidation_lookback = resolve_system_u64(
+        pool, "detection", "gap.consolidation_lookback",
+        "QTSS_DETECTION_GAP_CONSOL_LB", 10, 3, 500,
+    ).await as usize;
+    let runaway_trend_bars = resolve_system_u64(
+        pool, "detection", "gap.runaway_trend_bars",
+        "QTSS_DETECTION_GAP_RUNAWAY_BARS", 5, 2, 200,
+    ).await as usize;
+    let runaway_trend_min_pct = resolve_system_f64(
+        pool, "detection", "gap.runaway_trend_min_pct",
+        "QTSS_DETECTION_GAP_RUNAWAY_MIN_PCT", 0.02,
+    ).await;
+    let exhaustion_reversal_bars = resolve_system_u64(
+        pool, "detection", "gap.exhaustion_reversal_bars",
+        "QTSS_DETECTION_GAP_EXHAUSTION_REV_BARS", 5, 1, 200,
+    ).await as usize;
+    let island_max_bars = resolve_system_u64(
+        pool, "detection", "gap.island_max_bars",
+        "QTSS_DETECTION_GAP_ISLAND_MAX_BARS", 10, 1, 200,
+    ).await as usize;
+    let min_structural_score = resolve_system_f64(
+        pool, "detection", "gap.min_structural_score",
+        "QTSS_DETECTION_GAP_MIN_SCORE", 0.50,
+    ).await as f32;
+    GapConfig {
+        min_gap_pct,
+        volume_sma_bars,
+        vol_mult_breakaway,
+        vol_mult_runaway,
+        vol_mult_exhaustion,
+        range_flat_pct,
+        consolidation_lookback,
+        runaway_trend_bars,
+        runaway_trend_min_pct,
+        exhaustion_reversal_bars,
+        island_max_bars,
+        min_structural_score,
+    }
+}
+
 async fn resolve_classical_config(pool: &PgPool) -> ClassicalConfig {
     let level_str = resolve_system_string(
         pool, "detection", "classical.pivot_level",
@@ -550,6 +638,55 @@ async fn resolve_classical_config(pool: &PgPool) -> ClassicalConfig {
         pool, "detection", "classical.rounding_roundness_r2",
         "QTSS_DETECTION_CLASSICAL_ROUND_R2", 0.65,
     ).await;
+    // Faz 10 Aşama 1 — Triple / Broadening / V / ABCD.
+    let triple_peak_tol = resolve_system_f64(
+        pool, "detection", "classical.triple_peak_tol",
+        "QTSS_DETECTION_CLASSICAL_TRIPLE_PEAK_TOL", 0.03,
+    ).await;
+    let triple_min_span = resolve_system_u64(
+        pool, "detection", "classical.triple_min_span_bars",
+        "QTSS_DETECTION_CLASSICAL_TRIPLE_MIN_SPAN", 10, 1, 500,
+    ).await;
+    let triple_neck_slope = resolve_system_f64(
+        pool, "detection", "classical.triple_neckline_slope_max",
+        "QTSS_DETECTION_CLASSICAL_TRIPLE_NECK_SLOPE", 0.003,
+    ).await;
+    let broad_min_slope = resolve_system_f64(
+        pool, "detection", "classical.broadening_min_slope_pct",
+        "QTSS_DETECTION_CLASSICAL_BROAD_MIN_SLOPE", 0.002,
+    ).await;
+    let broad_flat_slope = resolve_system_f64(
+        pool, "detection", "classical.broadening_flat_slope_pct",
+        "QTSS_DETECTION_CLASSICAL_BROAD_FLAT_SLOPE", 0.0015,
+    ).await;
+    let v_max_bars = resolve_system_u64(
+        pool, "detection", "classical.v_max_total_bars",
+        "QTSS_DETECTION_CLASSICAL_V_MAX_BARS", 20, 1, 200,
+    ).await;
+    let v_min_amp = resolve_system_f64(
+        pool, "detection", "classical.v_min_amplitude_pct",
+        "QTSS_DETECTION_CLASSICAL_V_MIN_AMP", 0.03,
+    ).await;
+    let v_sym_tol = resolve_system_f64(
+        pool, "detection", "classical.v_symmetry_tol",
+        "QTSS_DETECTION_CLASSICAL_V_SYM_TOL", 0.4,
+    ).await;
+    let abcd_c_min = resolve_system_f64(
+        pool, "detection", "classical.abcd_c_min_retrace",
+        "QTSS_DETECTION_CLASSICAL_ABCD_C_MIN", 0.382,
+    ).await;
+    let abcd_c_max = resolve_system_f64(
+        pool, "detection", "classical.abcd_c_max_retrace",
+        "QTSS_DETECTION_CLASSICAL_ABCD_C_MAX", 0.886,
+    ).await;
+    let abcd_d_tol = resolve_system_f64(
+        pool, "detection", "classical.abcd_d_projection_tol",
+        "QTSS_DETECTION_CLASSICAL_ABCD_D_TOL", 0.15,
+    ).await;
+    let abcd_min_leg = resolve_system_u64(
+        pool, "detection", "classical.abcd_min_bars_per_leg",
+        "QTSS_DETECTION_CLASSICAL_ABCD_MIN_LEG", 3, 1, 200,
+    ).await;
 
     ClassicalConfig {
         pivot_level: parse_pivot_level(&level_str),
@@ -581,6 +718,18 @@ async fn resolve_classical_config(pool: &PgPool) -> ClassicalConfig {
         handle_max_depth_pct_of_cup: handle_max_depth.clamp(0.0, 1.0),
         rounding_min_bars,
         rounding_roundness_r2: rounding_r2.clamp(0.0, 1.0),
+        triple_peak_tol: triple_peak_tol.clamp(0.0, 0.25),
+        triple_min_span_bars: triple_min_span,
+        triple_neckline_slope_max: triple_neck_slope.clamp(0.0, 0.05),
+        broadening_min_slope_pct: broad_min_slope.clamp(0.0, 0.1),
+        broadening_flat_slope_pct: broad_flat_slope.clamp(0.0, 0.1),
+        v_max_total_bars: v_max_bars,
+        v_min_amplitude_pct: v_min_amp.clamp(0.0, 0.5),
+        v_symmetry_tol: v_sym_tol.clamp(0.0, 2.0),
+        abcd_c_min_retrace: abcd_c_min.clamp(0.0, 1.0),
+        abcd_c_max_retrace: abcd_c_max.clamp(0.0, 1.0),
+        abcd_d_projection_tol: abcd_d_tol.clamp(0.0, 1.0),
+        abcd_min_bars_per_leg: abcd_min_leg,
     }
 }
 
@@ -825,6 +974,21 @@ pub(crate) async fn build_runners(pool: &PgPool) -> Vec<Box<dyn DetectorRunner>>
         match WyckoffDetector::new(wyckoff_cfg) {
             Ok(d) => runners.push(Box::new(WyckoffRunner(d))),
             Err(e) => warn!(?e, "wyckoff detector init failed"),
+        }
+    }
+    if resolve_worker_enabled_flag(
+        pool,
+        "detection",
+        "gap.enabled",
+        "QTSS_DETECTION_GAP_ENABLED",
+        true,
+    )
+    .await
+    {
+        let gap_cfg = resolve_gap_config(pool).await;
+        match GapDetector::new(gap_cfg) {
+            Ok(d) => runners.push(Box::new(GapRunner(d))),
+            Err(e) => warn!(?e, "gap detector init failed"),
         }
     }
     if resolve_worker_enabled_flag(
@@ -1488,19 +1652,36 @@ async fn process_symbol(
         let inserted_id = new_row.id;
         let fs_raw_meta = new_row.raw_meta.clone();
         let fs_family = new_row.family;
+        let fs_subkind = new_row.subkind.to_string();
+        let fs_anchors = new_row.anchors.clone();
+        let fs_structural = new_row.structural_score;
+        let fs_invalidation = new_row.invalidation_price;
         repo.insert(new_row).await?;
         stats.inserted += 1;
 
-        // Faz 9.0.2 — feature store hook: per-detection ConfluenceSource
-        // extraction → qtss_features_snapshot. Best-effort, logged-only
-        // on failure so detector pipeline never blocks.
+        // Faz 9.0.2 / Faz 9.8.AI-Yol2 — feature store hook: per-detection
+        // ConfluenceSource extraction → qtss_features_snapshot. Best-effort,
+        // logged-only on failure so detector pipeline never blocks.
+        //
+        // The JSON below is the contract every `ConfluenceSource::extract`
+        // reads. Keep family-specific fields at the top level (phase/events
+        // for wyckoff, subkind/anchors/raw_meta for structural detectors)
+        // so new sources can pick what they need without ripping the hook
+        // apart (CLAUDE.md #1: dispatch on `family` inside the source, not
+        // with an if-chain here).
         {
             use serde_json::json;
             let raw_for_fs = json!({
                 "family": fs_family,
+                "subkind": fs_subkind,
+                "structural_score": fs_structural,
+                "invalidation_price": fs_invalidation.to_string(),
+                "anchors": fs_anchors,
+                "raw_meta": fs_raw_meta,
+                // Flattened conveniences for the existing wyckoff source
+                // (backwards-compatible; the source still reads these).
                 "phase": fs_raw_meta.get("phase"),
                 "events_json": fs_raw_meta.get("events_json"),
-                "structural_score": fs_raw_meta.get("structural_score"),
                 "range_bars": fs_raw_meta.get("range_bars"),
                 "is_accumulation": fs_raw_meta.get("is_accumulation"),
                 "is_distribution": fs_raw_meta.get("is_distribution"),
@@ -2526,6 +2707,7 @@ pub(crate) fn split_pattern_kind(kind: &PatternKind) -> (&'static str, &str) {
         PatternKind::Classical(s) => ("classical", s.as_str()),
         PatternKind::Wyckoff(s) => ("wyckoff", s.as_str()),
         PatternKind::Range(s) => ("range", s.as_str()),
+        PatternKind::Gap(s) => ("gap", s.as_str()),
         PatternKind::Custom(s) => ("custom", s.as_str()),
     }
 }

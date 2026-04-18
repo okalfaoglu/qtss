@@ -47,6 +47,7 @@ members = [
     "crates/qtss-setup-engine",
     "crates/qtss-range",
     "crates/qtss-vprofile",
+    "crates/qtss-gap",
 ]
 
 [workspace.package]
@@ -119,6 +120,7 @@ qtss-telegram-setup-analysis = { path = "crates/qtss-telegram-setup-analysis" }
 qtss-setup-engine = { path = "crates/qtss-setup-engine" }
 qtss-range = { path = "crates/qtss-range" }
 qtss-vprofile = { path = "crates/qtss-vprofile" }
+qtss-gap = { path = "crates/qtss-gap" }
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 hmac = "0.12"

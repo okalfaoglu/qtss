@@ -25,6 +25,13 @@ pub static FEATURE_SOURCES: &[&dyn ConfluenceSource] = &[
     &feature_sources::wyckoff::WyckoffSource,
     &feature_sources::derivatives::DerivativesSource,
     &feature_sources::orderbook::OrderbookSource,
+    // Faz 9.8.AI-Yol2 — structural-detector feature extractors.
+    &feature_sources::elliott::ElliottSource,
+    &feature_sources::harmonic::HarmonicSource,
+    &feature_sources::classical::ClassicalSource,
+    &feature_sources::gap::GapSource,
+    &feature_sources::range::RangeSource,
+    &feature_sources::tbm::TbmSource,
 ];
 
 /// DB-backed impl of the confluence `SourceQuery` port.

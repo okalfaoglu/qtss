@@ -104,6 +104,35 @@ pub struct ClassicalConfig {
     /// P5.5 — Rounding parabolic fit R² eşiği. Cup'tan biraz daha sıkı.
     /// Default 0.65.
     pub rounding_roundness_r2: f64,
+
+    // ------------------------------------------------------------------
+    // Faz 10 Aşama 1 — Triple / Broadening / V / ABCD. Hepsi CLAUDE.md #2
+    // uyarınca DB-config kaynaklı, hard-code yok.
+    // ------------------------------------------------------------------
+    /// Triple top/bottom: 3 tepe/dip arası max göreli sapma.
+    pub triple_peak_tol: f64,
+    /// Triple top/bottom: pattern ilk→son pivot min bar sayısı.
+    pub triple_min_span_bars: u64,
+    /// Triple top/bottom: neckline max eğim (fraction per bar).
+    pub triple_neckline_slope_max: f64,
+    /// Broadening (megaphone) min |slope| (fraction per bar).
+    pub broadening_min_slope_pct: f64,
+    /// Broadening triangle: "flat" kenarın max |slope|.
+    pub broadening_flat_slope_pct: f64,
+    /// V-top/V-bottom: baştan sona max bar sayısı.
+    pub v_max_total_bars: u64,
+    /// V-top/V-bottom: kenarların min göreli genliği.
+    pub v_min_amplitude_pct: f64,
+    /// V-top/V-bottom: iki kenarın simetri toleransı.
+    pub v_symmetry_tol: f64,
+    /// ABCD: B→C retracement min oranı (AB'ye göre).
+    pub abcd_c_min_retrace: f64,
+    /// ABCD: B→C retracement max oranı.
+    pub abcd_c_max_retrace: f64,
+    /// ABCD: CD bacağının AB'ye göre 1.0'a tolerans.
+    pub abcd_d_projection_tol: f64,
+    /// ABCD: her bacak min bar sayısı.
+    pub abcd_min_bars_per_leg: u64,
 }
 
 impl ClassicalConfig {
@@ -138,6 +167,19 @@ impl ClassicalConfig {
             handle_max_depth_pct_of_cup: 0.5,
             rounding_min_bars: 40,
             rounding_roundness_r2: 0.65,
+
+            triple_peak_tol: 0.03,
+            triple_min_span_bars: 10,
+            triple_neckline_slope_max: 0.003,
+            broadening_min_slope_pct: 0.002,
+            broadening_flat_slope_pct: 0.0015,
+            v_max_total_bars: 20,
+            v_min_amplitude_pct: 0.03,
+            v_symmetry_tol: 0.4,
+            abcd_c_min_retrace: 0.382,
+            abcd_c_max_retrace: 0.886,
+            abcd_d_projection_tol: 0.15,
+            abcd_min_bars_per_leg: 3,
         }
     }
 
@@ -275,6 +317,71 @@ impl ClassicalConfig {
         if self.rounding_min_bars == 0 {
             return Err(ClassicalError::InvalidConfig(
                 "rounding_min_bars must be > 0".into(),
+            ));
+        }
+        // Faz 10 Aşama 1 validations.
+        if !(0.0..=0.25).contains(&self.triple_peak_tol) {
+            return Err(ClassicalError::InvalidConfig(
+                "triple_peak_tol must be in 0..=0.25".into(),
+            ));
+        }
+        if self.triple_min_span_bars == 0 {
+            return Err(ClassicalError::InvalidConfig(
+                "triple_min_span_bars must be > 0".into(),
+            ));
+        }
+        if !(0.0..=0.05).contains(&self.triple_neckline_slope_max) {
+            return Err(ClassicalError::InvalidConfig(
+                "triple_neckline_slope_max must be in 0..=0.05".into(),
+            ));
+        }
+        if !(0.0..=0.1).contains(&self.broadening_min_slope_pct)
+            || !(0.0..=0.1).contains(&self.broadening_flat_slope_pct)
+        {
+            return Err(ClassicalError::InvalidConfig(
+                "broadening slope thresholds must be in 0..=0.1".into(),
+            ));
+        }
+        if self.broadening_flat_slope_pct >= self.broadening_min_slope_pct {
+            return Err(ClassicalError::InvalidConfig(
+                "broadening_flat_slope_pct must be < broadening_min_slope_pct".into(),
+            ));
+        }
+        if self.v_max_total_bars == 0 {
+            return Err(ClassicalError::InvalidConfig(
+                "v_max_total_bars must be > 0".into(),
+            ));
+        }
+        if !(0.0..=0.5).contains(&self.v_min_amplitude_pct) {
+            return Err(ClassicalError::InvalidConfig(
+                "v_min_amplitude_pct must be in 0..=0.5".into(),
+            ));
+        }
+        if !(0.0..=2.0).contains(&self.v_symmetry_tol) {
+            return Err(ClassicalError::InvalidConfig(
+                "v_symmetry_tol must be in 0..=2".into(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.abcd_c_min_retrace)
+            || !(0.0..=1.0).contains(&self.abcd_c_max_retrace)
+        {
+            return Err(ClassicalError::InvalidConfig(
+                "abcd_c_* retrace must be in 0..=1".into(),
+            ));
+        }
+        if self.abcd_c_min_retrace >= self.abcd_c_max_retrace {
+            return Err(ClassicalError::InvalidConfig(
+                "abcd_c_min_retrace must be < abcd_c_max_retrace".into(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.abcd_d_projection_tol) {
+            return Err(ClassicalError::InvalidConfig(
+                "abcd_d_projection_tol must be in 0..=1".into(),
+            ));
+        }
+        if self.abcd_min_bars_per_leg == 0 {
+            return Err(ClassicalError::InvalidConfig(
+                "abcd_min_bars_per_leg must be > 0".into(),
             ));
         }
         Ok(())

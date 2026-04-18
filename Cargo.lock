@@ -2480,6 +2480,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "qtss-gap"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "qtss-domain",
+ "rust_decimal",
+ "rust_decimal_macros",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "qtss-gui-api"
 version = "0.1.0"
 dependencies = [
@@ -2859,6 +2873,7 @@ dependencies = [
  "qtss-elliott",
  "qtss-eventbus",
  "qtss-execution",
+ "qtss-gap",
  "qtss-harmonic",
  "qtss-indicators",
  "qtss-nansen",

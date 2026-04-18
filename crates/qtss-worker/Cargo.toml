@@ -29,6 +29,7 @@ qtss-elliott.workspace = true
 qtss-harmonic.workspace = true
 qtss-classical.workspace = true
 qtss-wyckoff.workspace = true
+qtss-gap.workspace = true
 qtss-tbm.workspace = true
 qtss-onchain.workspace = true
 qtss-confluence.workspace = true

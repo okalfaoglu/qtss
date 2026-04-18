@@ -118,6 +118,47 @@ pub const SHAPES: &[ShapeSpec] = &[
         pivots_needed: 6,
         eval: eval_diamond_bottom,
     },
+    // Faz 10 Aşama 1 — yeni klasik formasyonlar.
+    ShapeSpec {
+        name: "triple_top",
+        pivots_needed: 5,
+        eval: eval_triple_top,
+    },
+    ShapeSpec {
+        name: "triple_bottom",
+        pivots_needed: 5,
+        eval: eval_triple_bottom,
+    },
+    ShapeSpec {
+        name: "broadening_top",
+        pivots_needed: 5,
+        eval: eval_broadening_top,
+    },
+    ShapeSpec {
+        name: "broadening_bottom",
+        pivots_needed: 5,
+        eval: eval_broadening_bottom,
+    },
+    ShapeSpec {
+        name: "broadening_triangle",
+        pivots_needed: 5,
+        eval: eval_broadening_triangle,
+    },
+    ShapeSpec {
+        name: "v_top",
+        pivots_needed: 3,
+        eval: eval_v_top,
+    },
+    ShapeSpec {
+        name: "v_bottom",
+        pivots_needed: 3,
+        eval: eval_v_bottom,
+    },
+    ShapeSpec {
+        name: "measured_move_abcd",
+        pivots_needed: 4,
+        eval: eval_measured_move_abcd,
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -771,6 +812,392 @@ fn eval_diamond_bottom(pivots: &[Pivot], _cfg: &ClassicalConfig) -> Option<Shape
 }
 
 // ---------------------------------------------------------------------------
+// Faz 10 Aşama 1 — Triple top/bottom, Broadening, V, ABCD
+// ---------------------------------------------------------------------------
+//
+// Her detector config-driven (CLAUDE.md #2), dispatch-table üzerinden
+// registered (CLAUDE.md #1). Eval fonksiyonları tamamen pivot-only; bar
+// datası gerekmiyor.
+
+/// Gaussian closeness for three "equal" values (triple top/bottom peaks).
+fn triple_equality_score(a: f64, b: f64, c: f64, tol: f64) -> Option<f64> {
+    let s_ab = equality_score(a, b, tol)?;
+    let s_bc = equality_score(b, c, tol)?;
+    let s_ac = equality_score(a, c, tol)?;
+    Some((s_ab + s_bc + s_ac) / 3.0)
+}
+
+/// Neckline slope between two troughs/peaks. Returns |slope| / mid per bar.
+fn neckline_slope_abs(p1: &Pivot, p2: &Pivot) -> Option<f64> {
+    let a = p(p1)?;
+    let b = p(p2)?;
+    let mid = (a.abs() + b.abs()) / 2.0;
+    if mid <= 0.0 {
+        return None;
+    }
+    let dx = (p2.bar_index as i64 - p1.bar_index as i64).abs() as f64;
+    if dx < 1.0 {
+        return None;
+    }
+    Some((b - a).abs() / mid / dx)
+}
+
+// ---- Triple Top / Triple Bottom --------------------------------------------
+
+fn eval_triple_top(pivots: &[Pivot], cfg: &ClassicalConfig) -> Option<ShapeMatch> {
+    if !require_kinds(
+        pivots,
+        &[
+            PivotKind::High,
+            PivotKind::Low,
+            PivotKind::High,
+            PivotKind::Low,
+            PivotKind::High,
+        ],
+    ) {
+        return None;
+    }
+    let h1 = p(&pivots[0])?;
+    let l1 = p(&pivots[1])?;
+    let h2 = p(&pivots[2])?;
+    let l2 = p(&pivots[3])?;
+    let h3 = p(&pivots[4])?;
+    // Troughs must be below every peak.
+    let min_peak = h1.min(h2).min(h3);
+    if l1 >= min_peak || l2 >= min_peak {
+        return None;
+    }
+    // Span bars guard.
+    let span = pivots[4].bar_index.saturating_sub(pivots[0].bar_index);
+    if span < cfg.triple_min_span_bars {
+        return None;
+    }
+    // Neckline slope guard.
+    let slope = neckline_slope_abs(&pivots[1], &pivots[3])?;
+    if slope > cfg.triple_neckline_slope_max {
+        return None;
+    }
+    let score = triple_equality_score(h1, h2, h3, cfg.triple_peak_tol)?;
+    Some(ShapeMatch {
+        score,
+        invalidation: pivots[0]
+            .price
+            .max(pivots[2].price)
+            .max(pivots[4].price),
+        anchor_labels: vec!["H1", "T1", "H2", "T2", "H3"],
+        variant: "bear",
+    })
+}
+
+fn eval_triple_bottom(pivots: &[Pivot], cfg: &ClassicalConfig) -> Option<ShapeMatch> {
+    if !require_kinds(
+        pivots,
+        &[
+            PivotKind::Low,
+            PivotKind::High,
+            PivotKind::Low,
+            PivotKind::High,
+            PivotKind::Low,
+        ],
+    ) {
+        return None;
+    }
+    let l1 = p(&pivots[0])?;
+    let h1 = p(&pivots[1])?;
+    let l2 = p(&pivots[2])?;
+    let h2 = p(&pivots[3])?;
+    let l3 = p(&pivots[4])?;
+    let max_trough = l1.max(l2).max(l3);
+    if h1 <= max_trough || h2 <= max_trough {
+        return None;
+    }
+    let span = pivots[4].bar_index.saturating_sub(pivots[0].bar_index);
+    if span < cfg.triple_min_span_bars {
+        return None;
+    }
+    let slope = neckline_slope_abs(&pivots[1], &pivots[3])?;
+    if slope > cfg.triple_neckline_slope_max {
+        return None;
+    }
+    let score = triple_equality_score(l1, l2, l3, cfg.triple_peak_tol)?;
+    Some(ShapeMatch {
+        score,
+        invalidation: pivots[0]
+            .price
+            .min(pivots[2].price)
+            .min(pivots[4].price),
+        anchor_labels: vec!["L1", "T1", "L2", "T2", "L3"],
+        variant: "bull",
+    })
+}
+
+// ---- Broadening (Megaphone) Top / Bottom / Triangle -----------------------
+
+/// Signed slope (per bar) between two pivots as fraction of midpoint.
+fn pivot_slope_pct(a: &Pivot, b: &Pivot) -> Option<f64> {
+    let pa = p(a)?;
+    let pb = p(b)?;
+    let mid = (pa.abs() + pb.abs()) / 2.0;
+    if mid <= 0.0 {
+        return None;
+    }
+    let dx = b.bar_index as f64 - a.bar_index as f64;
+    if dx.abs() < 1.0 {
+        return None;
+    }
+    Some((pb - pa) / mid / dx)
+}
+
+/// Broadening top — 5 pivots H-L-H-L-H, upper line rising, lower falling,
+/// both slopes above `broadening_min_slope_pct` in magnitude.
+fn eval_broadening_top(pivots: &[Pivot], cfg: &ClassicalConfig) -> Option<ShapeMatch> {
+    if !require_kinds(
+        pivots,
+        &[
+            PivotKind::High,
+            PivotKind::Low,
+            PivotKind::High,
+            PivotKind::Low,
+            PivotKind::High,
+        ],
+    ) {
+        return None;
+    }
+    let h1 = p(&pivots[0])?;
+    let h2 = p(&pivots[2])?;
+    let h3 = p(&pivots[4])?;
+    let l1 = p(&pivots[1])?;
+    let l2 = p(&pivots[3])?;
+    // Ordering: highs rising, lows falling.
+    if !(h3 > h2 && h2 > h1) || !(l2 < l1) {
+        return None;
+    }
+    let upper_slope = pivot_slope_pct(&pivots[0], &pivots[4])?;
+    let lower_slope = pivot_slope_pct(&pivots[1], &pivots[3])?;
+    if upper_slope < cfg.broadening_min_slope_pct
+        || -lower_slope < cfg.broadening_min_slope_pct
+    {
+        return None;
+    }
+    // Symmetry: ideal broadening has mirror slopes.
+    let sym = 1.0
+        - ((upper_slope + lower_slope).abs()
+            / (upper_slope.abs() + lower_slope.abs()).max(1e-9));
+    let score = sym.clamp(0.0, 1.0);
+    Some(ShapeMatch {
+        score,
+        invalidation: pivots[4].price,
+        anchor_labels: vec!["H1", "L1", "H2", "L2", "H3"],
+        variant: "bear",
+    })
+}
+
+fn eval_broadening_bottom(pivots: &[Pivot], cfg: &ClassicalConfig) -> Option<ShapeMatch> {
+    if !require_kinds(
+        pivots,
+        &[
+            PivotKind::Low,
+            PivotKind::High,
+            PivotKind::Low,
+            PivotKind::High,
+            PivotKind::Low,
+        ],
+    ) {
+        return None;
+    }
+    let l1 = p(&pivots[0])?;
+    let l2 = p(&pivots[2])?;
+    let l3 = p(&pivots[4])?;
+    let h1 = p(&pivots[1])?;
+    let h2 = p(&pivots[3])?;
+    if !(l3 < l2 && l2 < l1) || !(h2 > h1) {
+        return None;
+    }
+    let lower_slope = pivot_slope_pct(&pivots[0], &pivots[4])?;
+    let upper_slope = pivot_slope_pct(&pivots[1], &pivots[3])?;
+    if -lower_slope < cfg.broadening_min_slope_pct
+        || upper_slope < cfg.broadening_min_slope_pct
+    {
+        return None;
+    }
+    let sym = 1.0
+        - ((upper_slope + lower_slope).abs()
+            / (upper_slope.abs() + lower_slope.abs()).max(1e-9));
+    let score = sym.clamp(0.0, 1.0);
+    Some(ShapeMatch {
+        score,
+        invalidation: pivots[4].price,
+        anchor_labels: vec!["L1", "H1", "L2", "H2", "L3"],
+        variant: "bull",
+    })
+}
+
+/// Broadening triangle — one side near-flat, the other diverging. 5 pivot.
+fn eval_broadening_triangle(pivots: &[Pivot], cfg: &ClassicalConfig) -> Option<ShapeMatch> {
+    if !require_kinds(
+        pivots,
+        &[
+            PivotKind::High,
+            PivotKind::Low,
+            PivotKind::High,
+            PivotKind::Low,
+            PivotKind::High,
+        ],
+    ) {
+        return None;
+    }
+    let upper_slope = pivot_slope_pct(&pivots[0], &pivots[4])?;
+    let lower_slope = pivot_slope_pct(&pivots[1], &pivots[3])?;
+    // Exactly one side flat, the other diverging strongly.
+    let upper_flat = upper_slope.abs() < cfg.broadening_flat_slope_pct;
+    let lower_flat = lower_slope.abs() < cfg.broadening_flat_slope_pct;
+    let upper_diverge = upper_slope > cfg.broadening_min_slope_pct;
+    let lower_diverge = -lower_slope > cfg.broadening_min_slope_pct;
+    let (variant, score) = match (upper_flat, lower_flat, upper_diverge, lower_diverge) {
+        (true, false, _, true) => ("bear", 1.0 - upper_slope.abs() / cfg.broadening_flat_slope_pct),
+        (false, true, true, _) => ("bull", 1.0 - lower_slope.abs() / cfg.broadening_flat_slope_pct),
+        _ => return None,
+    };
+    let score = score.clamp(0.0, 1.0);
+    Some(ShapeMatch {
+        score,
+        invalidation: pivots[4].price.max(pivots[2].price),
+        anchor_labels: vec!["A1", "B1", "A2", "B2", "A3"],
+        variant,
+    })
+}
+
+// ---- V-Top / V-Bottom ------------------------------------------------------
+
+fn eval_v_top(pivots: &[Pivot], cfg: &ClassicalConfig) -> Option<ShapeMatch> {
+    if !require_kinds(pivots, &[PivotKind::Low, PivotKind::High, PivotKind::Low]) {
+        return None;
+    }
+    let l1 = p(&pivots[0])?;
+    let h = p(&pivots[1])?;
+    let l2 = p(&pivots[2])?;
+    // Sharp peak: both flanks above amplitude threshold.
+    let amp_up = (h - l1) / l1.max(1e-9);
+    let amp_dn = (h - l2) / l2.max(1e-9);
+    if amp_up < cfg.v_min_amplitude_pct || amp_dn < cfg.v_min_amplitude_pct {
+        return None;
+    }
+    let span = pivots[2].bar_index.saturating_sub(pivots[0].bar_index);
+    if span == 0 || span > cfg.v_max_total_bars {
+        return None;
+    }
+    let asym = (amp_up - amp_dn).abs() / (amp_up + amp_dn).max(1e-9);
+    if asym > cfg.v_symmetry_tol {
+        return None;
+    }
+    let score = (1.0 - asym / cfg.v_symmetry_tol).clamp(0.0, 1.0);
+    Some(ShapeMatch {
+        score,
+        invalidation: pivots[1].price,
+        anchor_labels: vec!["L1", "Peak", "L2"],
+        variant: "bear",
+    })
+}
+
+fn eval_v_bottom(pivots: &[Pivot], cfg: &ClassicalConfig) -> Option<ShapeMatch> {
+    if !require_kinds(pivots, &[PivotKind::High, PivotKind::Low, PivotKind::High]) {
+        return None;
+    }
+    let h1 = p(&pivots[0])?;
+    let l = p(&pivots[1])?;
+    let h2 = p(&pivots[2])?;
+    let amp_dn = (h1 - l) / h1.max(1e-9);
+    let amp_up = (h2 - l) / h2.max(1e-9);
+    if amp_up < cfg.v_min_amplitude_pct || amp_dn < cfg.v_min_amplitude_pct {
+        return None;
+    }
+    let span = pivots[2].bar_index.saturating_sub(pivots[0].bar_index);
+    if span == 0 || span > cfg.v_max_total_bars {
+        return None;
+    }
+    let asym = (amp_up - amp_dn).abs() / (amp_up + amp_dn).max(1e-9);
+    if asym > cfg.v_symmetry_tol {
+        return None;
+    }
+    let score = (1.0 - asym / cfg.v_symmetry_tol).clamp(0.0, 1.0);
+    Some(ShapeMatch {
+        score,
+        invalidation: pivots[1].price,
+        anchor_labels: vec!["H1", "Trough", "H2"],
+        variant: "bull",
+    })
+}
+
+// ---- Measured Move / ABCD --------------------------------------------------
+
+fn eval_measured_move_abcd(pivots: &[Pivot], cfg: &ClassicalConfig) -> Option<ShapeMatch> {
+    // Accept both directions: 4 alternating pivots forming A-B-C-D.
+    let bull = require_kinds(
+        pivots,
+        &[PivotKind::Low, PivotKind::High, PivotKind::Low, PivotKind::High],
+    );
+    let bear = require_kinds(
+        pivots,
+        &[PivotKind::High, PivotKind::Low, PivotKind::High, PivotKind::Low],
+    );
+    if !bull && !bear {
+        return None;
+    }
+    let a = p(&pivots[0])?;
+    let b = p(&pivots[1])?;
+    let c = p(&pivots[2])?;
+    let d = p(&pivots[3])?;
+    // Min bars per leg.
+    let leg_ab = pivots[1].bar_index.saturating_sub(pivots[0].bar_index);
+    let leg_bc = pivots[2].bar_index.saturating_sub(pivots[1].bar_index);
+    let leg_cd = pivots[3].bar_index.saturating_sub(pivots[2].bar_index);
+    if leg_ab < cfg.abcd_min_bars_per_leg
+        || leg_bc < cfg.abcd_min_bars_per_leg
+        || leg_cd < cfg.abcd_min_bars_per_leg
+    {
+        return None;
+    }
+    let ab = (b - a).abs();
+    let bc = (c - b).abs();
+    let cd = (d - c).abs();
+    if ab < 1e-9 {
+        return None;
+    }
+    // Retracement BC/AB within configured band.
+    let retrace = bc / ab;
+    if retrace < cfg.abcd_c_min_retrace || retrace > cfg.abcd_c_max_retrace {
+        return None;
+    }
+    // CD ≈ AB within ±projection_tol.
+    let proj = cd / ab;
+    let proj_err = (proj - 1.0).abs();
+    if proj_err > cfg.abcd_d_projection_tol {
+        return None;
+    }
+    // Directional consistency: CD must move the same way as AB (extend trend).
+    let ab_signed = b - a;
+    let cd_signed = d - c;
+    if ab_signed.signum() != cd_signed.signum() {
+        return None;
+    }
+    // Score combines projection accuracy and retrace proximity to golden.
+    let proj_score = 1.0 - proj_err / cfg.abcd_d_projection_tol.max(1e-9);
+    let retrace_ideal = 0.618_f64;
+    let retrace_band = (cfg.abcd_c_max_retrace - cfg.abcd_c_min_retrace).max(1e-9);
+    let retrace_score = 1.0 - (retrace - retrace_ideal).abs() / retrace_band;
+    let score = (0.5 * proj_score + 0.5 * retrace_score).clamp(0.0, 1.0);
+    let variant = if bull { "bull" } else { "bear" };
+    // Invalidation: opposite side of C (trend breakdown).
+    let invalidation = pivots[2].price;
+    Some(ShapeMatch {
+        score,
+        invalidation,
+        anchor_labels: vec!["A", "B", "C", "D"],
+        variant,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Bar-aware shape registry (P5.2)
 // ---------------------------------------------------------------------------
 //
@@ -1351,4 +1778,231 @@ fn eval_symmetrical_triangle(pivots: &[Pivot], cfg: &ClassicalConfig) -> Option<
         anchor_labels: vec!["P1", "P2", "P3", "P4"],
         variant: "neutral",
     })
+}
+
+// ---------------------------------------------------------------------------
+// Faz 10 Aşama 1 — unit tests for new detectors.
+// Doğrulama Adımları (plan belgesi §1):
+//   1. positive synthetic → Some + score > 0.5
+//   2. negative synthetic (eşik ihlali) → None
+//   3. geometry invariant assertion
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod faz10_tests {
+    use super::*;
+    use rust_decimal::Decimal;
+    use rust_decimal_macros::dec;
+
+    fn piv(idx: u64, price: Decimal, kind: PivotKind) -> Pivot {
+        Pivot {
+            bar_index: idx,
+            time: chrono::Utc::now(),
+            price,
+            kind,
+            level: qtss_domain::v2::pivot::PivotLevel::L1,
+            prominence: Decimal::ZERO,
+            volume_at_pivot: Decimal::ZERO,
+            swing_type: None,
+        }
+    }
+
+    fn cfg() -> ClassicalConfig {
+        ClassicalConfig::defaults()
+    }
+
+    // ---- Triple Top ----
+    #[test]
+    fn triple_top_positive() {
+        let pivots = vec![
+            piv(0, dec!(100.0), PivotKind::High),
+            piv(4, dec!(95.0), PivotKind::Low),
+            piv(8, dec!(100.1), PivotKind::High),
+            piv(12, dec!(95.1), PivotKind::Low),
+            piv(16, dec!(99.9), PivotKind::High),
+        ];
+        let m = eval_triple_top(&pivots, &cfg()).expect("triple_top should match");
+        assert!(m.score > 0.5, "score={}", m.score);
+        assert_eq!(m.variant, "bear");
+    }
+
+    #[test]
+    fn triple_top_rejects_uneven_peaks() {
+        // h3 = 115, well outside 3% tolerance of 100.
+        let pivots = vec![
+            piv(0, dec!(100.0), PivotKind::High),
+            piv(4, dec!(95.0), PivotKind::Low),
+            piv(8, dec!(100.0), PivotKind::High),
+            piv(12, dec!(95.0), PivotKind::Low),
+            piv(16, dec!(115.0), PivotKind::High),
+        ];
+        assert!(eval_triple_top(&pivots, &cfg()).is_none());
+    }
+
+    #[test]
+    fn triple_top_rejects_short_span() {
+        // span 4 bars < min 10
+        let pivots = vec![
+            piv(0, dec!(100.0), PivotKind::High),
+            piv(1, dec!(95.0), PivotKind::Low),
+            piv(2, dec!(100.0), PivotKind::High),
+            piv(3, dec!(95.0), PivotKind::Low),
+            piv(4, dec!(100.0), PivotKind::High),
+        ];
+        assert!(eval_triple_top(&pivots, &cfg()).is_none());
+    }
+
+    // ---- Triple Bottom ----
+    #[test]
+    fn triple_bottom_positive() {
+        let pivots = vec![
+            piv(0, dec!(100.0), PivotKind::Low),
+            piv(5, dec!(105.0), PivotKind::High),
+            piv(10, dec!(100.2), PivotKind::Low),
+            piv(15, dec!(105.0), PivotKind::High),
+            piv(20, dec!(99.9), PivotKind::Low),
+        ];
+        let m = eval_triple_bottom(&pivots, &cfg()).expect("triple_bottom match");
+        assert!(m.score > 0.5);
+        assert_eq!(m.variant, "bull");
+    }
+
+    // ---- Broadening Top ----
+    #[test]
+    fn broadening_top_positive() {
+        // Strictly rising highs, strictly falling lows.
+        let pivots = vec![
+            piv(0, dec!(100.0), PivotKind::High),
+            piv(5, dec!(90.0), PivotKind::Low),
+            piv(10, dec!(103.0), PivotKind::High),
+            piv(15, dec!(85.0), PivotKind::Low),
+            piv(20, dec!(108.0), PivotKind::High),
+        ];
+        let m = eval_broadening_top(&pivots, &cfg()).expect("broadening_top match");
+        assert!(m.score > 0.3);
+        assert_eq!(m.variant, "bear");
+        // Geometry invariant: upper slope positive, lower slope negative.
+        let up = pivot_slope_pct(&pivots[0], &pivots[4]).unwrap();
+        let lo = pivot_slope_pct(&pivots[1], &pivots[3]).unwrap();
+        assert!(up > 0.0 && lo < 0.0);
+    }
+
+    #[test]
+    fn broadening_top_rejects_converging() {
+        // Lines converge instead of diverge.
+        let pivots = vec![
+            piv(0, dec!(100.0), PivotKind::High),
+            piv(5, dec!(80.0), PivotKind::Low),
+            piv(10, dec!(102.0), PivotKind::High),
+            piv(15, dec!(85.0), PivotKind::Low),
+            piv(20, dec!(104.0), PivotKind::High),
+        ];
+        // Lows are rising (L2 > L1), not diverging → reject.
+        assert!(eval_broadening_top(&pivots, &cfg()).is_none());
+    }
+
+    // ---- Broadening Bottom ----
+    #[test]
+    fn broadening_bottom_positive() {
+        let pivots = vec![
+            piv(0, dec!(90.0), PivotKind::Low),
+            piv(5, dec!(100.0), PivotKind::High),
+            piv(10, dec!(85.0), PivotKind::Low),
+            piv(15, dec!(105.0), PivotKind::High),
+            piv(20, dec!(80.0), PivotKind::Low),
+        ];
+        let m = eval_broadening_bottom(&pivots, &cfg()).expect("broadening_bottom match");
+        assert!(m.score > 0.3);
+        assert_eq!(m.variant, "bull");
+    }
+
+    // ---- Broadening Triangle ----
+    #[test]
+    fn broadening_triangle_flat_upper() {
+        // upper ~flat, lower falls sharply
+        let pivots = vec![
+            piv(0, dec!(100.0), PivotKind::High),
+            piv(5, dec!(95.0), PivotKind::Low),
+            piv(10, dec!(100.1), PivotKind::High),
+            piv(15, dec!(85.0), PivotKind::Low),
+            piv(20, dec!(100.0), PivotKind::High),
+        ];
+        let m = eval_broadening_triangle(&pivots, &cfg()).expect("broadening_triangle");
+        assert!(m.score >= 0.0 && m.score <= 1.0);
+    }
+
+    // ---- V-Top ----
+    #[test]
+    fn v_top_positive() {
+        let pivots = vec![
+            piv(0, dec!(95.0), PivotKind::Low),
+            piv(5, dec!(110.0), PivotKind::High),
+            piv(10, dec!(94.5), PivotKind::Low),
+        ];
+        let m = eval_v_top(&pivots, &cfg()).expect("v_top match");
+        assert!(m.score > 0.0);
+        assert_eq!(m.variant, "bear");
+    }
+
+    #[test]
+    fn v_top_rejects_small_amplitude() {
+        // only 1% rise, below v_min_amplitude_pct default 3%
+        let pivots = vec![
+            piv(0, dec!(100.0), PivotKind::Low),
+            piv(5, dec!(101.0), PivotKind::High),
+            piv(10, dec!(99.5), PivotKind::Low),
+        ];
+        assert!(eval_v_top(&pivots, &cfg()).is_none());
+    }
+
+    // ---- V-Bottom ----
+    #[test]
+    fn v_bottom_positive() {
+        let pivots = vec![
+            piv(0, dec!(110.0), PivotKind::High),
+            piv(5, dec!(95.0), PivotKind::Low),
+            piv(10, dec!(109.5), PivotKind::High),
+        ];
+        let m = eval_v_bottom(&pivots, &cfg()).expect("v_bottom match");
+        assert!(m.score > 0.0);
+        assert_eq!(m.variant, "bull");
+    }
+
+    // ---- ABCD ----
+    #[test]
+    fn abcd_bullish_positive() {
+        // A(low)=100, B(high)=120 (AB=20), C(low)=108 (retrace 60%, golden), D(high)=128 (CD=20==AB).
+        let pivots = vec![
+            piv(0, dec!(100.0), PivotKind::Low),
+            piv(10, dec!(120.0), PivotKind::High),
+            piv(20, dec!(108.0), PivotKind::Low),
+            piv(30, dec!(128.0), PivotKind::High),
+        ];
+        let m = eval_measured_move_abcd(&pivots, &cfg()).expect("abcd bull match");
+        assert!(m.score > 0.5, "score={}", m.score);
+        assert_eq!(m.variant, "bull");
+    }
+
+    #[test]
+    fn abcd_rejects_wrong_projection() {
+        // CD=50 >> AB=20, projection 2.5x — outside tol.
+        let pivots = vec![
+            piv(0, dec!(100.0), PivotKind::Low),
+            piv(10, dec!(120.0), PivotKind::High),
+            piv(20, dec!(108.0), PivotKind::Low),
+            piv(30, dec!(158.0), PivotKind::High),
+        ];
+        assert!(eval_measured_move_abcd(&pivots, &cfg()).is_none());
+    }
+
+    #[test]
+    fn abcd_rejects_retrace_too_deep() {
+        // Retrace 90% (C very close to A).
+        let pivots = vec![
+            piv(0, dec!(100.0), PivotKind::Low),
+            piv(10, dec!(120.0), PivotKind::High),
+            piv(20, dec!(101.0), PivotKind::Low),  // retrace ~95%
+            piv(30, dec!(121.0), PivotKind::High),
+        ];
+        assert!(eval_measured_move_abcd(&pivots, &cfg()).is_none());
+    }
 }

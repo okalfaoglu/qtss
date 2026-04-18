@@ -155,7 +155,14 @@ impl PublicCard {
         let tier = TierBadge::build(snapshot.ai_score, &tier_thresholds);
         let entry_f = to_f64(snapshot.entry_price);
         let stop_f = to_f64(snapshot.stop_price);
-        let stop_pct = pct_from_entry(entry_f, stop_f);
+        // P/L-signed %: LONG keeps raw sign; SHORT inverts so stop→loss is
+        // always negative and TP→profit is always positive, regardless of
+        // whether the price moves up or down in absolute terms.
+        let dir_sign = match snapshot.direction {
+            SetupDirection::Long => 1.0,
+            SetupDirection::Short => -1.0,
+        };
+        let stop_pct = pct_from_entry(entry_f, stop_f) * dir_sign;
         let targets = [snapshot.tp1_price, snapshot.tp2_price, snapshot.tp3_price]
             .iter()
             .enumerate()
@@ -163,7 +170,7 @@ impl PublicCard {
             .map(|(idx, price)| TargetPoint {
                 index: idx,
                 price,
-                pct: pct_from_entry(entry_f, to_f64(price)),
+                pct: pct_from_entry(entry_f, to_f64(price)) * dir_sign,
             })
             .collect::<Vec<_>>();
         let risk_reward = compute_risk_reward(
@@ -174,7 +181,7 @@ impl PublicCard {
         );
         let current_change_pct = snapshot
             .current_price
-            .map(|cp| pct_from_entry(entry_f, to_f64(cp)));
+            .map(|cp| pct_from_entry(entry_f, to_f64(cp)) * dir_sign);
         let pattern_label = format_pattern(&snapshot.pattern_family, snapshot.pattern_subkind.as_deref());
         let ai_brief = snapshot
             .ai_brief
@@ -240,12 +247,91 @@ fn compute_risk_reward(
 }
 
 fn format_pattern(family: &str, subkind: Option<&str>) -> String {
-    // Simple title-case without external deps; avoids dragging `heck`.
     let fam = title_case(family);
     match subkind {
-        Some(s) if !s.is_empty() => format!("{fam} · {}", title_case(s)),
+        Some(s) if !s.is_empty() => format!("{fam} · {}", pretty_subkind(s)),
         _ => fam,
     }
+}
+
+/// Human-readable subkind labels. Dispatch-table keeps per-shape wording
+/// close to the detector names without scattering `match` arms everywhere
+/// (CLAUDE.md #1). Unknown keys fall back to title_case + auto bull/bear.
+fn pretty_subkind(raw: &str) -> String {
+    let s = raw.to_ascii_lowercase();
+    // Exact-match table first — covers aliases and multi-word shapes.
+    const EXACT: &[(&str, &str)] = &[
+        ("bull_flag", "Flag (Bull)"),
+        ("bear_flag", "Flag (Bear)"),
+        ("pennant", "Pennant"),
+        ("pennant_bull", "Pennant (Bull)"),
+        ("pennant_bear", "Pennant (Bear)"),
+        ("head_and_shoulders", "Head & Shoulders"),
+        ("head_and_shoulders_bear", "Head & Shoulders (Bear)"),
+        ("inverse_head_and_shoulders", "Inverse H&S"),
+        ("inverse_head_and_shoulders_bull", "Inverse H&S (Bull)"),
+        ("double_top", "Double Top"),
+        ("double_bottom", "Double Bottom"),
+        ("triple_top", "Triple Top"),
+        ("triple_bottom", "Triple Bottom"),
+        ("ascending_triangle", "Triangle (Ascending)"),
+        ("descending_triangle", "Triangle (Descending)"),
+        ("symmetrical_triangle", "Triangle (Symmetrical)"),
+        ("rising_wedge", "Wedge (Rising)"),
+        ("falling_wedge", "Wedge (Falling)"),
+        ("ascending_channel", "Channel (Ascending)"),
+        ("descending_channel", "Channel (Descending)"),
+        ("rectangle", "Rectangle"),
+        ("rectangle_neutral", "Rectangle"),
+        ("diamond", "Diamond"),
+        ("rounding_top", "Rounding Top"),
+        ("rounding_bottom", "Rounding Bottom"),
+        ("bullish_fvg", "FVG (Bull)"),
+        ("bearish_fvg", "FVG (Bear)"),
+        ("bullish_ob", "Order Block (Bull)"),
+        ("bearish_ob", "Order Block (Bear)"),
+        ("equal_highs", "Equal Highs"),
+        ("equal_lows", "Equal Lows"),
+        ("liquidity_pool_high", "Liquidity Pool (High)"),
+        ("liquidity_pool_low", "Liquidity Pool (Low)"),
+        ("bottom_setup", "Bottom Setup"),
+        ("top_setup", "Top Setup"),
+        // Faz 10 Aşama 1 — yeni klasik formasyon etiketleri.
+        ("triple_top_bear", "Triple Top (Bear)"),
+        ("triple_bottom_bull", "Triple Bottom (Bull)"),
+        ("broadening_top_bear", "Broadening Top (Bear)"),
+        ("broadening_bottom_bull", "Broadening Bottom (Bull)"),
+        ("broadening_triangle_bull", "Broadening Triangle (Bull)"),
+        ("broadening_triangle_bear", "Broadening Triangle (Bear)"),
+        ("v_top_bear", "V-Top (Bear)"),
+        ("v_bottom_bull", "V-Bottom (Bull)"),
+        ("measured_move_abcd_bull", "ABCD Measured Move (Bull)"),
+        ("measured_move_abcd_bear", "ABCD Measured Move (Bear)"),
+        // Faz 10 Aşama 2 — gap / island reversal etiketleri.
+        ("common_gap_bull", "Common Gap (Bull)"),
+        ("common_gap_bear", "Common Gap (Bear)"),
+        ("breakaway_gap_bull", "Breakaway Gap (Bull)"),
+        ("breakaway_gap_bear", "Breakaway Gap (Bear)"),
+        ("runaway_gap_bull", "Runaway Gap (Bull)"),
+        ("runaway_gap_bear", "Runaway Gap (Bear)"),
+        ("exhaustion_gap_bull", "Exhaustion Gap (Bull)"),
+        ("exhaustion_gap_bear", "Exhaustion Gap (Bear)"),
+        ("island_reversal_bull", "Island Reversal (Bull)"),
+        ("island_reversal_bear", "Island Reversal (Bear)"),
+    ];
+    for (k, v) in EXACT {
+        if *k == s {
+            return (*v).to_string();
+        }
+    }
+    // Auto "(Bull)" / "(Bear)" suffix stripping for long-tail detectors
+    // like `impulse_5_bull`, `gartley_bear`, etc.
+    for (suf, label) in [("_bull", "Bull"), ("_bear", "Bear")] {
+        if let Some(base) = s.strip_suffix(suf) {
+            return format!("{} ({})", title_case(base), label);
+        }
+    }
+    title_case(raw)
 }
 
 fn title_case(s: &str) -> String {
@@ -322,8 +408,10 @@ mod tests {
         // R:R = (82400-80000)/(83500-82400) ≈ 2.18
         let rr = c.risk_reward.unwrap();
         assert!((rr - 2.181).abs() < 0.01);
-        // Stop % positive (above entry) but still "bad for SHORT".
-        assert!(c.stop_pct > 0.0);
+        // P/L-signed: SHORT stop (price UP) is a loss → negative %.
+        assert!(c.stop_pct < 0.0);
+        // SHORT target (price DOWN) is profit → positive %.
+        assert!(c.targets.iter().all(|t| t.pct > 0.0));
     }
 
     #[test]
@@ -334,6 +422,18 @@ mod tests {
             AssetCategory::MegaCap,
         );
         assert_eq!(c.pattern_label, "Wyckoff · Spring");
+    }
+
+    #[test]
+    fn friendly_subkind_labels() {
+        assert_eq!(pretty_subkind("bull_flag"), "Flag (Bull)");
+        assert_eq!(pretty_subkind("bear_flag"), "Flag (Bear)");
+        assert_eq!(pretty_subkind("pennant"), "Pennant");
+        assert_eq!(pretty_subkind("inverse_head_and_shoulders"), "Inverse H&S");
+        assert_eq!(pretty_subkind("ascending_triangle"), "Triangle (Ascending)");
+        assert_eq!(pretty_subkind("bullish_fvg"), "FVG (Bull)");
+        assert_eq!(pretty_subkind("impulse_5_bull"), "Impulse 5 (Bull)");
+        assert_eq!(pretty_subkind("gartley_bear"), "Gartley (Bear)");
     }
 
     #[test]
