@@ -67,10 +67,18 @@ pub async fn selector_loop(pool: PgPool) {
 
 async fn run_tick(pool: &PgPool, batch: i64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let open = list_open_v2_setups(pool, None).await?;
-    // Keep only "armed" setups with numeric entry+SL — active ones are already running.
+    // Accept both "armed" (entry not yet touched) and "active" (already
+    // running) setups: the v2 pipeline currently writes setups straight
+    // into "active", so filtering on "armed" would starve us. The
+    // selected_candidates UNIQUE (setup_id, mode) keeps the enqueue
+    // idempotent regardless of how many times we see the same row.
     let armed: Vec<V2SetupRow> = open
         .into_iter()
-        .filter(|s| s.state == "armed" && s.entry_price.is_some() && s.entry_sl.is_some())
+        .filter(|s| {
+            matches!(s.state.as_str(), "armed" | "active")
+                && s.entry_price.is_some()
+                && s.entry_sl.is_some()
+        })
         .take(batch as usize)
         .collect();
     if armed.is_empty() {

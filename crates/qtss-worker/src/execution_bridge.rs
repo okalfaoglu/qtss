@@ -108,32 +108,14 @@ async fn dispatch_dry(
     store: &LivePositionStore,
     row: &SelectedCandidateRow,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Mirror the intent as a paper fill so the dry GUI + Training Set
-    // pipeline see real traffic. Schema-wise we match the DryOrdersMirror
-    // contract already used by strategy_runner: no venue_order_id,
-    // status='filled', filled_qty = qty, strategy_key tagged.
-    let qty = rust_decimal::Decimal::new(1, 2); // placeholder 0.01 — sizing lives upstream
-    sqlx::query(
-        r#"
-        INSERT INTO exchange_orders (
-            exchange, symbol, side, order_type, qty, price,
-            status, filled_qty, avg_price, strategy_key, dry_run,
-            created_at, updated_at
-        )
-        VALUES ($1,$2,$3,'market',$4,$5,'filled',$4,$5,'selector',TRUE,
-                now(),now())
-        ON CONFLICT DO NOTHING
-        "#,
-    )
-    .bind(&row.exchange)
-    .bind(&row.symbol)
-    .bind(side_str(&row.direction))
-    .bind(qty)
-    .bind(row.entry_price)
-    .execute(pool)
-    .await?;
-
-    // Also populate live_positions so the tick dispatcher / GUI see the
+    // Canonical source of truth for a paper fill is `live_positions` —
+    // the tick dispatcher evaluates it, the GUI lists it, the outcome
+    // labeler reads it for training set ground truth. We intentionally
+    // skip `exchange_orders` because that table is reserved for rows
+    // placed through the broker adapter (it requires org/user/intent
+    // jsonb shapes tied to real orders); paper fills would only clutter
+    // its audit trail.
+    // Populate live_positions so the tick dispatcher / GUI see the
     // open paper position. Failure here is non-fatal — the paper order
     // is already recorded; surface via warn! so we notice the drift.
     // On success we also upsert into the in-memory LivePositionStore so
@@ -230,13 +212,6 @@ async fn build_live_position(pool: &PgPool, row: &SelectedCandidateRow) -> Optio
             "risk_pct": row.risk_pct.to_string(),
         }),
     })
-}
-
-fn side_str(d: &str) -> &'static str {
-    match d {
-        "long" => "buy",
-        _ => "sell",
-    }
 }
 
 fn live_side(d: &str) -> &'static str {

@@ -85,8 +85,12 @@ async fn active_futures_pairs(pool: &PgPool) -> Vec<String> {
         Ok(rows) => {
             let mut seen: HashSet<String> = HashSet::new();
             for r in rows {
+                // Accept both "futures" and the legacy/generic "crypto"
+                // venue_class — v2 pipeline currently writes "crypto"
+                // for Binance perp setups.
+                let vc = r.venue_class.to_ascii_lowercase();
                 if r.exchange.eq_ignore_ascii_case("binance")
-                    && r.venue_class.eq_ignore_ascii_case("futures")
+                    && (vc == "futures" || vc == "crypto")
                 {
                     seen.insert(r.symbol.to_ascii_lowercase());
                 }
