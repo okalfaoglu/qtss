@@ -32,7 +32,7 @@ mod specs;
 #[cfg(test)]
 mod tests;
 
-pub use config::CandleConfig;
+pub use config::{CandleConfig, TrendMode};
 pub use detector::CandleDetector;
 pub use error::{CandleError, CandleResult};
 pub use specs::{CandleMatch, CandleSpec, CANDLE_SPECS};

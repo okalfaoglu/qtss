@@ -3,7 +3,7 @@
 //! window and keeps the highest-scoring match. Adding a new pattern =
 //! append a row; no central `match` to edit (CLAUDE.md #1).
 
-use crate::config::CandleConfig;
+use crate::config::{CandleConfig, TrendMode};
 use qtss_domain::v2::bar::Bar;
 use rust_decimal::prelude::ToPrimitive;
 
@@ -68,6 +68,28 @@ pub static CANDLE_SPECS: &[CandleSpec] = &[
     // 5-bar continuations (Faz 10 — three methods)
     CandleSpec { name: "rising_three_methods", bars_needed: 5, eval: eval_rising_three_methods },
     CandleSpec { name: "falling_three_methods", bars_needed: 5, eval: eval_falling_three_methods },
+    // TV parity additions (Aşama post-5.C) — closing the gap against
+    // tr.tradingview.com/support/folders/43000570503 catalog.
+    // 3-bar strict-doji star variants (ahead of plain *_star so the
+    // stricter match wins on overlap).
+    CandleSpec { name: "morning_doji_star",   bars_needed: 3, eval: eval_morning_doji_star },
+    CandleSpec { name: "evening_doji_star",   bars_needed: 3, eval: eval_evening_doji_star },
+    // 3-bar tasuki gap continuations.
+    CandleSpec { name: "upside_tasuki_gap",   bars_needed: 3, eval: eval_upside_tasuki_gap },
+    CandleSpec { name: "downside_tasuki_gap", bars_needed: 3, eval: eval_downside_tasuki_gap },
+    // 2-bar harami with doji inside bar.
+    CandleSpec { name: "harami_cross",        bars_needed: 2, eval: eval_harami_cross },
+    // 2-bar doji star (precursor to full morning/evening doji star — no
+    // 3rd confirming bar yet, so scored lower).
+    CandleSpec { name: "doji_star",           bars_needed: 2, eval: eval_doji_star },
+    // 2-bar kicking — opposite-color marubozus separated by a gap.
+    CandleSpec { name: "kicking",             bars_needed: 2, eval: eval_kicking },
+    // 2-bar separating lines — same-direction continuation, opposite-
+    // colored bars with identical opens.
+    CandleSpec { name: "separating_lines",    bars_needed: 2, eval: eval_separating_lines },
+    // 1-bar long-shadow exhaustion reversals.
+    CandleSpec { name: "long_lower_shadow",   bars_needed: 1, eval: eval_long_lower_shadow },
+    CandleSpec { name: "long_upper_shadow",   bars_needed: 1, eval: eval_long_upper_shadow },
 ];
 
 // ---------------------------------------------------------------------------
@@ -136,12 +158,68 @@ fn prior_trend_pct(bars: &[Bar], end_exclusive: usize, n: usize) -> f64 {
     (f(bars[end_exclusive - 1].close) - base) / base
 }
 
+/// Simple moving average of `close` over bars[end_exclusive - n .. end_exclusive].
+/// Returns `None` when insufficient bars.
+fn sma_close(bars: &[Bar], end_exclusive: usize, n: usize) -> Option<f64> {
+    if n == 0 || end_exclusive < n {
+        return None;
+    }
+    let start = end_exclusive - n;
+    let sum: f64 = bars[start..end_exclusive].iter().map(|b| f(b.close)).sum();
+    Some(sum / n as f64)
+}
+
+/// Trend classifier dispatch — TV parity. Single source of truth for
+/// every reversal pattern guard (CLAUDE.md #1). Returns `(uptrend,
+/// downtrend)` in one pass to avoid redundant SMA computation.
+///
+/// Fallback order when SMA modes lack bars: `Sma50And200` → `Sma50` →
+/// `Pct`. Legacy code paths (test fixtures with ~10 bars) auto-degrade
+/// to `Pct` without silent guard bypass.
+fn classify_trend(bars: &[Bar], end_exclusive: usize, cfg: &CandleConfig) -> (bool, bool) {
+    // `None` short-circuits both directions to `true` — pattern emits
+    // without trend context (TV'nin "Tespit yok" seçeneği).
+    if matches!(cfg.trend_mode, TrendMode::None) {
+        return (true, true);
+    }
+    // SMA candidates — price = last closed bar before `end_exclusive`.
+    if end_exclusive == 0 {
+        return (false, false);
+    }
+    let price = f(bars[end_exclusive - 1].close);
+    let sma50 = sma_close(bars, end_exclusive, 50);
+    let sma200 = sma_close(bars, end_exclusive, 200);
+
+    match cfg.trend_mode {
+        TrendMode::Sma50And200 => {
+            if let (Some(s50), Some(s200)) = (sma50, sma200) {
+                return (price > s50 && s50 > s200, price < s50 && s50 < s200);
+            }
+            // Fall through to Sma50.
+            if let Some(s50) = sma50 {
+                return (price > s50, price < s50);
+            }
+            // Fall through to Pct.
+        }
+        TrendMode::Sma50 => {
+            if let Some(s50) = sma50 {
+                return (price > s50, price < s50);
+            }
+            // Fall through to Pct.
+        }
+        TrendMode::Pct | TrendMode::None => {}
+    }
+
+    let ret = prior_trend_pct(bars, end_exclusive, cfg.trend_context_bars);
+    (ret >= cfg.trend_context_min_pct, ret <= -cfg.trend_context_min_pct)
+}
+
 fn has_prior_uptrend(bars: &[Bar], end_exclusive: usize, cfg: &CandleConfig) -> bool {
-    prior_trend_pct(bars, end_exclusive, cfg.trend_context_bars) >= cfg.trend_context_min_pct
+    classify_trend(bars, end_exclusive, cfg).0
 }
 
 fn has_prior_downtrend(bars: &[Bar], end_exclusive: usize, cfg: &CandleConfig) -> bool {
-    prior_trend_pct(bars, end_exclusive, cfg.trend_context_bars) <= -cfg.trend_context_min_pct
+    classify_trend(bars, end_exclusive, cfg).1
 }
 
 fn pct_eq(a: f64, b: f64, tol: f64) -> bool {
@@ -446,6 +524,11 @@ fn eval_dark_cloud_cover(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch
 
 fn eval_tweezer_top(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
     let (a, b) = last_two(bars)?;
+    // TV parity (43000592710): 1. bar yeşil (uzun bull), 2. bar kırmızı
+    // (bear). Sadece high eşitliği yetmez — renk dönüşü reversal'ın özü.
+    if !a.is_bull() || !b.is_bear() {
+        return None;
+    }
     if !pct_eq(a.high, b.high, cfg.tweezer_price_tol) {
         return None;
     }
@@ -462,6 +545,10 @@ fn eval_tweezer_top(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
 
 fn eval_tweezer_bottom(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
     let (a, b) = last_two(bars)?;
+    // TV parity (43000592709): 1. bar uzun kırmızı, 2. bar yeşil.
+    if !a.is_bear() || !b.is_bull() {
+        return None;
+    }
     if !pct_eq(a.low, b.low, cfg.tweezer_price_tol) {
         return None;
     }
@@ -898,8 +985,12 @@ fn eval_rising_three_methods(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleM
     if b1.body_ratio() < 0.5 || b5.body_ratio() < 0.5 {
         return None;
     }
-    // Three middle bars: small bodies, contained inside b1's high/low.
+    // TV parity (43000592711): ortadaki 3 bar kırmızı (karşı-renk).
+    // Range-inside + small body de birlikte aranır.
     for m in [&b2, &b3, &b4] {
+        if !m.is_bear() {
+            return None;
+        }
         if m.high > b1.high || m.low < b1.low {
             return None;
         }
@@ -930,7 +1021,11 @@ fn eval_falling_three_methods(bars: &[Bar], cfg: &CandleConfig) -> Option<Candle
     if b1.body_ratio() < 0.5 || b5.body_ratio() < 0.5 {
         return None;
     }
+    // TV parity (43000592712): ortadaki 3 bar yeşil (karşı-renk).
     for m in [&b2, &b3, &b4] {
+        if !m.is_bull() {
+            return None;
+        }
         if m.high > b1.high || m.low < b1.low {
             return None;
         }
@@ -948,6 +1043,287 @@ fn eval_falling_three_methods(bars: &[Bar], cfg: &CandleConfig) -> Option<Candle
         score: 0.86,
         variant: "bear",
         start_idx: bars.len() - 5,
+        end_idx: bars.len() - 1,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// TV parity additions (post-Aşama 5.C)
+//
+// Dispatch satırları yukarıda CANDLE_SPECS içine eklendi. Gövdeler klasik
+// literatüre dayalıdır; TV'nin bireysel sayfalarıyla bir sonraki turda
+// (A adımı) satır satır doğrulanacak — sapma varsa bu fonksiyonlar revize
+// edilecek. Hepsi CLAUDE.md #2 gereği eşikleri `CandleConfig`'ten alır.
+// ---------------------------------------------------------------------------
+
+/// Morning doji star — morning_star ile aynı yapı, ama ortadaki bar
+/// gerçek bir doji (body_ratio ≤ doji eşiği). Daha nadir ve daha güçlü
+/// sinyal olduğundan skor biraz daha yüksek.
+fn eval_morning_doji_star(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let (a, b, c) = last_three(bars)?;
+    if !a.is_bear() || !c.is_bull() {
+        return None;
+    }
+    if a.body_ratio() < 0.5 || c.body_ratio() < 0.5 {
+        return None;
+    }
+    if b.body_ratio() > cfg.doji_body_ratio_max {
+        return None;
+    }
+    // Orta doji, a'nın gövdesinin altına sarkmalı (star pozisyonu).
+    if b.body_high() >= a.body_low() {
+        return None;
+    }
+    let a_mid = (a.open + a.close) * 0.5;
+    if c.close < a_mid {
+        return None;
+    }
+    if !has_prior_downtrend(bars, bars.len() - 2, cfg) {
+        return None;
+    }
+    Some(CandleMatch {
+        score: 0.93,
+        variant: "bull",
+        start_idx: bars.len() - 3,
+        end_idx: bars.len() - 1,
+    })
+}
+
+/// Evening doji star — evening_star mirror, orta bar strict doji.
+fn eval_evening_doji_star(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let (a, b, c) = last_three(bars)?;
+    if !a.is_bull() || !c.is_bear() {
+        return None;
+    }
+    if a.body_ratio() < 0.5 || c.body_ratio() < 0.5 {
+        return None;
+    }
+    if b.body_ratio() > cfg.doji_body_ratio_max {
+        return None;
+    }
+    if b.body_low() <= a.body_high() {
+        return None;
+    }
+    let a_mid = (a.open + a.close) * 0.5;
+    if c.close > a_mid {
+        return None;
+    }
+    if !has_prior_uptrend(bars, bars.len() - 2, cfg) {
+        return None;
+    }
+    Some(CandleMatch {
+        score: 0.93,
+        variant: "bear",
+        start_idx: bars.len() - 3,
+        end_idx: bars.len() - 1,
+    })
+}
+
+/// Upside tasuki gap — bullish continuation:
+///   a: güçlü bull
+///   b: gap-up ile açılıp bull kapatan bar (b.low > a.high)
+///   c: bear bar; b'nin gövdesi içinde açılır, a ile b arasındaki gap'i
+///      *kapatmaz* (c.close > a.high).
+fn eval_upside_tasuki_gap(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let (a, b, c) = last_three(bars)?;
+    if !a.is_bull() || !b.is_bull() || !c.is_bear() {
+        return None;
+    }
+    if a.body_ratio() < 0.5 || b.body_ratio() < 0.5 {
+        return None;
+    }
+    // Gap between a and b.
+    if b.low <= a.high {
+        return None;
+    }
+    // c opens inside b's body.
+    if c.open <= b.body_low() || c.open >= b.body_high() {
+        return None;
+    }
+    // c does not close the gap.
+    if c.close <= a.high {
+        return None;
+    }
+    if !has_prior_uptrend(bars, bars.len() - 2, cfg) {
+        return None;
+    }
+    Some(CandleMatch {
+        score: 0.78,
+        variant: "bull",
+        start_idx: bars.len() - 3,
+        end_idx: bars.len() - 1,
+    })
+}
+
+/// Downside tasuki gap — mirror of upside.
+fn eval_downside_tasuki_gap(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let (a, b, c) = last_three(bars)?;
+    if !a.is_bear() || !b.is_bear() || !c.is_bull() {
+        return None;
+    }
+    if a.body_ratio() < 0.5 || b.body_ratio() < 0.5 {
+        return None;
+    }
+    if b.high >= a.low {
+        return None;
+    }
+    if c.open <= b.body_low() || c.open >= b.body_high() {
+        return None;
+    }
+    if c.close >= a.low {
+        return None;
+    }
+    if !has_prior_downtrend(bars, bars.len() - 2, cfg) {
+        return None;
+    }
+    Some(CandleMatch {
+        score: 0.78,
+        variant: "bear",
+        start_idx: bars.len() - 3,
+        end_idx: bars.len() - 1,
+    })
+}
+
+/// Harami cross — harami ama inside bar gerçek doji. Daha güçlü
+/// reversal varyantı.
+fn eval_harami_cross(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let (a, b) = last_two(bars)?;
+    if b.body_ratio() > cfg.doji_body_ratio_max {
+        return None;
+    }
+    let contained = b.body_low() >= a.body_low() && b.body_high() <= a.body_high();
+    if !contained {
+        return None;
+    }
+    if a.body_ratio() < 0.5 {
+        return None;
+    }
+    let start = bars.len() - 2;
+    let end = bars.len() - 1;
+    if a.is_bear() && has_prior_downtrend(bars, bars.len() - 1, cfg) {
+        return Some(CandleMatch { score: 0.78, variant: "bull", start_idx: start, end_idx: end });
+    }
+    if a.is_bull() && has_prior_uptrend(bars, bars.len() - 1, cfg) {
+        return Some(CandleMatch { score: 0.78, variant: "bear", start_idx: start, end_idx: end });
+    }
+    None
+}
+
+/// Doji star — 2-bar precursor to morning/evening doji star. Büyük trend
+/// barı + gap'li doji. 3. teyit barı yok, bu yüzden skor daha düşük.
+fn eval_doji_star(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let (a, b) = last_two(bars)?;
+    if b.body_ratio() > cfg.doji_body_ratio_max {
+        return None;
+    }
+    if a.body_ratio() < 0.5 {
+        return None;
+    }
+    let start = bars.len() - 2;
+    let end = bars.len() - 1;
+    // Bull setup: downtrend, a bear, b gap-down doji.
+    if a.is_bear()
+        && b.body_high() < a.body_low()
+        && has_prior_downtrend(bars, bars.len() - 1, cfg)
+    {
+        return Some(CandleMatch { score: 0.65, variant: "bull", start_idx: start, end_idx: end });
+    }
+    // Bear setup: uptrend, a bull, b gap-up doji.
+    if a.is_bull()
+        && b.body_low() > a.body_high()
+        && has_prior_uptrend(bars, bars.len() - 1, cfg)
+    {
+        return Some(CandleMatch { score: 0.65, variant: "bear", start_idx: start, end_idx: end });
+    }
+    None
+}
+
+/// Kicking — iki zıt yönlü marubozu ve aralarında gap. Şiddetli reversal;
+/// prior-trend guard'ı yok (pattern kendi başına kicker).
+fn eval_kicking(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let (a, b) = last_two(bars)?;
+    // Her iki bar da marubozu — gölgeler ihmal edilebilir, body dominant.
+    let shadow_limit = cfg.marubozu_shadow_ratio_max;
+    let a_shadows = (a.upper_shadow() + a.lower_shadow()) / a.range();
+    let b_shadows = (b.upper_shadow() + b.lower_shadow()) / b.range();
+    if a_shadows > shadow_limit || b_shadows > shadow_limit {
+        return None;
+    }
+    if a.body_ratio() < 0.9 || b.body_ratio() < 0.9 {
+        return None;
+    }
+    let start = bars.len() - 2;
+    let end = bars.len() - 1;
+    // Bull kicking: a bear marubozu, b bull marubozu gap-up.
+    if a.is_bear() && b.is_bull() && b.low > a.high {
+        return Some(CandleMatch { score: 0.9, variant: "bull", start_idx: start, end_idx: end });
+    }
+    // Bear kicking: a bull marubozu, b bear marubozu gap-down.
+    if a.is_bull() && b.is_bear() && b.high < a.low {
+        return Some(CandleMatch { score: 0.9, variant: "bear", start_idx: start, end_idx: end });
+    }
+    None
+}
+
+/// Separating lines — mevcut trend yönünde devam. Zıt renkli iki bar,
+/// (neredeyse) aynı açılış fiyatı. Bull: uptrend + bear bar + bull bar
+/// (bear'in açılışından açılıp üstüne kapatır).
+fn eval_separating_lines(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let (a, b) = last_two(bars)?;
+    if !pct_eq(a.open, b.open, cfg.tweezer_price_tol) {
+        return None;
+    }
+    if b.body_ratio() < 0.6 {
+        return None;
+    }
+    let start = bars.len() - 2;
+    let end = bars.len() - 1;
+    if a.is_bear() && b.is_bull() && has_prior_uptrend(bars, bars.len() - 1, cfg) {
+        return Some(CandleMatch { score: 0.7, variant: "bull", start_idx: start, end_idx: end });
+    }
+    if a.is_bull() && b.is_bear() && has_prior_downtrend(bars, bars.len() - 1, cfg) {
+        return Some(CandleMatch { score: 0.7, variant: "bear", start_idx: start, end_idx: end });
+    }
+    None
+}
+
+/// Long lower shadow — 1-bar exhaustion (hammer'ın body-agnostic
+/// akrabası). Lower shadow ≥ 60% range, upper shadow küçük, prior
+/// downtrend. Hammer'dan farkı: body-oranı kısıtı yok; bu yüzden hammer
+/// tetiklemeyen küçük-gövde vakalarını yakalar, skor daha düşük.
+fn eval_long_lower_shadow(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let g = Geom::from(bars.last()?);
+    let lower = g.lower_shadow() / g.range();
+    let upper = g.upper_shadow() / g.range();
+    if lower < 0.6 || upper > 0.2 {
+        return None;
+    }
+    if !has_prior_downtrend(bars, bars.len() - 1, cfg) {
+        return None;
+    }
+    Some(CandleMatch {
+        score: 0.6,
+        variant: "bull",
+        start_idx: bars.len() - 1,
+        end_idx: bars.len() - 1,
+    })
+}
+
+/// Long upper shadow — mirror. Upper shadow ≥ 60%, prior uptrend.
+fn eval_long_upper_shadow(bars: &[Bar], cfg: &CandleConfig) -> Option<CandleMatch> {
+    let g = Geom::from(bars.last()?);
+    let upper = g.upper_shadow() / g.range();
+    let lower = g.lower_shadow() / g.range();
+    if upper < 0.6 || lower > 0.2 {
+        return None;
+    }
+    if !has_prior_uptrend(bars, bars.len() - 1, cfg) {
+        return None;
+    }
+    Some(CandleMatch {
+        score: 0.6,
+        variant: "bear",
+        start_idx: bars.len() - 1,
         end_idx: bars.len() - 1,
     })
 }

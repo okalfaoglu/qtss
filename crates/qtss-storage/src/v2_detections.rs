@@ -39,6 +39,12 @@ pub struct DetectionRow {
     pub mode: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Aşama 5 — explicit overlay geometry. NULL for legacy rows; the
+    /// chart endpoint passes through unchanged and frontend decides
+    /// whether to dispatch on it or fall back to anchor-derived render.
+    pub render_geometry: Option<Json>,
+    pub render_style: Option<String>,
+    pub render_labels: Option<Json>,
 }
 
 /// Insert payload. Borrows where possible so the orchestrator does not
@@ -59,6 +65,12 @@ pub struct NewDetection<'a> {
     pub regime: Json,
     pub raw_meta: Json,
     pub mode: &'a str,
+    /// Aşama 5 — optional explicit overlay geometry. Detectors that opt
+    /// in pass a `{ "kind": ..., "payload": ... }` object here; legacy
+    /// detectors leave it None and the chart falls back to anchors.
+    pub render_geometry: Option<Json>,
+    pub render_style: Option<&'a str>,
+    pub render_labels: Option<Json>,
 }
 
 #[derive(Debug, Clone)]
@@ -116,16 +128,19 @@ impl V2DetectionRepository {
             r#"INSERT INTO qtss_v2_detections (
                    id, detected_at, exchange, symbol, timeframe,
                    family, subkind, state, structural_score,
-                   invalidation_price, anchors, regime, raw_meta, mode
+                   invalidation_price, anchors, regime, raw_meta, mode,
+                   render_geometry, render_style, render_labels
                ) VALUES (
                    $1, $2, $3, $4, $5,
                    $6, $7, $8, $9,
-                   $10, $11, $12, $13, $14
+                   $10, $11, $12, $13, $14,
+                   $15, $16, $17
                )
                RETURNING id, detected_at, exchange, symbol, timeframe,
                          family, subkind, state, structural_score, confidence,
                          invalidation_price, anchors, regime, channel_scores,
-                         raw_meta, validated_at, mode, created_at, updated_at"#,
+                         raw_meta, validated_at, mode, created_at, updated_at,
+                         render_geometry, render_style, render_labels"#,
         )
         .bind(d.id)
         .bind(d.detected_at)
@@ -141,6 +156,9 @@ impl V2DetectionRepository {
         .bind(d.regime)
         .bind(d.raw_meta)
         .bind(d.mode)
+        .bind(d.render_geometry)
+        .bind(d.render_style)
+        .bind(d.render_labels)
         .fetch_one(&self.pool)
         .await?;
         Ok(row)
@@ -228,7 +246,8 @@ impl V2DetectionRepository {
                          id, detected_at, exchange, symbol, timeframe,
                          family, subkind, state, structural_score, confidence,
                          invalidation_price, anchors, regime, channel_scores,
-                         raw_meta, validated_at, mode, created_at, updated_at
+                         raw_meta, validated_at, mode, created_at, updated_at,
+                      render_geometry, render_style, render_labels
                     FROM qtss_v2_detections
                    WHERE exchange = $1
                      AND symbol   = $2
@@ -295,7 +314,8 @@ impl V2DetectionRepository {
             r#"SELECT id, detected_at, exchange, symbol, timeframe,
                       family, subkind, state, structural_score, confidence,
                       invalidation_price, anchors, regime, channel_scores,
-                      raw_meta, validated_at, mode, created_at, updated_at
+                      raw_meta, validated_at, mode, created_at, updated_at,
+                      render_geometry, render_style, render_labels
                  FROM qtss_v2_detections
                 WHERE exchange = $1
                   AND symbol   = $2
@@ -324,7 +344,8 @@ impl V2DetectionRepository {
             r#"SELECT id, detected_at, exchange, symbol, timeframe,
                       family, subkind, state, structural_score, confidence,
                       invalidation_price, anchors, regime, channel_scores,
-                      raw_meta, validated_at, mode, created_at, updated_at
+                      raw_meta, validated_at, mode, created_at, updated_at,
+                      render_geometry, render_style, render_labels
                  FROM qtss_v2_detections
                 WHERE confidence IS NULL
                   AND state = 'forming'
@@ -433,7 +454,8 @@ impl V2DetectionRepository {
             r#"SELECT id, detected_at, exchange, symbol, timeframe,
                       family, subkind, state, structural_score, confidence,
                       invalidation_price, anchors, regime, channel_scores,
-                      raw_meta, validated_at, mode, created_at, updated_at
+                      raw_meta, validated_at, mode, created_at, updated_at,
+                      render_geometry, render_style, render_labels
                  FROM qtss_v2_detections
                 WHERE ($1::text IS NULL OR exchange  = $1)
                   AND ($2::text IS NULL OR symbol    = $2)

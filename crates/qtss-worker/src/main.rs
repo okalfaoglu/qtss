@@ -54,6 +54,7 @@ mod lifecycle_manager;
 mod nansen_symbol_lifecycle;
 // Faz 9.7.8 — position_status_notify removed.
 mod v2_detection_orchestrator;
+mod v2_render_geometry;
 mod v2_detection_sweeper;
 mod v2_projection_loop;
 mod v2_detection_validator;

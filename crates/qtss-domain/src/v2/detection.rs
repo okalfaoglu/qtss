@@ -314,6 +314,26 @@ pub struct Detection {
     /// matching higher-degree segment.
     #[serde(default)]
     pub sub_wave_anchors: Vec<Vec<PivotRef>>,
+    /// Aşama 5 — explicit render geometry contract. When present the
+    /// frontend RENDER_KIND_REGISTRY dispatches on `kind` inside this
+    /// JSON; when absent the chart falls back to legacy anchor-derived
+    /// polyline/band rendering. Shape:
+    /// `{ "kind": "polyline" | "two_lines" | "horizontal_band" |
+    ///            "head_shoulders" | "double_pattern" | "arc" |
+    ///            "v_spike" | "gap_marker" | "candle_annotation" |
+    ///            "diamond" | "fibonacci_ruler",
+    ///    "payload": { ... kind-specific ... } }`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_geometry: Option<serde_json::Value>,
+    /// Aşama 5 — family/variant style key (color + stroke hint) feeding
+    /// the frontend registry. Free-form so new kinds don't require a
+    /// domain-type change (CLAUDE.md #1: dispatch table, not match arm).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_style: Option<String>,
+    /// Aşama 5 — per-anchor/leg text labels (Elliott wave numbers,
+    /// harmonic ratio notes, etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_labels: Option<serde_json::Value>,
 }
 
 /// Output of `qtss-validator`. Wraps a `Detection` with the validator's
@@ -365,7 +385,38 @@ impl Detection {
             raw_meta: serde_json::Value::Null,
             projected_anchors: Vec::new(),
             sub_wave_anchors: Vec::new(),
+            render_geometry: None,
+            render_style: None,
+            render_labels: None,
         }
+    }
+
+    /// Builder-style helper for detectors that emit an explicit render
+    /// geometry (Aşama 5 overlay layer). `kind` drives the frontend
+    /// RENDER_KIND_REGISTRY dispatch; `payload` carries kind-specific
+    /// coordinates / ratios / labels.
+    pub fn with_render_geometry(
+        mut self,
+        kind: impl Into<String>,
+        payload: serde_json::Value,
+    ) -> Self {
+        self.render_geometry = Some(serde_json::json!({
+            "kind": kind.into(),
+            "payload": payload,
+        }));
+        self
+    }
+
+    /// Builder-style helper to tag a style key (color/stroke variant).
+    pub fn with_render_style(mut self, style: impl Into<String>) -> Self {
+        self.render_style = Some(style.into());
+        self
+    }
+
+    /// Builder-style helper to attach label notes (anchor/leg text).
+    pub fn with_render_labels(mut self, labels: serde_json::Value) -> Self {
+        self.render_labels = Some(labels);
+        self
     }
 
     /// Builder-style helper for detectors that compute a forward

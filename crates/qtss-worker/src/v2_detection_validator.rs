@@ -565,6 +565,11 @@ fn reconstruct_detection(row: &DetectionRow) -> Option<Detection> {
         // empty vecs are the correct round-trip default.
         projected_anchors: Vec::new(),
         sub_wave_anchors: Vec::new(),
+        // Aşama 5 overlay fields — validator doesn't consume them; they
+        // live on the DB row and are replayed to the chart there.
+        render_geometry: row.render_geometry.clone(),
+        render_style: row.render_style.clone(),
+        render_labels: row.render_labels.clone(),
     })
 }
 

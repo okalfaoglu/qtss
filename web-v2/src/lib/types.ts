@@ -202,6 +202,15 @@ export interface DetectionOverlay {
   wave_context?: string;
   /** True when sub-waves exist on a lower timeframe — enables drill-down */
   has_children?: boolean;
+  /**
+   * Aşama 5 — explicit overlay geometry contract emitted by the
+   * detector. When present, Chart.tsx dispatches through
+   * `RENDER_KIND_REGISTRY[kind]` instead of the anchor fallback.
+   * Shape: `{ kind: RenderKind, payload: unknown }`.
+   */
+  render_geometry?: { kind: string; payload: unknown } | null;
+  render_style?: string | null;
+  render_labels?: unknown;
 }
 
 export interface OpenOrderOverlay {

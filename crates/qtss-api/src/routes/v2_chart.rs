@@ -295,6 +295,9 @@ fn detection_row_to_overlay(row: DetectionRow) -> DetectionOverlay {
         sub_wave_anchors,
         wave_context: None,
         has_children: false,
+        render_geometry: row.render_geometry,
+        render_style: row.render_style,
+        render_labels: row.render_labels,
     }
 }
 

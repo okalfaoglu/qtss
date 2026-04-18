@@ -30,7 +30,13 @@ import {
 } from "lightweight-charts";
 
 import { apiFetch } from "../lib/api";
+import { useChartPalette } from "../lib/use-chart-palette";
 import { RectanglePrimitive, type RectangleOptions } from "../lib/rectangle-primitive";
+import {
+  dispatchRenderGeometry,
+  type RenderContext,
+  type RenderSinks,
+} from "../lib/render-kind-registry";
 import type { CandleBar, ChartWorkspace, DetectionOverlay } from "../lib/types";
 
 // ─── Constants ───────────────────────────────────────────────────────
@@ -38,6 +44,10 @@ const DEFAULTS = { venue: "binance", segment: "futures", symbol: "BTCUSDT", time
 const PAGE_SIZE = 500;
 const PREFETCH_THRESHOLD = 50;
 
+// Bootstrap defaults — `useChartPalette` overwrites this object when
+// the Config Editor response arrives (Aşama 5.C). Kept mutable so every
+// existing `familyColor()` caller picks up DB overrides without needing
+// to thread palette through the whole component tree.
 const FAMILY_COLORS: Record<string, string> = {
   elliott: "#7dd3fc",
   harmonic: "#f472b6",
@@ -49,6 +59,8 @@ const FAMILY_COLORS: Record<string, string> = {
   gap: "#38bdf8",
   custom: "#d4d4d8",
 };
+
+const STYLE_COLORS: Record<string, string> = {};
 
 // P19 — user-facing display names. The `range` family is actually SMC
 // zones (FVG / OB / Liquidity Pool / Equal Levels); "RANGE" was
@@ -484,6 +496,16 @@ export function Chart() {
   const [showProjections, setShowProjections] = useState(true);
   const [activeTool, setActiveTool] = useState<ToolId>("crosshair");
 
+  // Aşama 5.C — palette from system_config (DB-tunable via Config
+  // Editor, CLAUDE.md #2). Bootstrap defaults live in FAMILY_COLORS;
+  // here we overwrite them in-place so every downstream `familyColor()`
+  // call (there are dozens) picks up overrides without prop drilling.
+  const palette = useChartPalette();
+  useEffect(() => {
+    for (const [k, v] of Object.entries(palette.family)) FAMILY_COLORS[k] = v;
+    for (const [k, v] of Object.entries(palette.style)) STYLE_COLORS[k] = v;
+  }, [palette]);
+
   const fetchingOlderRef = useRef(false);
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -892,6 +914,36 @@ export function Chart() {
         return sameFamily.length === 0 || sameFamily[0].id === d.id;
       })();
       const showDetail = (isDetailMode && isTopInFamily) || isHov;
+
+      // Aşama 5 — opt-in explicit geometry dispatch. When the detector
+      // emitted `render_geometry`, route through RENDER_KIND_REGISTRY
+      // and skip the legacy anchor path entirely for that detection.
+      if (d.render_geometry && d.render_geometry.kind) {
+        const regMarkers: SeriesMarker<Time>[] = [];
+        const sinks: RenderSinks = {
+          rects: rectanglePrimitivesRef.current,
+          lines: overlayLinesRef.current,
+          markers: regMarkers,
+        };
+        // Aşama 5.C — style key overrides family color (bull/bear, etc).
+        const styleColor = d.render_style ? STYLE_COLORS[d.render_style] : undefined;
+        const ctx: RenderContext = {
+          chart: chartRef.current!,
+          candleSeries,
+          sinks,
+          isoToUnix,
+          familyColor: styleColor ?? color,
+          styleKey: d.render_style ?? null,
+          faded: isInvalidated,
+        };
+        if (dispatchRenderGeometry(d.render_geometry, ctx)) {
+          // Registry markers fold into the shared candle-series list so
+          // the existing cleanup/sort pass further below handles them
+          // uniformly with wyckoff/event markers.
+          for (const m of regMarkers) allMarkers.push(m);
+          continue;
+        }
+      }
 
       // Wyckoff has its own box + event overlay below — skip the generic
       // anchor-connecting polyline (purple zigzag) that adds noise.
@@ -2005,7 +2057,22 @@ export function Chart() {
           <div
             ref={chartContainerRef}
             className="absolute inset-0"
+            role="img"
+            aria-label={`${debounced.symbol} ${debounced.timeframe} fiyat grafiği, ${visibleDetections.length} overlay`}
+            tabIndex={0}
           />
+          {/* Aşama 5.C — visually-hidden overlay descriptor for screen
+              readers. The canvas itself has no semantic content so we
+              mirror active detections into a list the AT can walk. */}
+          <ul className="sr-only" aria-label="Aktif pattern overlay listesi">
+            {visibleDetections.map(d => (
+              <li key={d.id}>
+                {d.family} / {d.subkind} · {d.state} · confidence{" "}
+                {Number(d.confidence).toFixed(2)} · anchor{" "}
+                {new Date(d.anchor_time).toISOString()}
+              </li>
+            ))}
+          </ul>
           {/* ── Market Phase Panel (AlphaExtract style) ── */}
           {wyckoffQuery.data?.overlay && (familyModes["wyckoff"] ?? "on") !== "off" && (() => {
             const wo = wyckoffQuery.data.overlay;

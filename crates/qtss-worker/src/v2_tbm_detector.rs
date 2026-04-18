@@ -706,6 +706,9 @@ async fn process_symbol(
             regime,
             raw_meta,
             mode,
+            render_geometry: None,
+            render_style: None,
+            render_labels: None,
         };
         repo.insert(row).await?;
         stats.inserted += 1;

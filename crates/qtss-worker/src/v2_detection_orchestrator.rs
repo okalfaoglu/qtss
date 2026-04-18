@@ -39,7 +39,7 @@ use futures_util::stream::{self, StreamExt};
 use chrono::Utc;
 use qtss_chart_patterns::{analyze_trading_range, OhlcBar, TradingRangeParams};
 use qtss_classical::{ClassicalConfig, ClassicalDetector};
-use qtss_candles::{CandleConfig, CandleDetector};
+use qtss_candles::{CandleConfig, CandleDetector, TrendMode};
 use qtss_gap::{GapConfig, GapDetector};
 use qtss_range::RangeDetectorConfig;
 use qtss_domain::v2::bar::Bar;
@@ -571,6 +571,17 @@ async fn resolve_candle_config(pool: &PgPool) -> CandleConfig {
         pool, "detection", "candle.tweezer_price_tol",
         "QTSS_DETECTION_CANDLE_TWEEZER_TOL", 0.002,
     ).await;
+    let trend_mode_str = resolve_system_string(
+        pool, "detection", "candle.trend_mode",
+        "QTSS_DETECTION_CANDLE_TREND_MODE", "sma50_200",
+    ).await;
+    let trend_mode = match trend_mode_str.as_str() {
+        "sma50" => TrendMode::Sma50,
+        "sma50_200" => TrendMode::Sma50And200,
+        "pct" => TrendMode::Pct,
+        "none" => TrendMode::None,
+        _ => TrendMode::Sma50And200, // safe default on garbage value
+    };
     let trend_context_bars = resolve_system_u64(
         pool, "detection", "candle.trend_context_bars",
         "QTSS_DETECTION_CANDLE_TREND_BARS", 5, 2, 200,
@@ -594,6 +605,7 @@ async fn resolve_candle_config(pool: &PgPool) -> CandleConfig {
         hammer_upper_shadow_ratio_max,
         spinning_top_body_ratio_max,
         tweezer_price_tol,
+        trend_mode,
         trend_context_bars,
         trend_context_min_pct,
         min_structural_score,
@@ -1744,6 +1756,14 @@ async fn process_symbol(
             "sub_wave_anchors": sub_waves_json,
         });
 
+        // Aşama 5.B — derive before moving anchors_json. Detector-
+        // emitted geometry wins; otherwise the central prefix-rule
+        // dispatch derives one from (family, subkind, anchors).
+        // Wyckoff/range/tbm deliberately return None and keep their
+        // bespoke overlays.
+        let render_geometry = detection.render_geometry.clone().or_else(|| {
+            crate::v2_render_geometry::derive(family, subkind, &anchors_json)
+        });
         let new_row = NewDetection {
             id: Uuid::new_v4(),
             detected_at: Utc::now(),
@@ -1759,6 +1779,9 @@ async fn process_symbol(
             regime: regime_json,
             raw_meta,
             mode,
+            render_geometry,
+            render_style: detection.render_style.as_deref(),
+            render_labels: detection.render_labels.clone(),
         };
         let inserted_id = new_row.id;
         let fs_raw_meta = new_row.raw_meta.clone();

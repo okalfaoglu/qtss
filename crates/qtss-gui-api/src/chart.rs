@@ -88,6 +88,17 @@ pub struct DetectionOverlay {
     /// (wave_chain children exist). Enables drill-down UI.
     #[serde(default)]
     pub has_children: bool,
+    /// Aşama 5 — explicit overlay geometry `{ kind, payload }`. When
+    /// present the frontend RENDER_KIND_REGISTRY dispatches on
+    /// `kind`; when None the chart keeps the legacy anchor path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_geometry: Option<serde_json::Value>,
+    /// Aşama 5 — family/variant style key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_style: Option<String>,
+    /// Aşama 5 — anchor/leg label notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_labels: Option<serde_json::Value>,
 }
 
 /// One resting/working order overlay.
