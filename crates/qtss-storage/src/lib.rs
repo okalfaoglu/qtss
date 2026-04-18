@@ -52,6 +52,7 @@ pub mod v2_onchain_metrics;
 pub mod digest;
 pub mod setup_lifecycle;
 pub mod liquidation_guard_events;
+pub mod live_positions;
 pub mod selected_candidates;
 pub mod setup_broadcast_outbox;
 pub mod x_outbox;
@@ -85,6 +86,11 @@ pub use digest::{
 pub use x_outbox::{
     claim_x_outbox_batch, count_sent_today_utc, enqueue_x_outbox, mark_x_failed, mark_x_sent,
     XOutboxInsert, XOutboxRow,
+};
+pub use live_positions::{
+    close as close_live_position, insert as insert_live_position,
+    list_open as list_open_live_positions, update_mark as update_live_position_mark,
+    InsertLivePosition, LivePositionRow,
 };
 pub use selected_candidates::{
     claim_pending as claim_selected_candidates, existing_setup_ids as existing_selected_setup_ids,

@@ -21,11 +21,13 @@
 use std::time::Duration;
 
 use qtss_storage::{
-    claim_selected_candidates, mark_selected_errored, mark_selected_placed,
-    resolve_system_u64, resolve_worker_enabled_flag, SelectedCandidateRow,
+    claim_selected_candidates, insert_live_position, mark_selected_errored, mark_selected_placed,
+    resolve_system_string, resolve_system_u64, resolve_worker_enabled_flag, InsertLivePosition,
+    SelectedCandidateRow,
 };
 use sqlx::PgPool;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 const MODULE: &str = "execution";
 const CFG_INTERVAL_MS: &str = "execution.loop_interval_ms";
@@ -120,13 +122,71 @@ async fn dispatch_dry(
     .bind(row.entry_price)
     .execute(pool)
     .await?;
+
+    // Also populate live_positions so the tick dispatcher / GUI see the
+    // open paper position. Failure here is non-fatal — the paper order
+    // is already recorded; surface via warn! so we notice the drift.
+    if let Some(live) = build_live_position(pool, row).await {
+        match insert_live_position(pool, &live).await {
+            Ok(lp_id) => debug!(setup = %row.setup_id, live_pos = %lp_id, "dry live_positions ok"),
+            Err(e) => warn!(setup = %row.setup_id, error = %e, "live_positions insert failed"),
+        }
+    } else {
+        warn!(setup = %row.setup_id, "skipping live_positions: system org/user unresolved");
+    }
+
     debug!(setup = %row.setup_id, "dry dispatch ok");
     Ok(())
+}
+
+async fn build_live_position(pool: &PgPool, row: &SelectedCandidateRow) -> Option<InsertLivePosition> {
+    let org_raw = resolve_system_string(
+        pool, MODULE, "dry.default_org_id", "QTSS_DRY_ORG_ID", "",
+    )
+    .await;
+    let user_raw = resolve_system_string(
+        pool, MODULE, "dry.default_user_id", "QTSS_DRY_USER_ID", "",
+    )
+    .await;
+    let org_id = Uuid::parse_str(org_raw.trim()).ok()?;
+    let user_id = Uuid::parse_str(user_raw.trim()).ok()?;
+
+    let qty = rust_decimal::Decimal::new(1, 2); // 0.01 placeholder — sizing upstream
+    Some(InsertLivePosition {
+        org_id,
+        user_id,
+        setup_id: Some(row.setup_id),
+        mode: "dry",
+        exchange: row.exchange.clone(),
+        segment: "spot".to_string(),
+        symbol: row.symbol.clone(),
+        side: live_side(&row.direction),
+        leverage: 1,
+        entry_avg: row.entry_price,
+        qty_filled: qty,
+        qty_remaining: qty,
+        current_sl: Some(row.sl_price),
+        tp_ladder: row.tp_ladder.clone(),
+        last_mark: Some(row.entry_price),
+        metadata: serde_json::json!({
+            "selected_candidate_id": row.id,
+            "setup_id": row.setup_id.to_string(),
+            "timeframe": row.timeframe,
+            "risk_pct": row.risk_pct.to_string(),
+        }),
+    })
 }
 
 fn side_str(d: &str) -> &'static str {
     match d {
         "long" => "buy",
         _ => "sell",
+    }
+}
+
+fn live_side(d: &str) -> &'static str {
+    match d {
+        "long" => "BUY",
+        _ => "SELL",
     }
 }
