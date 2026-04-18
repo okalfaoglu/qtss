@@ -18,8 +18,13 @@
 //! so the GUI pages (Training Set, Model Registry, AI Shadow, live
 //! positions) stop looking like abandoned skeletons.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::Utc;
+use qtss_risk::{
+    ExecutionMode, LivePositionState, LivePositionStore, MarketSegment, PositionSide, TpLeg,
+};
 use qtss_storage::{
     claim_selected_candidates, insert_live_position, mark_selected_errored, mark_selected_placed,
     resolve_system_string, resolve_system_u64, resolve_worker_enabled_flag, InsertLivePosition,
@@ -40,7 +45,7 @@ const ENV_LIVE: &str = "QTSS_EXEC_LIVE_ENABLED";
 const DEFAULT_INTERVAL_MS: u64 = 2_000;
 const BATCH: i64 = 10;
 
-pub async fn execution_bridge_loop(pool: PgPool) {
+pub async fn execution_bridge_loop(pool: PgPool, store: Arc<LivePositionStore>) {
     info!("execution bridge worker: starting");
     loop {
         let interval_ms = resolve_system_u64(
@@ -48,14 +53,17 @@ pub async fn execution_bridge_loop(pool: PgPool) {
             DEFAULT_INTERVAL_MS, 500, 600_000,
         )
         .await;
-        if let Err(e) = run_tick(&pool).await {
+        if let Err(e) = run_tick(&pool, &store).await {
             warn!(error=%e, "execution bridge tick failed");
         }
         tokio::time::sleep(Duration::from_millis(interval_ms.max(500))).await;
     }
 }
 
-async fn run_tick(pool: &PgPool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn run_tick(
+    pool: &PgPool,
+    store: &LivePositionStore,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let dry_enabled =
         resolve_worker_enabled_flag(pool, MODULE, CFG_DRY_ENABLED, ENV_DRY, true).await;
     let live_enabled =
@@ -65,7 +73,7 @@ async fn run_tick(pool: &PgPool) -> Result<(), Box<dyn std::error::Error + Send 
         return Ok(());
     }
     for row in rows {
-        let outcome = dispatch(pool, &row, dry_enabled, live_enabled).await;
+        let outcome = dispatch(pool, store, &row, dry_enabled, live_enabled).await;
         match outcome {
             Ok(()) => mark_selected_placed(pool, row.id).await?,
             Err(e) => {
@@ -80,14 +88,15 @@ async fn run_tick(pool: &PgPool) -> Result<(), Box<dyn std::error::Error + Send 
 
 async fn dispatch(
     pool: &PgPool,
+    store: &LivePositionStore,
     row: &SelectedCandidateRow,
     dry_enabled: bool,
     live_enabled: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match row.mode.as_str() {
-        "dry" if dry_enabled => dispatch_dry(pool, row).await,
+        "dry" if dry_enabled => dispatch_dry(pool, store, row).await,
         "dry" => Err("dry execution disabled via config".into()),
-        "live" if live_enabled => Err("live execution adapter not yet wired (Faz 9.8.12)".into()),
+        "live" if live_enabled => Err("live execution adapter not yet wired (Faz 9.8.15)".into()),
         "live" => Err("live execution disabled via config".into()),
         "backtest" => Ok(()), // backtest rows are consumed by the backtest runner, not the bridge
         other => Err(format!("unknown mode: {other}").into()),
@@ -96,6 +105,7 @@ async fn dispatch(
 
 async fn dispatch_dry(
     pool: &PgPool,
+    store: &LivePositionStore,
     row: &SelectedCandidateRow,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Mirror the intent as a paper fill so the dry GUI + Training Set
@@ -126,9 +136,17 @@ async fn dispatch_dry(
     // Also populate live_positions so the tick dispatcher / GUI see the
     // open paper position. Failure here is non-fatal — the paper order
     // is already recorded; surface via warn! so we notice the drift.
+    // On success we also upsert into the in-memory LivePositionStore so
+    // the tick dispatcher can start evaluating it on the very next
+    // sweep, without waiting for the 60s re-hydrate cadence.
     if let Some(live) = build_live_position(pool, row).await {
         match insert_live_position(pool, &live).await {
-            Ok(lp_id) => debug!(setup = %row.setup_id, live_pos = %lp_id, "dry live_positions ok"),
+            Ok(lp_id) => {
+                debug!(setup = %row.setup_id, live_pos = %lp_id, "dry live_positions ok");
+                if let Some(state) = build_live_state(lp_id, &live) {
+                    store.upsert(state);
+                }
+            }
             Err(e) => warn!(setup = %row.setup_id, error = %e, "live_positions insert failed"),
         }
     } else {
@@ -137,6 +155,43 @@ async fn dispatch_dry(
 
     debug!(setup = %row.setup_id, "dry dispatch ok");
     Ok(())
+}
+
+fn build_live_state(id: Uuid, p: &InsertLivePosition) -> Option<LivePositionState> {
+    let mode = match p.mode {
+        "dry" => ExecutionMode::Dry,
+        "live" => ExecutionMode::Live,
+        _ => return None,
+    };
+    let segment = MarketSegment::parse(&p.segment)?;
+    let side = match p.side {
+        "BUY" | "buy" => PositionSide::Buy,
+        "SELL" | "sell" => PositionSide::Sell,
+        _ => return None,
+    };
+    let tp_ladder: Vec<TpLeg> = serde_json::from_value(p.tp_ladder.clone()).unwrap_or_default();
+    let leverage: u8 = u8::try_from(p.leverage).unwrap_or(1);
+    Some(LivePositionState {
+        id,
+        setup_id: p.setup_id,
+        mode,
+        exchange: p.exchange.clone(),
+        segment,
+        symbol: p.symbol.clone(),
+        side,
+        leverage,
+        entry_avg: p.entry_avg,
+        qty_filled: p.qty_filled,
+        qty_remaining: p.qty_remaining,
+        current_sl: p.current_sl,
+        tp_ladder,
+        liquidation_price: None,
+        maint_margin_ratio: None,
+        funding_rate_next: None,
+        last_mark: p.last_mark,
+        last_tick_at: None,
+        opened_at: Utc::now(),
+    })
 }
 
 async fn build_live_position(pool: &PgPool, row: &SelectedCandidateRow) -> Option<InsertLivePosition> {
