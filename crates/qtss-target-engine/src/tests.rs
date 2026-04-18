@@ -202,13 +202,15 @@ fn harmonic_retracement_bull() {
         ],
     );
     let targets = HarmonicRetracementMethod.project(&det);
-    assert_eq!(targets.len(), 3);
-    // leg=80 from D=20 long → 50.56, 69.44, 100
+    // 3 AD retracements + 1 PRZ midpoint
+    assert_eq!(targets.len(), 4);
+    // leg=80 from D=20 long → 50.56, 69.44, 100 + PRZ mid(50.56,69.44)=60
     use rust_decimal::prelude::ToPrimitive;
     let p: Vec<f64> = targets.iter().map(|t| t.price.to_f64().unwrap()).collect();
     assert!((p[0] - 50.56).abs() < 0.1);
     assert!((p[1] - 69.44).abs() < 0.1);
     assert!((p[2] - 100.0).abs() < 0.1);
+    assert!((p[3] - 60.0).abs() < 0.1);
 }
 
 // ---------------------------------------------------------------------------
