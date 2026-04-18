@@ -353,7 +353,7 @@ async fn build_live_position_for_mode(
     let side = live_side(&row.direction);
     let liq_price = liquidation_price(&segment, side, row.entry_price, leverage, mmr);
 
-    let qty = rust_decimal::Decimal::new(1, 2); // 0.01 placeholder — sizing upstream
+    let qty = size_from_risk(pool, mode, row).await;
     Some(InsertLivePosition {
         org_id,
         user_id,
@@ -380,6 +380,54 @@ async fn build_live_position_for_mode(
             "leverage": leverage,
         }),
     })
+}
+
+/// Faz 9.8.18 — risk-per-trade sizing.
+///
+///   qty = (equity * risk_pct) / |entry - sl|
+///
+/// Equity comes from `execution.{mode}.default_equity`; `risk_pct` is
+/// the fraction already attached to the selected candidate. Leverage is
+/// deliberately *not* multiplied in here — on USDT-M linear contracts
+/// the notional is `qty * entry`, and the guard worker uses leverage
+/// only for the liquidation formula, not for sizing. Margin = notional
+/// / leverage falls out naturally.
+///
+/// Falls back to `0.01` if either the distance is zero/negative or the
+/// equity config parses as zero, so the pipeline degrades gracefully
+/// rather than hard-failing on a single bad row.
+async fn size_from_risk(
+    pool: &PgPool,
+    mode: &'static str,
+    row: &SelectedCandidateRow,
+) -> rust_decimal::Decimal {
+    let fallback = rust_decimal::Decimal::new(1, 2); // 0.01
+    let (key, env, default_s) = match mode {
+        "live" => ("live.default_equity", "QTSS_LIVE_EQUITY", "1000"),
+        _ => ("dry.default_equity", "QTSS_DRY_EQUITY", "10000"),
+    };
+    let equity_raw = resolve_system_string(pool, MODULE, key, env, default_s).await;
+    let equity = rust_decimal::Decimal::from_str_exact(equity_raw.trim())
+        .unwrap_or_else(|_| rust_decimal::Decimal::new(10_000, 0));
+    if equity <= rust_decimal::Decimal::ZERO {
+        return fallback;
+    }
+    let distance = (row.entry_price - row.sl_price).abs();
+    if distance <= rust_decimal::Decimal::ZERO {
+        return fallback;
+    }
+    let risk_usdt = equity * row.risk_pct;
+    let raw_qty = risk_usdt / distance;
+    // Round to 4 decimals — conservative for Binance USDT-M majors
+    // (BTCUSDT step=0.001, ETHUSDT step=0.001, alt majors down to
+    // 0.0001). A proper per-symbol quantizer lands in Faz 9.8.19 along
+    // with the broker balance fetcher.
+    let qty = raw_qty.round_dp(4);
+    if qty <= rust_decimal::Decimal::ZERO {
+        fallback
+    } else {
+        qty
+    }
 }
 
 /// Map `selector_meta.venue_class` → canonical market segment.
