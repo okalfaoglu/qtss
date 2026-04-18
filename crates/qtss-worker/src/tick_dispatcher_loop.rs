@@ -33,9 +33,11 @@ use qtss_risk::{
 };
 use qtss_storage::{
     close_live_position, insert_liquidation_guard_event, insert_position_scale_event,
-    list_open_live_positions, resolve_system_u64, resolve_worker_enabled_flag,
-    update_live_position_mark, InsertLiquidationEvent, InsertScaleEvent, LivePositionRow,
+    list_open_live_positions, resolve_system_string, resolve_system_u64,
+    resolve_worker_enabled_flag, update_live_position_mark, InsertLiquidationEvent,
+    InsertScaleEvent, LivePositionRow,
 };
+use std::str::FromStr;
 use rust_decimal::Decimal;
 use serde_json::json;
 use sqlx::PgPool;
@@ -178,8 +180,18 @@ fn sl_close_reason(
 }
 
 /// Persist closure + evict from store so no future tick processes it.
-/// Realized PnL is left NULL — a follow-up phase wires the PnL engine
-/// off position_scale_events; this phase's job is the terminal state.
+///
+/// Faz 9.8.20 — realized PnL is computed inline from the store snapshot.
+/// For linear USDT-M contracts (the only segment we touch today):
+///
+///   gross_long  = (exit - entry) * qty
+///   gross_short = (entry - exit) * qty
+///   fee         = taker_bps/10_000 * (entry + exit) * qty   (both sides)
+///   realized    = gross - fee
+///
+/// Taker bps comes from `commission.<venue>.taker_bps` (module=setup,
+/// seeded by 0110). Market-only path for now; limit exits with maker
+/// rebates land when OCO bracket orders ship.
 async fn close_position(
     pool: &PgPool,
     store: &LivePositionStore,
@@ -187,13 +199,67 @@ async fn close_position(
     reason: &str,
     mark: Decimal,
 ) {
-    match close_live_position(pool, id, reason, None).await {
+    let realized = compute_realized_pnl(pool, store, id, mark).await;
+    match close_live_position(pool, id, reason, realized).await {
         Ok(()) => {
-            info!(position = %id, %reason, mark = %mark, "position closed");
+            info!(
+                position = %id,
+                %reason,
+                mark = %mark,
+                pnl = ?realized,
+                "position closed"
+            );
             store.remove(id);
         }
         Err(e) => warn!(position = %id, error = %e, "close_live_position"),
     }
+}
+
+async fn compute_realized_pnl(
+    pool: &PgPool,
+    store: &LivePositionStore,
+    id: uuid::Uuid,
+    exit: Decimal,
+) -> Option<Decimal> {
+    let state = store.get(id)?;
+    let qty = state.qty_filled;
+    if qty <= Decimal::ZERO {
+        return None;
+    }
+    let entry = state.entry_avg;
+    let gross = match state.side {
+        PositionSide::Buy => (exit - entry) * qty,
+        PositionSide::Sell => (entry - exit) * qty,
+    };
+    let taker_bps = taker_bps_for_segment(pool, &state.segment).await;
+    // fee_rate per leg; both entry + exit assumed taker.
+    let fee_rate = taker_bps / Decimal::new(10_000, 0);
+    let fee = fee_rate * (entry + exit) * qty;
+    Some(gross - fee)
+}
+
+async fn taker_bps_for_segment(pool: &PgPool, segment: &MarketSegment) -> Decimal {
+    let (key, env, default_s) = match segment {
+        MarketSegment::Futures => (
+            "commission.binance_futures.taker_bps",
+            "QTSS_TAKER_BPS_FUTURES",
+            "5.0",
+        ),
+        MarketSegment::Spot => (
+            "commission.binance_spot.taker_bps",
+            "QTSS_TAKER_BPS_SPOT",
+            "10.0",
+        ),
+        // Margin / Options: reuse futures number — refined when those
+        // segments start trading.
+        _ => (
+            "commission.binance_futures.taker_bps",
+            "QTSS_TAKER_BPS_FUTURES",
+            "5.0",
+        ),
+    };
+    let raw = resolve_system_string(pool, "setup", key, env, default_s).await;
+    Decimal::from_str(raw.trim()).unwrap_or_else(|_| Decimal::new(5, 0))
 }
 
 async fn persist_outcome(
