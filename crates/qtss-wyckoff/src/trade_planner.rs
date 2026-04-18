@@ -475,6 +475,7 @@ mod test {
             range_height: h,
             pnf_target: entry + h * 1.5,
             entry, sl,
+            sl_wide: sl - atr * 0.5,
             tp_targets: vec![entry + h * 0.5, entry + h * 1.5],
             trigger_event: WyckoffEvent::Spring,
             trigger_bar_index: 0, trigger_bar_ts_ms: 0, trigger_price: entry,

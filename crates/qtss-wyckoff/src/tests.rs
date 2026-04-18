@@ -164,7 +164,7 @@ fn detect_returns_none_on_too_few_pivots() {
     let tree = tree_from(vec![pivot(0, dec!(100), PivotKind::High, dec!(1))]);
     assert!(det
         .detect(&tree, &instrument(), Timeframe::H4, &regime())
-        .is_none());
+        .is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -182,9 +182,8 @@ fn detect_accumulation_range() {
         pivot(3, dec!(81), PivotKind::Low, dec!(1)),
         pivot(4, dec!(100), PivotKind::High, dec!(1)),
     ];
-    let d = det
-        .detect(&tree_from(pivots), &instrument(), Timeframe::H4, &regime())
-        .expect("trading range should be detected");
+    let dets = det.detect(&tree_from(pivots), &instrument(), Timeframe::H4, &regime());
+    let d = dets.first().expect("trading range should be detected");
     // After the Wyckoff body-definition fix (Spring/UT pivots excluded
     // from the range body), the SC pivot at 80 sits BELOW the body
     // support — so the detector may surface the Automatic Rally /
@@ -209,9 +208,8 @@ fn detect_distribution_range() {
         pivot(3, dec!(99), PivotKind::High, dec!(1)),
         pivot(4, dec!(80), PivotKind::Low, dec!(1)),
     ];
-    let d = det
-        .detect(&tree_from(pivots), &instrument(), Timeframe::H4, &regime())
-        .expect("distribution range should be detected");
+    let dets = det.detect(&tree_from(pivots), &instrument(), Timeframe::H4, &regime());
+    let d = dets.first().expect("distribution range should be detected");
     match &d.kind {
         PatternKind::Wyckoff(name) => assert!(
             name.ends_with("_distribution"),
@@ -242,9 +240,8 @@ fn detect_spring() {
         pivot(28, dec!(99),  PivotKind::High, dec!(1)),
         pivot(30, dec!(78),  PivotKind::Low,  dec!(1)), // spring
     ];
-    let d = det
-        .detect(&tree_from(pivots), &instrument(), Timeframe::H4, &regime())
-        .expect("spring should be detected");
+    let dets = det.detect(&tree_from(pivots), &instrument(), Timeframe::H4, &regime());
+    let d = dets.first().expect("spring should be detected");
     assert_eq!(d.kind, PatternKind::Wyckoff("spring_bull".into()));
     assert_eq!(d.invalidation_price, dec!(78));
 }
@@ -263,7 +260,7 @@ fn detect_spring_rejected_when_too_deep() {
         pivot(5, dec!(40), PivotKind::Low, dec!(1)), // 50%+ penetration
     ];
     let det_out = det.detect(&tree_from(pivots), &instrument(), Timeframe::H4, &regime());
-    if let Some(d) = det_out {
+    if let Some(d) = det_out.first() {
         assert!(!matches!(d.kind, PatternKind::Wyckoff(ref s) if s.starts_with("spring")));
     }
 }
@@ -287,9 +284,8 @@ fn detect_upthrust() {
         pivot(28, dec!(81),  PivotKind::Low,  dec!(1)),
         pivot(30, dec!(102), PivotKind::High, dec!(1)), // upthrust
     ];
-    let d = det
-        .detect(&tree_from(pivots), &instrument(), Timeframe::H4, &regime())
-        .expect("upthrust should be detected");
+    let dets = det.detect(&tree_from(pivots), &instrument(), Timeframe::H4, &regime());
+    let d = dets.first().expect("upthrust should be detected");
     assert_eq!(d.kind, PatternKind::Wyckoff("upthrust_bear".into()));
     assert_eq!(d.invalidation_price, dec!(102));
 }
@@ -312,5 +308,5 @@ fn detect_skips_when_score_floor_too_high() {
     ];
     assert!(det
         .detect(&tree_from(pivots), &instrument(), Timeframe::H4, &regime())
-        .is_none());
+        .is_empty());
 }
