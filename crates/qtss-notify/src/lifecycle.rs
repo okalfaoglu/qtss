@@ -35,6 +35,10 @@ pub enum LifecycleEventKind {
     TpPartial,
     TpFinal,
     SlHit,
+    /// Terminal: stop hit while the setup was in trailing-stop mode.
+    /// Distinguished from plain `SlHit` so analytics can tell "stopped
+    /// out at original risk" apart from "gave back trailed profit".
+    TrailStop,
     SlRatcheted,
     Invalidated,
     Cancelled,
@@ -50,6 +54,7 @@ impl LifecycleEventKind {
             Self::TpPartial => "tp_partial",
             Self::TpFinal => "tp_final",
             Self::SlHit => "sl_hit",
+            Self::TrailStop => "trail_stop",
             Self::SlRatcheted => "sl_ratcheted",
             Self::Invalidated => "invalidated",
             Self::Cancelled => "cancelled",
@@ -60,7 +65,10 @@ impl LifecycleEventKind {
 
     /// Terminal events end the setup and trigger close accounting.
     pub fn is_terminal(self) -> bool {
-        matches!(self, Self::TpFinal | Self::SlHit | Self::Invalidated | Self::Cancelled)
+        matches!(
+            self,
+            Self::TpFinal | Self::SlHit | Self::TrailStop | Self::Invalidated | Self::Cancelled
+        )
     }
 
     /// The `close_reason` to stamp on `qtss_setups` when terminal.
@@ -69,6 +77,7 @@ impl LifecycleEventKind {
         match self {
             Self::TpFinal => Some("tp_final"),
             Self::SlHit => Some("sl_hit"),
+            Self::TrailStop => Some("trail_stop"),
             Self::Invalidated => Some("invalidated"),
             Self::Cancelled => Some("cancelled"),
             _ => None,

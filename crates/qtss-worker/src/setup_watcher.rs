@@ -524,7 +524,11 @@ async fn tick_once(
                 }
                 _ => {
                     // Non-TP transitions fall back to 9.7.3 promotion.
-                    let promoted = promote_tp_hit(&state, decision);
+                    let mut promoted = promote_tp_hit(&state, decision);
+                    // Distinguish trail_stop from plain sl_hit (telemetry).
+                    if promoted.kind == LifecycleEventKind::SlHit && row.trail_mode {
+                        promoted.kind = LifecycleEventKind::TrailStop;
+                    }
                     let ctx = make_context(&state, &promoted, Some(health), prev_band, Utc::now());
                     router.dispatch(&ctx).await;
                 }

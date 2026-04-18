@@ -415,7 +415,9 @@
       "Bash(ls -1 \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\crates\\\\\" 2>/dev/null | head -20)",
       "Bash(find . -name \"main.rs\" -path \"*/qtss-worker/*\" -exec grep -l \"outcome_labeler\\\\|tick_dispatcher\" {} \\\\;)",
       "Bash(grep -E \"outcome_labeler_loop|tick_dispatcher_loop|position_manager\" \\\\\\\\wsl.localhost\\\\\\\\Ubuntu\\\\\\\\app\\\\\\\\qtss\\\\\\\\crates\\\\\\\\qtss-worker\\\\\\\\src\\\\\\\\main.rs)",
-      "Bash(ls -la \\\\\\\\wsl.localhost\\\\\\\\Ubuntu\\\\\\\\app\\\\\\\\qtss)"
+      "Bash(ls -la \\\\\\\\wsl.localhost\\\\\\\\Ubuntu\\\\\\\\app\\\\\\\\qtss)",
+      "Bash(cmd.exe /c \"wsl -d Ubuntu -- ls /app/qtss/migrations\")",
+      "Bash(cmd.exe /c \"wsl.exe -d Ubuntu -- bash -lc 'cd /app/qtss && cargo check -p qtss-notify -p qtss-worker 2>&1 | tail -40'\")"
     ]
   }
 }
