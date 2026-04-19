@@ -50,7 +50,7 @@ use qtss_tbm::{
     onchain::{score_onchain, OnchainMetrics, OnchainMetricsProvider},
     pillar::{PillarKind, PillarScore},
     scorer::score_tbm,
-    setup::{detect_setups, SetupDirection, SetupThresholds, TbmSetup},
+    setup::{detect_setups, SetupDirection, SetupThresholds},
     structure::score_structure,
     volume::score_volume,
 };
@@ -458,17 +458,11 @@ async fn process_symbol(
         win_start, n, false, &cfg.anchor,
     );
 
-    // P22e — supersede open forming detections whose stored anchor is
-    // worse than the current argmin/argmax. Without this, a bottom_setup
-    // from 3 hours ago at $60k sticks around even after price makes a
-    // fresh $58k LL; the chart keeps rendering the stale anchor and
-    // dedup_open blocks a new, correct emission. We invalidate the old
-    // row (reason=superseded) so a freshly-anchored one can be inserted
-    // this tick.
-    supersede_outdated_forming(
-        &repo, sym, &chronological, &lows, &highs, bottom_anchor, top_anchor,
-    )
-    .await?;
+    // Faz 9 follow-up — no explicit supersede pass. Anchor refresh is
+    // now handled in-place by the single-record upsert below: when the
+    // current argmin/argmax differs from the stored anchor on a forming
+    // row, update_anchor_projection rewrites the anchor block on the
+    // same row instead of invalidating + re-inserting.
 
     // P23a+b — confirmation state machine. For every forming row:
     //   BoS?  yes → follow-through? yes → confirmed; no  → stay forming.
@@ -629,12 +623,6 @@ async fn process_symbol(
         };
         let anchor_bar_time = chronological[anchor_idx].open_time;
 
-        // P22e — dedup now keys on (subkind, anchor_bar_time). A new
-        // anchor bar means a new structural extremum → new row.
-        if dedup_open(&repo, sym, setup, anchor_bar_time).await? {
-            continue;
-        }
-
         let subkind = subkind_for(setup.direction);
         let anchor_price = Decimal::from_f64(anchor_px_f64).unwrap_or(Decimal::ZERO);
         let invalidation_price = Decimal::from_f64(invalidation).unwrap_or(Decimal::ZERO);
@@ -691,27 +679,97 @@ async fn process_symbol(
         }
         apply_reversal_checklist(&mut raw_meta);
 
-        let row = NewDetection {
-            id: Uuid::new_v4(),
-            detected_at: Utc::now(),
-            exchange: &sym.exchange,
-            symbol: &sym.symbol,
-            timeframe: &sym.interval,
-            family: "tbm",
-            subkind,
-            state: "forming",
-            structural_score: (setup.score / 100.0) as f32,
-            invalidation_price,
-            anchors,
-            regime,
-            raw_meta,
-            mode,
-            render_geometry: None,
-            render_style: None,
-            render_labels: None,
-        };
-        repo.insert(row).await?;
-        stats.inserted += 1;
+        // Faz 9 follow-up — TBM single-record upsert.
+        //
+        // A TBM setup (bottom_setup / top_setup) is a *single logical
+        // entity* per (exchange, symbol, timeframe, subkind). Anchors
+        // get refined as the market prints a fresh extremum, scores
+        // drift as pillars re-evaluate, and eventually the row either
+        // confirms (BoS + follow-through) or gets invalidated. Inserting
+        // a brand-new row on each anchor refresh left the Detections
+        // panel with visual duplicates (e.g. 45% / 44% Weak sitting
+        // side-by-side). Instead, we look up the *one* open row for
+        // this key and:
+        //
+        //   - update anchors / score / raw_meta in place if it's still
+        //     forming (anchor may have moved to a fresher extremum;
+        //     that's expected evolution, not a new record),
+        //   - only refresh score + raw_meta for confirmed / entry_ready
+        //     rows (anchors are locked once BoS prints),
+        //   - insert a new row only when no open row exists.
+        //
+        // If legacy duplicates from before this patch are present, we
+        // keep the newest and flip the rest to `invalidated` so the
+        // panel converges on a single live record.
+        let open_rows = repo
+            .list_open_by_key(
+                &sym.exchange,
+                &sym.symbol,
+                &sym.interval,
+                "tbm",
+                subkind,
+            )
+            .await?;
+
+        let structural_score = (setup.score / 100.0) as f32;
+
+        if let Some((primary, duplicates)) = open_rows.split_first() {
+            // Retire legacy duplicates (if any) first so the panel is
+            // left with exactly one live row per key.
+            for dup in duplicates {
+                let _ = repo.update_state(dup.id, "invalidated").await;
+                debug!(
+                    id = %dup.id,
+                    subkind = %dup.subkind,
+                    "tbm single-record: legacy duplicate invalidated"
+                );
+            }
+
+            // Preserve fields that the lifecycle has already enriched:
+            // BoS / follow-through / retest / reversal checklist bits
+            // all live in raw_meta, and anchors get locked on confirm.
+            let locked = matches!(primary.state.as_str(), "confirmed" | "entry_ready");
+            let merged_meta = merge_tbm_raw_meta(&primary.raw_meta, &raw_meta);
+            let next_anchors = if locked { primary.anchors.clone() } else { anchors };
+            let next_invalidation = if locked {
+                primary.invalidation_price
+            } else {
+                invalidation_price
+            };
+
+            let _ = repo
+                .update_anchor_projection(
+                    primary.id,
+                    structural_score,
+                    next_invalidation,
+                    next_anchors,
+                    merged_meta,
+                )
+                .await;
+            stats.inserted += 1; // counts as a successful emission cycle
+        } else {
+            let row = NewDetection {
+                id: Uuid::new_v4(),
+                detected_at: Utc::now(),
+                exchange: &sym.exchange,
+                symbol: &sym.symbol,
+                timeframe: &sym.interval,
+                family: "tbm",
+                subkind,
+                state: "forming",
+                structural_score,
+                invalidation_price,
+                anchors,
+                regime,
+                raw_meta,
+                mode,
+                render_geometry: None,
+                render_style: None,
+                render_labels: None,
+            };
+            repo.insert(row).await?;
+            stats.inserted += 1;
+        }
     }
 
     Ok(stats)
@@ -927,124 +985,60 @@ async fn invalidate_stale_forming(
     Ok(())
 }
 
-/// P22e — dedup key is now (subkind, anchor_bar_time). Previously we
-/// blocked any new same-subkind emission that arrived after the last
-/// bar's open_time, which meant a re-anchored setup at a *new* extremum
-/// got silently dropped because an older forming row existed. The
-/// supersede pass invalidates the older row; this function only
-/// short-circuits when the same anchor bar already has an open row —
-/// i.e. re-emissions within the same bar.
-async fn dedup_open(
-    repo: &V2DetectionRepository,
-    sym: &EngineSymbolRow,
-    setup: &TbmSetup,
-    anchor_bar_time: chrono::DateTime<Utc>,
-) -> anyhow::Result<bool> {
-    use qtss_storage::DetectionFilter;
-    let rows = repo
-        .list_filtered(DetectionFilter {
-            exchange: Some(&sym.exchange),
-            symbol: Some(&sym.symbol),
-            timeframe: Some(&sym.interval),
-            family: Some("tbm"),
-            state: Some("forming"),
-            mode: None,
-            limit: 20,
-        })
-        .await?;
-    let target_subkind = subkind_for(setup.direction);
-    for row in rows {
-        if row.subkind != target_subkind { continue; }
-        let stored_anchor = row
-            .anchors
-            .as_array()
-            .and_then(|a| a.first())
-            .and_then(|a| a.get("time"))
-            .and_then(|t| t.as_str())
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        if stored_anchor == Some(anchor_bar_time) {
-            return Ok(true);
+/// Merge freshly-computed TBM raw_meta into the existing raw_meta of
+/// an open row, preserving lifecycle-enriched fields
+/// (bos_bar_index / followthrough_bar_index / retest_* / wyckoff_events
+/// / reversal_checklist bos+retest flags) that only `confirm_forming_or_timeout`
+/// and `detect_retest_for_confirmed` can produce. Without this merge,
+/// every in-place upsert would blow those fields away on the next tick.
+fn merge_tbm_raw_meta(
+    existing: &serde_json::Value,
+    incoming: &serde_json::Value,
+) -> serde_json::Value {
+    // Preserve keys set downstream by the confirmation / retest passes.
+    const PRESERVE: &[&str] = &[
+        "bos_bar_index",
+        "followthrough_bar_index",
+        "confirm_reason",
+        "retest_bar_index",
+        "retest_time",
+        "retest_price",
+        "retest_broken_level",
+        "wyckoff_events",
+    ];
+    let mut out = incoming.clone();
+    let (Some(out_obj), Some(ex_obj)) = (out.as_object_mut(), existing.as_object()) else {
+        return out;
+    };
+    for key in PRESERVE {
+        if let Some(v) = ex_obj.get(*key) {
+            out_obj.insert((*key).to_string(), v.clone());
         }
     }
-    Ok(false)
-}
-
-/// P22e — invalidate any open forming TBM row whose stored anchor is
-/// *worse* than the current tick's argmin/argmax. "Worse" means: for a
-/// bottom_setup the current argmin(lows) is lower than the stored
-/// anchor price (market made a fresh LL), and mirror for tops. Uses a
-/// 0.1% tolerance so tiny floating-point / rounding noise doesn't flip
-/// rows needlessly. The row that owns the current anchor bar is left
-/// alone (stored_time == current_time short-circuit).
-async fn supersede_outdated_forming(
-    repo: &V2DetectionRepository,
-    sym: &EngineSymbolRow,
-    chronological: &[qtss_storage::MarketBarRow],
-    lows: &[f64],
-    highs: &[f64],
-    bottom_anchor: usize,
-    top_anchor: usize,
-) -> anyhow::Result<()> {
-    use qtss_storage::DetectionFilter;
-    let rows = repo
-        .list_filtered(DetectionFilter {
-            exchange: Some(&sym.exchange),
-            symbol: Some(&sym.symbol),
-            timeframe: Some(&sym.interval),
-            family: Some("tbm"),
-            state: Some("forming"),
-            mode: None,
-            limit: 50,
-        })
-        .await?;
-    if rows.is_empty() { return Ok(()); }
-
-    let bottom_px = lows[bottom_anchor];
-    let bottom_time = chronological[bottom_anchor].open_time;
-    let top_px = highs[top_anchor];
-    let top_time = chronological[top_anchor].open_time;
-
-    for row in rows {
-        let stored_px: Option<f64> = row
-            .anchors
-            .as_array()
-            .and_then(|a| a.first())
-            .and_then(|a| a.get("price"))
-            .and_then(|p| p.as_str())
-            .and_then(|s| s.parse::<f64>().ok());
-        let stored_time: Option<chrono::DateTime<Utc>> = row
-            .anchors
-            .as_array()
-            .and_then(|a| a.first())
-            .and_then(|a| a.get("time"))
-            .and_then(|t| t.as_str())
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-
-        let (better, curr_time) = match row.subkind.as_str() {
-            "bottom_setup" => {
-                let b = stored_px.map(|sp| bottom_px < sp * 0.999).unwrap_or(false);
-                (b, bottom_time)
+    // Reversal checklist flags `bos` and `retest` are stamped by the
+    // lifecycle passes; keep them if they were ever flipped true.
+    if let (Some(ex_cl), Some(new_cl)) = (
+        ex_obj.get("reversal_checklist"),
+        out_obj
+            .get_mut("reversal_checklist")
+            .and_then(|v| v.as_object_mut()),
+    ) {
+        if let Some(ex_flags) = ex_cl.get("flags").and_then(|f| f.as_object()) {
+            if let Some(new_flags) = new_cl
+                .get_mut("flags")
+                .and_then(|f| f.as_object_mut())
+            {
+                for key in ["bos", "retest"] {
+                    if let Some(val) = ex_flags.get(key) {
+                        if val.as_bool().unwrap_or(false) {
+                            new_flags.insert(key.to_string(), val.clone());
+                        }
+                    }
+                }
             }
-            "top_setup" => {
-                let b = stored_px.map(|sp| top_px > sp * 1.001).unwrap_or(false);
-                (b, top_time)
-            }
-            _ => (false, Utc::now()),
-        };
-
-        if stored_time == Some(curr_time) { continue; }
-        if !better { continue; }
-
-        repo.update_state(row.id, "invalidated").await?;
-        debug!(
-            id = %row.id,
-            subkind = %row.subkind,
-            "P22e: tbm forming superseded by better extremum"
-        );
+        }
     }
-    Ok(())
+    out
 }
 
 /// P23a+b — walk open forming rows, promote to `confirmed` if BoS +

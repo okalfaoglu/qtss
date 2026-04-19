@@ -188,6 +188,80 @@ impl V2DetectionRepository {
         Ok(res.rows_affected())
     }
 
+    /// TBM single-record upsert support (Faz 9 follow-up): refresh the
+    /// anchor block, invalidation price, structural score and raw_meta
+    /// of an existing forming row in place. Used when a TBM setup's
+    /// argmin/argmax moves to a fresh extremum — instead of invalidating
+    /// the old row and inserting a new one (which produces visual
+    /// duplicates in the Detections panel), we mutate the same row so
+    /// each logical setup occupies exactly one DB row across its
+    /// lifetime. See bug: tbm duplicate rows.
+    pub async fn update_anchor_projection(
+        &self,
+        id: Uuid,
+        structural_score: f32,
+        invalidation_price: Decimal,
+        anchors: Json,
+        raw_meta: Json,
+    ) -> Result<u64, StorageError> {
+        let res = sqlx::query(
+            r#"UPDATE qtss_v2_detections
+                   SET structural_score   = $2,
+                       invalidation_price = $3,
+                       anchors            = $4,
+                       raw_meta           = $5,
+                       updated_at         = NOW()
+                 WHERE id = $1"#,
+        )
+        .bind(id)
+        .bind(structural_score)
+        .bind(invalidation_price)
+        .bind(anchors)
+        .bind(raw_meta)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
+    /// TBM single-record support: return every non-invalidated row for a
+    /// given (exchange, symbol, timeframe, family, subkind) key, newest
+    /// first. The TBM loop uses this to locate the *one* open record for
+    /// an upsert; if more than one comes back (legacy duplicates from
+    /// before the upsert path landed) the caller keeps the freshest and
+    /// invalidates the rest.
+    pub async fn list_open_by_key(
+        &self,
+        exchange: &str,
+        symbol: &str,
+        timeframe: &str,
+        family: &str,
+        subkind: &str,
+    ) -> Result<Vec<DetectionRow>, StorageError> {
+        let rows = sqlx::query_as::<_, DetectionRow>(
+            r#"SELECT id, detected_at, exchange, symbol, timeframe,
+                      family, subkind, state, structural_score, confidence,
+                      invalidation_price, anchors, regime, channel_scores,
+                      raw_meta, validated_at, mode, created_at, updated_at,
+                      render_geometry, render_style, render_labels
+                 FROM qtss_v2_detections
+                WHERE exchange  = $1
+                  AND symbol    = $2
+                  AND timeframe = $3
+                  AND family    = $4
+                  AND subkind   = $5
+                  AND state    <> 'invalidated'
+                ORDER BY detected_at DESC"#,
+        )
+        .bind(exchange)
+        .bind(symbol)
+        .bind(timeframe)
+        .bind(family)
+        .bind(subkind)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Move a detection between forming/confirmed/invalidated/completed.
     /// Returns the number of rows updated (0 = unknown id).
     pub async fn update_state(&self, id: Uuid, state: &str) -> Result<u64, StorageError> {
