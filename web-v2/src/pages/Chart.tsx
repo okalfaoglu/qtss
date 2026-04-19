@@ -1745,7 +1745,17 @@ export function Chart() {
     // from system_config (migration 0189) so operators tune without a
     // redeploy (CLAUDE.md #2). Rendering loop — no scattered if/else
     // over level names (CLAUDE.md #1).
-    {
+    //
+    // Pivots are clamped to the currently loaded candle window so the
+    // zigzag only renders for bars the user actually sees. The endpoint
+    // returns up to max_points_per_level pivots spanning the full
+    // pivot_cache history, which would otherwise drag the zigzag out
+    // into ancient price regions (the chart paginates candles lazily).
+    if (merged.candles.length > 0) {
+      const firstCandleTime = Number(isoToUnix(merged.candles[0].open_time));
+      const lastCandleTime = Number(
+        isoToUnix(merged.candles[merged.candles.length - 1].open_time),
+      );
       const styleMap: Record<ZigzagLineStyle, LineStyle> = {
         solid: LineStyle.Solid,
         dashed: LineStyle.Dashed,
@@ -1756,6 +1766,18 @@ export function Chart() {
         if (!levelEnabled[lvl]) continue;
         const series = pivotsQuery.data?.levels.find((s) => s.level === lvl);
         if (!series || series.points.length < 2) continue;
+        // Convert + clamp to visible candle window.
+        const inWindow = series.points
+          .map((p) => ({
+            time: Math.floor(new Date(p.open_time).getTime() / 1000) as Time,
+            value: Number(p.price),
+          }))
+          .filter(
+            (p) =>
+              (p.time as number) >= firstCandleTime &&
+              (p.time as number) <= lastCandleTime,
+          );
+        if (inWindow.length < 2) continue;
         const st = zigzagCfg.levels[lvl];
         const line = chart.addSeries(LineSeries, {
           color: st.color,
@@ -1767,14 +1789,7 @@ export function Chart() {
           pointMarkersVisible: true,
           pointMarkersRadius: 3,
         });
-        line.setData(
-          dedupeLineData(
-            series.points.map((p) => ({
-              time: Math.floor(new Date(p.open_time).getTime() / 1000) as Time,
-              value: Number(p.price),
-            })),
-          ),
-        );
+        line.setData(dedupeLineData(inWindow));
         overlayLinesRef.current.push(line);
       }
     }
