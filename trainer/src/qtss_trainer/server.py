@@ -20,9 +20,11 @@ Design rules (CLAUDE.md):
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +50,46 @@ _STATE: dict[str, Any] = {
     "artifact_path": None,
     "meta": {},  # Faz 9.4.2: loaded from meta.json beside artifact; holds training_distributions
 }
+
+# ---- SHAP LRU cache (Faz 9B) ----------------------------------------------
+# Key = sha1(model_version + feature vector bytes); value = cached ExplainResponse
+# payload (top-10 SHAP list + base_value). Invalidated on /reload by bumping
+# model_version (cache key includes it). Size from ai.inference.shap_cache_size.
+_SHAP_LOCK = threading.Lock()
+_SHAP_CACHE: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+_SHAP_CACHE_MAX = 1024  # overwritten on startup from config; 0 disables cache
+
+
+def _shap_cache_key(model_version: str, vec: np.ndarray) -> str:
+    h = hashlib.sha1()
+    h.update(model_version.encode("utf-8"))
+    h.update(vec.tobytes())
+    return h.hexdigest()
+
+
+def _shap_cache_get(key: str) -> dict[str, Any] | None:
+    if _SHAP_CACHE_MAX <= 0:
+        return None
+    with _SHAP_LOCK:
+        val = _SHAP_CACHE.get(key)
+        if val is not None:
+            _SHAP_CACHE.move_to_end(key)
+        return val
+
+
+def _shap_cache_put(key: str, val: dict[str, Any]) -> None:
+    if _SHAP_CACHE_MAX <= 0:
+        return
+    with _SHAP_LOCK:
+        _SHAP_CACHE[key] = val
+        _SHAP_CACHE.move_to_end(key)
+        while len(_SHAP_CACHE) > _SHAP_CACHE_MAX:
+            _SHAP_CACHE.popitem(last=False)
+
+
+def _shap_cache_clear() -> None:
+    with _SHAP_LOCK:
+        _SHAP_CACHE.clear()
 
 
 def _fetch_active(conn) -> dict[str, Any] | None:
@@ -182,7 +224,16 @@ app = FastAPI(title="qtss-inference", version="0.1.0")
 
 @app.on_event("startup")
 def _startup() -> None:
+    global _SHAP_CACHE_MAX
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    try:
+        with connect() as conn:
+            _SHAP_CACHE_MAX = int(
+                resolve_config(conn, "ai", "inference.shap_cache_size", 1024)
+            )
+        log.info("SHAP LRU cache sized at %d", _SHAP_CACHE_MAX)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not read shap_cache_size: %s (defaulting to 1024)", exc)
     try:
         _load_active()
     except Exception as exc:  # noqa: BLE001
@@ -219,6 +270,8 @@ def active() -> dict[str, Any]:
 @app.post("/reload")
 def reload_() -> dict[str, Any]:
     _load_active()
+    # New booster → stale SHAP entries must be evicted.
+    _shap_cache_clear()
     return active()
 
 
@@ -261,6 +314,15 @@ def explain(req: ScoreRequest) -> ExplainResponse:
     if booster is None:
         raise HTTPException(status_code=503, detail="no active model loaded")
     x, _missing = _vector(req.features_by_source, order)
+    # LRU hit? skip pred_contrib (dominant cost for deep trees).
+    cache_key = _shap_cache_key(mv or "", x)
+    cached = _shap_cache_get(cache_key)
+    if cached is not None:
+        return ExplainResponse(
+            shap_top10=[ShapEntry(**e) for e in cached["shap_top10"]],
+            base_value=cached["base_value"],
+            model_version=mv or "",
+        )
     # shape: (1, n_features + 1); last column = base value.
     contrib = booster.predict(x, pred_contrib=True)
     row = np.asarray(contrib)[0]
@@ -283,6 +345,13 @@ def explain(req: ScoreRequest) -> ExplainResponse:
         )
         for i in idxs
     ]
+    _shap_cache_put(
+        cache_key,
+        {
+            "shap_top10": [e.model_dump() for e in top],
+            "base_value": base_value,
+        },
+    )
     return ExplainResponse(shap_top10=top, base_value=base_value, model_version=mv or "")
 
 

@@ -38,6 +38,8 @@ mod digest_loop;
 mod selector_loop;
 mod execution_bridge;
 mod trainer_cron;
+mod psi_drift_loop;
+mod ml_backfill_orchestrator;
 mod tick_dispatcher_loop;
 mod setup_publisher;
 mod range_signal_execute_loop;
@@ -317,6 +319,12 @@ async fn main() -> anyhow::Result<()> {
         // Faz 9.8.12 — weekly trainer cron + AI sidecar health probe.
         let tr_pool = pool.clone();
         tokio::spawn(trainer_cron::trainer_cron_loop(tr_pool));
+        // Faz 9B — PSI drift circuit breaker (runbook FAZ_9B_DRIFT_RUNBOOK).
+        let psi_pool = pool.clone();
+        tokio::spawn(psi_drift_loop::psi_drift_loop(psi_pool));
+        // Faz 9B — historical backfill orchestrator (spec FAZ_9B_HISTORICAL_BACKFILL).
+        let bf_pool = pool.clone();
+        tokio::spawn(ml_backfill_orchestrator::ml_backfill_loop(bf_pool));
         // Faz 9.8.14 — tick dispatcher: hydrates LivePositionStore from DB,
         // polls PriceTickStore, runs evaluate_tick, persists outcomes.
         let td_pool = pool.clone();

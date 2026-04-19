@@ -74,6 +74,12 @@ class TrainerConfig:
     validation_fraction: float
     lgbm_params: dict[str, Any]
     num_boost_round: int
+    # Faz 9B gate parameters (migration 0169).
+    min_feature_coverage_pct: float
+    min_label_balance: float
+    auto_activate_if_better: bool
+    auto_activate_min_auc_lift: float
+    early_stopping_rounds: int
 
     @classmethod
     def load(cls, conn: psycopg.Connection) -> "TrainerConfig":
@@ -105,4 +111,19 @@ class TrainerConfig:
                 )
             ),
             num_boost_round=int(resolve_config(conn, "ai", "trainer.num_boost_round", 500)),
+            min_feature_coverage_pct=float(
+                resolve_config(conn, "ai", "trainer.min_feature_coverage_pct", 0.60)
+            ),
+            min_label_balance=float(
+                resolve_config(conn, "ai", "trainer.min_label_balance", 0.15)
+            ),
+            auto_activate_if_better=bool(
+                resolve_config(conn, "ai", "trainer.auto_activate_if_better", True)
+            ),
+            auto_activate_min_auc_lift=float(
+                resolve_config(conn, "ai", "trainer.auto_activate_min_auc_lift", 0.01)
+            ),
+            early_stopping_rounds=int(
+                resolve_config(conn, "ai", "trainer.early_stopping_rounds", 50)
+            ),
         )
