@@ -192,6 +192,138 @@ fn five_zero_ad_range_covers_analytic_extremes() {
     assert!(spec.ad.contains(0.0, 0.0));
 }
 
+/// Carney-textbook self-consistency test.
+///
+/// For each harmonic pattern, anchor (r_ab, r_bc, r_ad) to Carney's
+/// textbook values and verify the *geometrically derived* r_cd falls
+/// within `spec.cd`. This catches two classes of spec drift:
+///   (a) inconsistent independent ranges (the 5-0 bug — AD range
+///       excluded every valid geometry) — now impossible to ship silently.
+///   (b) a per-pattern anchor that Carney publishes as "exact" falling
+///       outside its own spec range (e.g. if someone narrows `ad` past
+///       0.886 for Bat by mistake).
+///
+/// NOTE: range centres are NOT used here — the four ratios are coupled
+/// by XABCD geometry, so range midpoints rarely form a valid pattern.
+/// Textbook values are Carney's own published defining numbers.
+#[test]
+fn every_pattern_matches_carney_textbook_example() {
+    // (name, r_ab, r_bc, r_ad) — source: harmonictrader.com per pattern.
+    // r_cd falls out of geometry; test asserts it lands in `spec.cd`.
+    let textbook: &[(&str, f64, f64, f64)] = &[
+        // Gartley:    B=0.618 XA, D=0.786 XA (Carney's defining pair)
+        ("gartley", 0.618, 0.618, 0.786),
+        // Bat:        B=0.50 XA, D=0.886 XA (Carney's preferred B)
+        ("bat", 0.50, 0.50, 0.886),
+        // Butterfly:  B=0.786 (mandatory), D=1.27 XA extension
+        ("butterfly", 0.786, 0.618, 1.27),
+        // Crab:       B=0.618, D=1.618 XA. r_bc=0.886 (upper BC retrace)
+        //             keeps derived r_cd ≈ 2.83 comfortably inside
+        //             spec.cd=[2.24, 3.618]. A mid r_bc=0.618 puts r_cd
+        //             exactly on 3.618 and trips float equality.
+        ("crab", 0.618, 0.886, 1.618),
+        // Deep Crab:  B=0.886 mandatory, D=1.618 XA
+        ("deep_crab", 0.886, 0.618, 1.618),
+        // Shark:      B=0.50 XA, BC extension ≈1.374, D near X (~0.986)
+        ("shark", 0.50, 1.374, 0.986),
+        // Cypher:     B=0.50 XA, BC ext 1.272 of XA, D=0.786 XC
+        ("cypher", 0.50, 1.272, 0.786),
+        // Alt Bat:    B=0.382 (tight), D=1.13 XA slight extension.
+        //             r_bc=0.786 lands r_cd ≈ 3.49 safely inside
+        //             spec.cd=[2.0, 3.618]. r_bc=0.886 back-computes to
+        //             0.886…0001 from float noise and trips the upper
+        //             bound of spec.bc=[0.382, 0.886].
+        ("alt_bat", 0.382, 0.786, 1.13),
+        // 5-0:        B extends past X (α=1.374), β=1.929, D≈A (r_ad≈0)
+        ("five_zero", 1.374, 1.929, 0.055),
+        // AB=CD:      classic equality CD=AB. With r_ab=0.5, r_bc=0.618
+        //             geometry forces r_ad=0.691 to make CD=AB=0.5 (then
+        //             r_cd=AB/BC=1/0.618≈1.618, inside spec.cd).
+        ("ab_cd", 0.50, 0.618, 0.691),
+        // Alt AB=CD:  Carney's 1.27 extension — CD = 1.27·AB. With
+        //             r_ab=0.5, r_bc=0.618 → CD=0.635, r_ad=0.826,
+        //             r_cd≈2.055, within spec.cd=[1.27, 3.618].
+        ("alt_ab_cd", 0.50, 0.618, 0.826),
+        // three_drives intentionally omitted — its ab/bc/cd/ad encoding
+        // represents drives+corrections rather than a single XABCD closure.
+    ];
+    for (name, r_ab, r_bc, r_ad) in textbook.iter().copied() {
+        let spec = PATTERNS
+            .iter()
+            .find(|p| p.name == name)
+            .unwrap_or_else(|| panic!("missing spec in catalog: {name}"));
+        // Construct bullish XABCD from the anchor triple; r_cd derives.
+        // r_ad>0 means D sits below A in bullish coords; r_ad<0 means
+        // D overshot upward past A (valid for 5-0 at β>2.0).
+        let x = 0.0f64;
+        let a = 1.0f64;
+        let b = a - r_ab * (a - x);
+        let c = b + r_bc * (a - b);
+        let d = a - r_ad * (a - x);
+        let pts = XabcdPoints { x, a, b, c, d };
+
+        // Precondition: each anchor must live inside its own spec range
+        // — if not, the textbook anchor itself is wrong (bug in the test
+        // table, not the spec).
+        assert!(
+            spec.ab.contains(r_ab, 0.0),
+            "{name} textbook r_ab={r_ab} outside spec.ab"
+        );
+        assert!(
+            spec.bc.contains(r_bc, 0.0),
+            "{name} textbook r_bc={r_bc} outside spec.bc"
+        );
+        assert!(
+            spec.ad.contains(r_ad, 0.0),
+            "{name} textbook r_ad={r_ad} outside spec.ad=[{},{}]",
+            spec.ad.lo,
+            spec.ad.hi
+        );
+
+        // The actual matcher run — geometric r_cd must land in spec.cd,
+        // producing a valid match with a reasonable score.
+        let score = match_pattern(spec, &pts, 0.0).unwrap_or_else(|| {
+            panic!(
+                "{name} textbook did not match: pts={pts:?}, derived r_cd={:.3}, spec.cd=[{:.3},{:.3}]",
+                (pts.c - pts.d) / (pts.c - pts.b),
+                spec.cd.lo,
+                spec.cd.hi,
+            )
+        });
+        assert!(
+            score > 0.4,
+            "{name} textbook score too low: {score:.3}"
+        );
+    }
+}
+
+/// Extension-flag audit: Carney assigns each pattern a stop-placement
+/// style. Lock it down here so future spec edits can't silently flip
+/// stop behaviour.
+#[test]
+fn extension_flag_matches_carney_doctrine() {
+    let expected: &[(&str, bool)] = &[
+        // Retracement patterns — stop beyond X:
+        ("gartley", false),
+        ("bat", false),
+        ("cypher", false),
+        // D-anchored / extension patterns — stop tightly past D:
+        ("butterfly", true),
+        ("crab", true),
+        ("deep_crab", true),
+        ("shark", true),
+        ("alt_bat", true),
+        ("five_zero", true),
+        ("ab_cd", true),
+        ("alt_ab_cd", true),
+        ("three_drives", true),
+    ];
+    for (name, want) in expected.iter().copied() {
+        let spec = PATTERNS.iter().find(|p| p.name == name).unwrap();
+        assert_eq!(spec.extension, want, "{name} extension flag drift");
+    }
+}
+
 #[test]
 fn match_returns_none_when_ratio_out_of_range() {
     let pts = XabcdPoints {

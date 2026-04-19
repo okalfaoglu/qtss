@@ -31,12 +31,16 @@ pub struct HarmonicSpec {
 }
 
 pub const PATTERNS: &[HarmonicSpec] = &[
+    // ── Gartley (Scott Carney, originally H.M. Gartley) ──────────────
+    // Ref: https://harmonictrader.com/harmonic-patterns/gartley-pattern/
+    // Carney: "0.618 at B point and 0.786 at D point" — strict.
+    // CD projection: 1.272 OR 1.618 of BC (AB=CD reciprocal).
     HarmonicSpec {
         name: "gartley",
-        ab: RatioRange::new(0.55, 0.65),  // ~0.618
+        ab: RatioRange::new(0.55, 0.65),  // ~0.618 (strict)
         bc: RatioRange::new(0.382, 0.886),
-        cd: RatioRange::new(1.13, 1.618),
-        ad: RatioRange::new(0.74, 0.82),  // ~0.786
+        cd: RatioRange::new(1.27, 1.618), // Carney: "1.27 or 1.618", NOT 1.13+
+        ad: RatioRange::new(0.74, 0.82),  // ~0.786 (strict)
         extension: false,
     },
     HarmonicSpec {
@@ -47,12 +51,17 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         ad: RatioRange::new(0.84, 0.92),  // ~0.886
         extension: false,
     },
+    // ── Butterfly (Bryce Gilmore, formalized by Scott Carney) ────────
+    // Ref: https://harmonictrader.com/harmonic-patterns/butterfly-pattern/
+    // Carney: "mandatory 0.786 retracement of XA as B", "BC projection
+    // typical 1.618, extreme 2.0/2.24/2.618", "1.27 XA projection" for D
+    // (extends beyond X).
     HarmonicSpec {
         name: "butterfly",
-        ab: RatioRange::new(0.74, 0.82),  // ~0.786
+        ab: RatioRange::new(0.74, 0.82),   // mandatory 0.786
         bc: RatioRange::new(0.382, 0.886),
-        cd: RatioRange::new(1.618, 2.24),
-        ad: RatioRange::new(1.20, 1.65),  // 1.27..1.618 extension
+        cd: RatioRange::new(1.618, 2.618), // Carney: up to 2.618 extreme
+        ad: RatioRange::new(1.20, 1.65),   // 1.27..1.618 XA extension
         extension: true,
     },
     HarmonicSpec {
@@ -64,13 +73,15 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         extension: true,
     },
     // ── Deep Crab (Scott Carney) ─────────────────────────────────────
-    // Like Crab but AB retraces deeper (0.886 of XA).
+    // Ref: https://harmonictrader.com/harmonic-patterns/deep-crab-pattern/
+    // Carney: "B must be 0.886 retracement", "extreme (2.24, 2.618, 3.14,
+    // 3.618) projection of BC", "1.618 XA projection" for D (exact).
     HarmonicSpec {
         name: "deep_crab",
-        ab: RatioRange::new(0.84, 0.92),  // ~0.886
+        ab: RatioRange::new(0.84, 0.92),   // 0.886 (exact)
         bc: RatioRange::new(0.382, 0.886),
-        cd: RatioRange::new(2.0, 3.618),
-        ad: RatioRange::new(1.55, 1.70),  // ~1.618
+        cd: RatioRange::new(2.24, 3.618),  // Carney: min 2.24 (was 2.0 — too loose)
+        ad: RatioRange::new(1.55, 1.70),   // 1.618 (exact)
         extension: true,
     },
     // ── Shark (Scott Carney, 2011) ───────────────────────────────────
@@ -141,21 +152,27 @@ pub const PATTERNS: &[HarmonicSpec] = &[
     // Alt AB=CD (below) takes the r_cd > 2.0 branch.
     HarmonicSpec {
         name: "ab_cd",
-        ab: RatioRange::new(0.20, 3.00),   // X unconstrained
+        ab: RatioRange::new(0.20, 3.00),   // X unconstrained (4-point pattern)
         bc: RatioRange::new(0.382, 0.886), // BC retracement of AB
-        cd: RatioRange::new(1.13, 2.00),   // CD ≈ AB equality region
+        cd: RatioRange::new(1.13, 2.618),  // Carney: "1.13–2.618"; reciprocal of r_bc
         ad: RatioRange::new(0.20, 5.00),   // AD unconstrained
         extension: true,
     },
-    // ── Alternate AB=CD (Scott Carney, Harmonic Trading Vol. 2) ──────
-    // CD extends beyond classic equality: CD = 1.272× or 1.618× of AB.
-    // Separation from classic AB=CD is made via the r_cd band:
-    // r_cd = CD/BC = (1.272..1.618) / (0.618..0.786) ≈ [2.0, 2.618].
+    // ── Alternate AB=CD (Scott Carney) ───────────────────────────────
+    // Ref: https://harmonictrader.com/harmonic-patterns/alternate-abcd-pattern/
+    // Carney: "multiply AB by 1.27 or 1.618 and project from C" —
+    // used when classic AB=CD equality is "blown out".
+    // r_cd = CD/BC = (1.27 or 1.618) / r_bc, r_bc ∈ [0.382, 0.886]
+    //   1.27/0.886=1.434  …  1.27/0.382=3.325
+    //   1.618/0.886=1.827 …  1.618/0.382=4.236
+    // Practical range [1.27, 3.618] — overlaps classic near CD≈AB
+    // (~1.8) but distinctive in the high end (> 2.618) where classic
+    // is excluded. Matcher picks whichever score is higher.
     HarmonicSpec {
         name: "alt_ab_cd",
         ab: RatioRange::new(0.20, 3.00),
         bc: RatioRange::new(0.382, 0.886),
-        cd: RatioRange::new(2.00, 2.618),
+        cd: RatioRange::new(1.27, 3.618),  // Carney alt projection band
         ad: RatioRange::new(0.20, 5.00),
         extension: true,
     },
