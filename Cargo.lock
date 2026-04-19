@@ -2206,6 +2206,7 @@ dependencies = [
  "qtss-risk",
  "qtss-storage",
  "qtss-telegram-setup-analysis",
+ "qtss-wyckoff",
  "rand 0.8.5",
  "reqwest",
  "rust_decimal",

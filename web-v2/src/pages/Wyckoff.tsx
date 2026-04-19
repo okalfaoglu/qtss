@@ -490,6 +490,145 @@ function PhaseGroupTable({
   );
 }
 
+// =========================================================================
+// EventViolationsPanel — surfaces phase_regression / direction_conflict /
+// phase_leak audit results from /v2/wyckoff/events?kind=violations.
+// =========================================================================
+
+interface ApiViolation {
+  struct_id: string;
+  symbol: string;
+  interval: string;
+  schematic: string;
+  structure_phase: string;
+  event_code: string;
+  full_name: string;
+  phase: string;
+  family: string;
+  bar_index: number | null;
+  price: number | null;
+  score: number;
+  time_ms: number | null;
+  violation: { kind: string; reason: string } | null;
+}
+
+const VIOLATION_KIND_COLORS: Record<string, string> = {
+  phase_regression: "bg-amber-500/20 text-amber-300 border-amber-500/40",
+  direction_conflict: "bg-rose-500/20 text-rose-300 border-rose-500/40",
+  phase_leak: "bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/40",
+};
+
+function EventViolationsPanel({ symbol, interval }: { symbol: string; interval: string }) {
+  const params = new URLSearchParams();
+  params.set("kind", "violations");
+  params.set("limit", "100");
+  if (symbol) params.set("symbol", symbol);
+  if (interval) params.set("interval", interval);
+
+  const q = useQuery({
+    queryKey: ["v2", "wyckoff", "events-violations", symbol, interval],
+    queryFn: () =>
+      apiFetch<{ count: number; violation_count: number; events: ApiViolation[] }>(
+        `/v2/wyckoff/events?${params.toString()}`,
+      ),
+    refetchInterval: 60_000,
+  });
+
+  const rows = q.data?.events ?? [];
+  const total = q.data?.violation_count ?? 0;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-3">
+        <h2 className="text-sm font-bold uppercase text-zinc-500">
+          Event Placement Audit
+        </h2>
+        <span
+          className={`rounded border px-2 py-0.5 text-xs font-semibold ${
+            total === 0
+              ? "border-emerald-500/40 bg-emerald-500/20 text-emerald-300"
+              : "border-amber-500/40 bg-amber-500/20 text-amber-300"
+          }`}
+        >
+          {total === 0 ? "All canonical" : `${total} violation${total === 1 ? "" : "s"}`}
+        </span>
+        {q.isFetching && <span className="text-xs text-zinc-600">refreshing…</span>}
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="rounded border border-zinc-800 bg-zinc-900/40 p-3 text-xs text-zinc-500">
+          No event placement violations in the current window.
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded border border-zinc-800 bg-zinc-900/40">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-zinc-900/60 text-zinc-500">
+              <tr>
+                <th className="px-2 py-1">Symbol/TF</th>
+                <th className="px-2 py-1">Structure</th>
+                <th className="px-2 py-1">Event</th>
+                <th className="px-2 py-1">Event Phase</th>
+                <th className="px-2 py-1">Kind</th>
+                <th className="px-2 py-1">Reason</th>
+                <th className="px-2 py-1">When</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.slice(0, 50).map((v, i) => {
+                const cls = v.violation
+                  ? VIOLATION_KIND_COLORS[v.violation.kind] ??
+                    "bg-zinc-700/30 text-zinc-300 border-zinc-600"
+                  : "";
+                const when = v.time_ms
+                  ? new Date(v.time_ms).toLocaleString()
+                  : v.bar_index !== null
+                  ? `bar ${v.bar_index}`
+                  : "—";
+                return (
+                  <tr
+                    key={`${v.struct_id}-${i}`}
+                    className="border-t border-zinc-800/60 hover:bg-zinc-900/60"
+                  >
+                    <td className="px-2 py-1 font-mono text-zinc-300">
+                      {v.symbol} <span className="text-zinc-600">·</span> {v.interval}
+                    </td>
+                    <td className="px-2 py-1 text-zinc-400">
+                      {v.schematic}
+                      <span className="text-zinc-600"> · </span>
+                      <span className="font-mono">{v.structure_phase}</span>
+                    </td>
+                    <td className="px-2 py-1 font-mono text-zinc-200">
+                      {v.event_code}
+                      <span className="ml-1 text-[10px] text-zinc-600">
+                        ({v.family})
+                      </span>
+                    </td>
+                    <td className="px-2 py-1 font-mono text-zinc-400">{v.phase}</td>
+                    <td className="px-2 py-1">
+                      <span className={`rounded border px-1.5 py-0.5 text-[10px] ${cls}`}>
+                        {v.violation?.kind ?? "—"}
+                      </span>
+                    </td>
+                    <td className="px-2 py-1 text-zinc-400" title={v.violation?.reason}>
+                      {v.violation?.reason ?? ""}
+                    </td>
+                    <td className="px-2 py-1 text-zinc-500">{when}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {rows.length > 50 && (
+            <div className="border-t border-zinc-800 px-2 py-1 text-[11px] text-zinc-600">
+              Showing 50 of {rows.length} — narrow filters to investigate further.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Wyckoff() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [status, setStatus] = useState<StatusFilter>("active");
@@ -611,6 +750,13 @@ export function Wyckoff() {
           onPick={(sym, itv) => { setSymbol(sym); setIntervalF(itv); }}
         />
       </div>
+
+      {/* Event placement audit — flags events whose phase or direction
+         disagrees with the parent structure (validate_event_placement
+         in qtss-wyckoff). Operator surface for "doğru fazlarda olmasına
+         bak; hatalı ise sistem bilgi versin". */}
+      <EventViolationsPanel symbol={symbol} interval={interval} />
+
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Left: structures list with status tabs */}

@@ -19,6 +19,9 @@ use qtss_storage::{
     list_phase_groups_by_timeframe, list_recent_wyckoff_structures, list_wyckoff_history,
     v2_setups::{list_v2_setups_filtered, SetupFilter},
 };
+use qtss_wyckoff::structure::{
+    validate_event_placement, WyckoffEvent, WyckoffPhase, WyckoffSchematic,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct ActiveQuery {
@@ -71,6 +74,150 @@ pub fn v2_wyckoff_router() -> Router<SharedState> {
         )
         .route("/v2/wyckoff/setups", get(get_wyckoff_setups))
         .route("/v2/wyckoff/phase-groups", get(get_phase_groups))
+        .route("/v2/wyckoff/events", get(get_events))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EventsQuery {
+    pub symbol: Option<String>,
+    pub interval: Option<String>,
+    pub status: Option<String>,
+    pub limit: Option<i64>,
+    /// `all` (default), `valid`, `violations` — server-side filter on
+    /// the validator output so the GUI doesn't have to re-walk the list.
+    pub kind: Option<String>,
+}
+
+/// Flat event feed for chart overlay + violation surfacing (Faz 10
+/// follow-up to backlog `faz_wyckoff_event_labels_overlay.md`). Reads
+/// active+recent structures, flattens `events_json`, and runs
+/// `validate_event_placement` per event for direction/phase coherence
+/// audit. The chart toggles markers from this feed; the Wyckoff page
+/// surfaces violation counts.
+async fn get_events(
+    State(st): State<SharedState>,
+    Query(q): Query<EventsQuery>,
+) -> Result<Json<JsonValue>, ApiError> {
+    let limit = q.limit.unwrap_or(500).clamp(1, 5_000);
+    // Pull a generous window of structures so even if the latest one is
+    // light on events we still have enough to render. Internal cap = 100
+    // structures (Wyckoff doesn't churn that fast).
+    let rows = list_recent_wyckoff_structures(
+        &st.pool,
+        q.status.as_deref(),
+        None,
+        q.symbol.as_deref(),
+        q.interval.as_deref(),
+        100,
+    )
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let kind_filter = q.kind.as_deref().unwrap_or("all");
+    let mut out: Vec<JsonValue> = Vec::new();
+    let mut violation_count: u64 = 0;
+
+    for s in rows {
+        let schematic: WyckoffSchematic = serde_json::from_value(
+            JsonValue::String(s.schematic.clone()),
+        )
+        .unwrap_or(WyckoffSchematic::Accumulation);
+        let structure_phase: WyckoffPhase = serde_json::from_value(
+            JsonValue::String(s.current_phase.clone()),
+        )
+        .unwrap_or(WyckoffPhase::A);
+
+        let events_arr = match s.events_json.as_array() {
+            Some(a) => a.clone(),
+            None => continue,
+        };
+
+        // Sort by bar_index (or time_ms if present) so prior_max_phase
+        // is meaningful for regression detection.
+        let mut sorted = events_arr;
+        sorted.sort_by_key(|v| {
+            v.get("time_ms")
+                .and_then(|t| t.as_i64())
+                .unwrap_or_else(|| {
+                    v.get("bar_index").and_then(|b| b.as_i64()).unwrap_or(0)
+                })
+        });
+
+        let mut prior_max_phase = WyckoffPhase::A;
+
+        for ev_json in &sorted {
+            let event: WyckoffEvent = match ev_json
+                .get("event")
+                .and_then(|v| serde_json::from_value::<WyckoffEvent>(v.clone()).ok())
+            {
+                Some(e) => e,
+                None => continue,
+            };
+            let bar_index = ev_json.get("bar_index").and_then(|v| v.as_u64());
+            let price = ev_json.get("price").and_then(|v| v.as_f64());
+            let score = ev_json.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let time_ms = ev_json.get("time_ms").and_then(|v| v.as_i64());
+
+            let violation =
+                validate_event_placement(event, structure_phase, schematic, prior_max_phase);
+            let is_violation = violation.is_some();
+            if is_violation {
+                violation_count += 1;
+            }
+
+            let include = match kind_filter {
+                "violations" => is_violation,
+                "valid" => !is_violation,
+                _ => true,
+            };
+            if !include {
+                // still advance prior_max_phase so downstream regression
+                // detection stays accurate.
+                if event.phase() > prior_max_phase {
+                    prior_max_phase = event.phase();
+                }
+                continue;
+            }
+
+            out.push(json!({
+                "struct_id": s.id,
+                "symbol": s.symbol,
+                "interval": s.interval,
+                "schematic": s.schematic,
+                "structure_phase": s.current_phase,
+                "event_code": event.as_str(),
+                "full_name": event.full_name(),
+                "phase": event.phase().as_str(),
+                "family": event.family().as_str(),
+                "bar_index": bar_index,
+                "price": price,
+                "score": score,
+                "time_ms": time_ms,
+                "violation": violation.as_ref().map(|v| json!({
+                    "kind": v.kind,
+                    "reason": v.reason,
+                })),
+            }));
+
+            if event.phase() > prior_max_phase {
+                prior_max_phase = event.phase();
+            }
+            if out.len() as i64 >= limit {
+                break;
+            }
+        }
+
+        if out.len() as i64 >= limit {
+            break;
+        }
+    }
+
+    Ok(Json(json!({
+        "generated_at": chrono::Utc::now(),
+        "count": out.len(),
+        "violation_count": violation_count,
+        "events": out,
+    })))
 }
 
 /// Wyckoff-scoped setup feed. Thin wrapper around

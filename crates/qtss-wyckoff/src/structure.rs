@@ -128,6 +128,164 @@ impl WyckoffEvent {
             Self::Markup | Self::Markdown => WyckoffPhase::E,
         }
     }
+
+    /// Direction family for schematic coherence checks.
+    /// - `Bullish` events belong to Accumulation/Re-Accumulation schematics.
+    /// - `Bearish` events belong to Distribution/Re-Distribution schematics.
+    /// - `Neutral` events (AR, ST, STB, SOT) are valid in either family.
+    pub fn family(self) -> EventFamily {
+        match self {
+            Self::PS | Self::SC | Self::Spring | Self::SpringTest
+            | Self::Shakeout | Self::SOS | Self::LPS | Self::JAC
+            | Self::BreakOfIce | Self::BUEC | Self::Markup => EventFamily::Bullish,
+            Self::BC | Self::UA | Self::UTAD | Self::UTADTest
+            | Self::SOW | Self::LPSY | Self::Markdown => EventFamily::Bearish,
+            Self::AR | Self::ST | Self::STB | Self::SOT => EventFamily::Neutral,
+        }
+    }
+
+    /// Long, operator-friendly name (Telegram tooltip / chart hover).
+    pub fn full_name(self) -> &'static str {
+        match self {
+            Self::PS => "Preliminary Support",
+            Self::SC => "Selling Climax",
+            Self::BC => "Buying Climax",
+            Self::AR => "Automatic Rally/Reaction",
+            Self::ST => "Secondary Test",
+            Self::UA => "Upthrust Action",
+            Self::STB => "Secondary Test (Phase B)",
+            Self::Spring => "Spring",
+            Self::UTAD => "Upthrust After Distribution",
+            Self::Shakeout => "Shakeout",
+            Self::SpringTest => "Spring Test",
+            Self::UTADTest => "UTAD Test",
+            Self::SOS => "Sign of Strength",
+            Self::SOW => "Sign of Weakness",
+            Self::LPS => "Last Point of Support",
+            Self::LPSY => "Last Point of Supply",
+            Self::JAC => "Jump Across the Creek",
+            Self::BreakOfIce => "Break of Ice",
+            Self::BUEC => "Back-Up to Edge of Creek",
+            Self::SOT => "Sign of Turn",
+            Self::Markup => "Markup",
+            Self::Markdown => "Markdown",
+        }
+    }
+}
+
+/// Direction family for `WyckoffEvent`. Used by `validate_event_placement`
+/// to detect schematic↔event direction conflicts (e.g. an SOS recorded on
+/// a Distribution structure).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventFamily {
+    Bullish,
+    Bearish,
+    Neutral,
+}
+
+impl EventFamily {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bullish => "bullish",
+            Self::Bearish => "bearish",
+            Self::Neutral => "neutral",
+        }
+    }
+}
+
+/// Schematic direction family — Accumulation/Re-Accumulation are bullish,
+/// Distribution/Re-Distribution are bearish. Used by validator.
+impl WyckoffSchematic {
+    pub fn family(self) -> EventFamily {
+        match self {
+            Self::Accumulation | Self::ReAccumulation => EventFamily::Bullish,
+            Self::Distribution | Self::ReDistribution => EventFamily::Bearish,
+        }
+    }
+}
+
+/// A coherence violation flagged by `validate_event_placement`. The
+/// validator never mutates state — it surfaces problems for operator
+/// inspection (CLAUDE.md #1: validator-as-detector pattern).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventViolation {
+    /// Stable kind tag for telemetry/UI grouping.
+    /// `"phase_regression"` — an earlier-phase event recorded after a
+    ///                        later-phase event (out-of-order in time).
+    /// `"direction_conflict"` — event family opposite the structure
+    ///                          schematic family (bullish event on
+    ///                          Distribution, etc.).
+    /// `"phase_leak"` — event canonical phase is strictly greater than
+    ///                  structure current_phase (audit-mode leak; only
+    ///                  flagged when current_phase already advanced past
+    ///                  Phase A — bootstrap leaks staying in A are OK
+    ///                  per P12).
+    pub kind: &'static str,
+    pub reason: String,
+}
+
+/// Validate an event against the structure context it was recorded in.
+/// Returns `None` when canonical, otherwise an `EventViolation` for the
+/// first rule that fires (callers may run multiple times if needed).
+///
+/// `prior_max_phase` is the highest phase among events recorded BEFORE
+/// this one in the same structure (for regression detection). Pass
+/// `WyckoffPhase::A` if this is the first event.
+pub fn validate_event_placement(
+    event: WyckoffEvent,
+    structure_phase: WyckoffPhase,
+    schematic: WyckoffSchematic,
+    prior_max_phase: WyckoffPhase,
+) -> Option<EventViolation> {
+    let ev_phase = event.phase();
+    let ev_family = event.family();
+    let sch_family = schematic.family();
+
+    // 1) Direction conflict — bullish/bearish event on opposite schematic.
+    //    Neutral events are always OK direction-wise.
+    if ev_family != EventFamily::Neutral && ev_family != sch_family {
+        return Some(EventViolation {
+            kind: "direction_conflict",
+            reason: format!(
+                "{} ({}) recorded on {} schematic ({})",
+                event.as_str(),
+                ev_family.as_str(),
+                schematic.as_str(),
+                sch_family.as_str(),
+            ),
+        });
+    }
+
+    // 2) Phase regression — earlier-phase event after a later-phase one.
+    if ev_phase < prior_max_phase {
+        return Some(EventViolation {
+            kind: "phase_regression",
+            reason: format!(
+                "{} (canonical phase {}) recorded after phase {} events in same structure",
+                event.as_str(),
+                ev_phase.as_str(),
+                prior_max_phase.as_str(),
+            ),
+        });
+    }
+
+    // 3) Phase leak — event's canonical phase strictly above structure's
+    //    current_phase, and current_phase already advanced beyond A.
+    //    (Phase A bootstrap leaks are intentional per P12 audit policy.)
+    if ev_phase > structure_phase && structure_phase > WyckoffPhase::A {
+        return Some(EventViolation {
+            kind: "phase_leak",
+            reason: format!(
+                "{} (canonical phase {}) recorded while structure still in phase {}",
+                event.as_str(),
+                ev_phase.as_str(),
+                structure_phase.as_str(),
+            ),
+        });
+    }
+
+    None
 }
 
 // =========================================================================

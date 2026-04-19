@@ -17,6 +17,7 @@ path = "src/main.rs"
 qtss-common.workspace = true
 qtss-domain.workspace = true
 qtss-storage.workspace = true
+qtss-wyckoff.workspace = true
 qtss-execution.workspace = true
 qtss-reconcile.workspace = true
 qtss-binance.workspace = true
