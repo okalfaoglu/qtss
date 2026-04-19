@@ -194,9 +194,15 @@ impl ClassicalConfig {
             abcd_d_projection_tol: 0.15,
             abcd_min_bars_per_leg: 3,
 
+            // Faz 10 Aşama 4.1 — tightened after BTCUSDT 1h false-
+            // positive review (noisy local 3-pivot swings passing the
+            // original loose thresholds and getting labelled scallop).
+            // Rounding R² 0.55→0.70 brings curvature closer to
+            // Bulkowski's J-shape requirement; rim progression 2%→3.5%
+            // filters marginal asymmetry.
             scallop_min_bars: 20,
-            scallop_min_rim_progress_pct: 0.02,
-            scallop_roundness_r2: 0.55,
+            scallop_min_rim_progress_pct: 0.035,
+            scallop_roundness_r2: 0.70,
         }
     }
 
