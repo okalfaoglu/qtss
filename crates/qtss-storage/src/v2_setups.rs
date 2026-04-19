@@ -77,6 +77,12 @@ pub struct V2SetupInsert {
     /// rows (which are keyed by `detection_id`). `None` only for legacy rows
     /// created before this field existed.
     pub detection_id: Option<Uuid>,
+    /// Faz 9B backfill fix — "live" | "dry" | "backtest". Propagated from
+    /// the primary detection's own `mode` so historical_progressive_scan
+    /// replays produce mode='backtest' setups instead of collapsing into
+    /// the column default. Required for the backfill orchestrator's
+    /// plateau detection to observe actual setup growth.
+    pub mode: String,
 }
 
 pub async fn insert_v2_setup(
@@ -89,15 +95,13 @@ pub async fn insert_v2_setup(
             venue_class, exchange, symbol, timeframe, profile, alt_type,
             state, direction, confluence_id,
             entry_price, entry_sl, koruma, target_ref, risk_pct, raw_meta,
-            ai_score, detection_id
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-        -- P14 — matches migration 0078 `uq_open_setup_key`:
-        -- one open setup per (exchange, symbol, timeframe, profile)
-        -- regardless of direction, using the real state value
-        -- `active` (the old predicate used `open`, which never
-        -- appeared in prod data — so ON CONFLICT never fired and
-        -- LONG+SHORT could both insert).
-        ON CONFLICT (exchange, symbol, timeframe, profile)
+            ai_score, detection_id, mode
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        -- P14 + Faz 9B: one open setup per (exchange, symbol, timeframe,
+        -- profile, mode) — mode added so live + backtest can coexist
+        -- while the backfill orchestrator replays history. See
+        -- migration 0171.
+        ON CONFLICT (exchange, symbol, timeframe, profile, mode)
             WHERE state IN ('armed', 'active')
         DO NOTHING
         RETURNING id
@@ -120,6 +124,7 @@ pub async fn insert_v2_setup(
     .bind(&row.raw_meta)
     .bind(row.ai_score)
     .bind(row.detection_id)
+    .bind(&row.mode)
     .fetch_optional(pool)
     .await?;
     match id {

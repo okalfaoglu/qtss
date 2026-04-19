@@ -112,7 +112,12 @@ async fn run_pass(pool: &PgPool, repo: Arc<V2DetectionRepository>) -> anyhow::Re
     )
     .await as usize;
 
-    let mode = "live"; // historical detections tagged live so charts render them alongside current
+    // Faz 9B — historical replays must be tagged 'backtest' so they feed
+    // the backfill→setup→training pipeline (ml_backfill_orchestrator counts
+    // qtss_setups WHERE mode='backtest' to detect plateau). Chart renderers
+    // widen their filter to `mode IN ('live','backtest')` so historical
+    // detections still appear alongside live ones.
+    let mode = "backtest";
 
     let runners = build_runners(pool).await;
     if runners.is_empty() {

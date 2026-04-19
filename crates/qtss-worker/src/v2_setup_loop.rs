@@ -1251,7 +1251,7 @@ async fn try_arm_new_setup(
     // confluence reading and has the highest structural_score. This detection_id
     // is what `qtss_features_snapshot.detection_id` is keyed by, so persisting
     // it unblocks the `v_qtss_training_set` join and the LightGBM trainer.
-    let primary_detection_id: Option<Uuid> = detections
+    let primary_detection = detections
         .iter()
         .filter(|d| {
             let det_dir = if d.subkind.contains("bull") {
@@ -1267,8 +1267,17 @@ async fn try_arm_new_setup(
             a.structural_score
                 .partial_cmp(&b.structural_score)
                 .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .map(|d| d.id);
+        });
+    let primary_detection_id: Option<Uuid> = primary_detection.map(|d| d.id);
+    // Faz 9B backfill fix — setup inherits mode from the triggering
+    // detection. historical_progressive_scan tags detections 'backtest';
+    // live detection orchestrator uses worker.runtime_mode. Without this
+    // propagation every setup defaulted to the DB column default ('dry')
+    // and the backfill orchestrator's mode='backtest' plateau probe
+    // never saw growth (31M detections → 0 backtest setups).
+    let setup_mode: String = primary_detection
+        .map(|d| d.mode.clone())
+        .unwrap_or_else(|| "live".to_string());
 
     let row = V2SetupInsert {
         venue_class: venue.as_str().to_string(),
@@ -1308,6 +1317,7 @@ async fn try_arm_new_setup(
         }),
         ai_score,
         detection_id: primary_detection_id,
+        mode: setup_mode,
     };
     let id: Uuid = match insert_v2_setup(pool, &row).await {
         Ok(id) => id,
