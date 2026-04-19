@@ -258,7 +258,7 @@ fn profile_from_timeframe(tf: &str) -> Option<Profile> {
 
 /// Map an exchange code to a venue class. Unknown venues → `None`,
 /// caller skips the symbol.
-fn venue_class_from_exchange(exchange: &str) -> Option<VenueClass> {
+pub(crate) fn venue_class_from_exchange(exchange: &str) -> Option<VenueClass> {
     let e = exchange.trim().to_ascii_lowercase();
     const CRYPTO_KEYS: &[&str] = &["binance", "bybit", "okx", "kucoin", "coinbase"];
     if CRYPTO_KEYS.iter().any(|k| e.contains(k)) {
@@ -270,7 +270,7 @@ fn venue_class_from_exchange(exchange: &str) -> Option<VenueClass> {
     None
 }
 
-fn direction_from_str(s: &str) -> Direction {
+pub(crate) fn direction_from_str(s: &str) -> Direction {
     match s {
         "long" => Direction::Long,
         "short" => Direction::Short,

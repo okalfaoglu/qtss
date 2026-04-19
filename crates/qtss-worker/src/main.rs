@@ -70,6 +70,7 @@ mod v2_onchain_bridge;
 mod v2_confluence_loop;
 // Faz 9.7.8 — setup_chart removed (consumer v2_setup_telegram_loop gone).
 mod v2_setup_loop;
+mod v2_backtest_setup_loop;
 // Faz 9.7.8 — v2_setup_telegram_loop removed.
 mod wyckoff_setup_loop;
 mod wyckoff_setup_invalidation_loop;
@@ -406,6 +407,13 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(v2_confluence_loop::v2_confluence_loop(v2_conf_pool));
         let v2_setup_pool = pool.clone();
         tokio::spawn(v2_setup_loop::v2_setup_loop(v2_setup_pool));
+        // Faz 9C — backtest setup dispatcher. Self-gated on
+        // `backtest.setup_loop.enabled` (migration 0178); spawned always
+        // so the operator can flip the flag without a restart.
+        let v2_backtest_setup_pool = pool.clone();
+        tokio::spawn(v2_backtest_setup_loop::v2_backtest_setup_loop(
+            v2_backtest_setup_pool,
+        ));
         let wyckoff_setup_pool = pool.clone();
         tokio::spawn(wyckoff_setup_loop::wyckoff_setup_loop(wyckoff_setup_pool));
         let wyckoff_inv_pool = pool.clone();
