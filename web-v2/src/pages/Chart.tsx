@@ -1341,10 +1341,16 @@ export function Chart() {
 
         drawLevel(sl, "#ef4444", LineStyle.Dashed, "SL");
         drawLevel(entry, "#d4d4d8", LineStyle.Dotted, `Entry${confStr}`);
+        // Use standardised TP1/TP2/TP3 labels. The formation-specific
+        // name (e.g. "MM 1.618x", "ABCD 1.272x") is kept as the
+        // tooltip on hover via a parenthesised suffix so the geometry
+        // provenance is still discoverable without cluttering the
+        // price scale.
         const tpPalette = ["#34d399", "#22c55ecc", "#22c55e80"];
         const tpStyles = [LineStyle.Dashed, LineStyle.Dotted, LineStyle.Dotted];
         targets.slice(0, 3).forEach((t, i) => {
-          drawLevel(t.price, tpPalette[i] ?? "#22c55e60", tpStyles[i] ?? LineStyle.Dotted, t.label);
+          const label = `TP${i + 1} (${t.label})`;
+          drawLevel(t.price, tpPalette[i] ?? "#22c55e60", tpStyles[i] ?? LineStyle.Dotted, label);
         });
       }
     }
