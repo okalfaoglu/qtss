@@ -478,25 +478,45 @@ impl WyckoffStructureTracker {
         time_ms: Option<i64>,
     ) {
         // STRICT dedup (kullanıcı kuralı):
-        //   - Aynı (event_type, bar_index) → kayıt güncellenir, yeni satır
-        //     eklenmez. Fiyat farkı olsa bile aynı bar'da aynı event tek
-        //     olmalı; fiyat/score ileri sürümden güncellenir.
-        //   - Aynı bar'da **farklı** event eklenebilir (engellenmez).
-        // P17 — Soft window dedup ikinci katman: aynı event type bar'lar
-        // arasında dar aralıkta (≤ dedup_window_bars) ve fiyat aynı
-        // (≤ eps_pct) ise collapse eder; bu 3200-dup hatasını ve art
-        // arda printleyen detector salvo'larını engeller.
-        if let Some(existing) = self
+        //   - Aynı bar'da aynı event tek kayıt. Yeni detection geldiğinde
+        //     eski kayıt güncellenir (score/price/bar_index).
+        //   - Aynı bar'da FARKLI event serbest.
+        //
+        // Primary key: (event_type, time_ms). Rolling window offset'leri
+        // yüzünden bar_index aynı gerçek bar için 3-5 tick sapabilir
+        // (detector'ın gördüğü window'un sol kenarı her tick'te
+        // kayıyor), ama `time_ms` gerçek bar açılış zamanına bağlı
+        // olduğu için değişmez. İki event aynı `time_ms`'e sahipse
+        // aynı bardadır — `bar_index` farkı yalnızca bookkeeping.
+        //
+        // Fallback: time_ms yoksa (legacy rows / tests) strict
+        // (event_type, bar_index) match.
+        //
+        // P17 — Soft window dedup üçüncü katman: aynı event type
+        // bar'lar arasında dar aralıkta (≤ dedup_window_bars) ve fiyat
+        // aynı (≤ eps_pct) ise collapse eder; 3200-dup hatası + art
+        // arda salvo detector vuruşlarına karşı.
+        if let Some(t) = time_ms {
+            if let Some(existing) = self
+                .events
+                .iter_mut()
+                .find(|e| e.event == event && e.time_ms == Some(t))
+            {
+                if score >= existing.score {
+                    existing.score = score;
+                    existing.price = price;
+                    existing.bar_index = bar_index;
+                }
+                return;
+            }
+        } else if let Some(existing) = self
             .events
             .iter_mut()
-            .find(|e| e.event == event && e.bar_index == bar_index)
+            .find(|e| e.event == event && e.bar_index == bar_index && e.time_ms.is_none())
         {
             if score >= existing.score {
                 existing.score = score;
                 existing.price = price;
-                if time_ms.is_some() {
-                    existing.time_ms = time_ms;
-                }
             }
             return;
         }
