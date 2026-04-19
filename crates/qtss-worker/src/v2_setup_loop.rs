@@ -1384,6 +1384,34 @@ async fn try_arm_new_setup(
         .map(|d| d.mode.clone())
         .unwrap_or_else(|| "live".to_string());
 
+    // Faz 9C — deterministic natural key so detector re-emissions
+    // upsert the existing open setup instead of spawning duplicates
+    // (BLURUSDT 18:45/46/47 regression). Anchor time is the earliest
+    // pivot timestamp, stable across rolling windows.
+    let idempotency_key: Option<String> = primary_detection.map(|d| {
+        let anchor_time = d
+            .anchors
+            .get(0)
+            .and_then(|a: &serde_json::Value| a.get("time"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("nil");
+        format!(
+            "v2:{}:{}:{}:{}:{}:{}:{}:{}",
+            sym.exchange,
+            sym.symbol,
+            sym.interval,
+            match direction {
+                Direction::Long => "long",
+                Direction::Short => "short",
+                Direction::Neutral => "neutral",
+            },
+            profile.as_str(),
+            d.family,
+            d.subkind,
+            anchor_time
+        )
+    });
+
     let row = V2SetupInsert {
         venue_class: venue.as_str().to_string(),
         exchange: sym.exchange.clone(),
@@ -1425,6 +1453,7 @@ async fn try_arm_new_setup(
         ai_score,
         detection_id: primary_detection_id,
         mode: setup_mode,
+        idempotency_key,
     };
     let id: Uuid = match insert_v2_setup(pool, &row).await {
         Ok(id) => id,

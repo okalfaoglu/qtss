@@ -87,27 +87,49 @@ pub struct V2SetupInsert {
     /// the column default. Required for the backfill orchestrator's
     /// plateau detection to observe actual setup growth.
     pub mode: String,
+    /// Faz 9C — deterministic natural key of the logical setup. Format:
+    ///   v2:{exchange}:{symbol}:{tf}:{direction}:{profile}
+    ///      :{detection_family}:{detection_subkind}:{anchor_time}
+    /// Migration 0185 enforces a partial UNIQUE index on this column so
+    /// re-emitted detections upsert the existing row instead of opening
+    /// a fresh setup each tick (prior bug: BLURUSDT got 3 identical
+    /// setups 18:45/46/47 because each tick produced a new detection
+    /// and `insert_v2_setup` had no idempotency guard).
+    pub idempotency_key: Option<String>,
 }
 
 pub async fn insert_v2_setup(
     pool: &PgPool,
     row: &V2SetupInsert,
 ) -> Result<Uuid, StorageError> {
-    let id = sqlx::query_scalar::<_, Uuid>(
+    // Faz 9C — upsert on `idempotency_key`. When the detector re-emits
+    // the same logical pattern, we revise the open setup in place
+    // (entry/SL/target/raw_meta may drift as the pattern refines) and
+    // leave closed setups untouched (WHERE state NOT LIKE 'closed%').
+    //
+    // The legacy "one open per slot" partial UNIQUE from migration 0171
+    // still exists; if a different natural key collides on that slot
+    // the INSERT raises a unique_violation which we translate to
+    // DuplicateSetup so callers can silently skip.
+    let result = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO qtss_setups (
             venue_class, exchange, symbol, timeframe, profile, alt_type,
             state, direction, confluence_id,
             entry_price, entry_sl, koruma, target_ref, risk_pct, raw_meta,
-            ai_score, detection_id, mode
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-        -- P14 + Faz 9B: one open setup per (exchange, symbol, timeframe,
-        -- profile, mode) — mode added so live + backtest can coexist
-        -- while the backfill orchestrator replays history. See
-        -- migration 0171.
-        ON CONFLICT (exchange, symbol, timeframe, profile, mode)
-            WHERE state IN ('armed', 'active')
-        DO NOTHING
+            ai_score, detection_id, mode, idempotency_key
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+        ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+        DO UPDATE SET
+            entry_price = EXCLUDED.entry_price,
+            entry_sl    = EXCLUDED.entry_sl,
+            koruma      = EXCLUDED.koruma,
+            target_ref  = EXCLUDED.target_ref,
+            risk_pct    = EXCLUDED.risk_pct,
+            raw_meta    = qtss_setups.raw_meta || EXCLUDED.raw_meta,
+            ai_score    = EXCLUDED.ai_score,
+            updated_at  = now()
+          WHERE qtss_setups.state NOT LIKE 'closed%'
         RETURNING id
         "#,
     )
@@ -129,11 +151,25 @@ pub async fn insert_v2_setup(
     .bind(row.ai_score)
     .bind(row.detection_id)
     .bind(&row.mode)
+    .bind(row.idempotency_key.as_deref())
     .fetch_optional(pool)
-    .await?;
-    match id {
-        Some(id) => Ok(id),
-        None => Err(StorageError::DuplicateSetup),
+    .await;
+    match result {
+        Ok(Some(id)) => Ok(id),
+        // ON CONFLICT matched a closed setup and the WHERE clause
+        // suppressed the UPDATE → no RETURNING row. Or the slot-based
+        // partial unique (0171) fired and DO NOTHING-ed — both are
+        // legitimate "skip, do not reopen" signals.
+        Ok(None) => Err(StorageError::DuplicateSetup),
+        Err(sqlx::Error::Database(ref db_err))
+            if db_err.code().as_deref() == Some("23505") =>
+        {
+            // Another index (e.g. legacy slot partial UNIQUE) fired.
+            // Same semantic: there is already an open setup for this
+            // slot — don't raise, let caller skip.
+            Err(StorageError::DuplicateSetup)
+        }
+        Err(e) => Err(e.into()),
     }
 }
 

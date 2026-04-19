@@ -327,6 +327,27 @@ async fn process_detection(
     });
 
     // ── insert ──
+    // Faz 9C — idempotency_key mirrors the live loop. Even in backtest
+    // the same logical pattern must upsert in place so plateau
+    // detection sees real growth, not re-emission noise.
+    let anchor_time = det
+        .anchors
+        .get(0)
+        .and_then(|a: &serde_json::Value| a.get("time"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("nil");
+    let idempotency_key = Some(format!(
+        "v2:{}:{}:{}:{}:{}:{}:{}:{}",
+        det.exchange,
+        det.symbol,
+        det.timeframe,
+        direction_as_db(direction),
+        cfg.profile.as_str(),
+        det.family,
+        det.subkind,
+        anchor_time
+    ));
+
     let insert = V2SetupInsert {
         venue_class: venue.as_str().to_string(),
         exchange: det.exchange.clone(),
@@ -346,6 +367,7 @@ async fn process_detection(
         ai_score: None,
         detection_id: Some(det.id),
         mode: "backtest".to_string(),
+        idempotency_key,
     };
     match insert_v2_setup(pool, &insert).await {
         Ok(_id) => Ok(true),
