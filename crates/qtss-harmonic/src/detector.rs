@@ -95,7 +95,9 @@ impl HarmonicDetector {
         //   Bear: invalidation = above X (break of structure start)
         let d_price = window[4].price;
         let x_price = window[0].price;
-        let is_extension = spec.ad.hi > 1.0; // butterfly, crab extend beyond X
+        // Explicit per-spec flag — AD alone isn't enough to classify
+        // 5-0 (AD near zero but invalidation is still D-anchored).
+        let is_extension = spec.extension;
         let invalidation_price = match (direction, is_extension) {
             // Extension patterns: SL beyond D with tight buffer.
             // Standard harmonic practice: 1-2% of XA beyond D.

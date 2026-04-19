@@ -155,6 +155,43 @@ fn match_gartley_passes_on_canonical_ratios() {
     assert!(s > 0.5, "score too low: {s}");
 }
 
+/// Textbook 5-0 (Scott Carney):
+///   XA = 100 upmove: X=0, A=100
+///   AB  = 1.3 × XA  ⇒ B = A − 130 = −30  (B extends below X — "not M/W")
+///   BC  = 2.0 × AB  ⇒ C = B + 260 = 230   (BC = 2.0, mid of [1.618, 2.24])
+///   CD  = 0.5 × BC  ⇒ D = C − 130 = 100   (D at 50% of BC)
+/// Ratios: r_ab=1.30, r_bc=2.00, r_cd=0.50, r_ad=(A−D)/XA=0 — all in-spec.
+/// (Note: at β=2.0 the Reciprocal AB=CD confluence hits exactly —
+///  CD = 130 = AB, matching Carney's dual PRZ rule.)
+#[test]
+fn match_five_zero_passes_on_canonical_ratios() {
+    let pts = XabcdPoints {
+        x: 0.0,
+        a: 100.0,
+        b: -30.0,
+        c: 230.0,
+        d: 100.0,
+    };
+    let spec = PATTERNS.iter().find(|p| p.name == "five_zero").unwrap();
+    let s = match_pattern(spec, &pts, 0.0).expect("5-0 should match canonical ratios");
+    assert!(s > 0.5, "5-0 score too low: {s}");
+    assert!(spec.extension, "5-0 must use D-anchored invalidation");
+}
+
+/// Regression guard: the *old* AD range `[0.84, 1.20]` would never
+/// accept any canonical 5-0 because analytic r_ad ∈ [−0.20, +0.35].
+/// Assert the current range covers those analytical extremes.
+#[test]
+fn five_zero_ad_range_covers_analytic_extremes() {
+    let spec = PATTERNS.iter().find(|p| p.name == "five_zero").unwrap();
+    // β=1.618, α=1.618 → r_ad ≈ +0.309 (largest positive)
+    assert!(spec.ad.contains(0.309, 0.0));
+    // β=2.24, α=1.618 → r_ad ≈ −0.194 (largest negative)
+    assert!(spec.ad.contains(-0.194, 0.0));
+    // β=2.00 → r_ad = 0 exactly
+    assert!(spec.ad.contains(0.0, 0.0));
+}
+
 #[test]
 fn match_returns_none_when_ratio_out_of_range() {
     let pts = XabcdPoints {
