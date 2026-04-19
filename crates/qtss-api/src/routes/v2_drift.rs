@@ -118,7 +118,7 @@ pub fn v2_drift_router() -> Router<SharedState> {
         .route("/v2/drift/snapshots", get(snapshots))
         .route("/v2/drift/timeline", get(timeline))
         .route("/v2/drift/breakers", get(breakers))
-        .route("/v2/drift/breakers/:id/resolve", post(resolve_breaker))
+        .route("/v2/drift/breakers/{id}/resolve", post(resolve_breaker))
         .route("/v2/drift/calibration", get(calibration))
 }
 
