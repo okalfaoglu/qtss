@@ -1,7 +1,22 @@
 # BUG — backtest modunda setup üretilmiyor
 
 Tarih: 2026-04-19
-Durum: **açık**, sonra ele alınacak.
+Durum: **çözüldü** (commit `e024409`). Flag açılınca replay başlayacak.
+
+## 2026-04-19 çözüm
+`crates/qtss-worker/src/v2_backtest_setup_loop.rs` (~350 LOC) yazıldı
+ve `main.rs`'te `tokio::spawn` ile başlatıldı. Loop kendi
+`backtest.setup_loop.enabled` flag'ine bağlı (default false, migration
+0178). Bypass listesi: live confluence / AI inference / commission
+gate. Structural guard tercih ediliyor, ATR fallback var. Point-in-time
+ATR `list_recent_bars_before(detected_at, N)` ile hesaplanıyor.
+Duplicate koruması migration 0171'in `(ex,sym,tf,profile,mode)` partial
+unique index'ine düşüyor. 3 unit test pass.
+
+**Sonraki adım**: prod DB'ye migration 0178 uygula, `enabled=true`
+yap, 30 dk sonra `SELECT COUNT(*) FROM qtss_setups WHERE mode='backtest'`
+ile kontrol et. Beklenen: 453k detection'dan confidence+structural
+eşiklerini geçenler setup'a dönüşüyor olmalı.
 
 ## Belirti
 `qtss_v2_detections` tablosunda **453k+ backtest detection** var ama
