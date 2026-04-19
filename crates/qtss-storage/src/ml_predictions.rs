@@ -37,6 +37,10 @@ pub struct MlPredictionInsert {
     pub shap_top10: Option<JsonValue>,
     pub latency_ms: i32,
     pub sidecar_url: String,
+    /// Faz 9C — 'active' feeds the gate; 'shadow' rows are audit-only so
+    /// calibration / A-B dashboards can split by role. Defaults to
+    /// 'active' at the DB layer (migration 0174) for legacy safety.
+    pub role: String,
 }
 
 /// INSERT one ML prediction row. Returns the new row's UUID so callers
@@ -53,14 +57,14 @@ pub async fn insert_ml_prediction(
             model_name, model_version, model_sha,
             feature_spec_version, feature_hash,
             score, threshold, gate_enabled, decision,
-            shap_top10, latency_ms, sidecar_url
+            shap_top10, latency_ms, sidecar_url, role
         ) VALUES (
             $1,  $2,
             $3,  $4,  $5,
             $6,  $7,  $8,
             $9,  $10,
             $11, $12, $13, $14,
-            $15, $16, $17
+            $15, $16, $17, $18
         )
         RETURNING id
         "#,
@@ -82,6 +86,7 @@ pub async fn insert_ml_prediction(
     .bind(row.shap_top10.as_ref())
     .bind(row.latency_ms)
     .bind(&row.sidecar_url)
+    .bind(&row.role)
     .fetch_one(pool)
     .await?;
     Ok(id)

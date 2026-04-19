@@ -1078,11 +1078,28 @@ async fn try_arm_new_setup(
     };
 
     let inference_start = std::time::Instant::now();
-    let ai_response = match features_by_source.as_ref() {
-        Some(f) => crate::ai_inference::score(&ai_cfg, f).await,
+    // Faz 9C — fan-out to active + every role='shadow' model in one
+    // sidecar round-trip. The active entry drives the gate; shadow
+    // entries are written as audit-only prediction rows below.
+    let multi_response = match features_by_source.as_ref() {
+        Some(f) => crate::ai_inference::score_multi(&ai_cfg, f).await,
         None => None,
     };
     let inference_latency_ms = inference_start.elapsed().as_millis() as i32;
+    // Adapter: the rest of this function was built against the flat
+    // ScoreResponse shape. We reuse it by projecting the active entry
+    // back into that struct so the gate logic / SHAP path stays intact.
+    let ai_response = multi_response.as_ref().and_then(|m| {
+        m.active.as_ref().map(|a| crate::ai_inference::ScoreResponse {
+            score: a.score,
+            model_family: a.model_family.clone(),
+            model_version: a.model_version.clone(),
+            model_name: a.model_family.clone(),
+            feature_spec_version: a.feature_spec_version.clone(),
+            missing_features: a.missing_features,
+            n_features: a.n_features,
+        })
+    });
 
     // Compute feature hash for reproducibility (Faz 9.3.5).
     let feat_hash = features_by_source
@@ -1134,6 +1151,7 @@ async fn try_arm_new_setup(
                 shap_top10: shap_json.clone(),
                 latency_ms: inference_latency_ms,
                 sidecar_url: ai_cfg.sidecar_url.clone(),
+                role: "active".to_string(),
             };
             match qtss_storage::insert_ml_prediction(pool, &insert).await {
                 Ok(id) => Some(id),
@@ -1145,6 +1163,37 @@ async fn try_arm_new_setup(
         }
         None => None,
     };
+
+    // Faz 9C — persist shadow predictions (audit-only, never gate). One
+    // row per shadow model the sidecar scored. Soft-fail per row so one
+    // bad shadow doesn't sink the others or the setup path.
+    if let Some(multi) = multi_response.as_ref() {
+        for sh in &multi.shadows {
+            let insert = qtss_storage::MlPredictionInsert {
+                setup_id: None,
+                detection_id: None,
+                exchange: sym.exchange.clone(),
+                symbol: sym.symbol.clone(),
+                timeframe: sym.interval.clone(),
+                model_name: sh.model_family.clone(),
+                model_version: sh.model_version.clone(),
+                model_sha: None,
+                feature_spec_version: sh.feature_spec_version.clone(),
+                feature_hash: feat_hash.clone(),
+                score: sh.score as f32,
+                threshold: ai_cfg.min_score as f32,
+                gate_enabled: false,
+                decision: "shadow".to_string(),
+                shap_top10: None,
+                latency_ms: inference_latency_ms,
+                sidecar_url: ai_cfg.sidecar_url.clone(),
+                role: "shadow".to_string(),
+            };
+            if let Err(e) = qtss_storage::insert_ml_prediction(pool, &insert).await {
+                warn!(%e, version = %sh.model_version, "shadow prediction insert failed");
+            }
+        }
+    }
 
     let ai_score = ai_response.as_ref().map(|r| r.score as f32);
     if effective_gate {

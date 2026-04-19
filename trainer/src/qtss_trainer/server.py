@@ -50,6 +50,11 @@ _STATE: dict[str, Any] = {
     "artifact_path": None,
     "meta": {},  # Faz 9.4.2: loaded from meta.json beside artifact; holds training_distributions
 }
+# Faz 9C — shadow inference. Each entry is a self-contained booster bundle
+# (same shape as _STATE minus the "meta"). The active model stays in _STATE
+# so every pre-9C endpoint keeps working unchanged; `/score/multi` is the
+# only new surface area that iterates active + shadows.
+_SHADOWS: list[dict[str, Any]] = []
 
 # ---- SHAP LRU cache (Faz 9B) ----------------------------------------------
 # Key = sha1(model_version + feature vector bytes); value = cached ExplainResponse
@@ -111,10 +116,64 @@ def _fetch_active(conn) -> dict[str, Any] | None:
         return dict(zip(cols, row))
 
 
+def _fetch_shadows(conn) -> list[dict[str, Any]]:
+    """Faz 9C — every non-active model tagged role='shadow' is served in
+    parallel to the active one. Archived rows are skipped."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT model_family, model_version, feature_spec_version,
+                   feature_names, artifact_path, metrics_json
+            FROM qtss_models
+            WHERE role = 'shadow'
+            ORDER BY trained_at DESC
+            """
+        )
+        rows = cur.fetchall()
+        cols = [d.name for d in cur.description]
+        return [dict(zip(cols, r)) for r in rows]
+
+
+def _load_booster_bundle(row: dict[str, Any]) -> dict[str, Any] | None:
+    path = Path(row["artifact_path"])
+    if not path.exists():
+        log.warning("shadow artifact missing: %s", path)
+        return None
+    booster = lgb.Booster(model_file=str(path))
+    return {
+        "booster": booster,
+        "feature_names": list(row["feature_names"] or []),
+        "model_family": row["model_family"],
+        "model_version": row["model_version"],
+        "feature_spec_version": row["feature_spec_version"],
+        "metrics": row["metrics_json"],
+        "artifact_path": str(path),
+    }
+
+
 def _load_active() -> None:
-    """Refresh _STATE from the DB. Safe to call repeatedly."""
+    """Refresh _STATE (active) and _SHADOWS from the DB. Safe to call repeatedly."""
     with connect() as conn:
         active = _fetch_active(conn)
+        shadow_rows = _fetch_shadows(conn)
+    # Load shadows best-effort — a missing artifact for one shadow must not
+    # block the active model reload path.
+    new_shadows: list[dict[str, Any]] = []
+    for row in shadow_rows:
+        try:
+            bundle = _load_booster_bundle(row)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("shadow %s/%s load failed: %s",
+                        row.get("model_family"), row.get("model_version"), exc)
+            continue
+        if bundle is not None:
+            new_shadows.append(bundle)
+    with _LOCK:
+        _SHADOWS.clear()
+        _SHADOWS.extend(new_shadows)
+    if new_shadows:
+        log.info("loaded %d shadow model(s): %s", len(new_shadows),
+                 ", ".join(f"{b['model_family']}/{b['model_version']}" for b in new_shadows))
     if not active:
         log.warning("no active model in qtss_models — /score will 503")
         with _LOCK:
@@ -249,6 +308,11 @@ def health() -> dict[str, Any]:
             "model_loaded": loaded,
             "model_family": _STATE["model_family"],
             "model_version": _STATE["model_version"],
+            "shadow_count": len(_SHADOWS),
+            "shadows": [
+                {"family": b["model_family"], "version": b["model_version"]}
+                for b in _SHADOWS
+            ],
         }
 
 
@@ -296,6 +360,61 @@ def score(req: ScoreRequest) -> ScoreResponse:
         missing_features=missing,
         n_features=len(order),
     )
+
+
+class MultiScoreEntry(BaseModel):
+    role: str  # "active" | "shadow"
+    score: float
+    model_family: str
+    model_version: str
+    feature_spec_version: str
+    missing_features: int
+    n_features: int
+
+
+class MultiScoreResponse(BaseModel):
+    active: MultiScoreEntry | None
+    shadows: list[MultiScoreEntry]
+
+
+def _score_bundle(bundle: dict[str, Any], req: ScoreRequest, role: str) -> MultiScoreEntry:
+    order = bundle["feature_names"]
+    x, missing = _vector(req.features_by_source, order)
+    p = float(bundle["booster"].predict(x)[0])
+    return MultiScoreEntry(
+        role=role,
+        score=p,
+        model_family=bundle.get("model_family") or "",
+        model_version=bundle.get("model_version") or "",
+        feature_spec_version=str(bundle.get("feature_spec_version") or ""),
+        missing_features=missing,
+        n_features=len(order),
+    )
+
+
+@app.post("/score/multi", response_model=MultiScoreResponse)
+def score_multi(req: ScoreRequest) -> MultiScoreResponse:
+    """Faz 9C — score active + every role='shadow' model in parallel.
+
+    The Rust caller stamps `qtss_ml_predictions.role` accordingly: active
+    feeds the gate, shadows are audit-only (calibration + A/B drift).
+    """
+    with _LOCK:
+        active_bundle = None
+        if _STATE["booster"] is not None:
+            active_bundle = {
+                "booster": _STATE["booster"],
+                "feature_names": _STATE["feature_names"],
+                "model_family": _STATE["model_family"],
+                "model_version": _STATE["model_version"],
+                "feature_spec_version": _STATE["feature_spec_version"],
+            }
+        shadow_bundles = list(_SHADOWS)
+    active_entry = _score_bundle(active_bundle, req, "active") if active_bundle else None
+    shadow_entries = [_score_bundle(b, req, "shadow") for b in shadow_bundles]
+    if active_entry is None and not shadow_entries:
+        raise HTTPException(status_code=503, detail="no models loaded")
+    return MultiScoreResponse(active=active_entry, shadows=shadow_entries)
 
 
 @app.post("/explain", response_model=ExplainResponse)

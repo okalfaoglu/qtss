@@ -158,6 +158,7 @@ pub struct ExplainResponse {
 /// (disabled, sidecar unreachable, timeout, 5xx). Setup creation must
 /// never block on inference — `None` just means the setup will be
 /// persisted with `ai_score=NULL`.
+#[allow(dead_code)] // Faz 9C: superseded by score_multi; kept for callers that only want active.
 pub async fn score(
     cfg: &InferenceConfig,
     features_by_source: &JsonValue,
@@ -195,6 +196,75 @@ pub async fn score(
         Ok(body) => Some(body),
         Err(err) => {
             warn!(%err, "inference sidecar response parse failed");
+            None
+        }
+    }
+}
+
+/// Faz 9C — one entry in a `/score/multi` response. `role` is either
+/// `"active"` (feeds the gate) or `"shadow"` (audit-only). The caller
+/// stamps `qtss_ml_predictions.role` with this value so calibration and
+/// A/B dashboards can split rows.
+#[derive(Debug, Deserialize, Clone)]
+pub struct MultiScoreEntry {
+    pub role: String,
+    pub score: f64,
+    pub model_family: String,
+    pub model_version: String,
+    #[serde(default)]
+    pub feature_spec_version: String,
+    #[serde(default)]
+    pub missing_features: i64,
+    #[serde(default)]
+    pub n_features: i64,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct MultiScoreResponse {
+    pub active: Option<MultiScoreEntry>,
+    #[serde(default)]
+    pub shadows: Vec<MultiScoreEntry>,
+}
+
+/// Faz 9C — score against active + every `role='shadow'` model in one
+/// round-trip. Soft-fails to `None` on any transport/parse error, same
+/// contract as [`score`]. When the sidecar is older and doesn't know
+/// `/score/multi`, the caller should fall back to [`score`].
+pub async fn score_multi(
+    cfg: &InferenceConfig,
+    features_by_source: &JsonValue,
+) -> Option<MultiScoreResponse> {
+    if !cfg.enabled {
+        return None;
+    }
+    if features_by_source.is_null() {
+        return None;
+    }
+    let url = format!("{}/score/multi", cfg.sidecar_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(cfg.timeout_ms.max(50)))
+        .build()
+        .ok()?;
+    let resp = match client
+        .post(&url)
+        .json(&ScoreRequest { features_by_source })
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(err) => {
+            debug!(%err, "/score/multi unreachable");
+            return None;
+        }
+    };
+    if !resp.status().is_success() {
+        warn!(status = %resp.status(), "/score/multi non-2xx");
+        return None;
+    }
+    match resp.json::<MultiScoreResponse>().await {
+        Ok(body) => Some(body),
+        Err(err) => {
+            warn!(%err, "/score/multi parse failed");
             None
         }
     }
