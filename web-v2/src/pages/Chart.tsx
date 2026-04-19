@@ -737,6 +737,36 @@ export function Chart() {
     refetchInterval: 30_000,
   });
 
+  // ─── Multi-structure event feed (Faz 10 follow-up) ──────────────
+  // /v2/wyckoff/overlay only returns the single ACTIVE structure for
+  // the (symbol,TF). When no structure is active the chart had zero
+  // Wyckoff labels even though completed/failed structures had rich
+  // event data. /v2/wyckoff/events flattens active+recent structures
+  // and tags each event with `validate_event_placement` violation
+  // info — operator gets:
+  //   1) labels even on symbols with no live structure
+  //   2) yellow halo over events that broke phase/direction coherence
+  interface WyckEventRow {
+    event_code: string;
+    full_name: string;
+    phase: string;
+    family: string;
+    bar_index: number | null;
+    price: number | null;
+    score: number;
+    time_ms: number | null;
+    violation: { kind: string; reason: string } | null;
+  }
+  const wyckEventsQuery = useQuery({
+    enabled: (familyModes["wyckoff"] ?? "on") !== "off",
+    queryKey: ["v2", "wyckoff", "events", debounced.symbol, debounced.timeframe],
+    queryFn: () =>
+      apiFetch<{ events: WyckEventRow[]; violation_count: number }>(
+        `/v2/wyckoff/events?symbol=${encodeURIComponent(debounced.symbol)}&interval=${encodeURIComponent(debounced.timeframe)}&limit=300`,
+      ),
+    refetchInterval: 30_000,
+  });
+
   // ─── Setup overlay feed (Faz 8 /v2/setups) ──────────────────────
   // Backlog item — armed+active setups on the current (symbol,timeframe).
   // API takes only a single `state` param so we fetch all non-closed
@@ -1806,6 +1836,98 @@ export function Chart() {
       // rails near SPRING/SC labels) and duplicated what the arrow
       // marker already conveys.
       void eventLines;
+
+    }
+
+    // ── Supplementary multi-structure event feed ──
+    // /v2/wyckoff/events covers active + recent structures so the chart
+    // still shows labels when no structure is currently active for
+    // (symbol,TF). Runs in its own guard, independent of the
+    // active-overlay block above. Events with a validator violation get
+    // a yellow circle halo so the operator spots mis-placed events.
+    const auditEvents = wyckEventsQuery.data?.events ?? [];
+    if (
+      auditEvents.length > 0 &&
+      (familyModes["wyckoff"] ?? "on") !== "off" &&
+      merged.candles?.length
+    ) {
+      // Reuse the same eventMeta dispatch as the active-overlay path.
+      const auditEventMeta: Record<string, { label: string; color: string; pos: "aboveBar" | "belowBar" }> = {
+        p_s:          { label: "PS",     color: "#4CAF50", pos: "belowBar" },
+        s_c:          { label: "SC",     color: "#45B39D", pos: "belowBar" },
+        b_c:          { label: "BC",     color: "#FF7F00", pos: "aboveBar" },
+        a_r:          { label: "AR",     color: "#2ECC71", pos: "aboveBar" },
+        s_t:          { label: "ST",     color: "#66CDAA", pos: "belowBar" },
+        st_b:         { label: "ST-D",   color: "#FFA07A", pos: "aboveBar" },
+        spring:       { label: "SPRING", color: "#00FA9A", pos: "belowBar" },
+        u_a:          { label: "UT",     color: "#FFA500", pos: "aboveBar" },
+        utad:         { label: "UTAD",   color: "#FFA500", pos: "aboveBar" },
+        shakeout:     { label: "TSO",    color: "#00FA9A", pos: "belowBar" },
+        s_o_s:        { label: "SOS",    color: "#27AE60", pos: "aboveBar" },
+        s_o_w:        { label: "SOW",    color: "#FF0000", pos: "belowBar" },
+        l_p_s:        { label: "LPS",    color: "#229954", pos: "belowBar" },
+        lpsy:         { label: "LPSY",   color: "#FF4141", pos: "aboveBar" },
+        j_a_c:        { label: "JAC",    color: "#32CD32", pos: "aboveBar" },
+        break_of_ice: { label: "BoI",    color: "#FF0000", pos: "belowBar" },
+        buec:         { label: "BUEC",   color: "#FF6347", pos: "aboveBar" },
+        s_o_t:        { label: "SOT",    color: "#008000", pos: "aboveBar" },
+        markup:       { label: "MU",     color: "#27AE60", pos: "aboveBar" },
+        markdown:     { label: "MD",     color: "#FF0000", pos: "belowBar" },
+      };
+      const codeToSerde: Record<string, string> = {
+        PS: "p_s", SC: "s_c", BC: "b_c", AR: "a_r", ST: "s_t",
+        UA: "u_a", "ST-B": "st_b",
+        Spring: "spring", UTAD: "utad", Shakeout: "shakeout",
+        SpringTest: "spring", UTADTest: "utad",
+        SOS: "s_o_s", SOW: "s_o_w", LPS: "l_p_s", LPSY: "lpsy",
+        JAC: "j_a_c", BreakOfIce: "break_of_ice", BUEC: "buec",
+        SOT: "s_o_t", Markup: "markup", Markdown: "markdown",
+      };
+
+      // Local dedup so we don't double-stamp markers the active-overlay
+      // path already placed (those markers live in `allMarkers` after
+      // the previous block ran).
+      const placedKeys = new Set<string>();
+      for (const m of allMarkers) {
+        placedKeys.add(`${String(m.time)}|${m.position}`);
+      }
+
+      for (const ev of auditEvents) {
+        const idx = ev.bar_index;
+        if (idx === null || idx < 0 || idx >= merged.candles.length) continue;
+        const serdeKey = codeToSerde[ev.event_code] ?? "";
+        const meta = auditEventMeta[serdeKey] ?? {
+          label: ev.event_code, color: "#9ca3af", pos: "aboveBar" as const,
+        };
+        const candle = merged.candles[idx];
+        const candleTime = isoToUnix(candle.open_time);
+
+        const dupKey = `${String(candleTime)}|${meta.pos}`;
+        if (!placedKeys.has(dupKey)) {
+          placedKeys.add(dupKey);
+          allMarkers.push({
+            time: candleTime,
+            position: meta.pos,
+            color: meta.color,
+            shape: meta.pos === "aboveBar" ? "arrowDown" : "arrowUp",
+            text: meta.label,
+          });
+        }
+
+        if (ev.violation) {
+          allMarkers.push({
+            time: candleTime,
+            position: meta.pos === "aboveBar" ? "belowBar" : "aboveBar",
+            color: "#facc15", // amber-400 — matches Wyckoff page badge
+            shape: "circle",
+            text: `⚠ ${
+              ev.violation.kind === "direction_conflict" ? "DIR"
+              : ev.violation.kind === "phase_regression" ? "REG"
+              : "LEAK"
+            }`,
+          });
+        }
+      }
     }
 
     // Sort markers by time (TV requires ascending) and apply
@@ -2140,7 +2262,7 @@ export function Chart() {
       }
     }
 
-  }, [merged, showVolume, showZigzag, showLabels, showProjections, visibleDetections, familyModes, detailLayers, wyckoffQuery.data, projectionsQuery.data, showSetups, showPositions, setupsQuery.data, positionsQuery.data, debounced.symbol, debounced.timeframe]);
+  }, [merged, showVolume, showZigzag, showLabels, showProjections, visibleDetections, familyModes, detailLayers, wyckoffQuery.data, wyckEventsQuery.data, projectionsQuery.data, showSetups, showPositions, setupsQuery.data, positionsQuery.data, debounced.symbol, debounced.timeframe]);
 
   // ═══════════════════════════════════════════════════════════════
   // RENDER
