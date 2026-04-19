@@ -18,8 +18,6 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use qtss_storage::pivot_cache::list_pivot_cache;
-
 use crate::error::ApiError;
 use crate::state::SharedState;
 
@@ -80,24 +78,58 @@ async fn get_pivots(
             .collect(),
     };
 
+    // NOTE: qtss_storage::list_pivot_cache does `ORDER BY bar_index ASC
+    // LIMIT N` which returns the OLDEST pivots when the cache holds
+    // more than N rows — wrong for a chart overlay whose visible
+    // window is always the RECENT candles. We inline a DESC+reverse
+    // query here instead so the frontend receives the latest `limit`
+    // pivots per level in ascending time order.
     let mut out: Vec<PivotLevelSeries> = Vec::with_capacity(requested_levels.len());
     for level in requested_levels {
-        let rows = list_pivot_cache(&st.pool, &venue, &symbol, &tf, level, limit)
-            .await
-            .map_err(|e| {
-                ApiError::new(
-                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("pivot_cache read failed: {e}"),
-                )
-            })?;
+        let rows = sqlx::query_as::<
+            _,
+            (
+                i64,
+                chrono::DateTime<chrono::Utc>,
+                rust_decimal::Decimal,
+                String,
+                Option<String>,
+            ),
+        >(
+            r#"
+            SELECT bar_index, open_time, price, kind, swing_type
+              FROM (
+                SELECT bar_index, open_time, price, kind, swing_type
+                  FROM pivot_cache
+                 WHERE exchange = $1 AND symbol = $2
+                   AND timeframe = $3 AND level = $4
+                 ORDER BY bar_index DESC
+                 LIMIT $5
+              ) t
+             ORDER BY bar_index ASC
+            "#,
+        )
+        .bind(&venue)
+        .bind(&symbol)
+        .bind(&tf)
+        .bind(level)
+        .bind(limit)
+        .fetch_all(&st.pool)
+        .await
+        .map_err(|e| {
+            ApiError::new(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("pivot_cache read failed: {e}"),
+            )
+        })?;
         let points = rows
             .into_iter()
-            .map(|r| PivotPoint {
-                bar_index: r.bar_index,
-                open_time: r.open_time,
-                price: r.price,
-                kind: r.kind,
-                swing_type: r.swing_type,
+            .map(|(bar_index, open_time, price, kind, swing_type)| PivotPoint {
+                bar_index,
+                open_time,
+                price,
+                kind,
+                swing_type,
             })
             .collect();
         out.push(PivotLevelSeries {
