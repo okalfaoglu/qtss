@@ -1906,9 +1906,15 @@ export function Chart() {
       // Local dedup so we don't double-stamp markers the active-overlay
       // path already placed (those markers live in `allMarkers` after
       // the previous block ran).
+      //
+      // FIX: Seed must match the dupKey format used below
+      // (`time|label|position`). Previously we seeded with only
+      // `time|position`, so active-overlay markers were NEVER matched
+      // by the audit-events loop — every Wyckoff event got stamped
+      // twice (BC/BC, AR/AR stacks at the same bar).
       const placedKeys = new Set<string>();
       for (const m of allMarkers) {
-        placedKeys.add(`${String(m.time)}|${m.position}`);
+        placedKeys.add(`${String(m.time)}|${m.text ?? ""}|${m.position}`);
       }
 
       // Build a unix-seconds → candle-index map. Wyckoff events_json
@@ -1943,9 +1949,11 @@ export function Chart() {
         const candle = merged.candles[idx];
         const candleTime = isoToUnix(candle.open_time);
 
-        // Dedup anahtarı: aynı bar + aynı event + aynı pozisyonda
-        // tek marker. Farklı event aynı pozisyonda serbest (engellenmez).
-        const dupKey = `${String(candleTime)}|${ev.event_code}|${meta.pos}`;
+        // Dedup anahtarı: aynı bar + aynı LABEL + aynı pozisyonda
+        // tek marker. meta.label (e.g. "BC") kullanılıyor çünkü
+        // active-overlay path da aynı label'ı marker.text'e koyuyor;
+        // seed'de `time|label|position` ile match sağlanıyor.
+        const dupKey = `${String(candleTime)}|${meta.label}|${meta.pos}`;
         if (!placedKeys.has(dupKey)) {
           placedKeys.add(dupKey);
           allMarkers.push({
