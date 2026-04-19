@@ -207,6 +207,10 @@ pub async fn score(
 /// A/B dashboards can split rows.
 #[derive(Debug, Deserialize, Clone)]
 pub struct MultiScoreEntry {
+    /// Populated by the sidecar but currently only inspected via the
+    /// serialized JSON in audit logs; silence dead-code warning while
+    /// the field is part of the public wire contract.
+    #[allow(dead_code)]
     pub role: String,
     pub score: f64,
     pub model_family: String,
