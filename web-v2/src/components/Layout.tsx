@@ -25,6 +25,7 @@ const NAV_ENTRIES: NavEntry[] = [
   { label: "Monte Carlo", to: "/v2/montecarlo", enabled: true },
   { label: "Risk", to: "/v2/risk", enabled: true },
   { label: "Blotter", to: "/v2/blotter", enabled: true },
+  { label: "Backtest", to: "/v2/backtest", enabled: true },
   { label: "Setups", to: "/v2/setups", enabled: true },
   { label: "Confluence Inspector", to: "/v2/setup-rejections", enabled: true },
   { label: "Training Set", to: "/v2/training-set", enabled: true },

@@ -6,6 +6,7 @@ import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { Risk } from "./pages/Risk";
 import { Blotter } from "./pages/Blotter";
+import { Backtest } from "./pages/Backtest";
 import { Setups } from "./pages/Setups";
 import { SetupRejections } from "./pages/SetupRejections";
 import { TrainingSet } from "./pages/TrainingSet";
@@ -53,6 +54,7 @@ export const router = createBrowserRouter([
       { path: "dashboard", element: <Dashboard /> },
       { path: "risk", element: <Risk /> },
       { path: "blotter", element: <Blotter /> },
+      { path: "backtest", element: <Backtest /> },
       { path: "setups", element: <Setups /> },
       { path: "setup-rejections", element: <SetupRejections /> },
       { path: "training-set", element: <TrainingSet /> },
