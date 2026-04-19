@@ -1811,34 +1811,90 @@ async fn process_symbol(
         let render_geometry = detection.render_geometry.clone().or_else(|| {
             crate::v2_render_geometry::derive(family, subkind, &anchors_json)
         });
-        let new_row = NewDetection {
-            id: Uuid::new_v4(),
-            detected_at: Utc::now(),
-            exchange: &sym.exchange,
-            symbol: &sym.symbol,
-            timeframe: &sym.interval,
-            family,
-            subkind,
-            state: "forming",
-            structural_score: detection.structural_score,
-            invalidation_price: detection.invalidation_price,
-            anchors: anchors_json,
-            regime: regime_json,
-            raw_meta,
-            mode,
-            render_geometry,
-            render_style: detection.render_style.as_deref(),
-            render_labels: detection.render_labels.clone(),
+
+        // Single-record upsert pattern (mirrors v2_tbm_detector). tbm /
+        // wyckoff keep their bespoke paths: tbm owns its own detector
+        // file; wyckoff rows are tracked in wyckoff_structures.
+        let use_upsert = family != "tbm" && family != "wyckoff";
+        let open_rows = if use_upsert {
+            repo.list_open_by_key(
+                &sym.exchange,
+                &sym.symbol,
+                &sym.interval,
+                family,
+                subkind,
+            )
+            .await?
+        } else {
+            Vec::new()
         };
-        let inserted_id = new_row.id;
-        let fs_raw_meta = new_row.raw_meta.clone();
-        let fs_family = new_row.family;
-        let fs_subkind = new_row.subkind.to_string();
-        let fs_anchors = new_row.anchors.clone();
-        let fs_structural = new_row.structural_score;
-        let fs_invalidation = new_row.invalidation_price;
-        repo.insert(new_row).await?;
-        stats.inserted += 1;
+
+        let (inserted_id, fs_raw_meta, fs_anchors, fs_invalidation) =
+            if let Some((primary, duplicates)) = open_rows.split_first() {
+                // Retire legacy duplicates so the panel converges to one row.
+                for dup in duplicates {
+                    let _ = repo.update_state(dup.id, "invalidated").await;
+                    debug!(
+                        id = %dup.id,
+                        family,
+                        subkind = %dup.subkind,
+                        "single-record: legacy duplicate invalidated"
+                    );
+                }
+                // Anchors/invalidation lock once the row has confirmed;
+                // score + raw_meta still tick forward so the UI stays live.
+                let locked =
+                    matches!(primary.state.as_str(), "confirmed" | "entry_ready");
+                let merged_meta = merge_detection_raw_meta(&primary.raw_meta, &raw_meta);
+                let next_anchors = if locked {
+                    primary.anchors.clone()
+                } else {
+                    anchors_json.clone()
+                };
+                let next_invalidation = if locked {
+                    primary.invalidation_price
+                } else {
+                    detection.invalidation_price
+                };
+                let _ = repo
+                    .update_anchor_projection(
+                        primary.id,
+                        detection.structural_score,
+                        next_invalidation,
+                        next_anchors.clone(),
+                        merged_meta.clone(),
+                    )
+                    .await;
+                stats.inserted += 1;
+                (primary.id, merged_meta, next_anchors, next_invalidation)
+            } else {
+                let new_row = NewDetection {
+                    id: Uuid::new_v4(),
+                    detected_at: Utc::now(),
+                    exchange: &sym.exchange,
+                    symbol: &sym.symbol,
+                    timeframe: &sym.interval,
+                    family,
+                    subkind,
+                    state: "forming",
+                    structural_score: detection.structural_score,
+                    invalidation_price: detection.invalidation_price,
+                    anchors: anchors_json.clone(),
+                    regime: regime_json,
+                    raw_meta: raw_meta.clone(),
+                    mode,
+                    render_geometry,
+                    render_style: detection.render_style.as_deref(),
+                    render_labels: detection.render_labels.clone(),
+                };
+                let new_id = new_row.id;
+                repo.insert(new_row).await?;
+                stats.inserted += 1;
+                (new_id, raw_meta, anchors_json, detection.invalidation_price)
+            };
+        let fs_family = family;
+        let fs_subkind = subkind.to_string();
+        let fs_structural = detection.structural_score;
 
         // Faz 9.0.2 / Faz 9.8.AI-Yol2 — feature store hook: per-detection
         // ConfluenceSource extraction → qtss_features_snapshot. Best-effort,
@@ -3013,4 +3069,32 @@ async fn validate_active_projections(pool: &PgPool) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Generic raw_meta merge for non-TBM structural detectors: the incoming
+/// value wins for scalar keys (fresh score details etc.), but nested
+/// objects are deep-merged so lifecycle-enriched children are not wiped
+/// out on every tick. TBM has its own merger with an explicit preserve
+/// list; here the deep merge is enough because non-TBM families don't
+/// stamp distinct lifecycle keys yet.
+pub(crate) fn merge_detection_raw_meta(
+    existing: &serde_json::Value,
+    incoming: &serde_json::Value,
+) -> serde_json::Value {
+    match (existing, incoming) {
+        (serde_json::Value::Object(old), serde_json::Value::Object(new)) => {
+            let mut out = old.clone();
+            for (k, v_new) in new {
+                let merged = match out.get(k) {
+                    Some(v_old) if v_old.is_object() && v_new.is_object() => {
+                        merge_detection_raw_meta(v_old, v_new)
+                    }
+                    _ => v_new.clone(),
+                };
+                out.insert(k.clone(), merged);
+            }
+            serde_json::Value::Object(out)
+        }
+        _ => incoming.clone(),
+    }
 }
