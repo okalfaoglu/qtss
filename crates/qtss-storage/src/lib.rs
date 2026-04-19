@@ -50,6 +50,7 @@ pub mod v2_detection_outcomes;
 pub mod v2_detections;
 pub mod v2_onchain_metrics;
 pub mod digest;
+pub mod reports;
 pub mod setup_lifecycle;
 pub mod liquidation_guard_events;
 pub mod live_positions;
@@ -84,6 +85,10 @@ pub use setup_lifecycle::{
 };
 pub use digest::{
     aggregate_digest, list_digest_candidates, stamp_digest_sent, DigestAggregate, DigestUserRow,
+};
+pub use reports::{
+    aggregate_report, previous_month_window, previous_week_window, previous_year_window,
+    record_report_run, report_exists, ReportAggregate, ReportKind, ReportRunInsert,
 };
 pub use x_outbox::{
     claim_x_outbox_batch, count_sent_today_utc, enqueue_x_outbox, mark_x_failed, mark_x_sent,

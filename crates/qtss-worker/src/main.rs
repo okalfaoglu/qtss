@@ -35,6 +35,7 @@ mod price_tick_ws;
 mod setup_watcher;
 mod x_publisher;
 mod digest_loop;
+mod report_scheduler_loop;
 mod selector_loop;
 mod execution_bridge;
 mod trainer_cron;
@@ -297,6 +298,9 @@ async fn main() -> anyhow::Result<()> {
         // Faz 9.7.7 — per-user daily digest.
         let digest_pool = pool.clone();
         tokio::spawn(digest_loop::digest_loop(digest_pool));
+        // Faz 9C — market-wide weekly/monthly/yearly reports (Telegram + x_outbox).
+        let report_pool = pool.clone();
+        tokio::spawn(report_scheduler_loop::report_scheduler_loop(report_pool));
         // Faz 9.7.8 — new-setup public broadcast (Telegram + x_outbox).
         let setup_pub_pool = pool.clone();
         tokio::spawn(setup_publisher::setup_publisher_loop(setup_pub_pool));
