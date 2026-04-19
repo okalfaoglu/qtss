@@ -315,7 +315,7 @@ export function FeatureInspector() {
                         }
                       >
                         <span className="w-1/4 px-3 py-1.5 text-zinc-300">
-                          {fmtTs(snap.computed_at)}
+                          {fmtTs(snap.created_at)}
                         </span>
                         <span className="w-1/6 px-3 py-1.5 text-zinc-200">
                           {snap.source}

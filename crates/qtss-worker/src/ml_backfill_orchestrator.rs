@@ -89,6 +89,12 @@ async fn run_cycle(pool: &PgPool) -> Result<(), String> {
 
     // 1. Audit: mark backfill start.
     let run_id = insert_training_run_start(pool).await?;
+    // Seed the live-progress heartbeat row (migration 0172). Updated on
+    // every poll tick so the GUI can show "cycle N running · 3.2K
+    // backtest setups · last grew 2 min ago" without tailing logs.
+    if let Err(e) = upsert_progress(pool, run_id, 0, 0, "running").await {
+        warn!(%e, "ml backfill: initial progress row insert failed");
+    }
 
     // 2. Enable the child scanner. The progressive scan worker is already
     //    running its own idle poll loop; we just flip the flag it reads.
@@ -108,20 +114,27 @@ async fn run_cycle(pool: &PgPool) -> Result<(), String> {
     loop {
         tokio::time::sleep(Duration::from_secs(poll_secs)).await;
         let now_count = count_backtest_setups(pool).await;
-        if now_count > last_count {
+        let growing = now_count > last_count;
+        if growing {
             debug!(prev = last_count, now = now_count, "ml backfill: growth");
             last_count = now_count;
             last_growth_at = std::time::Instant::now();
-            continue;
         }
-        if last_growth_at.elapsed().as_secs() >= plateau_secs {
+        let plateau_hit = !growing && last_growth_at.elapsed().as_secs() >= plateau_secs;
+        let phase = if plateau_hit { "plateau_detected" } else { "running" };
+        if let Err(e) = upsert_progress(pool, run_id, now_count, 0, phase).await {
+            warn!(%e, "ml backfill: progress upsert failed");
+        }
+        if plateau_hit {
             info!(
                 final_count = now_count,
                 "ml backfill: plateau reached — closing cycle"
             );
             break;
         }
-        debug!(count = now_count, "ml backfill: no growth yet, waiting for plateau");
+        if !growing {
+            debug!(count = now_count, "ml backfill: no growth yet, waiting for plateau");
+        }
     }
 
     // 4. Disable progressive scan so the bar iteration stops burning CPU.
@@ -131,6 +144,9 @@ async fn run_cycle(pool: &PgPool) -> Result<(), String> {
     //    its next tick (T6 bootstrap or T4 outcome milestone); operator can
     //    also fire manually per playbook §6.
     finalize_training_run(pool, run_id, last_count).await?;
+    if let Err(e) = upsert_progress(pool, run_id, last_count, 0, "closed").await {
+        warn!(%e, "ml backfill: progress close failed");
+    }
 
     Ok(())
 }
@@ -172,6 +188,43 @@ async fn finalize_training_run(
     .await
     .map(|_| ())
     .map_err(|e| format!("training_runs finalize: {e}"))
+}
+
+/// Upsert the orchestrator's heartbeat row (migration 0172). Called on
+/// cycle start, every poll tick, and at close. `last_growth_at` is
+/// only refreshed when the setup count actually advances so the GUI
+/// can show genuine staleness.
+async fn upsert_progress(
+    pool: &PgPool,
+    run_id: uuid::Uuid,
+    last_setup_count: i64,
+    symbols_active: i32,
+    phase: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        r#"INSERT INTO qtss_ml_backfill_progress
+               (run_id, last_poll_at, last_growth_at, last_setup_count,
+                symbols_active, phase)
+           VALUES ($1, now(), now(), $2, $3, $4)
+           ON CONFLICT (run_id) DO UPDATE SET
+               last_poll_at     = now(),
+               last_growth_at   = CASE
+                                    WHEN EXCLUDED.last_setup_count > qtss_ml_backfill_progress.last_setup_count
+                                    THEN now()
+                                    ELSE qtss_ml_backfill_progress.last_growth_at
+                                  END,
+               last_setup_count = EXCLUDED.last_setup_count,
+               symbols_active   = EXCLUDED.symbols_active,
+               phase            = EXCLUDED.phase"#,
+    )
+    .bind(run_id)
+    .bind(last_setup_count)
+    .bind(symbols_active)
+    .bind(phase)
+    .execute(pool)
+    .await
+    .map(|_| ())
+    .map_err(|e| format!("backfill progress upsert: {e}"))
 }
 
 async fn count_backtest_setups(pool: &PgPool) -> i64 {

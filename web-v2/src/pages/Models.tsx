@@ -27,6 +27,15 @@ type ModelEntry = {
   trained_by: string | null;
   notes: string | null;
   active: boolean;
+  role: "active" | "shadow" | "archived";
+};
+
+// Kalem H — role → pill class. Kept as a dispatch map (CLAUDE.md #1)
+// so adding 'challenger' later is one line.
+const ROLE_PILL: Record<string, string> = {
+  active: "border-emerald-500/40 bg-emerald-500/15 text-emerald-300",
+  shadow: "border-blue-500/40 bg-blue-500/15 text-blue-300",
+  archived: "border-zinc-700 bg-zinc-800/40 text-zinc-500",
 };
 
 type ModelList = {
@@ -63,6 +72,29 @@ export function Models() {
   const activateMut = useMutation({
     mutationFn: (vars: { family: string; version: string }) =>
       apiFetch<{ ok: boolean }>("/v2/models/activate", {
+        method: "POST",
+        body: JSON.stringify(vars),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["v2", "models"] }),
+  });
+
+  // Faz 9B Kalem F — rollback path. Primary use cases:
+  //   (a) PSI breaker auto-flipped active=false; operator confirms by
+  //       hitting deactivate explicitly so the audit log captures intent.
+  //   (b) operator wants a family to go silent without promoting a
+  //       replacement (e.g. pause inference for the family entirely).
+  const deactivateMut = useMutation({
+    mutationFn: (vars: { family: string; version: string }) =>
+      apiFetch<{ ok: boolean }>("/v2/models/deactivate", {
+        method: "POST",
+        body: JSON.stringify(vars),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["v2", "models"] }),
+  });
+
+  const setRoleMut = useMutation({
+    mutationFn: (vars: { family: string; version: string; role: string }) =>
+      apiFetch<{ ok: boolean }>("/v2/models/set-role", {
         method: "POST",
         body: JSON.stringify(vars),
       }),
@@ -123,7 +155,7 @@ export function Models() {
           <table className="min-w-full">
             <thead className="bg-zinc-900/80 text-[10px] uppercase tracking-wide text-zinc-500">
               <tr>
-                <th className="px-2 py-2 text-left">Active</th>
+                <th className="px-2 py-2 text-left">Role</th>
                 <th className="px-2 py-2 text-left">Family</th>
                 <th className="px-2 py-2 text-left">Version</th>
                 <th className="px-2 py-2 text-left">Spec v</th>
@@ -144,13 +176,13 @@ export function Models() {
                   className="border-b border-zinc-800/60 text-xs hover:bg-zinc-800/30"
                 >
                   <td className="px-2 py-1.5">
-                    {m.active ? (
-                      <span className="rounded border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">
-                        active
-                      </span>
-                    ) : (
-                      <span className="text-zinc-600">—</span>
-                    )}
+                    <span
+                      className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${
+                        ROLE_PILL[m.role] ?? ROLE_PILL.archived
+                      }`}
+                    >
+                      {m.role}
+                    </span>
                   </td>
                   <td className="px-2 py-1.5 text-zinc-300">
                     {m.model_family}
@@ -183,7 +215,61 @@ export function Models() {
                     {m.trained_by ?? "—"}
                   </td>
                   <td className="px-2 py-1.5">
-                    {!m.active && (
+                    <div className="flex gap-1">
+                      {m.role !== "shadow" && (
+                        <button
+                          type="button"
+                          disabled={setRoleMut.isPending}
+                          onClick={() =>
+                            setRoleMut.mutate({
+                              family: m.model_family,
+                              version: m.model_version,
+                              role: "shadow",
+                            })
+                          }
+                          className="rounded border border-blue-700 bg-blue-900/30 px-2 py-0.5 text-[10px] text-blue-300 hover:bg-blue-900/60 disabled:opacity-50"
+                        >
+                          shadow
+                        </button>
+                      )}
+                      {m.role !== "archived" && !m.active && (
+                        <button
+                          type="button"
+                          disabled={setRoleMut.isPending}
+                          onClick={() =>
+                            setRoleMut.mutate({
+                              family: m.model_family,
+                              version: m.model_version,
+                              role: "archived",
+                            })
+                          }
+                          className="rounded border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400 hover:bg-zinc-700 disabled:opacity-50"
+                        >
+                          archive
+                        </button>
+                      )}
+                    {m.active ? (
+                      <button
+                        type="button"
+                        disabled={deactivateMut.isPending}
+                        onClick={() => {
+                          if (
+                            !window.confirm(
+                              `Deactivate ${m.model_family}/${m.model_version}? Inference gate will go silent for this family until another version is activated.`,
+                            )
+                          ) {
+                            return;
+                          }
+                          deactivateMut.mutate({
+                            family: m.model_family,
+                            version: m.model_version,
+                          });
+                        }}
+                        className="rounded border border-red-700 bg-red-900/30 px-2 py-0.5 text-[10px] text-red-300 hover:bg-red-900/60 disabled:opacity-50"
+                      >
+                        deactivate
+                      </button>
+                    ) : (
                       <button
                         type="button"
                         disabled={activateMut.isPending}
@@ -198,6 +284,7 @@ export function Models() {
                         activate
                       </button>
                     )}
+                    </div>
                   </td>
                 </tr>
               ))}

@@ -31,6 +31,10 @@ pub struct ModelRow {
     pub trained_by: Option<String>,
     pub notes: Option<String>,
     pub active: bool,
+    /// Faz 9B Kalem H — 'active' | 'shadow' | 'archived'. Source of truth
+    /// for the GUI registry; `active` bool is kept in sync via a DB
+    /// trigger so legacy readers keep working.
+    pub role: String,
 }
 
 pub async fn list_models(
@@ -45,7 +49,7 @@ pub async fn list_models(
                        algorithm, task, n_train, n_valid,
                        metrics_json, params_json, feature_names,
                        artifact_path, artifact_sha256,
-                       trained_at, trained_by, notes, active
+                       trained_at, trained_by, notes, active, role
                 FROM qtss_models
                 WHERE model_family = $1
                 ORDER BY trained_at DESC
@@ -62,7 +66,7 @@ pub async fn list_models(
                        algorithm, task, n_train, n_valid,
                        metrics_json, params_json, feature_names,
                        artifact_path, artifact_sha256,
-                       trained_at, trained_by, notes, active
+                       trained_at, trained_by, notes, active, role
                 FROM qtss_models
                 ORDER BY trained_at DESC
                 "#,
@@ -121,5 +125,44 @@ pub async fn activate_model(
         )));
     }
     tx.commit().await?;
+    Ok(())
+}
+
+/// Faz 9B Kalem H — set `role` for a single (family, version). Values:
+/// 'active' | 'shadow' | 'archived'. Validates against the CHECK
+/// constraint up front so a bad role gets a readable error.
+///
+/// Demotion semantics: setting role='shadow' or 'archived' on the
+/// currently-active row clears it (trigger maps role→active=false).
+/// Promotion to 'active' requires the caller to also demote whatever
+/// was active before; use `activate_model` for that — this function
+/// does NOT displace the current active to keep the two paths
+/// auditable separately.
+pub async fn set_model_role(
+    pool: &PgPool,
+    family: &str,
+    version: &str,
+    role: &str,
+) -> Result<(), StorageError> {
+    const VALID: [&str; 3] = ["active", "shadow", "archived"];
+    if !VALID.contains(&role) {
+        return Err(StorageError::Other(format!(
+            "invalid role '{role}' (must be active|shadow|archived)"
+        )));
+    }
+    let res = sqlx::query(
+        "UPDATE qtss_models SET role = $3 \
+           WHERE model_family = $1 AND model_version = $2",
+    )
+    .bind(family)
+    .bind(version)
+    .bind(role)
+    .execute(pool)
+    .await?;
+    if res.rows_affected() != 1 {
+        return Err(StorageError::Other(format!(
+            "model {family}/{version} not found"
+        )));
+    }
     Ok(())
 }

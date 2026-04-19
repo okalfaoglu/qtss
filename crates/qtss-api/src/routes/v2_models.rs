@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use qtss_storage::{activate_model, active_model, list_models, ModelRow};
+use qtss_storage::{activate_model, active_model, list_models, set_model_role, ModelRow};
 
 use crate::error::ApiError;
 use crate::state::SharedState;
@@ -50,6 +50,7 @@ pub struct ModelEntry {
     pub trained_by: Option<String>,
     pub notes: Option<String>,
     pub active: bool,
+    pub role: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -69,6 +70,65 @@ pub fn v2_models_router() -> Router<SharedState> {
         .route("/v2/models", get(list))
         .route("/v2/models/active", get(active))
         .route("/v2/models/activate", post(activate))
+        .route("/v2/models/deactivate", post(deactivate))
+        .route("/v2/models/set-role", post(set_role))
+}
+
+// Faz 9B Kalem H — shadow/A-B registry. `role` is the source of truth
+// in the GUI; `activate` stays separate so promoting to active keeps
+// its atomic demote-then-set transaction path.
+#[derive(Debug, Deserialize)]
+pub struct SetRoleBody {
+    pub family: String,
+    pub version: String,
+    pub role: String, // active | shadow | archived
+}
+
+async fn set_role(
+    State(st): State<SharedState>,
+    Json(body): Json<SetRoleBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Route promotion through the atomic path so there's never a moment
+    // with two rows at role='active' for one family.
+    if body.role == "active" {
+        activate_model(&st.pool, &body.family, &body.version).await?;
+    } else {
+        set_model_role(&st.pool, &body.family, &body.version, &body.role).await?;
+    }
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "family": body.family,
+        "version": body.version,
+        "role": body.role,
+    })))
+}
+
+async fn deactivate(
+    State(st): State<SharedState>,
+    Json(body): Json<ActivateBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Rollback path: operator takes a family offline without promoting a
+    // replacement (e.g. when the PSI breaker already flipped active=false
+    // and the operator wants to confirm the intent rather than rely on
+    // silent mutation). Idempotent — no-op if the row is already inactive.
+    let res = sqlx::query(
+        "UPDATE qtss_models SET active = false \
+           WHERE model_family = $1 AND model_version = $2",
+    )
+    .bind(&body.family)
+    .bind(&body.version)
+    .execute(&st.pool)
+    .await
+    .map_err(|e| ApiError::internal(format!("deactivate: {e}")))?;
+    if res.rows_affected() == 0 {
+        return Err(ApiError::not_found("model not found"));
+    }
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "family": body.family,
+        "version": body.version,
+        "rows_affected": res.rows_affected(),
+    })))
 }
 
 async fn list(
@@ -127,5 +187,6 @@ fn into_entry(row: ModelRow) -> ModelEntry {
         trained_by: row.trained_by,
         notes: row.notes,
         active: row.active,
+        role: row.role,
     }
 }

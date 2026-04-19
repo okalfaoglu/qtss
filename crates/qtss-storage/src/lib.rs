@@ -128,7 +128,7 @@ pub use ml_prediction_stats::{
     fetch_feature_coverage, fetch_recent_snapshots, fetch_feature_stats,
     SourceCoverage, FeatureSnapshotRow, FeatureStat,
 };
-pub use models_registry::{activate_model, active_model, list_models, ModelRow};
+pub use models_registry::{activate_model, active_model, list_models, set_model_role, ModelRow};
 pub use training_set::{
     fetch_latest_features_by_source, fetch_training_set_stats, CloseReasonBucket, DirectionBucket,
     FeatureCoverage, LabelBucket, PnlSummary, SymbolBucket, TrainingSetStats,
