@@ -53,6 +53,12 @@ pub struct V2SetupRow {
     /// the allocator so mode-scoped per-profile caps don't starve
     /// backtest candidates (see `list_open_v2_setups` doc).
     pub mode: String,
+    /// Faz A — TP1 (`target_ref`) değdi mi? True iken aynı target_ref
+    /// değimi kapanış tetiklemez, koruma entry'e çekilmiştir.
+    /// Migration 0186 ile eklendi (DEFAULT false → eski satırlar güvenli).
+    pub tp1_hit: bool,
+    pub tp1_hit_at: Option<DateTime<Utc>>,
+    pub tp1_price: Option<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -218,6 +224,38 @@ pub async fn update_v2_setup_state(
     Ok(())
 }
 
+/// Faz A — idempotent TP1 marker. Sets `tp1_hit=true`, stamps
+/// `tp1_hit_at=now()`, records the trigger price, and ratchets
+/// `koruma` to `new_koruma` (caller passes `entry` for BE). The
+/// `WHERE tp1_hit = false` guard ensures replays are no-ops so the
+/// BE ratchet cannot loosen on repeated target_ref touches.
+///
+/// Returns the number of rows actually updated (0 if this setup had
+/// already been marked).
+pub async fn mark_v2_setup_tp1_hit(
+    pool: &PgPool,
+    id: Uuid,
+    tp1_price: f32,
+    new_koruma: f32,
+) -> Result<u64, StorageError> {
+    let r = sqlx::query(
+        r#"UPDATE qtss_setups
+              SET tp1_hit    = true,
+                  tp1_hit_at = now(),
+                  tp1_price  = $2,
+                  koruma     = $3,
+                  updated_at = now()
+            WHERE id = $1
+              AND tp1_hit = false"#,
+    )
+    .bind(id)
+    .bind(tp1_price)
+    .bind(new_koruma)
+    .execute(pool)
+    .await?;
+    Ok(r.rows_affected())
+}
+
 pub async fn fetch_v2_setup(
     pool: &PgPool,
     id: Uuid,
@@ -227,7 +265,8 @@ pub async fn fetch_v2_setup(
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
-                  pnl_pct, risk_mode, ai_score, trail_mode, mode
+                  pnl_pct, risk_mode, ai_score, trail_mode, mode,
+                  tp1_hit, tp1_hit_at, tp1_price
              FROM qtss_setups
             WHERE id = $1"#,
     )
@@ -253,7 +292,8 @@ pub async fn list_open_v2_setups(
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
-                  pnl_pct, risk_mode, ai_score, trail_mode, mode
+                  pnl_pct, risk_mode, ai_score, trail_mode, mode,
+                  tp1_hit, tp1_hit_at, tp1_price
              FROM qtss_setups
             WHERE state IN ('armed','active')
               AND ($1::text IS NULL OR venue_class = $1)
@@ -291,7 +331,8 @@ pub async fn list_v2_setups_filtered(
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
-                  pnl_pct, risk_mode, ai_score, trail_mode, mode
+                  pnl_pct, risk_mode, ai_score, trail_mode, mode,
+                  tp1_hit, tp1_hit_at, tp1_price
              FROM qtss_setups
             WHERE 1=1"#,
     );
@@ -346,7 +387,8 @@ pub async fn list_recent_v2_setups(
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
-                  pnl_pct, risk_mode, ai_score, trail_mode, mode
+                  pnl_pct, risk_mode, ai_score, trail_mode, mode,
+                  tp1_hit, tp1_hit_at, tp1_price
              FROM qtss_setups
             ORDER BY created_at DESC
             LIMIT $1"#,

@@ -145,6 +145,13 @@ pub enum SetupState {
     ClosedWin,
     ClosedLoss,
     ClosedManual,
+    /// Faz A — TP1 alındı, ardından TP_final değildi ama koruma BE''den
+    /// ilerledi; trailing / target_ref2 hit ile kapandı. Net sonuç ≥ +0.5R.
+    ClosedPartialWin,
+    /// Faz A — TP1 alındı, sonra BE (entry) kırıldı. Realize edilen TP1
+    /// karı + kalan yarının 0R'ı → net hafif pozitif, "karlı bölgeden
+    /// zarar etme" senaryosunun matematiksel imkansızlığı burada loglanır.
+    ClosedScratch,
 }
 
 impl SetupState {
@@ -157,6 +164,8 @@ impl SetupState {
             SetupState::ClosedWin => "closed_win",
             SetupState::ClosedLoss => "closed_loss",
             SetupState::ClosedManual => "closed_manual",
+            SetupState::ClosedPartialWin => "closed_partial_win",
+            SetupState::ClosedScratch => "closed_scratch",
         }
     }
 
@@ -169,22 +178,56 @@ impl SetupState {
             "closed_win" => Some(SetupState::ClosedWin),
             "closed_loss" => Some(SetupState::ClosedLoss),
             "closed_manual" => Some(SetupState::ClosedManual),
+            "closed_partial_win" => Some(SetupState::ClosedPartialWin),
+            "closed_scratch" => Some(SetupState::ClosedScratch),
             _ => None,
         }
     }
 
     pub fn is_closed(self) -> bool {
-        matches!(self, Self::Closed | Self::ClosedWin | Self::ClosedLoss | Self::ClosedManual)
+        matches!(
+            self,
+            Self::Closed
+                | Self::ClosedWin
+                | Self::ClosedLoss
+                | Self::ClosedManual
+                | Self::ClosedPartialWin
+                | Self::ClosedScratch
+        )
     }
 
-    /// Derive the granular close state from a CloseReason.
-    pub fn from_close_reason(reason: CloseReason) -> Self {
-        match reason {
-            CloseReason::TargetHit => SetupState::ClosedWin,
-            CloseReason::StopHit => SetupState::ClosedLoss,
-            CloseReason::ReverseSignal => SetupState::ClosedLoss,
-            CloseReason::Manual => SetupState::ClosedManual,
+    /// Derive the granular close state from a CloseReason. `tp1_hit`
+    /// upgrades the otherwise-losing outcomes: a post-TP1 stop is a
+    /// scratch, not a loss; a post-TP1 target is partial-win.
+    pub fn from_close_reason_with_tp1(reason: CloseReason, tp1_hit: bool) -> Self {
+        match (reason, tp1_hit) {
+            (CloseReason::TargetHit, true) => SetupState::ClosedPartialWin,
+            (CloseReason::TargetHit, false) => SetupState::ClosedWin,
+            (CloseReason::Scratch, _) => SetupState::ClosedScratch,
+            (CloseReason::StopHit, true) => SetupState::ClosedScratch,
+            (CloseReason::StopHit, false) => SetupState::ClosedLoss,
+            (CloseReason::ReverseSignal, true) => SetupState::ClosedPartialWin,
+            (CloseReason::ReverseSignal, false) => SetupState::ClosedLoss,
+            // Faz C — early warning: post-TP1 her zaman scratch (kar realize
+            // edildi + erken çıkış); pre-TP1 loss olarak loglanır.
+            (CloseReason::EarlyWarning, true) => SetupState::ClosedScratch,
+            (CloseReason::EarlyWarning, false) => SetupState::ClosedLoss,
+            // Faz D — time stop: harekete ulaşmadan vakit doldu.
+            (CloseReason::TimeStop, true) => SetupState::ClosedScratch,
+            (CloseReason::TimeStop, false) => SetupState::ClosedLoss,
+            // Faz E — formasyon seviyesinde kesin geçersizlik. TP1 alındıysa
+            // bile realize edilen kar <-> geçersizlik mesafesine göre net
+            // negatif olabilir; muhafazakar tarafta ClosedLoss olarak loglanır
+            // (TP1 sonrası BE koruması çoğu durumda zaten daha önce tetiklenir,
+            // bu dal esasen gap / boşluk senaryoları içindir).
+            (CloseReason::HardInvalidation, _) => SetupState::ClosedLoss,
+            (CloseReason::Manual, _) => SetupState::ClosedManual,
         }
+    }
+
+    /// Back-compat shim — equivalent to `from_close_reason_with_tp1(reason, false)`.
+    pub fn from_close_reason(reason: CloseReason) -> Self {
+        Self::from_close_reason_with_tp1(reason, false)
     }
 }
 
@@ -234,6 +277,23 @@ pub enum CloseReason {
     StopHit,
     ReverseSignal,
     Manual,
+    /// Faz A — TP1 sonrası BE stop'u tetiklendi. Realize edilmiş TP1
+    /// karı sayesinde toplam sonuç ≥ 0 (kasa nötr veya hafif pozitif).
+    Scratch,
+    /// Faz C — Early Warning Quorum exit (≥ exit_quorum sinyali).
+    /// Yapı tam bozulmadan erken çıkış; TP1 alındıysa Scratch davranışı
+    /// `from_close_reason_with_tp1` üzerinden uygulanır.
+    EarlyWarning,
+    /// Faz D — Time Stop. Setup, `max_bars_pre_tp1` (veya TP1 sonrası
+    /// `max_bars_post_tp1`) boyunca hedeflenen harekete ulaşmadı → vakit
+    /// dolumu ile kapatılır. TP1 alındıysa Scratch, alınmadıysa Loss.
+    TimeStop,
+    /// Faz E — Hard Invalidation. Fiyat, detection'ın ürettiği pattern
+    /// geçersizlik noktasını (entry_sl / D-point) aştı. Koruma ratchet'i
+    /// BE'ye çekilmiş olsa bile, formasyonun yapısal şartı bozulduğu için
+    /// ayrı bir `invalidated` sebebiyle kapatılır ve formation bir daha
+    /// aynı pivotlardan setup üretemez.
+    HardInvalidation,
 }
 
 impl CloseReason {
@@ -250,6 +310,10 @@ impl CloseReason {
             CloseReason::StopHit => "sl_hit",
             CloseReason::ReverseSignal => "invalidated",
             CloseReason::Manual => "cancelled",
+            CloseReason::Scratch => "scratch",
+            CloseReason::EarlyWarning => "early_warning",
+            CloseReason::TimeStop => "time_stop",
+            CloseReason::HardInvalidation => "hard_invalidation",
         }
     }
 }

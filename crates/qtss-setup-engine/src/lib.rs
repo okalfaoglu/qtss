@@ -33,6 +33,7 @@
 pub mod allocator;
 pub mod classifier;
 pub mod confluence_gate;
+pub mod early_warning;
 pub mod guard;
 pub mod reverse;
 pub mod sharing;
@@ -46,6 +47,10 @@ pub use confluence_gate::{
     should_open as confluence_gate_should_open,
     should_open_with_reading as confluence_gate_should_open_with_reading, GateApproval, GateConfig,
     GateContext, GateDecision, GateRejection, VetoKind, VetoRule,
+};
+pub use early_warning::{
+    evaluate_warnings, WarningAction, WarningConfig, WarningContext, WarningSignal,
+    WarningVerdict,
 };
 pub use guard::{PositionGuard, PositionGuardConfig, StructuralTarget};
 pub use reverse::should_reverse_close;

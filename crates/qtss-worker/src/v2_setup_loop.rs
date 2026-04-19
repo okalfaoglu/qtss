@@ -27,8 +27,8 @@ use qtss_setup_engine::{
 use qtss_storage::v2_confluence::fetch_latest_v2_confluence;
 use qtss_storage::{
     insert_v2_setup, insert_v2_setup_event, insert_v2_setup_rejection, list_enabled_engine_symbols,
-    list_groups_for_symbol, list_open_v2_setups, list_recent_bars, resolve_system_f64,
-    resolve_system_u64, resolve_worker_enabled_flag, update_v2_setup_state,
+    list_groups_for_symbol, list_open_v2_setups, list_recent_bars, mark_v2_setup_tp1_hit,
+    resolve_system_f64, resolve_system_u64, resolve_worker_enabled_flag, update_v2_setup_state,
     DetectionOutcomeRepository, DetectionRow, EngineSymbolRow, V2DetectionRepository,
     V2SetupEventInsert, V2SetupInsert, V2SetupRejectionInsert, V2SetupRow,
 };
@@ -53,6 +53,50 @@ struct LoopConfig {
     tp_override_guven_threshold: f64,
     tp_override_max_extension_r: f64,
     gate: GateLimits,
+    /// Faz B — post-TP1 structural trailing (pivot-based koruma ratchet).
+    trailing: TrailingConfig,
+    /// Faz C — early warning quorum.
+    warning: WarningLoopConfig,
+    /// Faz D — time stop (vakit dolunca kapat).
+    time_stop: TimeStopConfig,
+    /// Faz E — hard invalidation (D-point / entry_sl breach, formation death).
+    hard_invalidation_enabled: bool,
+}
+
+/// Faz D — Time Stop knobs. Setup, kendi interval'ı cinsinden
+/// `max_bars_pre_tp1` süresini aşarsa kapatılır; TP1 alındıysa ek
+/// `max_bars_post_tp1` bar verilir (0 → post-TP1 zaman baskısı yok).
+#[derive(Debug, Clone, Copy)]
+struct TimeStopConfig {
+    enabled: bool,
+    max_bars_pre_tp1: u64,
+    max_bars_post_tp1: u64,
+}
+
+/// Faz C — wrapper around the pure `WarningConfig` plus the loop-level
+/// enable flag. The inner `WarningConfig` is passed directly to
+/// `evaluate_warnings`; `enabled=false` short-circuits the whole layer.
+#[derive(Debug, Clone, Copy)]
+struct WarningLoopConfig {
+    enabled: bool,
+    inner: qtss_setup_engine::WarningConfig,
+}
+
+/// Faz B — structural trailing knobs.
+///
+/// The trailing stop only activates *after* TP1 (`tp1_hit == true`).
+/// BE ratchet from Faz A is the floor; this layer only tightens
+/// further by following confirmed pivot lows (long) / highs (short).
+#[derive(Debug, Clone, Copy)]
+struct TrailingConfig {
+    enabled: bool,
+    /// Bars-before the pivot must dominate to be confirmed.
+    pivot_left: usize,
+    /// Bars-after the pivot must dominate to be confirmed. `>0`
+    /// enforces "no anticipation" — latest bars are ineligible.
+    pivot_right: usize,
+    /// Buffer distance below/above the pivot, in ATR multiples.
+    buffer_atr_mult: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -206,6 +250,99 @@ async fn load_config(pool: &PgPool) -> LoopConfig {
 
     let gate = load_gate_limits(pool).await;
 
+    // Faz B — structural trailing (post-TP1 pivot-based ratchet).
+    let trailing = TrailingConfig {
+        enabled: resolve_system_u64(
+            pool,
+            "setup_engine",
+            "position_guard.trailing.enabled",
+            "",
+            1,
+            0,
+            1,
+        )
+        .await
+            == 1,
+        pivot_left: resolve_system_u64(
+            pool,
+            "setup_engine",
+            "position_guard.trailing.pivot_left",
+            "",
+            3,
+            1,
+            50,
+        )
+        .await as usize,
+        pivot_right: resolve_system_u64(
+            pool,
+            "setup_engine",
+            "position_guard.trailing.pivot_right",
+            "",
+            2,
+            1,
+            50,
+        )
+        .await as usize,
+        buffer_atr_mult: resolve_system_f64(
+            pool,
+            "setup_engine",
+            "position_guard.trailing.buffer_atr_mult",
+            "",
+            0.25,
+        )
+        .await,
+    };
+
+    let warning = load_warning_config(pool).await;
+
+    // Faz D — Time Stop
+    let time_stop = TimeStopConfig {
+        enabled: resolve_system_u64(
+            pool,
+            "setup_engine",
+            "position_guard.time_stop.enabled",
+            "",
+            1,
+            0,
+            1,
+        )
+        .await
+            == 1,
+        max_bars_pre_tp1: resolve_system_u64(
+            pool,
+            "setup_engine",
+            "position_guard.time_stop.max_bars_pre_tp1",
+            "",
+            24,
+            0,
+            100_000,
+        )
+        .await,
+        max_bars_post_tp1: resolve_system_u64(
+            pool,
+            "setup_engine",
+            "position_guard.time_stop.max_bars_post_tp1",
+            "",
+            48,
+            0,
+            100_000,
+        )
+        .await,
+    };
+
+    // Faz E — Hard Invalidation
+    let hard_invalidation_enabled = resolve_system_u64(
+        pool,
+        "setup_engine",
+        "position_guard.hard_invalidation.enabled",
+        "",
+        1,
+        0,
+        1,
+    )
+    .await
+        == 1;
+
     LoopConfig {
         enabled,
         tick_interval_s,
@@ -217,6 +354,72 @@ async fn load_config(pool: &PgPool) -> LoopConfig {
         tp_override_guven_threshold,
         tp_override_max_extension_r,
         gate,
+        trailing,
+        warning,
+        time_stop,
+        hard_invalidation_enabled,
+    }
+}
+
+async fn load_warning_config(pool: &PgPool) -> WarningLoopConfig {
+    let m = "setup_engine";
+    let s = "position_guard";
+    async fn bflag(pool: &PgPool, key: &str) -> bool {
+        resolve_system_u64(pool, "setup_engine", key, "", 1, 0, 1).await == 1
+    }
+    async fn uflag(pool: &PgPool, key: &str, def: u64, max: u64) -> usize {
+        resolve_system_u64(pool, "setup_engine", key, "", def, 0, max).await as usize
+    }
+    async fn ffloat(pool: &PgPool, key: &str, def: f64) -> f64 {
+        resolve_system_f64(pool, "setup_engine", key, "", def).await
+    }
+    let enabled = bflag(pool, "position_guard.warning.enabled").await;
+    let warn_quorum = uflag(pool, "position_guard.warning.warn_quorum", 2, 5).await;
+    let exit_quorum = uflag(pool, "position_guard.warning.exit_quorum", 3, 5).await;
+    let divergence_enabled = bflag(pool, "position_guard.warning.divergence.enabled").await;
+    let divergence_lookback_bars =
+        uflag(pool, "position_guard.warning.divergence.lookback_bars", 50, 1000).await;
+    let divergence_pivot_left =
+        uflag(pool, "position_guard.warning.divergence.pivot_left", 2, 50).await;
+    let divergence_pivot_right =
+        uflag(pool, "position_guard.warning.divergence.pivot_right", 2, 50).await;
+    let volume_enabled = bflag(pool, "position_guard.warning.volume.enabled").await;
+    let volume_spike_mult =
+        ffloat(pool, "position_guard.warning.volume.spike_mult", 1.8).await;
+    let volume_lookback_bars =
+        uflag(pool, "position_guard.warning.volume.lookback_bars", 10, 500).await;
+    let volume_recent_bars =
+        uflag(pool, "position_guard.warning.volume.recent_bars", 3, 50).await;
+    let micro_enabled = bflag(pool, "position_guard.warning.micro.enabled").await;
+    let micro_pivot_left =
+        uflag(pool, "position_guard.warning.micro.pivot_left", 2, 50).await;
+    let micro_pivot_right =
+        uflag(pool, "position_guard.warning.micro.pivot_right", 2, 50).await;
+    let candle_enabled = bflag(pool, "position_guard.warning.candle.enabled").await;
+    let regime_enabled = bflag(pool, "position_guard.warning.regime.enabled").await;
+    let regime_guven_threshold =
+        ffloat(pool, "position_guard.warning.regime.guven_threshold", 0.5).await;
+    let _ = (m, s); // strings used in trait? silence unused warning
+    WarningLoopConfig {
+        enabled,
+        inner: qtss_setup_engine::WarningConfig {
+            warn_quorum,
+            exit_quorum,
+            divergence_enabled,
+            divergence_lookback_bars,
+            divergence_pivot_left,
+            divergence_pivot_right,
+            volume_enabled,
+            volume_spike_mult,
+            volume_lookback_bars,
+            volume_recent_bars,
+            micro_enabled,
+            micro_pivot_left,
+            micro_pivot_right,
+            candle_enabled,
+            regime_enabled,
+            regime_guven_threshold,
+        },
     }
 }
 
@@ -456,6 +659,16 @@ async fn process_symbol(
         .iter()
         .map(|b| b.low.to_f64().unwrap_or(0.0))
         .collect();
+    // Faz C — additional series for the early-warning layer.
+    let opens: Vec<f64> = chronological
+        .iter()
+        .map(|b| b.open.to_f64().unwrap_or(0.0))
+        .collect();
+    let volumes: Vec<f64> = chronological
+        .iter()
+        .map(|b| b.volume.to_f64().unwrap_or(0.0))
+        .collect();
+    let macd_hist = qtss_indicators::macd(&closes, 12, 26, 9).histogram;
 
     let current_price = *closes.last().ok_or("empty closes")?;
     let ema50_series = ema(&closes, 50);
@@ -466,8 +679,25 @@ async fn process_symbol(
     let atr_val = last_finite(&atr_series);
 
     // 2. Update any existing open setup for this (venue, exchange, symbol, timeframe, profile).
+    // Faz B — pass highs/lows/atr so the structural trailing layer can
+    // find pivots. Safe defaults when ATR not yet available (NaN from
+    // insufficient bars) → trailing is skipped, BE ratchet still holds.
+    let atr_for_trail = atr_val.unwrap_or(f64::NAN);
     update_open_setups(
-        pool, cfg, venue, profile, sym, current_price, ctx,
+        pool,
+        cfg,
+        venue,
+        profile,
+        sym,
+        current_price,
+        &opens,
+        &highs,
+        &lows,
+        &closes,
+        &volumes,
+        &macd_hist,
+        atr_for_trail,
+        ctx,
     )
     .await?;
 
@@ -507,6 +737,13 @@ async fn update_open_setups(
     profile: Profile,
     sym: &EngineSymbolRow,
     current_price: f64,
+    opens: &[f64],
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    volumes: &[f64],
+    macd_hist: &[f64],
+    atr: f64,
     ctx: &mut AllocatorContext,
 ) -> Result<(), BoxErr> {
     // Re-query open setups from DB for this narrow key; cheaper and
@@ -544,20 +781,73 @@ async fn update_open_setups(
             target_ref2: None,
             direction: dir,
             structural: false,
+            tp1_hit: row.tp1_hit,
         };
 
         // --- close checks (ordered; first hit wins) ---
-        if let Some((reason, exit_price)) =
-            evaluate_close(pool, cfg, profile, &guard, current_price, sym).await?
-        {
-            close_setup(pool, &row, reason, exit_price, ctx).await?;
-            continue;
+        match evaluate_close(pool, cfg, profile, &guard, current_price, sym).await? {
+            CloseDecision::Full { reason, exit_price } => {
+                close_setup(pool, &row, reason, exit_price, ctx).await?;
+                continue;
+            }
+            CloseDecision::Tp1Partial { price: tp1_price } => {
+                // BE ratchet + partial-exit metadata, setup stays open.
+                let changed = guard.on_tp1();
+                if changed {
+                    let affected = mark_v2_setup_tp1_hit(
+                        pool,
+                        row.id,
+                        tp1_price as f32,
+                        guard.koruma as f32,
+                    )
+                    .await?;
+                    if affected > 0 {
+                        let fraction =
+                            resolve_system_f64(pool, "setup_engine",
+                                "position_guard.tp1_partial.fraction", "", 0.5).await;
+                        insert_v2_setup_event(
+                            pool,
+                            &V2SetupEventInsert {
+                                setup_id: row.id,
+                                event_type: "tp1_partial".to_string(),
+                                payload: json!({
+                                    "tp1_price": tp1_price,
+                                    "koruma": guard.koruma,
+                                    "active_sl": guard.active_sl(),
+                                    "partial_fraction": fraction,
+                                    "price": current_price,
+                                    "unrealized_r": guard.unrealized_r(current_price),
+                                    "note": "Faz A: partial exit + BE ratchet",
+                                }),
+                            },
+                        )
+                        .await?;
+                    }
+                }
+                // Fall through to ratchet — if price kept going, we
+                // still want the monotonic ratchet to tighten beyond BE.
+            }
+            CloseDecision::None => {}
         }
 
-        // --- ratchet ---
-        let changed = guard.try_ratchet(current_price);
+        // --- R-based ratchet (Faz 8 monotonic) ---
+        let r_changed = guard.try_ratchet(current_price);
         let _ = pcfg; // reserved for future interval gating
-        if changed {
+
+        // --- Faz B: structural trailing (post-TP1 only) ---
+        let mut trail_changed = false;
+        if cfg.trailing.enabled && guard.tp1_hit && atr.is_finite() && atr > 0.0 {
+            trail_changed = guard.try_structural_trail(
+                highs,
+                lows,
+                atr,
+                cfg.trailing.pivot_left,
+                cfg.trailing.pivot_right,
+                cfg.trailing.buffer_atr_mult,
+            );
+        }
+
+        if r_changed || trail_changed {
             update_v2_setup_state(
                 pool,
                 row.id,
@@ -567,23 +857,179 @@ async fn update_open_setups(
                 None,
             )
             .await?;
+            let source = if trail_changed && r_changed {
+                "ratchet+trail"
+            } else if trail_changed {
+                "structural_trail"
+            } else {
+                "ratchet"
+            };
             insert_v2_setup_event(
                 pool,
                 &V2SetupEventInsert {
                     setup_id: row.id,
                     event_type: "updated".to_string(),
                     payload: json!({
+                        "source": source,
                         "koruma": guard.koruma,
                         "active_sl": guard.active_sl(),
                         "unrealized_r": guard.unrealized_r(current_price),
                         "price": current_price,
+                        "tp1_hit": guard.tp1_hit,
                     }),
                 },
             )
             .await?;
         }
+
+        // --- Faz C: Early Warning Quorum ---
+        if cfg.warning.enabled {
+            let (regime_direction, regime_guven) = match fetch_latest_v2_confluence(
+                pool, &sym.exchange, &sym.symbol, &sym.interval,
+            )
+            .await?
+            {
+                Some(c) => (direction_from_str(&c.direction), c.guven as f64),
+                None => (Direction::Neutral, 0.0),
+            };
+            let wctx = qtss_setup_engine::WarningContext {
+                direction: guard.direction,
+                opens,
+                highs,
+                lows,
+                closes,
+                volumes,
+                momentum: macd_hist,
+                regime_direction,
+                regime_guven,
+            };
+            let verdict =
+                qtss_setup_engine::evaluate_warnings(&wctx, &cfg.warning.inner);
+            if !verdict.triggered.is_empty() {
+                let signals: Vec<&'static str> =
+                    verdict.triggered.iter().map(|s| s.as_str()).collect();
+                match verdict.action {
+                    qtss_setup_engine::WarningAction::Exit => {
+                        insert_v2_setup_event(
+                            pool,
+                            &V2SetupEventInsert {
+                                setup_id: row.id,
+                                event_type: "warning_exit".to_string(),
+                                payload: json!({
+                                    "signals": signals,
+                                    "count": verdict.triggered.len(),
+                                    "exit_quorum": cfg.warning.inner.exit_quorum,
+                                    "tp1_hit": guard.tp1_hit,
+                                    "price": current_price,
+                                }),
+                            },
+                        )
+                        .await?;
+                        close_setup(
+                            pool,
+                            &row,
+                            CloseReason::EarlyWarning,
+                            current_price,
+                            ctx,
+                        )
+                        .await?;
+                        continue;
+                    }
+                    qtss_setup_engine::WarningAction::Warn => {
+                        insert_v2_setup_event(
+                            pool,
+                            &V2SetupEventInsert {
+                                setup_id: row.id,
+                                event_type: "warning".to_string(),
+                                payload: json!({
+                                    "signals": signals,
+                                    "count": verdict.triggered.len(),
+                                    "warn_quorum": cfg.warning.inner.warn_quorum,
+                                    "tp1_hit": guard.tp1_hit,
+                                    "price": current_price,
+                                }),
+                            },
+                        )
+                        .await?;
+                    }
+                    qtss_setup_engine::WarningAction::None => {}
+                }
+            }
+        }
+
+        // --- Faz D: Time Stop ---
+        // Setup kendi interval'ı cinsinden max_bars_pre_tp1 / max_bars_post_tp1
+        // süresini aşmışsa kapatılır. TP1 alındıysa Scratch, alınmadıysa Loss
+        // olarak `from_close_reason_with_tp1` üzerinden maplenir.
+        if cfg.time_stop.enabled {
+            if let Some(bar_secs) = interval_to_seconds(&sym.interval) {
+                let elapsed_secs = chrono::Utc::now()
+                    .signed_duration_since(row.created_at)
+                    .num_seconds()
+                    .max(0) as u64;
+                let bars_elapsed = elapsed_secs / bar_secs.max(1);
+                let limit = if guard.tp1_hit {
+                    let pre = cfg.time_stop.max_bars_pre_tp1;
+                    let post = cfg.time_stop.max_bars_post_tp1;
+                    if post == 0 { 0 } else { pre.saturating_add(post) }
+                } else {
+                    cfg.time_stop.max_bars_pre_tp1
+                };
+                if limit > 0 && bars_elapsed >= limit {
+                    insert_v2_setup_event(
+                        pool,
+                        &V2SetupEventInsert {
+                            setup_id: row.id,
+                            event_type: "time_stop".to_string(),
+                            payload: json!({
+                                "bars_elapsed": bars_elapsed,
+                                "limit_bars": limit,
+                                "tp1_hit": guard.tp1_hit,
+                                "price": current_price,
+                            }),
+                        },
+                    )
+                    .await?;
+                    close_setup(pool, &row, CloseReason::TimeStop, current_price, ctx).await?;
+                    continue;
+                }
+            }
+        }
     }
     Ok(())
+}
+
+/// Interval string ("1m", "5m", "15m", "1h", "4h", "1d", "1w") → seconds.
+/// Returns `None` if unparseable so the caller (Faz D) no-ops silently
+/// instead of misdating setups on exotic timeframes.
+fn interval_to_seconds(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (num_part, unit_part) = s.split_at(s.len() - 1);
+    let n: u64 = num_part.parse().ok()?;
+    let unit_secs: u64 = match unit_part {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3_600,
+        "d" => 86_400,
+        "w" => 604_800,
+        _ => return None,
+    };
+    Some(n * unit_secs)
+}
+
+/// Faz A — per-tick decision for an open setup.
+enum CloseDecision {
+    /// Nothing to do; let the ratchet run.
+    None,
+    /// `target_ref` değdi ve TP1 henüz alınmamış → partial exit + BE
+    /// ratchet. Setup kapatılmaz, yalnızca `tp1_hit` işaretlenir ve
+    /// koruma entry'e çekilir.
+    Tp1Partial { price: f64 },
+    /// Setup kapatılmalı (SL, TP2/target_ref, reverse, scratch).
+    Full { reason: CloseReason, exit_price: f64 },
 }
 
 async fn evaluate_close(
@@ -593,7 +1039,7 @@ async fn evaluate_close(
     guard: &PositionGuard,
     price: f64,
     sym: &EngineSymbolRow,
-) -> Result<Option<(CloseReason, f64)>, BoxErr> {
+) -> Result<CloseDecision, BoxErr> {
     let active_sl = guard.active_sl();
     // Stop-hit (long: price<=sl; short: price>=sl).
     let stop_hit = match guard.direction {
@@ -601,9 +1047,34 @@ async fn evaluate_close(
         Direction::Short => price >= active_sl,
         Direction::Neutral => false,
     };
-    if stop_hit {
-        return Ok(Some((CloseReason::StopHit, active_sl)));
+    // Faz E — Hard Invalidation. Fiyat, pattern'in D-point'ini (entry_sl)
+    // aştıysa, koruma BE'de olsa bile formasyon yapısal olarak ölmüştür.
+    // Bu dal çoğunlukla TP1 sonrası gap / flash-crash senaryolarında
+    // tetiklenir (normalde koruma entry_sl'den önce vurulur). Pre-TP1 ise
+    // stop_hit ile aynı fiyat seviyesi ama ayrı `hard_invalidation` slug'ı
+    // ile yazılır → downstream "aynı pivotlardan tekrar setup üretme" denir.
+    let breaches_entry_sl = match guard.direction {
+        Direction::Long => price <= guard.entry_sl,
+        Direction::Short => price >= guard.entry_sl,
+        Direction::Neutral => false,
+    };
+    if cfg.hard_invalidation_enabled && breaches_entry_sl && guard.tp1_hit {
+        return Ok(CloseDecision::Full {
+            reason: CloseReason::HardInvalidation,
+            exit_price: price,
+        });
     }
+    if stop_hit {
+        // Faz A — TP1 alındıysa SL değimi "scratch" olarak kapanır
+        // (realize edilmiş yarı kar + 0R kalan yarı = net ≥ 0).
+        let reason = if guard.tp1_hit {
+            CloseReason::Scratch
+        } else {
+            CloseReason::StopHit
+        };
+        return Ok(CloseDecision::Full { reason, exit_price: active_sl });
+    }
+
     // Target-hit — with TP override: if structure still strong, extend.
     let target_hit = match guard.direction {
         Direction::Long => price >= guard.target_ref,
@@ -611,7 +1082,26 @@ async fn evaluate_close(
         Direction::Neutral => false,
     };
     if target_hit {
-        // Check TP override: keep position open if guven is strong enough.
+        // Faz A — TP1 ilk defa tetikleniyorsa tam kapanış YOK;
+        // yalnızca partial-exit + BE ratchet. `position_guard.tp1_partial.enabled`
+        // false ise eski davranışa döner (direkt full close).
+        let tp1_enabled = resolve_system_u64(
+            pool,
+            "setup_engine",
+            "position_guard.tp1_partial.enabled",
+            "",
+            1,
+            0,
+            1,
+        )
+        .await
+            == 1;
+        if tp1_enabled && !guard.tp1_hit {
+            return Ok(CloseDecision::Tp1Partial { price: guard.target_ref });
+        }
+
+        // tp1_hit zaten true veya özellik kapalı → TP override dahil
+        // klasik full-close mantığı.
         if cfg.tp_override_enabled {
             let latest_conf =
                 fetch_latest_v2_confluence(pool, &sym.exchange, &sym.symbol, &sym.interval).await?;
@@ -620,25 +1110,31 @@ async fn evaluate_close(
             if guven >= cfg.tp_override_guven_threshold
                 && extension_r < cfg.tp_override_max_extension_r
             {
-                // Structure strong + within max extension → skip target close, let ratchet manage.
                 debug!(
                     symbol = %sym.symbol,
                     guven = guven,
                     extension_r = extension_r,
+                    tp1_hit = guard.tp1_hit,
                     "TP override: yapı güçlü, target aşılıyor"
                 );
             } else {
-                return Ok(Some((CloseReason::TargetHit, guard.target_ref)));
+                return Ok(CloseDecision::Full {
+                    reason: CloseReason::TargetHit,
+                    exit_price: guard.target_ref,
+                });
             }
         } else {
-            return Ok(Some((CloseReason::TargetHit, guard.target_ref)));
+            return Ok(CloseDecision::Full {
+                reason: CloseReason::TargetHit,
+                exit_price: guard.target_ref,
+            });
         }
     }
     // Reverse-signal — needs latest confluence.
     let latest =
         fetch_latest_v2_confluence(pool, &sym.exchange, &sym.symbol, &sym.interval).await?;
     let Some(row) = latest else {
-        return Ok(None);
+        return Ok(CloseDecision::None);
     };
     let reading = ConfluenceReading {
         erken_uyari: row.erken_uyari as f64,
@@ -654,9 +1150,12 @@ async fn evaluate_close(
             Direction::Short => active_sl.min(price),
             Direction::Neutral => price,
         };
-        return Ok(Some((CloseReason::ReverseSignal, exit)));
+        return Ok(CloseDecision::Full {
+            reason: CloseReason::ReverseSignal,
+            exit_price: exit,
+        });
     }
-    Ok(None)
+    Ok(CloseDecision::None)
 }
 
 /// Round-trip (entry + exit) taker commission expressed as a % of entry.
@@ -683,8 +1182,10 @@ async fn close_setup(
     exit_price: f64,
     ctx: &mut AllocatorContext,
 ) -> Result<(), BoxErr> {
-    // Granular close state + P&L computation.
-    let close_state = SetupState::from_close_reason(reason);
+    // Granular close state + P&L computation. Faz A — post-TP1
+    // outcomes use `from_close_reason_with_tp1` so SL → scratch and
+    // TP/reverse → partial_win instead of loss.
+    let close_state = SetupState::from_close_reason_with_tp1(reason, row.tp1_hit);
     // Net-of-commission pnl_pct — we subtract the round-trip taker fee so the
     // outcome labeler + Faz 9.3 trainer see the realized P&L the account
     // actually booked. Gross pnl at this point silently biased the win label
@@ -771,6 +1272,21 @@ async fn record_detection_outcome(
     let outcome = match reason {
         CloseReason::TargetHit => "win",
         CloseReason::StopHit => "loss",
+        // Faz A — explicit Scratch (BE stop after TP1). Net ≥ 0 because
+        // TP1 half was realised, so trainer labels it as scratch.
+        CloseReason::Scratch => "scratch",
+        // Faz C — early warning quorum exit. If TP1 was already booked the
+        // realised leg guarantees net ≥ 0 → scratch; pre-TP1 it's a loss.
+        CloseReason::EarlyWarning => {
+            if row.tp1_hit { "scratch" } else { "loss" }
+        }
+        // Faz D — vakit dolumu: TP1 yoksa loss, varsa scratch.
+        CloseReason::TimeStop => {
+            if row.tp1_hit { "scratch" } else { "loss" }
+        }
+        // Faz E — formasyon seviyesinde ölüm: her zaman loss olarak
+        // sayılır (detector self-learning tarafı için negatif sinyal).
+        CloseReason::HardInvalidation => "loss",
         CloseReason::ReverseSignal | CloseReason::Manual => "scratch",
     };
 

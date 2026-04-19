@@ -145,8 +145,8 @@ pub use v2_setup_rejections::{
 };
 pub use v2_setups::{
     fetch_v2_setup, insert_v2_setup, list_open_v2_setups, list_recent_v2_setups,
-    list_v2_setups_filtered, update_v2_setup_state, SetupFilter, V2SetupInsert,
-    V2SetupRow,
+    list_v2_setups_filtered, mark_v2_setup_tp1_hit, update_v2_setup_state, SetupFilter,
+    V2SetupInsert, V2SetupRow,
 };
 
 pub use wyckoff_signals::{
