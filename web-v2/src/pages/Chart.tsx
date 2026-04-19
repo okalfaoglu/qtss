@@ -2238,13 +2238,19 @@ export function Chart() {
             const isAcc = wo.schematic === "accumulation" || wo.schematic === "reaccumulation";
             // P-chart-fix — Phase A/B schematic is provisional (mirrors
             // Wyckoff.tsx logic). Only Phase C+ commits the family call.
-            const phaseLocked = ["C", "D", "E"].includes((wo.phase ?? "").toUpperCase());
+            // Pre-C we intentionally omit the schematic direction from
+            // the headline so the card doesn't contradict the "Phase A"
+            // detail row below (bug: previously showed "RANGE ·
+            // redistribution?" alongside "Phase A", implying a direction
+            // the tracker had not yet committed to).
+            const phaseUpper = (wo.phase ?? "").toUpperCase();
+            const phaseLocked = ["C", "D", "E"].includes(phaseUpper);
             const phaseColor = phaseLocked
               ? (isAcc ? "#22c55e" : "#ef4444")
               : "#9ca3af";
             const phaseText = phaseLocked
               ? (isAcc ? "ACCUMULATION" : "DISTRIBUTION")
-              : `RANGE · ${wo.schematic}?`;
+              : `RANGE · PHASE ${phaseUpper || "?"}`;
             const conf = wo.confidence ? (wo.confidence * 100).toFixed(0) : "?";
             const strength = Number(conf) > 70 ? "STRONG" : Number(conf) > 40 ? "MODERATE" : "WEAK";
             const rangeP = wo.range.top && wo.range.bottom

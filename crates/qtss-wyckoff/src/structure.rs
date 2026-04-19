@@ -348,6 +348,22 @@ impl WyckoffStructureTracker {
             }
             return;
         }
+        // Directional coherence gate (bug fix: "Düşüş yapısının içinde
+        // Spring işaretlenmiş"). An event whose direction contradicts the
+        // committed schematic would normally trigger `auto_reclassify`
+        // below, but the hysteresis guards (`max_flips`, `min_gap_bars`)
+        // can block that flip — leaving us with e.g. a Spring stored
+        // under `Distribution`, which the overlay then paints as a green
+        // Spring label on top of a bearish structure. If the reclassify
+        // path would be blocked, refuse the event entirely rather than
+        // commit an inconsistent row. Phase A is exempt because the
+        // schematic there is itself provisional.
+        if self.current_phase != WyckoffPhase::A
+            && self.would_contradict_schematic(event)
+            && self.reclassify_blocked(bar_index)
+        {
+            return;
+        }
         self.events.push(RecordedEvent {
             event,
             bar_index,
@@ -600,6 +616,40 @@ impl WyckoffStructureTracker {
             self.reclassify_count += 1;
             self.last_reclassify_bar = Some(bar_index);
         }
+    }
+
+    /// Whether `event`'s implicit direction contradicts the committed
+    /// schematic (e.g. Spring under Distribution). Returns `false` for
+    /// directionally neutral events (SC, AR, ST, …).
+    fn would_contradict_schematic(&self, event: WyckoffEvent) -> bool {
+        use WyckoffEvent::*;
+        use WyckoffSchematic::*;
+        let bullish = match event {
+            Spring | SpringTest | SOS | LPS | JAC => Some(true),
+            UTAD | UTADTest | SOW | LPSY | BreakOfIce => Some(false),
+            _ => None,
+        };
+        let Some(bull) = bullish else { return false };
+        match (self.schematic, bull) {
+            (Accumulation, false) | (ReAccumulation, false) => true,
+            (Distribution, true) | (ReDistribution, true) => true,
+            _ => false,
+        }
+    }
+
+    /// Mirrors the hysteresis guards in `auto_reclassify` — returns
+    /// `true` when a flip would be blocked right now, so the caller can
+    /// refuse the event instead of storing a direction-incoherent row.
+    fn reclassify_blocked(&self, bar_index: u64) -> bool {
+        if self.reclassify_count >= self.policy.max_flips {
+            return true;
+        }
+        if let Some(last) = self.last_reclassify_bar {
+            if bar_index.saturating_sub(last) < self.policy.min_gap_bars {
+                return true;
+            }
+        }
+        false
     }
 
     /// Try to advance phase based on accumulated events.

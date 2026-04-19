@@ -24,6 +24,10 @@ Kullanıcı raporu: BTCUSDT 5m, Wyckoff overlay + setup overlay birlikte.
 - **Setups overlay on Chart**: armed/live setup'ları Chart'a çizme işi ayrı başlık.
 - **Açık pozisyonlar GUI**: broker'da açık olan işlemleri Chart'a/Setups'a render etme ayrı başlık.
 
+## 2026-04-19 ilerleme — Wyckoff faz/event tutarsızlığı
+- **Market Phase kartı**: Chart.tsx'te "RANGE · redistribution?" yerine artık Phase A/B'de `RANGE · PHASE A` (direction commit edilmemiş) yazıyor. Phase C+ lock olduğunda ACCUMULATION/DISTRIBUTION headline'a çıkıyor. Detail satırındaki "Phase A" ile çelişki kalktı.
+- **Spring/UTAD on ters schematic**: `WyckoffStructureTracker::record_event_with_time` artık Phase ≠ A iken event'in yönü committed schematic'i çelişkiye düşürüyorsa **ve** `auto_reclassify` hysteresis guard'ları flip'i engelliyorsa event'i reddediyor. Yeni helper'lar: `would_contradict_schematic(event)`, `reclassify_blocked(bar_index)`. Böylece `events_json` içinde Distribution fazında Spring (ya da Accumulation fazında UTAD) birikmesi engellendi — overlay artık yön uyumsuz pin çizmeyecek. 31 wyckoff test pass.
+
 ## 2026-04-19 ilerleme
 - Backend artık her setup için `raw_meta.structural_targets = [{price, weight, label}, ...]` ve `raw_meta.structural_subkind` yayıyor (v2_setup_loop.rs). Formation'a özel etiketler ("MM 1.0x", "Pat 1.618x", "ABCD 1.272x") burada.
 - Chart.tsx artık `computeFormationTargets(d)` ile backend `compute_structural_targets_raw` mirror'u kullanıyor. Her classical formation (double_top/bottom, H&S, triple_top/bottom, ABCD, V-spike, wedge/channel/triangle/rectangle/diamond/broadening/cup&handle/rounding/scallop), harmonic XABCD ve Elliott impulse için entry/SL/TP'ler formasyona özel label'larla ("MM 1.0x", "ABCD 1.272x", "Pat 1.618x", "AD 0.618") çiziliyor. TS mirror backend ile manuel senkron tutuluyor; backend unit-tested → truth source.
