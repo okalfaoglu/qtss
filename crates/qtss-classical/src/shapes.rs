@@ -1578,14 +1578,19 @@ fn eval_scallop_side(
     // Invalidation: bull → apex (price breaks below the J-bottom);
     // bear → apex (price breaks above the J-top).
     let invalidation = pivots[1].price;
-    // Score weights (CLAUDE.md #2 keeps these in code only because
-    // confidence-formula tuning hasn't hit config yet — planned in
-    // docs/notes/scallop_detection_quality.md item 3):
-    //   curvature 0.35, rim progression 0.25, breakout 0.25, volume 0.15.
-    let score = 0.35 * s_round
-        + 0.25 * s_progress
-        + 0.25 * confirm.s_breakout
-        + 0.15 * confirm.s_volume;
+    // Faz 10 Aşama 4.3 — score weights read from `ClassicalConfig`
+    // (CLAUDE.md #2). Raw sum is renormalised so operator edits can't
+    // distort the clamp range.
+    let w_sum = (cfg.scallop_score_w_curvature
+        + cfg.scallop_score_w_progress
+        + cfg.scallop_score_w_breakout
+        + cfg.scallop_score_w_volume)
+        .max(1e-9);
+    let score = (cfg.scallop_score_w_curvature * s_round
+        + cfg.scallop_score_w_progress * s_progress
+        + cfg.scallop_score_w_breakout * confirm.s_breakout
+        + cfg.scallop_score_w_volume * confirm.s_volume)
+        / w_sum;
     Some(ShapeMatch {
         score: score.clamp(0.0, 1.0),
         invalidation,

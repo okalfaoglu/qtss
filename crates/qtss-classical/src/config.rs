@@ -162,6 +162,19 @@ pub struct ClassicalConfig {
     pub scallop_vol_avg_window: usize,
     /// ATR periyodu (breakout teyidi için). Default 14.
     pub scallop_atr_period: usize,
+    // ------------------------------------------------------------------
+    // Faz 10 Aşama 4.3 — Scallop confidence score weights (config-driven
+    // per CLAUDE.md #2). Sum should stay ≈ 1.0; `validate()` normalises
+    // if sums drift due to operator edits.
+    // ------------------------------------------------------------------
+    /// Curvature (parabolic R²) ağırlığı. Default 0.35.
+    pub scallop_score_w_curvature: f64,
+    /// Rim progression (asimetri) ağırlığı. Default 0.25.
+    pub scallop_score_w_progress: f64,
+    /// Breakout magnitude (close vs RimR+ATR) ağırlığı. Default 0.25.
+    pub scallop_score_w_breakout: f64,
+    /// Breakout volume ağırlığı. Default 0.15.
+    pub scallop_score_w_volume: f64,
 }
 
 impl ClassicalConfig {
@@ -224,6 +237,10 @@ impl ClassicalConfig {
             scallop_breakout_vol_mult: 1.3,
             scallop_vol_avg_window: 20,
             scallop_atr_period: 14,
+            scallop_score_w_curvature: 0.35,
+            scallop_score_w_progress: 0.25,
+            scallop_score_w_breakout: 0.25,
+            scallop_score_w_volume: 0.15,
         }
     }
 

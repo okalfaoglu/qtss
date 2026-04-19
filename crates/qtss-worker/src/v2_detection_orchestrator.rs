@@ -813,6 +813,23 @@ async fn resolve_classical_config(pool: &PgPool) -> ClassicalConfig {
         pool, "detection", "classical.scallop_atr_period",
         "QTSS_DETECTION_CLASSICAL_SCALLOP_ATR_P", 14, 2, 100,
     ).await as usize;
+    // Faz 10 Aşama 4.3 — scallop confidence score weights (CLAUDE.md #2).
+    let scallop_w_curve = resolve_system_f64(
+        pool, "detection", "classical.scallop_score_w_curvature",
+        "QTSS_DETECTION_CLASSICAL_SCALLOP_W_CURVATURE", 0.35,
+    ).await;
+    let scallop_w_prog = resolve_system_f64(
+        pool, "detection", "classical.scallop_score_w_progress",
+        "QTSS_DETECTION_CLASSICAL_SCALLOP_W_PROGRESS", 0.25,
+    ).await;
+    let scallop_w_break = resolve_system_f64(
+        pool, "detection", "classical.scallop_score_w_breakout",
+        "QTSS_DETECTION_CLASSICAL_SCALLOP_W_BREAKOUT", 0.25,
+    ).await;
+    let scallop_w_vol = resolve_system_f64(
+        pool, "detection", "classical.scallop_score_w_volume",
+        "QTSS_DETECTION_CLASSICAL_SCALLOP_W_VOLUME", 0.15,
+    ).await;
 
     ClassicalConfig {
         pivot_level: parse_pivot_level(&level_str),
@@ -864,6 +881,10 @@ async fn resolve_classical_config(pool: &PgPool) -> ClassicalConfig {
         scallop_breakout_vol_mult: scallop_br_vol.max(1.0),
         scallop_vol_avg_window: scallop_vol_win.max(2),
         scallop_atr_period: scallop_atr_p.max(2),
+        scallop_score_w_curvature: scallop_w_curve.clamp(0.0, 1.0),
+        scallop_score_w_progress: scallop_w_prog.clamp(0.0, 1.0),
+        scallop_score_w_breakout: scallop_w_break.clamp(0.0, 1.0),
+        scallop_score_w_volume: scallop_w_vol.clamp(0.0, 1.0),
     }
 }
 
