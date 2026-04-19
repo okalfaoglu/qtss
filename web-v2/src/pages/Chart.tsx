@@ -31,6 +31,11 @@ import {
 
 import { apiFetch } from "../lib/api";
 import { useChartPalette } from "../lib/use-chart-palette";
+import {
+  useZigzagLevelConfig,
+  type PivotLevel,
+  type ZigzagLineStyle,
+} from "../lib/use-zigzag-level-config";
 import { RectanglePrimitive, type RectangleOptions } from "../lib/rectangle-primitive";
 import {
   dispatchRenderGeometry,
@@ -618,6 +623,69 @@ function computeFormationTargets(d: DetectionOverlay): {
   return empty;
 }
 
+/** Shared entry/TP/SL price-line renderer. Used from both the render-
+ *  geometry dispatch branch (harmonic, double, H&S, …) and the legacy
+ *  anchor-polyline branch so neither path loses the ladder. Kept free
+ *  of React state so it can be called from inside the detection loop
+ *  without closing over stale refs. */
+interface EntryTpSlDeps {
+  chart: IChartApi;
+  candles: { open_time: string }[];
+  isoToUnix: (iso: string) => Time;
+  layers: Set<string>;
+  showDetail: boolean;
+  overlayLines: ISeriesApi<"Line">[];
+}
+
+function drawFormationEntryTpSl(
+  d: DetectionOverlay,
+  deps: EntryTpSlDeps,
+): void {
+  if (!deps.showDetail || !deps.layers.has("entry_tp_sl")) return;
+  if (!d.anchors || d.anchors.length === 0) return;
+  const { entry, sl, targets } = computeFormationTargets(d);
+  const conf = Number(d.confidence) || 0;
+  const confStr = conf > 0 ? ` (${(conf * 100).toFixed(0)}%)` : "";
+  const lastTime = deps.isoToUnix(d.anchors[d.anchors.length - 1].time);
+  const barInterval = deps.candles.length >= 2
+    ? (new Date(deps.candles[deps.candles.length - 1].open_time).getTime() -
+       new Date(deps.candles[deps.candles.length - 2].open_time).getTime()) / 1000
+    : 3600;
+  const futureTime = ((lastTime as number) + barInterval * 20) as Time;
+
+  const drawLevel = (price: number | null, col: string, style: LineStyle, label: string) => {
+    if (!price || !Number.isFinite(price)) return;
+    const lvl = deps.chart.addSeries(LineSeries, {
+      color: col,
+      lineWidth: 1,
+      lineStyle: style,
+      crosshairMarkerVisible: false,
+      lastValueVisible: true,
+      priceLineVisible: false,
+      title: label,
+      autoscaleInfoProvider: () => null,
+    });
+    lvl.setData([
+      { time: lastTime, value: price },
+      { time: futureTime, value: price },
+    ].sort((a, b) => Number(a.time) - Number(b.time)));
+    deps.overlayLines.push(lvl);
+  };
+
+  drawLevel(sl, "#ef4444", LineStyle.Dashed, "SL");
+  drawLevel(entry, "#d4d4d8", LineStyle.Dotted, `Entry${confStr}`);
+  const tpPalette = ["#34d399", "#22c55ecc", "#22c55e80"];
+  const tpStyles = [LineStyle.Dashed, LineStyle.Dotted, LineStyle.Dotted];
+  targets.slice(0, 3).forEach((t, i) => {
+    drawLevel(
+      t.price,
+      tpPalette[i] ?? "#22c55e60",
+      tpStyles[i] ?? LineStyle.Dotted,
+      `TP${i + 1} (${t.label})`,
+    );
+  });
+}
+
 // ═════════════════════════════════════════════════════════════════════
 // MAIN COMPONENT
 // ═════════════════════════════════════════════════════════════════════
@@ -632,6 +700,16 @@ export function Chart() {
   // Keep ref in sync for use inside useEffect without triggering re-render
   hoveredRef.current = hovered;
   const [showZigzag, setShowZigzag] = useState(false);
+  // Per-level ZigZag overlays (L0..L3) fed from pivot_cache — each level
+  // is an independent toggle so the operator can stack or isolate the
+  // cascaded pivot scales.
+  const zigzagCfg = useZigzagLevelConfig();
+  const [levelEnabled, setLevelEnabled] = useState<Record<PivotLevel, boolean>>({
+    L0: zigzagCfg.levels.L0.enabledByDefault,
+    L1: zigzagCfg.levels.L1.enabledByDefault,
+    L2: zigzagCfg.levels.L2.enabledByDefault,
+    L3: zigzagCfg.levels.L3.enabledByDefault,
+  });
   const [showVolume, setShowVolume] = useState(true);
   const [familyModes, setFamilyModes] = useState<Record<string, FamilyMode>>({});
   const [detailLayers, setDetailLayers] = useState<Record<string, Set<string>>>({});
@@ -726,6 +804,38 @@ export function Chart() {
       ),
     refetchInterval: 30_000,
     structuralSharing: true,
+  });
+
+  // Multi-level ZigZag pivots. Only hit the endpoint when at least one
+  // level toggle is on — saves network + parse cost on operators who
+  // keep all four off.
+  const anyLevelOn = levelEnabled.L0 || levelEnabled.L1 || levelEnabled.L2 || levelEnabled.L3;
+  interface PivotPoint {
+    bar_index: number;
+    open_time: string;
+    price: string;
+    kind: string;
+    swing_type?: string | null;
+  }
+  interface PivotLevelSeriesWire { level: PivotLevel; points: PivotPoint[] }
+  interface PivotsResponseWire { levels: PivotLevelSeriesWire[] }
+  const requestedLevelsCsv = (["L0", "L1", "L2", "L3"] as PivotLevel[])
+    .filter((l) => levelEnabled[l])
+    .join(",");
+  const pivotsQuery = useQuery({
+    enabled: anyLevelOn,
+    queryKey: [
+      "v2", "pivots", debounced.venue, debounced.symbol, debounced.timeframe,
+      debounced.segment, requestedLevelsCsv, zigzagCfg.maxPointsPerLevel,
+    ],
+    queryFn: () =>
+      apiFetch<PivotsResponseWire>(
+        `/v2/pivots/${debounced.venue}/${debounced.symbol}/${debounced.timeframe}` +
+          `?segment=${debounced.segment}` +
+          `&levels=${requestedLevelsCsv}` +
+          `&limit=${zigzagCfg.maxPointsPerLevel}`,
+      ),
+    refetchInterval: 60_000,
   });
 
   const wyckoffQuery = useQuery({
@@ -1157,7 +1267,30 @@ export function Chart() {
       // Aşama 5 — opt-in explicit geometry dispatch. When the detector
       // emitted `render_geometry`, route through RENDER_KIND_REGISTRY
       // and skip the legacy anchor path entirely for that detection.
-      if (d.render_geometry && d.render_geometry.kind) {
+      //
+      // Harmonic upgrade: older detections in the DB were emitted with
+      // `kind: "polyline"` before the backend learned to emit
+      // `kind: "harmonic"` with filled triangles. Promote on-the-fly
+      // so the user doesn't have to wait for a worker restart + the
+      // next re-detection tick to see the filled XABCD.
+      let renderGeom = d.render_geometry;
+      if (
+        d.family === "harmonic" &&
+        d.anchors.length >= 5 &&
+        (!renderGeom || renderGeom.kind !== "harmonic")
+      ) {
+        renderGeom = {
+          kind: "harmonic",
+          payload: {
+            xabcd: d.anchors.slice(0, 5).map((a, i) => ({
+              time: a.time,
+              price: a.price,
+              label: ["X", "A", "B", "C", "D"][i],
+            })),
+          },
+        };
+      }
+      if (renderGeom && renderGeom.kind) {
         const regMarkers: SeriesMarker<Time>[] = [];
         const sinks: RenderSinks = {
           rects: rectanglePrimitivesRef.current,
@@ -1175,11 +1308,23 @@ export function Chart() {
           styleKey: d.render_style ?? null,
           faded: isInvalidated,
         };
-        if (dispatchRenderGeometry(d.render_geometry, ctx)) {
+        if (dispatchRenderGeometry(renderGeom, ctx)) {
           // Registry markers fold into the shared candle-series list so
           // the existing cleanup/sort pass further below handles them
           // uniformly with wyckoff/event markers.
           for (const m of regMarkers) allMarkers.push(m);
+          // Entry / TP / SL still need to render — harmonic, double,
+          // head&shoulders etc. all take this branch and the user wants
+          // the ladder visible alongside the filled geometry. Same
+          // semantics as the legacy branch below (see block at L1404+).
+          drawFormationEntryTpSl(d, {
+            chart: chartRef.current!,
+            candles: merged.candles,
+            isoToUnix,
+            layers,
+            showDetail,
+            overlayLines: overlayLinesRef.current,
+          });
           continue;
         }
       }
@@ -1201,23 +1346,29 @@ export function Chart() {
           isTwoTrendlinePattern(d.subkind);
 
         if (useTwoLines) {
-          // Partition anchors into highs / lows based on price relative
-          // to local neighbour. For 4 alternating pivots, the higher of
-          // each adjacent pair belongs to the upper band.
+          // Partition anchors by price rank (top half → upper band,
+          // bottom half → lower band). Earlier neighbour-comparison
+          // logic mis-classified anchors when the detector emitted
+          // non-alternating touches (e.g. R1,R1,S1,S1,S2,S2,R2,R2
+          // for a rectangle) — see build_two_lines() in
+          // v2_render_geometry.rs for the same fix on the backend.
+          const pricesArr = d.anchors.map(a => Number(a.price));
+          const sortedIdx = pricesArr
+            .map((_, i) => i)
+            .sort((i, j) => pricesArr[j] - pricesArr[i]);
+          const splitAt = Math.floor(d.anchors.length / 2);
+          const upperIdx = new Set(sortedIdx.slice(0, splitAt));
           const upper: { time: Time; value: number }[] = [];
           const lower: { time: Time; value: number }[] = [];
           for (let i = 0; i < d.anchors.length; i++) {
             const a = d.anchors[i];
-            const prev = d.anchors[i - 1];
-            const next = d.anchors[i + 1];
-            const ref =
-              prev !== undefined ? Number(prev.price)
-              : next !== undefined ? Number(next.price)
-              : Number(a.price);
             const point = { time: isoToUnix(a.time), value: Number(a.price) };
-            if (Number(a.price) >= ref) upper.push(point);
+            if (upperIdx.has(i)) upper.push(point);
             else lower.push(point);
           }
+          // Sort each band by time so the polyline traces left→right.
+          upper.sort((a, b) => Number(a.time) - Number(b.time));
+          lower.sort((a, b) => Number(a.time) - Number(b.time));
           const mkLine = (pts: { time: Time; value: number }[]) => {
             if (pts.length < 2) return;
             const ln = chart.addSeries(LineSeries, {
@@ -1459,6 +1610,18 @@ export function Chart() {
       // whose last leg extends beyond the last visible candle,
       // and whose prices stay within ±60% of current price
       const currentPrice = Number(merged.candles[merged.candles.length - 1].close);
+      // ±60% price sanity bound — projections produced at high-degree
+      // timeframes (1M cycle-level Fibonacci extensions) can land at
+      // absurd absolute prices (negative values, 10x current), drawn
+      // as a vertical purple streak that also stretches the Y-axis.
+      // Drop any projection whose legs contain a point outside this
+      // bound. The comment above always promised this filter; the body
+      // just never implemented it.
+      const PROJ_PRICE_BAND = 0.5;
+      const priceInBand = (pr: number) =>
+        Number.isFinite(pr) &&
+        pr > 0 &&
+        Math.abs(pr - currentPrice) / currentPrice <= PROJ_PRICE_BAND;
       const projs = projectionsQuery.data
         .filter((p) => {
           if (p.state === "eliminated" || p.rank !== 1) return false;
@@ -1466,6 +1629,10 @@ export function Chart() {
           const lastLeg = legs[legs.length - 1];
           if (!lastLeg?.time_end_est) return false;
           if ((isoToUnix(lastLeg.time_end_est) as number) <= lastCandleT) return false;
+          // Reject when any leg endpoint sits outside the ±60% band.
+          for (const l of legs) {
+            if (!priceInBand(l.price_start) || !priceInBand(l.price_end)) return false;
+          }
           return true;
         })
         // Sort by max deviation of future-visible points from current price
@@ -1539,7 +1706,11 @@ export function Chart() {
           priceLineVisible: false,
           pointMarkersVisible: true,
           pointMarkersRadius: 3,
-          priceScaleId: "", // overlay — don't affect main Y axis scale
+          // Hard-exclude from Y autoscale so projection values — even
+          // in-band ones — never stretch the candle pane. Without this,
+          // lightweight-charts feeds line-series values into the main
+          // scale and high-TF Fibonacci extensions compress candles.
+          autoscaleInfoProvider: () => null,
         });
         projLine.setData(dedupeLineData(points));
         overlayLinesRef.current.push(projLine);
@@ -1569,7 +1740,46 @@ export function Chart() {
       }
     }
 
-    // ── Zigzag overlay ──
+    // ── Multi-level ZigZag (L0..L3) from pivot_cache ─────────────
+    // One line series per enabled level. Colors/widths/styles come
+    // from system_config (migration 0189) so operators tune without a
+    // redeploy (CLAUDE.md #2). Rendering loop — no scattered if/else
+    // over level names (CLAUDE.md #1).
+    {
+      const styleMap: Record<ZigzagLineStyle, LineStyle> = {
+        solid: LineStyle.Solid,
+        dashed: LineStyle.Dashed,
+        dotted: LineStyle.Dotted,
+      };
+      const pivotLevels: PivotLevel[] = ["L0", "L1", "L2", "L3"];
+      for (const lvl of pivotLevels) {
+        if (!levelEnabled[lvl]) continue;
+        const series = pivotsQuery.data?.levels.find((s) => s.level === lvl);
+        if (!series || series.points.length < 2) continue;
+        const st = zigzagCfg.levels[lvl];
+        const line = chart.addSeries(LineSeries, {
+          color: st.color,
+          lineWidth: Math.max(1, Math.min(4, st.width)) as 1 | 2 | 3 | 4,
+          lineStyle: styleMap[st.style] ?? LineStyle.Solid,
+          crosshairMarkerVisible: false,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          pointMarkersVisible: true,
+          pointMarkersRadius: 3,
+        });
+        line.setData(
+          dedupeLineData(
+            series.points.map((p) => ({
+              time: Math.floor(new Date(p.open_time).getTime() / 1000) as Time,
+              value: Number(p.price),
+            })),
+          ),
+        );
+        overlayLinesRef.current.push(line);
+      }
+    }
+
+    // ── Legacy client-side %1 ZigZag (fallback if no server pivots) ──
     if (showZigzag && merged.candles.length > 2) {
       const pts = computeZigzag(merged.candles, ZIGZAG_PCT);
       if (pts.length >= 2) {
@@ -2313,7 +2523,7 @@ export function Chart() {
       }
     }
 
-  }, [merged, showVolume, showZigzag, showLabels, showProjections, visibleDetections, familyModes, detailLayers, wyckoffQuery.data, wyckEventsQuery.data, projectionsQuery.data, showSetups, showPositions, setupsQuery.data, positionsQuery.data, debounced.symbol, debounced.timeframe]);
+  }, [merged, showVolume, showZigzag, levelEnabled, pivotsQuery.data, zigzagCfg, showLabels, showProjections, visibleDetections, familyModes, detailLayers, wyckoffQuery.data, wyckEventsQuery.data, projectionsQuery.data, showSetups, showPositions, setupsQuery.data, positionsQuery.data, debounced.symbol, debounced.timeframe]);
 
   // ═══════════════════════════════════════════════════════════════
   // RENDER
@@ -2352,11 +2562,11 @@ export function Chart() {
         >
           V
         </button>
-        {/* Zigzag toggle */}
+        {/* Legacy client-side zigzag (%1) — fallback / sanity */}
         <button
           type="button"
           onClick={() => setShowZigzag((v) => !v)}
-          title={showZigzag ? "Zigzag gizle" : "Zigzag göster"}
+          title={showZigzag ? "Legacy %1 ZigZag gizle" : "Legacy %1 ZigZag göster"}
           className={`flex h-8 w-8 items-center justify-center rounded text-[10px] font-bold transition ${
             showZigzag
               ? "bg-yellow-500/20 text-yellow-300"
@@ -2365,6 +2575,29 @@ export function Chart() {
         >
           Z
         </button>
+        {/* Multi-level ZigZag (L0..L3) — one toggle per pivot level,
+            fed from pivot_cache. Each button tints with its level color
+            from system_config (migration 0189). */}
+        {(["L0", "L1", "L2", "L3"] as PivotLevel[]).map((lvl) => {
+          const on = levelEnabled[lvl];
+          const col = zigzagCfg.levels[lvl].color;
+          return (
+            <button
+              key={lvl}
+              type="button"
+              onClick={() =>
+                setLevelEnabled((prev) => ({ ...prev, [lvl]: !prev[lvl] }))
+              }
+              title={on ? `${lvl} ZigZag gizle` : `${lvl} ZigZag göster`}
+              style={on ? { backgroundColor: col + "33", color: col, borderColor: col } : undefined}
+              className={`flex h-8 w-8 items-center justify-center rounded border text-[10px] font-bold transition ${
+                on ? "border-current" : "border-transparent text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+              }`}
+            >
+              {lvl}
+            </button>
+          );
+        })}
         {/* Labels toggle */}
         <button
           type="button"

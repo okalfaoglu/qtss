@@ -44,6 +44,7 @@ mod v2_scenarios;
 mod v2_strategies;
 mod v2_tbm;
 mod v2_onchain;
+mod v2_pivots;
 mod v2_reconcile;
 mod v2_confluence;
 mod v2_engine_symbols;
@@ -80,6 +81,7 @@ pub use v2_strategies::{
 };
 pub use v2_tbm::v2_tbm_router;
 pub use v2_onchain::v2_onchain_router;
+pub use v2_pivots::v2_pivots_router;
 pub use v2_reconcile::v2_reconcile_router;
 pub use v2_confluence::v2_confluence_router;
 pub use v2_engine_symbols::v2_engine_symbols_router;
@@ -140,6 +142,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_detections_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_tbm_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_onchain_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_pivots_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_confluence_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_setups_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_setup_rejections_router().layer(from_fn(require_dashboard_roles)))
