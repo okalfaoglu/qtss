@@ -309,6 +309,9 @@ mod tests {
                 raw_meta: serde_json::json!({"entry_price": 50000.0}),
                 projected_anchors: Vec::new(),
                 sub_wave_anchors: Vec::new(),
+                render_geometry: None,
+                render_style: None,
+                render_labels: None,
             },
             channel_scores: vec![ChannelScore {
                 channel: "test".into(),
