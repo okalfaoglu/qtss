@@ -49,6 +49,10 @@ pub struct V2SetupRow {
     /// into trailing-stop mode (either approaching the last TP or
     /// running beyond final TP). SL then ratchets via `apply_trail_advance`.
     pub trail_mode: Option<bool>,
+    /// Faz 9B — runtime mode (`live` | `dry` | `backtest`). Needed by
+    /// the allocator so mode-scoped per-profile caps don't starve
+    /// backtest candidates (see `list_open_v2_setups` doc).
+    pub mode: String,
 }
 
 #[derive(Debug, Clone)]
@@ -187,7 +191,7 @@ pub async fn fetch_v2_setup(
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
-                  pnl_pct, risk_mode, ai_score, trail_mode
+                  pnl_pct, risk_mode, ai_score, trail_mode, mode
              FROM qtss_setups
             WHERE id = $1"#,
     )
@@ -197,22 +201,31 @@ pub async fn fetch_v2_setup(
     Ok(row)
 }
 
+/// `mode` is optional: None = count every mode (legacy behavior). When
+/// the caller is deciding whether to arm a new setup it MUST pass the
+/// candidate's mode — otherwise live setups saturate the per-profile
+/// `max_concurrent` cap and backtest candidates never get a slot, which
+/// is exactly how Faz 9B ended up with 453k backtest detections and
+/// zero backtest setups.
 pub async fn list_open_v2_setups(
     pool: &PgPool,
     venue_class: Option<&str>,
+    mode: Option<&str>,
 ) -> Result<Vec<V2SetupRow>, StorageError> {
     let rows = sqlx::query_as::<_, V2SetupRow>(
         r#"SELECT id, created_at, updated_at, venue_class, exchange, symbol,
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
-                  pnl_pct, risk_mode, ai_score, trail_mode
+                  pnl_pct, risk_mode, ai_score, trail_mode, mode
              FROM qtss_setups
             WHERE state IN ('armed','active')
               AND ($1::text IS NULL OR venue_class = $1)
+              AND ($2::text IS NULL OR mode = $2)
             ORDER BY created_at DESC"#,
     )
     .bind(venue_class)
+    .bind(mode)
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -242,7 +255,7 @@ pub async fn list_v2_setups_filtered(
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
-                  pnl_pct, risk_mode, ai_score, trail_mode
+                  pnl_pct, risk_mode, ai_score, trail_mode, mode
              FROM qtss_setups
             WHERE 1=1"#,
     );
@@ -297,7 +310,7 @@ pub async fn list_recent_v2_setups(
                   timeframe, profile, alt_type, state, direction, confluence_id,
                   entry_price, entry_sl, koruma, target_ref, risk_pct,
                   close_reason, close_price, closed_at, raw_meta, detection_id,
-                  pnl_pct, risk_mode, ai_score, trail_mode
+                  pnl_pct, risk_mode, ai_score, trail_mode, mode
              FROM qtss_setups
             ORDER BY created_at DESC
             LIMIT $1"#,

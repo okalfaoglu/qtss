@@ -34,6 +34,12 @@ pub struct OpenSetupSummary {
     pub risk_pct: f64,
     /// Correlation group keys this setup's symbol belongs to.
     pub correlation_groups: Vec<String>,
+    /// Faz 9C — runtime mode (`live` | `dry` | `backtest`). Caps are
+    /// mode-scoped: a backtest setup never crowds out a live candidate
+    /// and vice versa. Without this field, live setups saturating the
+    /// per-profile slots starved the historical backfill pipeline
+    /// (453k backtest detections → 0 backtest setups).
+    pub mode: String,
 }
 
 /// Aggregated open-book context for one decision call. Filtered to a
@@ -51,8 +57,19 @@ pub fn check_allocation(
     ctx: &AllocatorContext,
     candidate: &OpenSetupSummary,
 ) -> Result<(), RejectReason> {
+    // Faz 9C — all three caps are mode-scoped. Live setups saturating
+    // the per-profile slots must not starve backtest candidates (and
+    // vice versa). Filter the open book down to the candidate's own
+    // mode before applying any guard.
+    let same_mode = |s: &&OpenSetupSummary| s.mode == candidate.mode;
+
     // Guard 1 — total open risk
-    let current_total: f64 = ctx.open_setups.iter().map(|s| s.risk_pct).sum();
+    let current_total: f64 = ctx
+        .open_setups
+        .iter()
+        .filter(same_mode)
+        .map(|s| s.risk_pct)
+        .sum();
     if current_total + candidate.risk_pct > limits.max_total_open_risk_pct {
         return Err(RejectReason::TotalRiskCap);
     }
@@ -61,6 +78,7 @@ pub fn check_allocation(
     let profile_count = ctx
         .open_setups
         .iter()
+        .filter(same_mode)
         .filter(|s| s.profile == candidate.profile)
         .count() as u32;
     let max_for_profile = limits
@@ -77,6 +95,7 @@ pub fn check_allocation(
         let group_count = ctx
             .open_setups
             .iter()
+            .filter(same_mode)
             .filter(|s| s.correlation_groups.iter().any(|g| g == group))
             .filter(|s| {
                 !limits.correlation_same_direction_only || s.direction == candidate.direction
@@ -113,7 +132,20 @@ mod tests {
             direction: dir,
             risk_pct: risk,
             correlation_groups: groups.iter().map(|g| g.to_string()).collect(),
+            mode: "live".to_string(),
         }
+    }
+
+    fn s_mode(
+        profile: Profile,
+        dir: Direction,
+        risk: f64,
+        groups: &[&str],
+        mode: &str,
+    ) -> OpenSetupSummary {
+        let mut row = s(profile, dir, risk, groups);
+        row.mode = mode.to_string();
+        row
     }
 
     #[test]
@@ -180,6 +212,26 @@ mod tests {
         // candidate is SHORT — same_direction_only=true → not counted
         let cand = s(Profile::D, Direction::Short, 1.0, &["btc_family"]);
         assert!(check_allocation(&limits(), &ctx, &cand).is_ok());
+    }
+
+    #[test]
+    fn mode_scoping_isolates_caps() {
+        // Live profile D saturated at cap=2; a backtest candidate in
+        // the same profile must still be allowed — caps are per-mode.
+        let ctx = AllocatorContext {
+            open_setups: vec![
+                s_mode(Profile::D, Direction::Long, 0.1, &[], "live"),
+                s_mode(Profile::D, Direction::Short, 0.1, &[], "live"),
+            ],
+        };
+        let cand = s_mode(Profile::D, Direction::Long, 0.1, &[], "backtest");
+        assert!(check_allocation(&limits(), &ctx, &cand).is_ok());
+        // Same candidate in live mode is still rejected.
+        let cand_live = s_mode(Profile::D, Direction::Long, 0.1, &[], "live");
+        assert_eq!(
+            check_allocation(&limits(), &ctx, &cand_live),
+            Err(RejectReason::MaxConcurrent)
+        );
     }
 
     #[test]

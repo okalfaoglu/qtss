@@ -67,10 +67,22 @@ struct LabelDecision {
 fn classify_close_reason(reason: Option<&str>) -> Option<LabelDecision> {
     let r = reason?;
     Some(match r {
-        "target_hit" => LabelDecision { label: "win", category: "tp" },
-        "stop_hit" => LabelDecision { label: "loss", category: "sl" },
-        "reverse_signal" => LabelDecision { label: "invalidated", category: "reverse" },
-        "p14_opposite_dir_conflict" => LabelDecision { label: "invalidated", category: "conflict" },
+        // Canonical v2 close strings (qtss_setups.close_reason).
+        // Bug history: the dispatch used the older "stop_hit/target_hit"
+        // names; the live system writes "sl_hit/tp_final" plus staged
+        // "tp1..tp4" partials. Result was every SL hit falling through
+        // to 'neutral' — label_balance came out 0.0 and the trainer
+        // gate refused to fit. All tp_*/sl_* variants now map here.
+        "tp_final" | "tp1" | "tp2" | "tp3" | "tp4" | "target_hit" => {
+            LabelDecision { label: "win", category: "tp" }
+        }
+        "sl_hit" | "stop_hit" | "sl_protected" => {
+            LabelDecision { label: "loss", category: "sl" }
+        }
+        "invalidated" | "reverse_signal" | "p14_opposite_dir_conflict" => {
+            LabelDecision { label: "invalidated", category: "reverse" }
+        }
+        "cancelled" => LabelDecision { label: "invalidated", category: "cancelled" },
         "closed_manual" => LabelDecision { label: "neutral", category: "manual" },
         "expiry" | "ttl" | "timeout" => LabelDecision { label: "timeout", category: "expiry" },
         _ => LabelDecision { label: "neutral", category: "unknown" },

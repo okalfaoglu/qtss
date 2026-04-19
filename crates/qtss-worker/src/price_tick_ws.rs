@@ -81,7 +81,7 @@ fn combined_url(pairs: &[String]) -> String {
 }
 
 async fn active_futures_pairs(pool: &PgPool) -> Vec<String> {
-    match list_open_v2_setups(pool, None).await {
+    match list_open_v2_setups(pool, None, None).await {
         Ok(rows) => {
             let mut seen: HashSet<String> = HashSet::new();
             for r in rows {

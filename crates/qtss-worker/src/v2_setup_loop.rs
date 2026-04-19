@@ -383,7 +383,9 @@ async fn run_pass(pool: &PgPool, cfg: &LoopConfig) -> Result<(), BoxErr> {
 }
 
 async fn hydrate_context(pool: &PgPool, venue: VenueClass) -> Result<AllocatorContext, BoxErr> {
-    let rows = list_open_v2_setups(pool, Some(venue.as_str())).await?;
+    // Load every mode; the allocator filters by candidate.mode per call
+    // so live and backtest caps stay independent (Faz 9C).
+    let rows = list_open_v2_setups(pool, Some(venue.as_str()), None).await?;
     let mut open_setups: Vec<OpenSetupSummary> = Vec::with_capacity(rows.len());
     for r in rows {
         let Some(profile) = Profile::from_str(&r.profile) else {
@@ -397,6 +399,7 @@ async fn hydrate_context(pool: &PgPool, venue: VenueClass) -> Result<AllocatorCo
             direction: direction_from_str(&r.direction),
             risk_pct: r.risk_pct.unwrap_or(0.0) as f64,
             correlation_groups: groups,
+            mode: r.mode.clone(),
         });
     }
     Ok(AllocatorContext { open_setups })
@@ -497,7 +500,7 @@ async fn update_open_setups(
 ) -> Result<(), BoxErr> {
     // Re-query open setups from DB for this narrow key; cheaper and
     // avoids stale-in-memory drift inside a single pass.
-    let open = list_open_v2_setups(pool, Some(venue.as_str())).await?;
+    let open = list_open_v2_setups(pool, Some(venue.as_str()), None).await?;
     let matching: Vec<V2SetupRow> = open
         .into_iter()
         .filter(|r| {
@@ -828,7 +831,11 @@ async fn try_arm_new_setup(
     }
 
     // Skip if we already have an open setup for (symbol, timeframe, profile, direction).
-    let already_open = list_open_v2_setups(pool, Some(venue.as_str())).await?;
+    // Duplicate check is cross-mode on purpose: migration 0171 already
+    // includes `mode` in the partial unique index, so the duplicate guard
+    // here exists only to short-circuit before the INSERT. Counting every
+    // mode is harmless; a dup in any mode still means we shouldn't arm.
+    let already_open = list_open_v2_setups(pool, Some(venue.as_str()), None).await?;
     let duplicate = already_open.iter().any(|r| {
         r.exchange == sym.exchange
             && r.symbol == sym.symbol
@@ -930,11 +937,30 @@ async fn try_arm_new_setup(
     let groups = list_groups_for_symbol(pool, venue.as_str(), &sym.symbol)
         .await
         .unwrap_or_default();
+    // Mode tag for allocator — mirrors the final `setup_mode` picked
+    // just before INSERT (Faz 9B: inherit from triggering detection).
+    // Pre-computed here so the allocator's mode-scoped caps evaluate
+    // the candidate against its OWN mode pool, not a mixed pool.
+    let candidate_mode: String = detections
+        .iter()
+        .find(|d| {
+            let det_dir = if d.subkind.contains("bull") {
+                Direction::Long
+            } else if d.subkind.contains("bear") {
+                Direction::Short
+            } else {
+                Direction::Neutral
+            };
+            det_dir == direction && (d.state == "confirmed" || d.state == "forming")
+        })
+        .map(|d| d.mode.clone())
+        .unwrap_or_else(|| "live".to_string());
     let candidate = OpenSetupSummary {
         profile,
         direction,
         risk_pct: pcfg.risk_pct,
         correlation_groups: groups.clone(),
+        mode: candidate_mode.clone(),
     };
 
     // Faz 9.1 — Classic confluence gate (veto + consensus + score).
