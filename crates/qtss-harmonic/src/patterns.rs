@@ -94,6 +94,32 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         cd: RatioRange::new(0.45, 0.55),  // ~0.50 of BC
         ad: RatioRange::new(0.84, 1.20),  // variable
     },
+    // ── AB=CD (Classic, Scott Carney / Larry Pesavento) ──────────────
+    // 4-point pattern (A→B→C→D). We embed it in the XABCD container
+    // with intentionally loose XA/AD bounds so the earlier pivot (X)
+    // acts only as a structural anchor rather than a ratio constraint.
+    // Invariants enforced:
+    //   * BC retraces 0.382–0.886 of AB (r_bc)
+    //   * CD ≈ AB (price equality) → CD/BC ≈ 1/r_bc ∈ [1.13, 2.0]
+    // Alt AB=CD (below) takes the r_cd > 2.0 branch.
+    HarmonicSpec {
+        name: "ab_cd",
+        ab: RatioRange::new(0.20, 3.00),   // X unconstrained
+        bc: RatioRange::new(0.382, 0.886), // BC retracement of AB
+        cd: RatioRange::new(1.13, 2.00),   // CD ≈ AB equality region
+        ad: RatioRange::new(0.20, 5.00),   // AD unconstrained
+    },
+    // ── Alternate AB=CD (Scott Carney, Harmonic Trading Vol. 2) ──────
+    // CD extends beyond classic equality: CD = 1.272× or 1.618× of AB.
+    // Separation from classic AB=CD is made via the r_cd band:
+    // r_cd = CD/BC = (1.272..1.618) / (0.618..0.786) ≈ [2.0, 2.618].
+    HarmonicSpec {
+        name: "alt_ab_cd",
+        ab: RatioRange::new(0.20, 3.00),
+        bc: RatioRange::new(0.382, 0.886),
+        cd: RatioRange::new(2.00, 2.618),
+        ad: RatioRange::new(0.20, 5.00),
+    },
     // ── Three Drives ────────────────────────────────────────────────
     // Mapped to XABCD: three successive drives with equal extensions.
     // Drive 2 = 1.272–1.618 of correction 1, Drive 3 = 1.272–1.618 of

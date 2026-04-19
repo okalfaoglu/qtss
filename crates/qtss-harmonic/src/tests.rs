@@ -127,6 +127,14 @@ fn pattern_catalog_has_expected_entries() {
     assert!(names.contains(&"bat"));
     assert!(names.contains(&"butterfly"));
     assert!(names.contains(&"crab"));
+    assert!(names.contains(&"deep_crab"));
+    assert!(names.contains(&"shark"));
+    assert!(names.contains(&"cypher"));
+    assert!(names.contains(&"alt_bat"));
+    assert!(names.contains(&"five_zero"));
+    assert!(names.contains(&"three_drives"));
+    assert!(names.contains(&"ab_cd"));
+    assert!(names.contains(&"alt_ab_cd"));
 }
 
 // ---------------------------------------------------------------------------
