@@ -20,31 +20,23 @@ ciddi retrace; hedef 1.0x bile gerçekleşmeden dönüş.
 ## 2026-04-19 düzeltilen
 - `scallop_roundness_r2`: 0.55 → **0.70** (config.rs default + migration 0176)
 - `scallop_min_rim_progress_pct`: 0.02 → **0.035** (config.rs default + migration 0176)
-
-Bunlar `system_config` tablosunda, worker restart'ta veya config-reload sonrası etki eder.
+- **Breakout + volume confirmation (migration 0177)**:
+  - `scallop_confirm_lookback = 5` — RimR sonrası max 5 bar aranıyor.
+  - `scallop_breakout_atr_mult = 0.25` — close RimR'i en az 0.25·ATR aşmalı.
+  - `scallop_breakout_vol_mult = 1.3` — breakout bar'ı son 20 bar avg vol × 1.3 üstünde.
+  - `scallop_vol_avg_window = 20`, `scallop_atr_period = 14`.
+  - Skor formülü: `0.35·s_round + 0.25·s_progress + 0.25·s_breakout + 0.15·s_volume`.
 
 ## Kalan backlog (ayrı başlık)
 
-1. **Post-RimR breakout confirmation**
-   - Detector şu an RimR pivot oluşur oluşmaz tetikliyor.
-   - Gerekli: RimR bar'ından sonra en az 1 bar, RimR fiyatını `N * ATR` üstünden close etmeli (bull için).
-   - Implementasyon: `eval_scallop_side` imzasına `bars[pivots[2].bar_index + 1 ..]` slice'ı aktarılmalı, confirmation eşiği config'e `scallop_breakout_atr_mult` olarak girmeli.
-   - Risk: pivot'lar sadece kapanmış swing'ler olduğu için zaten gecikmeli tetikleniyor; breakout confirmation ekstra 1–3 bar daha geciktirir ama false positive'i ciddi biçimde düşürür.
+1. ~~Post-RimR breakout confirmation~~ ✅ 2026-04-19
+2. ~~Volume confirmation~~ ✅ 2026-04-19
+3. ~~Score formula rebalance~~ ✅ 2026-04-19
 
-2. **Volume confirmation**
-   - RimR breakout bar'ının hacmi son N bar ortalamasının ≥ 1.3× olmalı.
-   - Config: `scallop_breakout_vol_mult` (default 1.3).
-   - Bar'larda `volume` alanı zaten mevcut; `bars[pivots[2].bar_index].volume` ile `avg(bars[pivots[2].bar_index - 20 ..])`.
+### Kalan
+4. **Backtest kalibrasyonu** — 6 ay historical BTCUSDT/ETHUSDT 1h+4h scallop hit-rate vs. Bulkowski ~%70 baseline. Confidence tier'larının realized başarı oranını yansıttığını doğrula.
 
-3. **Confidence tier'larına kalibrasyon**
-   - Scallop skoru şu an `(s_round + s_progress) / 2` — breakout + volume teyidi geldiğinde skora katılmalı:
-     ```
-     score = 0.35*s_round + 0.25*s_progress + 0.25*s_breakout + 0.15*s_volume
-     ```
-   - Aksi takdirde confidence dağılımı gerçek başarı oranını yansıtmıyor.
+## Notlar
+- Skor formülü ağırlıkları (`0.35/0.25/0.25/0.15`) henüz config'te değil — kod düzeyinde sabit. Yeterli backtest verisi toplandıktan sonra ağırlıkları config'e taşıyacağız (CLAUDE.md #2).
+- Bu değişikliklerden sonra scallop **detection sayısı düşer** (breakout/volume gating) ama **detection başına güven artar**: hayatta kalan tespitler zaten mekanik tetiği geçmiş olur. Skor dağılımı da s_breakout + s_volume eklendiği için gerçek başarı oranını daha iyi yansıtır.
 
-4. **Backtest kalibrasyonu**
-   - 3 madde uygulandıktan sonra 6 ay historical BTCUSDT/ETHUSDT 1h + 4h scallop detection hit-rate ölç. Bulkowski avg ~%70 civarı referans.
-
-## Önerilen sıra
-(1) ve (2) beraber gider (aynı fonksiyon imzası değişikliği). (3) ve (4) sonra.

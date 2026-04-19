@@ -146,6 +146,22 @@ pub struct ClassicalConfig {
     /// Scallop parabolic fit R² eşiği. Rounding'den biraz daha gevşek
     /// (scallop curve'ü asimetrik). Default 0.55.
     pub scallop_roundness_r2: f64,
+    /// Faz 10 Aşama 4.2 — RimR sonrası breakout teyit lookback (bar).
+    /// Bu kadar bar içinde tetik teyidi aranır. Default 5.
+    pub scallop_confirm_lookback: usize,
+    /// Breakout teyit eşiği: RimR sonrası bir bar close'u RimR'i
+    /// `scallop_breakout_atr_mult * ATR` üstünden (bull için aşağı için
+    /// altından) aşmalı. Default 0.25 (ATR'nin dörtte biri — gürültü
+    /// üstü minimum hareket).
+    pub scallop_breakout_atr_mult: f64,
+    /// Volume teyit: breakout bar'ının hacmi son N bar avg'ının en az
+    /// bu çarpanı kadar üstünde olmalı. Default 1.3.
+    pub scallop_breakout_vol_mult: f64,
+    /// Volume avg penceresi (breakout bar'ından önceki bar sayısı).
+    /// Default 20.
+    pub scallop_vol_avg_window: usize,
+    /// ATR periyodu (breakout teyidi için). Default 14.
+    pub scallop_atr_period: usize,
 }
 
 impl ClassicalConfig {
@@ -203,6 +219,11 @@ impl ClassicalConfig {
             scallop_min_bars: 20,
             scallop_min_rim_progress_pct: 0.035,
             scallop_roundness_r2: 0.70,
+            scallop_confirm_lookback: 5,
+            scallop_breakout_atr_mult: 0.25,
+            scallop_breakout_vol_mult: 1.3,
+            scallop_vol_avg_window: 20,
+            scallop_atr_period: 14,
         }
     }
 
@@ -420,6 +441,31 @@ impl ClassicalConfig {
         if !(0.0..=1.0).contains(&self.scallop_roundness_r2) {
             return Err(ClassicalError::InvalidConfig(
                 "scallop_roundness_r2 must be in 0..=1".into(),
+            ));
+        }
+        if self.scallop_confirm_lookback == 0 {
+            return Err(ClassicalError::InvalidConfig(
+                "scallop_confirm_lookback must be > 0".into(),
+            ));
+        }
+        if !(0.0..=5.0).contains(&self.scallop_breakout_atr_mult) {
+            return Err(ClassicalError::InvalidConfig(
+                "scallop_breakout_atr_mult must be in 0..=5".into(),
+            ));
+        }
+        if self.scallop_breakout_vol_mult < 1.0 {
+            return Err(ClassicalError::InvalidConfig(
+                "scallop_breakout_vol_mult must be >= 1.0".into(),
+            ));
+        }
+        if self.scallop_vol_avg_window < 2 {
+            return Err(ClassicalError::InvalidConfig(
+                "scallop_vol_avg_window must be >= 2".into(),
+            ));
+        }
+        if self.scallop_atr_period < 2 {
+            return Err(ClassicalError::InvalidConfig(
+                "scallop_atr_period must be >= 2".into(),
             ));
         }
         Ok(())

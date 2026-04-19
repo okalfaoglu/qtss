@@ -792,6 +792,27 @@ async fn resolve_classical_config(pool: &PgPool) -> ClassicalConfig {
         pool, "detection", "classical.scallop_roundness_r2",
         "QTSS_DETECTION_CLASSICAL_SCALLOP_R2", 0.55,
     ).await;
+    // Faz 10 Aşama 4.2 — breakout + volume confirmation.
+    let scallop_confirm = resolve_system_u64(
+        pool, "detection", "classical.scallop_confirm_lookback",
+        "QTSS_DETECTION_CLASSICAL_SCALLOP_CONFIRM", 5, 1, 50,
+    ).await as usize;
+    let scallop_br_atr = resolve_system_f64(
+        pool, "detection", "classical.scallop_breakout_atr_mult",
+        "QTSS_DETECTION_CLASSICAL_SCALLOP_BR_ATR", 0.25,
+    ).await;
+    let scallop_br_vol = resolve_system_f64(
+        pool, "detection", "classical.scallop_breakout_vol_mult",
+        "QTSS_DETECTION_CLASSICAL_SCALLOP_BR_VOL", 1.3,
+    ).await;
+    let scallop_vol_win = resolve_system_u64(
+        pool, "detection", "classical.scallop_vol_avg_window",
+        "QTSS_DETECTION_CLASSICAL_SCALLOP_VOL_WIN", 20, 2, 200,
+    ).await as usize;
+    let scallop_atr_p = resolve_system_u64(
+        pool, "detection", "classical.scallop_atr_period",
+        "QTSS_DETECTION_CLASSICAL_SCALLOP_ATR_P", 14, 2, 100,
+    ).await as usize;
 
     ClassicalConfig {
         pivot_level: parse_pivot_level(&level_str),
@@ -838,6 +859,11 @@ async fn resolve_classical_config(pool: &PgPool) -> ClassicalConfig {
         scallop_min_bars,
         scallop_min_rim_progress_pct: scallop_progress.clamp(0.0, 0.5),
         scallop_roundness_r2: scallop_r2.clamp(0.0, 1.0),
+        scallop_confirm_lookback: scallop_confirm.max(1),
+        scallop_breakout_atr_mult: scallop_br_atr.clamp(0.0, 5.0),
+        scallop_breakout_vol_mult: scallop_br_vol.max(1.0),
+        scallop_vol_avg_window: scallop_vol_win.max(2),
+        scallop_atr_period: scallop_atr_p.max(2),
     }
 }
 

@@ -1561,15 +1561,111 @@ fn eval_scallop_side(
     let s_round = ((r2 - cfg.scallop_roundness_r2) / (1.0 - cfg.scallop_roundness_r2).max(1e-9))
         .clamp(0.0, 1.0);
     let s_progress = (progress / cfg.scallop_min_rim_progress_pct - 1.0).clamp(0.0, 1.0);
+
+    // Faz 10 Aşama 4.2 — post-RimR breakout + volume confirmation.
+    // Reject the pattern unless, within `confirm_lookback` bars after
+    // RimR, at least one bar closes beyond RimR by N*ATR (breakout)
+    // with volume ≥ vol_mult * trailing average. Without this gate
+    // the detector fires on the pivot itself and the operator sees
+    // a "pattern" with no actual follow-through — which is exactly
+    // the BTCUSDT 1h false-positive we audited.
+    let rim_r_idx = pivots[2].bar_index as usize;
+    let confirm = scallop_breakout_confirmed(bars, rim_r_idx, rim_r, bull, cfg);
+    if !confirm.confirmed {
+        return None;
+    }
+
     // Invalidation: bull → apex (price breaks below the J-bottom);
     // bear → apex (price breaks above the J-top).
     let invalidation = pivots[1].price;
+    // Score weights (CLAUDE.md #2 keeps these in code only because
+    // confidence-formula tuning hasn't hit config yet — planned in
+    // docs/notes/scallop_detection_quality.md item 3):
+    //   curvature 0.35, rim progression 0.25, breakout 0.25, volume 0.15.
+    let score = 0.35 * s_round
+        + 0.25 * s_progress
+        + 0.25 * confirm.s_breakout
+        + 0.15 * confirm.s_volume;
     Some(ShapeMatch {
-        score: (s_round + s_progress) / 2.0,
+        score: score.clamp(0.0, 1.0),
         invalidation,
         anchor_labels: vec!["RimL", "Apex", "RimR"],
         variant: if bull { "bull" } else { "bear" },
     })
+}
+
+struct ScallopConfirm {
+    confirmed: bool,
+    s_breakout: f64,
+    s_volume: f64,
+}
+
+/// Post-RimR confirmation: scan the next `cfg.scallop_confirm_lookback`
+/// bars for the first one that closes beyond RimR by `breakout_atr_mult
+/// * ATR`. Return its breakout strength (how far past the threshold,
+/// in ATR units, clamped) and volume score (how much above the
+/// trailing avg, clamped). Returns `confirmed = false` when no bar
+/// qualifies — caller drops the pattern.
+fn scallop_breakout_confirmed(
+    bars: &[Bar],
+    rim_r_idx: usize,
+    rim_r: f64,
+    bull: bool,
+    cfg: &ClassicalConfig,
+) -> ScallopConfirm {
+    let none = ScallopConfirm { confirmed: false, s_breakout: 0.0, s_volume: 0.0 };
+    if rim_r_idx + 1 >= bars.len() {
+        return none;
+    }
+    // ATR from bars up to and including RimR; if insufficient history
+    // we can't gate reliably — fall through as unconfirmed (stricter
+    // than silently accepting).
+    let atr_end = (rim_r_idx + 1).min(bars.len());
+    let atr_start = atr_end.saturating_sub(cfg.scallop_atr_period + 1);
+    let atr = match atr_window(&bars[atr_start..atr_end], cfg.scallop_atr_period) {
+        Some(v) => v,
+        None => return none,
+    };
+    let br_threshold = cfg.scallop_breakout_atr_mult * atr;
+    let scan_end = (rim_r_idx + 1 + cfg.scallop_confirm_lookback).min(bars.len());
+    for i in (rim_r_idx + 1)..scan_end {
+        let close = bar_close(&bars[i]);
+        let diff = if bull { close - rim_r } else { rim_r - close };
+        if diff <= br_threshold {
+            continue;
+        }
+        // Volume check — trailing avg over `vol_avg_window` bars prior
+        // to this bar. When history is short, shrink the window rather
+        // than failing: a 1.3× multiple over a 10-bar avg is still
+        // meaningful for confirmation.
+        let vol_start = i.saturating_sub(cfg.scallop_vol_avg_window);
+        if i <= vol_start + 1 {
+            continue;
+        }
+        let vol_slice = &bars[vol_start..i];
+        let avg_vol: f64 = vol_slice
+            .iter()
+            .map(|b| b.volume.to_f64().unwrap_or(0.0))
+            .sum::<f64>()
+            / (vol_slice.len() as f64);
+        if avg_vol <= 0.0 {
+            continue;
+        }
+        let bar_vol = bars[i].volume.to_f64().unwrap_or(0.0);
+        let vol_ratio = bar_vol / avg_vol;
+        if vol_ratio < cfg.scallop_breakout_vol_mult {
+            continue;
+        }
+        // Both gates passed — compute sub-scores. Breakout overshoot
+        // normalised by 2× threshold caps very-strong breakouts at 1.0.
+        let s_breakout = ((diff - br_threshold) / br_threshold.max(1e-9))
+            .clamp(0.0, 1.0);
+        let s_volume = ((vol_ratio - cfg.scallop_breakout_vol_mult)
+            / cfg.scallop_breakout_vol_mult.max(1e-9))
+            .clamp(0.0, 1.0);
+        return ScallopConfirm { confirmed: true, s_breakout, s_volume };
+    }
+    none
 }
 
 fn eval_scallop_bullish(
