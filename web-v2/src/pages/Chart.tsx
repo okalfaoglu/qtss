@@ -174,12 +174,27 @@ const TOOLS: ToolDef[] = [
 // ─── Family Mode ─────────────────────────────────────────────────────
 type FamilyMode = "off" | "on" | "detail";
 
-const DETAIL_SUB_BUTTONS = [
+// Per-family detail-menu buttons. `families` omitted = applies to every
+// family; listing families restricts the button so we don't pollute the
+// toolbar with toggles that have no renderer for that family (e.g.
+// classical detections carry no projected_anchors / sub_wave_anchors,
+// so Fib Levels + Measured Move would be inert for CLASSICAL). The
+// `invalidation` key was dead (never read by the renderer) and is
+// removed entirely.
+const DETAIL_SUB_BUTTONS: Array<{
+  key: string;
+  label: string;
+  icon: string;
+  families?: string[];
+}> = [
   { key: "entry_tp_sl", label: "Entry / TP / SL", icon: "⊞" },
   { key: "labels", label: "Labels", icon: "Aa" },
-  { key: "fib_levels", label: "Fib Levels", icon: "φ" },
-  { key: "measured_move", label: "Measured Move", icon: "⟷" },
-  { key: "invalidation", label: "Invalidation Zone", icon: "✕" },
+  // Sub-wave decomposition (Elliott-only in practice — harmonic/wyckoff
+  // rows don't emit sub_wave_anchors).
+  { key: "fib_levels", label: "Fib Levels", icon: "φ", families: ["elliott", "harmonic"] },
+  // Forward projection — emitted by Elliott (projected next wave) and
+  // harmonic (PRZ projection).
+  { key: "measured_move", label: "Measured Move", icon: "⟷", families: ["elliott", "harmonic"] },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -2147,7 +2162,9 @@ export function Chart() {
                     <span className="text-[9px] font-bold uppercase tracking-widest" style={{ color }}>
                       {family}
                     </span>
-                    {DETAIL_SUB_BUTTONS.map((btn) => {
+                    {DETAIL_SUB_BUTTONS.filter(
+                      (btn) => !btn.families || btn.families.includes(family),
+                    ).map((btn) => {
                       const active = layers.has(btn.key);
                       return (
                         <button
