@@ -477,11 +477,29 @@ impl WyckoffStructureTracker {
         score: f64,
         time_ms: Option<i64>,
     ) {
-        // P17 — TF-aware dedup: same event type within `dedup_window_bars`
-        // AND (price is within eps OR either price is NaN). The price
-        // check prevents two *semantically distinct* SCs at far-apart
-        // prices from collapsing just because they land in the same
-        // 20-bar window; the window check prevents the 3200-dup bug.
+        // STRICT dedup (kullanıcı kuralı):
+        //   - Aynı (event_type, bar_index) → kayıt güncellenir, yeni satır
+        //     eklenmez. Fiyat farkı olsa bile aynı bar'da aynı event tek
+        //     olmalı; fiyat/score ileri sürümden güncellenir.
+        //   - Aynı bar'da **farklı** event eklenebilir (engellenmez).
+        // P17 — Soft window dedup ikinci katman: aynı event type bar'lar
+        // arasında dar aralıkta (≤ dedup_window_bars) ve fiyat aynı
+        // (≤ eps_pct) ise collapse eder; bu 3200-dup hatasını ve art
+        // arda printleyen detector salvo'larını engeller.
+        if let Some(existing) = self
+            .events
+            .iter_mut()
+            .find(|e| e.event == event && e.bar_index == bar_index)
+        {
+            if score >= existing.score {
+                existing.score = score;
+                existing.price = price;
+                if time_ms.is_some() {
+                    existing.time_ms = time_ms;
+                }
+            }
+            return;
+        }
         let win = self.policy.dedup_window_bars;
         let eps_pct = self.policy.dedup_price_eps_pct;
         let price_close = |a: f64, b: f64| -> bool {

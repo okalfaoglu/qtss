@@ -1943,7 +1943,9 @@ export function Chart() {
         const candle = merged.candles[idx];
         const candleTime = isoToUnix(candle.open_time);
 
-        const dupKey = `${String(candleTime)}|${meta.pos}`;
+        // Dedup anahtarı: aynı bar + aynı event + aynı pozisyonda
+        // tek marker. Farklı event aynı pozisyonda serbest (engellenmez).
+        const dupKey = `${String(candleTime)}|${ev.event_code}|${meta.pos}`;
         if (!placedKeys.has(dupKey)) {
           placedKeys.add(dupKey);
           allMarkers.push({
