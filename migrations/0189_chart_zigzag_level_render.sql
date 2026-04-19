@@ -40,7 +40,7 @@ SELECT _qtss_register_key(
 -- Colors — one per level. Hex, dark-theme tuned.
 SELECT _qtss_register_key(
     'chart.zigzag.l0.color', 'chart', 'zigzag',
-    'string', '"#546e7a"'::jsonb, '',
+    'string', '"#94a3b8"'::jsonb, '',
     'L0 ZigZag çizgisi rengi (hex).',
     'color', false, 'normal', ARRAY['chart','zigzag','pivot_level','style']
 );

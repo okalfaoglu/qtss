@@ -27,7 +27,7 @@ export interface ZigzagLevelConfig {
 }
 
 const DEFAULTS: Record<PivotLevel, ZigzagLevelStyle> = {
-  L0: { color: "#546e7a", width: 1, style: "dotted", enabledByDefault: false },
+  L0: { color: "#94a3b8", width: 1, style: "dotted", enabledByDefault: false },
   L1: { color: "#42a5f5", width: 2, style: "solid",  enabledByDefault: true  },
   L2: { color: "#ab47bc", width: 2, style: "solid",  enabledByDefault: false },
   L3: { color: "#ff7043", width: 3, style: "solid",  enabledByDefault: false },
