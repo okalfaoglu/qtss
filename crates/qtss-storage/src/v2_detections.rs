@@ -477,4 +477,34 @@ impl V2DetectionRepository {
         .await?;
         Ok(rows)
     }
+
+    /// Faz 9C — confirmed backtest detections that have NOT yet been
+    /// converted into a `qtss_setups` row. Feeds `backtest_setup_loop`,
+    /// which arms setups directly (bypassing the live confluence gate —
+    /// backtest detections are historical, so live confluence rows
+    /// don't exist for their timestamps). LEFT JOIN on
+    /// `qtss_setups.detection_id` is the "not yet armed" filter.
+    pub async fn list_backtest_unset_detections(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<DetectionRow>, StorageError> {
+        let rows = sqlx::query_as::<_, DetectionRow>(
+            r#"SELECT d.id, d.detected_at, d.exchange, d.symbol, d.timeframe,
+                      d.family, d.subkind, d.state, d.structural_score, d.confidence,
+                      d.invalidation_price, d.anchors, d.regime, d.channel_scores,
+                      d.raw_meta, d.validated_at, d.mode, d.created_at, d.updated_at,
+                      d.render_geometry, d.render_style, d.render_labels
+                 FROM qtss_v2_detections d
+                 LEFT JOIN qtss_setups s ON s.detection_id = d.id
+                WHERE d.state = 'confirmed'
+                  AND d.mode  = 'backtest'
+                  AND s.detection_id IS NULL
+                ORDER BY d.detected_at ASC
+                LIMIT $1"#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
 }

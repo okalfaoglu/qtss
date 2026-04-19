@@ -897,6 +897,14 @@ async fn try_arm_new_setup(
         .list_for_chart(&sym.exchange, &sym.symbol, &sym.interval, 100)
         .await
         .unwrap_or_default();
+    // Captured for raw_meta — the chart overlay uses these to label
+    // TP lines with the formation-specific name ("MM 1.0x" / "Pat
+    // 1.618x" / "ABCD 1.272x") instead of generic TP1/TP2. Kept in
+    // sync with the guard so what the user sees in the GUI matches
+    // what the engine actually armed with.
+    let mut structural_targets_meta: Vec<serde_json::Value> = Vec::new();
+    let mut structural_subkind: Option<String> = None;
+
     let guard = {
         // Find the best confirmed detection matching our direction.
         let best_det = detections.iter().find(|d| {
@@ -925,6 +933,17 @@ async fn try_arm_new_setup(
                         tp1 = targets[0].price,
                         "structural guard from detection"
                     );
+                    structural_subkind = Some(det.subkind.clone());
+                    structural_targets_meta = targets
+                        .iter()
+                        .map(|t| {
+                            json!({
+                                "price": t.price,
+                                "weight": t.weight,
+                                "label": t.label,
+                            })
+                        })
+                        .collect();
                     PositionGuard::new_structural(
                         price, inv_price, &targets, atr_val, &pcfg, direction,
                     )
@@ -1389,6 +1408,8 @@ async fn try_arm_new_setup(
                 "missing_features": r.missing_features,
                 "n_features": r.n_features,
             })),
+            "structural_targets": structural_targets_meta,
+            "structural_subkind": structural_subkind,
         }),
         ai_score,
         detection_id: primary_detection_id,
@@ -1519,7 +1540,13 @@ const CLASSICAL_HEIGHT_PREFIXES: &[&str] = &[
     "rectangle",
     "diamond_top", "diamond_bottom",
     "broadening",
-    "cup_and_handle", "rounding_top", "rounding_bottom",
+    "cup_and_handle", "inverse_cup_and_handle",
+    "rounding_top", "rounding_bottom",
+    // Added after audit — these families are emitted by qtss-classical
+    // but previously fell through to the ATR-based fallback. Anchors
+    // are compatible with the generic pattern-height projection.
+    "scallop_bullish", "scallop_bearish",
+    "measured_move_abcd",
 ];
 
 /// Extract measured-move targets from a detection's anchors.
@@ -1527,11 +1554,34 @@ const CLASSICAL_HEIGHT_PREFIXES: &[&str] = &[
 /// scattered match arms (CLAUDE.md #1). Returns empty vec only when the
 /// anchors are structurally unusable — the caller then falls back to
 /// ATR-based PositionGuard.
-fn compute_structural_targets(det: &DetectionRow, direction: Direction) -> Vec<StructuralTarget> {
+pub(crate) fn compute_structural_targets(det: &DetectionRow, direction: Direction) -> Vec<StructuralTarget> {
     let anchors: Vec<serde_json::Value> = match serde_json::from_value(det.anchors.clone()) {
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };
+    compute_structural_targets_raw(
+        &anchors,
+        det.subkind.as_str(),
+        det.family.as_str(),
+        direction,
+        det.invalidation_price.to_f64().unwrap_or(0.0),
+        &det.raw_meta,
+    )
+}
+
+/// Value-based sibling of `compute_structural_targets`. Used by the
+/// classical feature extractor (Faz 9.3) so LightGBM sees normalised
+/// target geometry (count, R-multiples) as input features, not just
+/// the shape ordinal. Single pure function shared with the setup
+/// arming path so the two can't drift.
+pub(crate) fn compute_structural_targets_raw(
+    anchors: &[serde_json::Value],
+    subkind: &str,
+    family: &str,
+    direction: Direction,
+    inv_price: f64,
+    raw_meta: &serde_json::Value,
+) -> Vec<StructuralTarget> {
     if anchors.is_empty() {
         return Vec::new();
     }
@@ -1544,13 +1594,10 @@ fn compute_structural_targets(det: &DetectionRow, direction: Direction) -> Vec<S
             }))
     };
 
-    let subkind = det.subkind.as_str();
-    let family = det.family.as_str();
     let sign = direction.sign();
     if sign == 0.0 {
         return Vec::new();
     }
-    let inv_price = det.invalidation_price.to_f64().unwrap_or(0.0);
 
     // ---------------- classical: double top / bottom ----------------
     // 3 anchors [H1/L1, T/N, H2/L2]. Measured move projects *from the
@@ -1584,6 +1631,53 @@ fn compute_structural_targets(det: &DetectionRow, direction: Direction) -> Vec<S
                 return vec![
                     StructuralTarget { price: neckline + sign * height,         weight: 0.80, label: "MM 1.0x" },
                     StructuralTarget { price: neckline + sign * height * 1.618, weight: 0.50, label: "MM 1.618x" },
+                ];
+            }
+        }
+    }
+
+    // ---------------- classical: triple top / bottom ----------------
+    // 5 anchors [P1, V1, P2, V2, P3]. Neckline = avg(V1, V2); height =
+    // distance from avg peak (P1..P3 avg) to neckline. Measured move
+    // projects from neckline ± height in the trade's direction. Weight
+    // tier slightly above double_top/bottom because triple confirmation
+    // carries stronger structural basis.
+    if anchors.len() >= 5
+        && (subkind.starts_with("triple_top") || subkind.starts_with("triple_bottom"))
+    {
+        let p1 = price_of(&anchors[0]);
+        let v1 = price_of(&anchors[1]);
+        let p2 = price_of(&anchors[2]);
+        let v2 = price_of(&anchors[3]);
+        let p3 = price_of(&anchors[4]);
+        if let (Some(p1), Some(v1), Some(p2), Some(v2), Some(p3)) = (p1, v1, p2, v2, p3) {
+            let neck = (v1 + v2) / 2.0;
+            let peak = (p1 + p2 + p3) / 3.0;
+            let height = (peak - neck).abs();
+            if height > 0.0 {
+                return vec![
+                    StructuralTarget { price: neck + sign * height,         weight: 0.85, label: "MM 1.0x" },
+                    StructuralTarget { price: neck + sign * height * 1.618, weight: 0.55, label: "MM 1.618x" },
+                ];
+            }
+        }
+    }
+
+    // ---------------- classical: measured move ABCD -----------------
+    // 4 anchors [A, B, C, D]. Classic AB=CD projection: target from D
+    // equal to the AB leg length in the trade's direction. Extension
+    // ladder uses 1.272× and 1.618× of AB (common Fib continuation
+    // multiples for this pattern).
+    if anchors.len() >= 4 && subkind.starts_with("measured_move_abcd") {
+        if let (Some(a), Some(b), Some(d)) =
+            (price_of(&anchors[0]), price_of(&anchors[1]), price_of(&anchors[3]))
+        {
+            let ab = (b - a).abs();
+            if ab > 0.0 {
+                return vec![
+                    StructuralTarget { price: d + sign * ab * 1.000, weight: 0.80, label: "ABCD 1.0x" },
+                    StructuralTarget { price: d + sign * ab * 1.272, weight: 0.55, label: "ABCD 1.272x" },
+                    StructuralTarget { price: d + sign * ab * 1.618, weight: 0.40, label: "ABCD 1.618x" },
                 ];
             }
         }
@@ -1760,8 +1854,8 @@ fn compute_structural_targets(det: &DetectionRow, direction: Direction) -> Vec<S
     // ---------------- wyckoff: spring / upthrust --------------------
     if subkind.contains("spring") || subkind.contains("upthrust") {
         if let (Some(top), Some(bot)) = (
-            det.raw_meta.get("range_top").and_then(|v| v.as_f64()),
-            det.raw_meta.get("range_bottom").and_then(|v| v.as_f64()),
+            raw_meta.get("range_top").and_then(|v| v.as_f64()),
+            raw_meta.get("range_bottom").and_then(|v| v.as_f64()),
         ) {
             let range_h = (top - bot).abs();
             if range_h > 0.0 && inv_price > 0.0 {
