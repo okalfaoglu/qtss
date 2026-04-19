@@ -1082,18 +1082,25 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "pre-existing: phase promotion from mid-structure event regressed; tracked separately"]
-    fn mid_structure_event_promotes_phase() {
-        // Historical scan spawns a tracker and the first event seen is
-        // an SOS (canonical Phase D). Without the bootstrap guard the
-        // tracker stayed at Phase A because try_advance_phase needs
-        // SC/BC + AR + ST first. After the guard it reports Phase D.
+    fn mid_structure_event_stays_in_phase_a() {
+        // **Contract shift (P12)** — the old version of this test asserted
+        // that an isolated SOS / Markup could promote `current_phase`
+        // straight to D / E via a bootstrap path. That bootstrap was
+        // deliberately removed (see comment block above `try_advance_phase`
+        // — it produced rows like "Phase D with only a single SOS in
+        // events_json" and 6-year-long structures that glued a 2019 AR to
+        // a 2026 Markup). Sequential gates are now the ONLY path; starting
+        // mid-structure without SC/BC + AR + ST keeps the tracker at A
+        // (honest) and the event is preserved in `events_json` as audit
+        // trail. This test pins the new contract so the bootstrap can't
+        // regress back in silently.
         let t = tracker_with(&[(WyckoffEvent::SOS, 100, 0.9)]);
-        assert_eq!(t.current_phase, WyckoffPhase::D);
+        assert_eq!(t.current_phase, WyckoffPhase::A);
+        assert_eq!(t.events.len(), 1, "event must still be recorded (audit)");
 
-        // And a Markup alone lands in Phase E.
         let e = tracker_with(&[(WyckoffEvent::Markup, 200, 0.9)]);
-        assert_eq!(e.current_phase, WyckoffPhase::E);
+        assert_eq!(e.current_phase, WyckoffPhase::A);
+        assert_eq!(e.events.len(), 1);
     }
 
     #[test]

@@ -812,12 +812,16 @@ mod test {
     }
 
     #[test]
-    #[ignore = "pre-existing: LPSY short-setup emission regressed after phase-progression gating; tracked separately"]
     fn lpsy_emits_short_setup() {
         let mut tr = WyckoffStructureTracker::new(
             WyckoffSchematic::Distribution, 110.0, 100.0);
         tr.current_phase = WyckoffPhase::D;
         tr.record_event(WyckoffEvent::BC, 1, 111.0, 80.0);
+        // P7.2 — LPSY is on `sos_sow_required_for` (default list). Phase-D
+        // continuation shorts must be preceded by a SOW within
+        // `sos_sow_max_bars_ago` (default 50). Fixture adds a SOW at
+        // bar 35, then the LPSY at 40 — 5-bar gap, well within the window.
+        tr.record_event(WyckoffEvent::SOW, 35, 105.0, 80.0);
         tr.record_event(WyckoffEvent::LPSY, 40, 108.0, 75.0);
 
         let bars: Vec<SetupBar> = (0..30)
