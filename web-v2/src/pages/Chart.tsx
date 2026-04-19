@@ -637,6 +637,13 @@ export function Chart() {
   const [detailLayers, setDetailLayers] = useState<Record<string, Set<string>>>({});
   const [showLabels, setShowLabels] = useState(true);
   const [showProjections, setShowProjections] = useState(true);
+  // Backlog items — Setup + Open Position overlays. Default OFF because
+  // Chart already carries classical/elliott/harmonic/wyckoff/zones/tbm/
+  // mum/boşluk layers; layering armed setups + live positions on top of
+  // everything always-on becomes a wall of lines. Toolbar toggles let
+  // the operator opt-in per viewing session.
+  const [showSetups, setShowSetups] = useState(false);
+  const [showPositions, setShowPositions] = useState(false);
   const [activeTool, setActiveTool] = useState<ToolId>("crosshair");
 
   // Aşama 5.C — palette from system_config (DB-tunable via Config
@@ -728,6 +735,65 @@ export function Chart() {
         `/v2/wyckoff/overlay/${debounced.symbol}/${debounced.timeframe}`,
       ),
     refetchInterval: 30_000,
+  });
+
+  // ─── Setup overlay feed (Faz 8 /v2/setups) ──────────────────────
+  // Backlog item — armed+active setups on the current (symbol,timeframe).
+  // API takes only a single `state` param so we fetch all non-closed
+  // states by omitting it and filter client-side. Profile / direction
+  // drive the line colour; close_reason!=null rows are excluded.
+  interface SetupOverlayRow {
+    id: string;
+    symbol: string;
+    timeframe: string;
+    profile: string;
+    state: string;
+    direction: string;
+    alt_type: string | null;
+    entry_price: number | null;
+    entry_sl: number | null;
+    koruma: number | null;
+    target_ref: number | null;
+    close_reason: string | null;
+    ai_score: number | null;
+    trail_mode: boolean | null;
+    raw_meta: { structural_targets?: Array<{ price: number; weight: number; label: string }> } | null;
+  }
+  const setupsQuery = useQuery({
+    enabled: showSetups,
+    queryKey: ["v2", "chart-setups", debounced.symbol, debounced.timeframe],
+    queryFn: () =>
+      apiFetch<{ entries: SetupOverlayRow[] }>(
+        `/v2/setups?symbol=${encodeURIComponent(debounced.symbol)}&timeframe=${encodeURIComponent(debounced.timeframe)}&limit=200`,
+      ),
+    refetchInterval: 30_000,
+  });
+
+  // ─── Live-position overlay feed (/v2/live-positions) ────────────
+  // API is global (no symbol filter); we filter by symbol client-side.
+  // `include_closed=false` so ledger history doesn't crowd the pane —
+  // closed positions belong to a separate history panel (out of scope).
+  interface LivePositionRow {
+    id: string;
+    setup_id: string | null;
+    mode: string;
+    symbol: string;
+    side: string;
+    leverage: number;
+    entry_avg: string;
+    qty_filled: string;
+    qty_remaining: string;
+    current_sl: string | null;
+    liquidation_price: string | null;
+    last_mark: string | null;
+    unrealized_pnl_quote: string | null;
+    tp_ladder: unknown;
+  }
+  const positionsQuery = useQuery({
+    enabled: showPositions,
+    queryKey: ["v2", "chart-positions", debounced.symbol],
+    queryFn: () => apiFetch<LivePositionRow[]>(`/v2/live-positions?include_closed=false&limit=200`),
+    refetchInterval: 15_000,
   });
 
   // ─── Projections query ──────────────────────────────────────────
@@ -1928,7 +1994,153 @@ export function Chart() {
       // drew redundant boxes inside Wyckoff view.
     }
 
-  }, [merged, showVolume, showZigzag, showLabels, showProjections, visibleDetections, familyModes, detailLayers, wyckoffQuery.data, projectionsQuery.data]);
+    // ── Setup overlay (armed/active setups for current symbol+tf) ──
+    // Each setup contributes 4 horizontal lines (SL / entry / koruma /
+    // target_ref). We reuse the candle-range time axis; lines extend
+    // from the first visible candle to ~20 bars past the last candle.
+    if (showSetups && setupsQuery.data?.entries?.length && merged.candles?.length) {
+      const firstT = isoToUnix(merged.candles[0].open_time) as number;
+      const lastT = isoToUnix(merged.candles[merged.candles.length - 1].open_time) as number;
+      const barStep = merged.candles.length >= 2
+        ? (new Date(merged.candles[merged.candles.length - 1].open_time).getTime() -
+           new Date(merged.candles[merged.candles.length - 2].open_time).getTime()) / 1000
+        : 3600;
+      const futureT = (lastT + barStep * 20) as Time;
+      const startT = firstT as Time;
+      const active = setupsQuery.data.entries.filter(
+        (s) =>
+          s.symbol === debounced.symbol &&
+          s.timeframe === debounced.timeframe &&
+          !s.close_reason &&
+          (s.state === "armed" || s.state === "active" || s.state === "open"),
+      );
+      const profileColor: Record<string, string> = {
+        T: "#38bdf8",
+        Q: "#f59e0b",
+        D: "#a855f7",
+      };
+      const drawSetupLevel = (price: number | null, col: string, style: LineStyle, label: string) => {
+        if (price === null || !Number.isFinite(price)) return;
+        const lvl = chart.addSeries(LineSeries, {
+          color: col,
+          lineWidth: 1,
+          lineStyle: style,
+          crosshairMarkerVisible: false,
+          lastValueVisible: true,
+          priceLineVisible: false,
+          title: label,
+          autoscaleInfoProvider: () => null,
+        });
+        lvl.setData(sortLineData([
+          { time: startT, value: price },
+          { time: futureT, value: price },
+        ]));
+        overlayLinesRef.current.push(lvl);
+      };
+      for (const s of active) {
+        const col = profileColor[s.profile] ?? "#60a5fa";
+        const dirTag = s.direction?.toUpperCase() === "LONG" ? "L" : s.direction?.toUpperCase() === "SHORT" ? "S" : "?";
+        const tag = `${s.profile}${dirTag}`;
+        const aiTag = s.ai_score != null ? ` ai=${(s.ai_score * 100).toFixed(0)}` : "";
+        const trailTag = s.trail_mode ? " ⇢" : "";
+        drawSetupLevel(s.entry_sl, "#ef4444aa", LineStyle.Dashed, `[${tag}] SL`);
+        drawSetupLevel(s.entry_price, col, LineStyle.Solid, `[${tag}] Entry${aiTag}${trailTag}`);
+        // Koruma (ratcheted protection stop) — only draw if distinct from
+        // entry_sl so we don't stack two labels at the same price.
+        if (
+          s.koruma != null &&
+          s.entry_sl != null &&
+          Math.abs(s.koruma - s.entry_sl) > 1e-6
+        ) {
+          drawSetupLevel(s.koruma, "#fb923caa", LineStyle.Dotted, `[${tag}] Koruma`);
+        }
+        drawSetupLevel(s.target_ref, "#22c55e", LineStyle.Dashed, `[${tag}] Target`);
+      }
+    }
+
+    // ── Live/Dry open positions overlay ─────────────────────────────
+    // Surfaces currently-open positions (dry + live). entry_avg + current_sl
+    // + tp_ladder are drawn; unrealized PnL appears on the entry label.
+    if (showPositions && positionsQuery.data?.length && merged.candles?.length) {
+      const firstT = isoToUnix(merged.candles[0].open_time) as number;
+      const lastT = isoToUnix(merged.candles[merged.candles.length - 1].open_time) as number;
+      const barStep = merged.candles.length >= 2
+        ? (new Date(merged.candles[merged.candles.length - 1].open_time).getTime() -
+           new Date(merged.candles[merged.candles.length - 2].open_time).getTime()) / 1000
+        : 3600;
+      const futureT = (lastT + barStep * 20) as Time;
+      const startT = firstT as Time;
+      const symMatches = positionsQuery.data.filter((p) => p.symbol === debounced.symbol);
+      const drawPosLevel = (price: number | null, col: string, style: LineStyle, label: string) => {
+        if (price === null || !Number.isFinite(price)) return;
+        const lvl = chart.addSeries(LineSeries, {
+          color: col,
+          lineWidth: 2,
+          lineStyle: style,
+          crosshairMarkerVisible: false,
+          lastValueVisible: true,
+          priceLineVisible: false,
+          title: label,
+          autoscaleInfoProvider: () => null,
+        });
+        lvl.setData(sortLineData([
+          { time: startT, value: price },
+          { time: futureT, value: price },
+        ]));
+        overlayLinesRef.current.push(lvl);
+      };
+      for (const p of symMatches) {
+        const side = (p.side || "").toUpperCase();
+        const isLong = side === "BUY" || side === "LONG";
+        const dirCol = isLong ? "#22c55e" : "#ef4444";
+        const modeTag = p.mode.toUpperCase().slice(0, 3);
+        const pnl = p.unrealized_pnl_quote != null ? Number(p.unrealized_pnl_quote) : null;
+        const pnlTag =
+          pnl == null
+            ? ""
+            : ` uPnL=${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}`;
+        const lev = p.leverage && p.leverage > 1 ? ` ${p.leverage}x` : "";
+        const tag = `[${modeTag} ${isLong ? "L" : "S"}${lev}]`;
+        const entryAvg = Number(p.entry_avg);
+        drawPosLevel(entryAvg, dirCol, LineStyle.Solid, `${tag} Entry${pnlTag}`);
+        if (p.current_sl) {
+          drawPosLevel(Number(p.current_sl), "#ef4444", LineStyle.Dashed, `${tag} SL`);
+        }
+        if (p.liquidation_price) {
+          drawPosLevel(
+            Number(p.liquidation_price),
+            "#b91c1c",
+            LineStyle.Dotted,
+            `${tag} LIQ`,
+          );
+        }
+        // tp_ladder format varies (array or object with `levels`). We tolerate
+        // either: {price, label?} items or bare numbers.
+        const ladderRaw = p.tp_ladder as
+          | Array<{ price?: number; label?: string } | number>
+          | { levels?: Array<{ price?: number; label?: string } | number> }
+          | null
+          | undefined;
+        const ladderArr: Array<{ price?: number; label?: string } | number> = Array.isArray(
+          ladderRaw,
+        )
+          ? ladderRaw
+          : Array.isArray((ladderRaw as { levels?: unknown[] } | null)?.levels)
+            ? ((ladderRaw as { levels: Array<{ price?: number; label?: string } | number> }).levels)
+            : [];
+        ladderArr.slice(0, 3).forEach((item, i) => {
+          const price = typeof item === "number" ? item : item?.price;
+          if (price == null || !Number.isFinite(price)) return;
+          const lbl =
+            typeof item === "object" && item?.label
+              ? item.label
+              : `TP${i + 1}`;
+          drawPosLevel(Number(price), "#22c55ecc", LineStyle.Dotted, `${tag} ${lbl}`);
+        });
+      }
+    }
+
+  }, [merged, showVolume, showZigzag, showLabels, showProjections, visibleDetections, familyModes, detailLayers, wyckoffQuery.data, projectionsQuery.data, showSetups, showPositions, setupsQuery.data, positionsQuery.data, debounced.symbol, debounced.timeframe]);
 
   // ═══════════════════════════════════════════════════════════════
   // RENDER
@@ -2144,6 +2356,43 @@ export function Chart() {
                   </button>
                 );
               })}
+          </div>
+
+          {/* Separator */}
+          <div className="h-5 w-px bg-zinc-700" />
+
+          {/* Overlay toggles — Setup + Open Position (backlog items).
+              Separate from family toggles because they render from
+              different APIs (/v2/setups, /v2/live-positions) and their
+              lines are pinned horizontally across the whole window,
+              not anchored to a pivot like detections. */}
+          <div className="flex items-center gap-1">
+            {(
+              [
+                { key: "setup", label: "SETUP", color: "#38bdf8", on: showSetups, toggle: () => setShowSetups((v) => !v), tip: "Armed/active setup'ların entry/SL/target çizgileri" },
+                { key: "pos", label: "POZİSYON", color: "#22c55e", on: showPositions, toggle: () => setShowPositions((v) => !v), tip: "Açık paper/live pozisyon entry/SL/TP/LIQ çizgileri" },
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={t.toggle}
+                title={t.tip}
+                className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide transition"
+                style={{
+                  borderWidth: 1,
+                  borderColor: t.on ? t.color : "#3f3f46",
+                  background: t.on ? `${t.color}18` : "transparent",
+                  color: t.on ? t.color : "#71717a",
+                }}
+              >
+                <span
+                  className="inline-block h-1.5 w-2.5 rounded-sm"
+                  style={{ background: t.on ? t.color : "#3f3f46" }}
+                />
+                {t.label}
+              </button>
+            ))}
           </div>
 
           {/* Right side: info */}

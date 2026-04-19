@@ -21,8 +21,9 @@ Kullanıcı raporu: BTCUSDT 5m, Wyckoff overlay + setup overlay birlikte.
 5. Setup overlay TP label'ları — "TP1/TP2/TP3" dizilişi entry'den uzaklık yerine sabit index'e bağlı olabilir; direction-aware sırala.
 
 ## Ayrı başlıklar (kullanıcı talebi, 2026-04-19)
-- **Setups overlay on Chart**: armed/live setup'ları Chart'a çizme işi ayrı başlık.
-- **Açık pozisyonlar GUI**: broker'da açık olan işlemleri Chart'a/Setups'a render etme ayrı başlık.
+- ~~**Setups overlay on Chart**~~ ✅ 2026-04-19 — Chart.tsx toolbar'ına "SETUP" toggle eklendi. `/v2/setups` feed client-side (symbol,timeframe) filtreleniyor, armed+active+open rows çiziliyor. Her setup: SL (kırmızı dashed) + Entry (profile renginde solid: T=mavi, Q=kehribar, D=mor) + Koruma (turuncu dotted, entry_sl'den farklıysa) + Target (yeşil dashed). Label: `[<profile><L|S>] Entry ai=<n> ⇢` (trail mode ⇢ ikonu).
+- ~~**Açık pozisyonlar GUI overlay**~~ ✅ 2026-04-19 — "POZİSYON" toggle eklendi. `/v2/live-positions?include_closed=false` feed client-side symbol filtreleniyor. Her pozisyon: Entry (long=yeşil / short=kırmızı solid, +uPnL) + current_sl (kırmızı dashed) + liquidation (bordo dotted) + tp_ladder (yeşil dotted, ilk 3 seviye). Label: `[<DRY|LIV> L|S 3x] Entry uPnL=+12.50`.
+- **Backtest results sayfası**: ayrı başlık — dispatcher fix'inden sonra veri akacak. `/backtest` sayfası + equity curve + trades + per-formation win-rate tablosu.
 
 ## 2026-04-19 ilerleme — Wyckoff faz/event tutarsızlığı
 - **Market Phase kartı**: Chart.tsx'te "RANGE · redistribution?" yerine artık Phase A/B'de `RANGE · PHASE A` (direction commit edilmemiş) yazıyor. Phase C+ lock olduğunda ACCUMULATION/DISTRIBUTION headline'a çıkıyor. Detail satırındaki "Phase A" ile çelişki kalktı.
