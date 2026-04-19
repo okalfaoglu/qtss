@@ -556,20 +556,24 @@ function computeFormationTargets(d: DetectionOverlay): {
   // Generic classical pattern-height projection — wedges, flags,
   // channels, rectangles, diamonds, broadening, cup & handle, rounding,
   // scallops. Height = range of all anchor prices, projected from
-  // invalidation edge in breakout direction. Last anchor is entry.
+  // *entry* (last anchor = breakout pivot). Projecting from the
+  // invalidation edge would place TP1 at ~entry (since h ≈ entry - inv
+  // for these patterns) — the label would collide with Entry and the
+  // 1.618× extension would sit too close to be useful.
   if (
     d.family === "classical" &&
     CLASSICAL_HEIGHT_PREFIXES.some((p) => sub.startsWith(p))
   ) {
     const valid = prices.filter((x) => Number.isFinite(x));
-    if (valid.length >= 2 && sl !== null) {
+    if (valid.length >= 2) {
       const h = Math.max(...valid) - Math.min(...valid);
-      if (h > 0) {
+      const entry = prices[prices.length - 1];
+      if (h > 0 && entry > 0) {
         return {
-          entry: prices[prices.length - 1], sl,
+          entry, sl,
           targets: [
-            { price: sl + sign * h,         label: "Pat 1.0x" },
-            { price: sl + sign * h * 1.618, label: "Pat 1.618x" },
+            { price: entry + sign * h,         label: "Pat 1.0x" },
+            { price: entry + sign * h * 1.618, label: "Pat 1.618x" },
           ],
         };
       }

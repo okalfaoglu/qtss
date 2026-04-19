@@ -1700,8 +1700,13 @@ pub(crate) fn compute_structural_targets_raw(
 
     // ---------------- classical: generic pattern-height ------------
     // Wedges, flags, channels, rectangles, diamonds, broadening, cup &
-    // handle, rounding. All share the same "project pattern height in
-    // breakout direction from the invalidation edge" semantics.
+    // handle, rounding, scallops. Project pattern height in breakout
+    // direction from the *entry* (last anchor = breakout pivot), NOT
+    // the invalidation edge. Earlier version used `inv + sign*h`, but
+    // for these families `height = max - min ≈ entry - inv`, so
+    // `inv + h ≈ entry` — TP1 collapsed onto the Entry label and TP2
+    // sat only ~0.6× height above entry. Projecting from entry yields
+    // the correct "target distance = pattern height" measured-move.
     if family == "classical"
         && CLASSICAL_HEIGHT_PREFIXES.iter().any(|p| subkind.starts_with(p))
     {
@@ -1710,12 +1715,11 @@ pub(crate) fn compute_structural_targets_raw(
             let max = prices.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
             let min = prices.iter().cloned().fold(f64::INFINITY, f64::min);
             let height = max - min;
-            if height > 0.0 && inv_price > 0.0 {
-                // Project from the invalidation edge — that is the
-                // structural pivot the pattern breaks at.
+            let entry = *prices.last().unwrap();
+            if height > 0.0 && entry > 0.0 {
                 return vec![
-                    StructuralTarget { price: inv_price + sign * height,         weight: 0.70, label: "Pat 1.0x" },
-                    StructuralTarget { price: inv_price + sign * height * 1.618, weight: 0.45, label: "Pat 1.618x" },
+                    StructuralTarget { price: entry + sign * height,         weight: 0.70, label: "Pat 1.0x" },
+                    StructuralTarget { price: entry + sign * height * 1.618, weight: 0.45, label: "Pat 1.618x" },
                 ];
             }
         }
