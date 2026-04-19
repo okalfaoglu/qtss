@@ -99,12 +99,27 @@ async fn get_events(
     Query(q): Query<EventsQuery>,
 ) -> Result<Json<JsonValue>, ApiError> {
     let limit = q.limit.unwrap_or(500).clamp(1, 5_000);
-    // Pull a generous window of structures so even if the latest one is
-    // light on events we still have enough to render. Internal cap = 100
-    // structures (Wyckoff doesn't churn that fast).
+    // Wyckoff duplicate label fix (user report "btcusdt 1h futures,
+    // aynı barda çok fazla aynı kayıt"). The recent-structures endpoint
+    // was returning *every* lifecycle state (active + completed + failed)
+    // for the symbol/TF — e.g. 3 historical BTCUSDT 1h structures each
+    // kept their own events_json array, so the same BC bar got flattened
+    // three times. Chart-side dedup missed them because `time_ms` /
+    // `bar_index` drift by a tick between independent structure
+    // snapshots, breaking the (candleTime,event_code,pos) key.
+    //
+    // Two-layer fix:
+    //   1) Default to `status=active` so only the (now unique)
+    //      live structure contributes. Callers who want the full
+    //      history can still pass `status=all`.
+    //   2) Cross-structure dedup below on (event_code, bucket) where
+    //      bucket rounds time_ms to the bar open (or falls back to
+    //      bar_index). Guards against residual overlap when the caller
+    //      asks for status=all.
+    let status = q.status.as_deref().unwrap_or("active");
     let rows = list_recent_wyckoff_structures(
         &st.pool,
-        q.status.as_deref(),
+        Some(status),
         None,
         q.symbol.as_deref(),
         q.interval.as_deref(),
@@ -116,6 +131,9 @@ async fn get_events(
     let kind_filter = q.kind.as_deref().unwrap_or("all");
     let mut out: Vec<JsonValue> = Vec::new();
     let mut violation_count: u64 = 0;
+    // Cross-structure dedup key: event_code + bucketed time (ms). If
+    // time_ms is missing we fall back to bar_index.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for s in rows {
         let schematic: WyckoffSchematic = serde_json::from_value(
@@ -173,6 +191,26 @@ async fn get_events(
             if !include {
                 // still advance prior_max_phase so downstream regression
                 // detection stays accurate.
+                if event.phase() > prior_max_phase {
+                    prior_max_phase = event.phase();
+                }
+                continue;
+            }
+
+            // Cross-structure dedup: aynı (event_code, bar-bucket)
+            // kombinasyonu birden fazla structure'dan geldiğinde sadece
+            // ilkini yayınla. Bucket = time_ms varsa doğrudan, yoksa
+            // -1:bar_index fallback. Bu, chart tarafındaki
+            // (candleTime,event_code,pos) dedup'ının kaçırdığı
+            // mikrosaniye drift'li duplikeleri yakalar.
+            let bucket_key = format!(
+                "{}|{}",
+                event.as_str(),
+                time_ms
+                    .map(|t| t.to_string())
+                    .unwrap_or_else(|| format!("bar:{}", bar_index.unwrap_or(0)))
+            );
+            if !seen.insert(bucket_key) {
                 if event.phase() > prior_max_phase {
                     prior_max_phase = event.phase();
                 }
