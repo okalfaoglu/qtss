@@ -414,65 +414,189 @@ interface ChartVenueOption {
 }
 
 // ─── Compute Entry/TP/SL from detection geometry ─────────────────────
-function computeTargets(d: DetectionOverlay): {
+/** Frontend mirror of `compute_structural_targets_raw`
+ * (crates/qtss-worker/src/v2_setup_loop.rs). Kept in sync manually so
+ * the chart overlay shows exactly the entry/SL/TP ladder the setup
+ * engine would arm — with formation-specific labels ("MM 1.0x",
+ * "ABCD 1.272x", "Pat 1.618x"). Any change to the backend formulas
+ * must be reflected here; the unit-tested Rust version is the source
+ * of truth. Returns an empty list when the formation has no
+ * structural geometry (caller falls back to displaying SL only).
+ */
+const CLASSICAL_HEIGHT_PREFIXES = [
+  "rising_wedge", "falling_wedge",
+  "bull_flag", "bear_flag", "pennant",
+  "ascending_channel", "descending_channel",
+  "ascending_triangle", "descending_triangle", "symmetrical_triangle",
+  "rectangle",
+  "diamond_top", "diamond_bottom",
+  "broadening",
+  "cup_and_handle", "inverse_cup_and_handle",
+  "rounding_top", "rounding_bottom",
+  "scallop_bullish", "scallop_bearish",
+  "measured_move_abcd",
+];
+
+interface StructuralLevel { price: number; label: string }
+
+function directionSign(subkind: string): 0 | 1 | -1 {
+  if (subkind.endsWith("_bull") || subkind.includes("_bull_")) return 1;
+  if (subkind.endsWith("_bear") || subkind.includes("_bear_")) return -1;
+  return 0;
+}
+
+function computeFormationTargets(d: DetectionOverlay): {
   entry: number | null;
-  tp1: number | null;
-  tp2: number | null;
   sl: number | null;
+  targets: StructuralLevel[];
 } {
   const inv = Number(d.invalidation_price);
   const sl = Number.isFinite(inv) && inv > 0 ? inv : null;
   const anchors = d.anchors;
-  let entry: number | null = null;
-  let tp1: number | null = null;
-  let tp2: number | null = null;
+  const prices = anchors.map((a) => Number(a.price));
+  const sub = d.subkind;
+  const sign = directionSign(sub);
+  const empty = { entry: null as number | null, sl, targets: [] as StructuralLevel[] };
+  if (sign === 0 || anchors.length === 0) return empty;
 
-  if (d.subkind.includes("double_top") || d.subkind.includes("double_bottom")) {
-    if (anchors.length >= 3) {
-      const extreme = Number(anchors[0].price);
-      const neck = Number(anchors[1].price);
-      const height = Math.abs(extreme - neck);
-      const dir = d.subkind.includes("bull") ? 1 : -1;
-      entry = neck;
-      tp1 = neck + dir * height;
-      tp2 = neck + dir * height * 1.618;
+  // double_top / double_bottom — 3 anchors, project from neckline
+  if (anchors.length >= 3 && (sub.startsWith("double_top") || sub.startsWith("double_bottom"))) {
+    const extreme = prices[0], neck = prices[1];
+    const h = Math.abs(extreme - neck);
+    if (h > 0) {
+      return {
+        entry: neck, sl,
+        targets: [
+          { price: neck + sign * h,         label: "MM 1.0x" },
+          { price: neck + sign * h * 1.618, label: "MM 1.618x" },
+        ],
+      };
     }
-  } else if (d.subkind.includes("head_and_shoulders")) {
-    if (anchors.length >= 5) {
-      const head = Number(anchors[2].price);
-      const n1 = Number(anchors[1].price);
-      const n2 = Number(anchors[3].price);
-      const neckline = (n1 + n2) / 2;
-      const height = Math.abs(head - neckline);
-      const dir = d.subkind.includes("bull") ? 1 : -1;
-      entry = neckline;
-      tp1 = neckline + dir * height;
-      tp2 = neckline + dir * height * 1.618;
-    }
-  } else if (d.family === "harmonic" && anchors.length >= 5) {
-    // Harmonic entry = D (PRZ), targets = CD leg retrace
-    const cP = Number(anchors[3].price);
-    const dP = Number(anchors[4].price);
-    const cdRange = Math.abs(cP - dP);
-    // Direction: bull → price should rise from D, bear → fall from D
-    // For bull: D < C (D is a low), targets are ABOVE D
-    // For bear: D > C (D is a high), targets are BELOW D
-    const dir = dP < cP ? 1 : -1; // derive from geometry, not subkind name
-    entry = dP;
-    tp1 = dP + dir * cdRange * 0.382;
-    tp2 = dP + dir * cdRange * 0.618;
-  } else if (d.subkind.includes("impulse") && anchors.length >= 6) {
-    const p0 = Number(anchors[0].price);
-    const p1 = Number(anchors[1].price);
-    const p4 = Number(anchors[4].price);
-    const w1h = Math.abs(p1 - p0);
-    const dir = d.subkind.includes("bull") ? 1 : -1;
-    entry = p4;
-    tp1 = p4 + dir * w1h;
-    tp2 = p4 + dir * w1h * 1.618;
   }
 
-  return { entry, tp1, tp2, sl };
+  // head & shoulders — 5 anchors
+  if (anchors.length >= 5 && sub.includes("head_and_shoulders")) {
+    const head = prices[2], n1 = prices[1], n2 = prices[3];
+    const neck = (n1 + n2) / 2;
+    const h = Math.abs(head - neck);
+    if (h > 0) {
+      return {
+        entry: neck, sl,
+        targets: [
+          { price: neck + sign * h,         label: "MM 1.0x" },
+          { price: neck + sign * h * 1.618, label: "MM 1.618x" },
+        ],
+      };
+    }
+  }
+
+  // triple_top / triple_bottom — 5 anchors
+  if (anchors.length >= 5 && (sub.startsWith("triple_top") || sub.startsWith("triple_bottom"))) {
+    const [p1, v1, p2, v2, p3] = prices;
+    const neck = (v1 + v2) / 2;
+    const peak = (p1 + p2 + p3) / 3;
+    const h = Math.abs(peak - neck);
+    if (h > 0) {
+      return {
+        entry: neck, sl,
+        targets: [
+          { price: neck + sign * h,         label: "MM 1.0x" },
+          { price: neck + sign * h * 1.618, label: "MM 1.618x" },
+        ],
+      };
+    }
+  }
+
+  // measured_move_abcd — 4 anchors, AB=CD from D
+  if (anchors.length >= 4 && sub.startsWith("measured_move_abcd")) {
+    const a = prices[0], b = prices[1], dPt = prices[3];
+    const ab = Math.abs(b - a);
+    if (ab > 0) {
+      return {
+        entry: dPt, sl,
+        targets: [
+          { price: dPt + sign * ab * 1.000, label: "ABCD 1.0x" },
+          { price: dPt + sign * ab * 1.272, label: "ABCD 1.272x" },
+          { price: dPt + sign * ab * 1.618, label: "ABCD 1.618x" },
+        ],
+      };
+    }
+  }
+
+  // v_top / v_bottom — 3 anchors
+  if (anchors.length >= 3 && (sub.startsWith("v_top") || sub.startsWith("v_bottom"))) {
+    const tip = prices[1], neck = prices[0];
+    const h = Math.abs(tip - neck);
+    if (h > 0) {
+      return {
+        entry: neck, sl,
+        targets: [
+          { price: neck + sign * h * 0.618, label: "V 0.618x" },
+          { price: neck + sign * h * 1.000, label: "V 1.0x" },
+        ],
+      };
+    }
+  }
+
+  // Generic classical pattern-height projection — wedges, flags,
+  // channels, rectangles, diamonds, broadening, cup & handle, rounding,
+  // scallops. Height = range of all anchor prices, projected from
+  // invalidation edge in breakout direction. Last anchor is entry.
+  if (
+    d.family === "classical" &&
+    CLASSICAL_HEIGHT_PREFIXES.some((p) => sub.startsWith(p))
+  ) {
+    const valid = prices.filter((x) => Number.isFinite(x));
+    if (valid.length >= 2 && sl !== null) {
+      const h = Math.max(...valid) - Math.min(...valid);
+      if (h > 0) {
+        return {
+          entry: prices[prices.length - 1], sl,
+          targets: [
+            { price: sl + sign * h,         label: "Pat 1.0x" },
+            { price: sl + sign * h * 1.618, label: "Pat 1.618x" },
+          ],
+        };
+      }
+    }
+  }
+
+  // Harmonic XABCD — entry at D, project AD retracement
+  if (d.family === "harmonic" && anchors.length >= 5) {
+    const aP = prices[1];
+    const dP = prices[prices.length - 1];
+    const ad = Math.abs(aP - dP);
+    // Use geometry-derived direction for harmonic (subkind may be neutral)
+    const cP = prices[3];
+    const hSign = dP < cP ? 1 : -1;
+    if (ad > 0) {
+      return {
+        entry: dP, sl,
+        targets: [
+          { price: dP + hSign * ad * 0.382, label: "AD 0.382" },
+          { price: dP + hSign * ad * 0.618, label: "AD 0.618" },
+          { price: dP + hSign * ad * 1.000, label: "AD 1.000" },
+        ],
+      };
+    }
+  }
+
+  // Elliott impulse 1-2-3-4-5 — project wave-1 height from wave-4 end
+  if (sub.includes("impulse") && anchors.length >= 6) {
+    const p0 = prices[0], p1 = prices[1], p4 = prices[4];
+    const w1 = Math.abs(p1 - p0);
+    if (w1 > 0) {
+      return {
+        entry: p4, sl,
+        targets: [
+          { price: p4 + sign * w1,         label: "W1 1.0x" },
+          { price: p4 + sign * w1 * 1.618, label: "W1 1.618x" },
+        ],
+      };
+    }
+  }
+
+  return empty;
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -1156,9 +1280,13 @@ export function Chart() {
         rectanglePrimitivesRef.current.push(prim);
       }
 
-      // Entry / TP / SL price lines (only when layer enabled)
+      // Entry / TP / SL price lines (only when layer enabled) —
+      // formation-driven geometry with formation-specific labels
+      // ("MM 1.0x", "Pat 1.618x", "ABCD 1.272x") so the chart shows
+      // exactly the ladder the setup engine would arm. Generic
+      // "TP1/TP2" labels are used only as a last-resort fallback.
       if (showDetail && layers.has("entry_tp_sl") && d.anchors.length > 0) {
-        const { entry, tp1, tp2, sl } = computeTargets(d);
+        const { entry, sl, targets } = computeFormationTargets(d);
         const conf = Number(d.confidence) || 0;
         const confStr = conf > 0 ? ` (${(conf * 100).toFixed(0)}%)` : "";
         const lastTime = isoToUnix(d.anchors[d.anchors.length - 1].time);
@@ -1194,8 +1322,11 @@ export function Chart() {
 
         drawLevel(sl, "#ef4444", LineStyle.Dashed, "SL");
         drawLevel(entry, "#d4d4d8", LineStyle.Dotted, `Entry${confStr}`);
-        drawLevel(tp1, "#34d399", LineStyle.Dashed, "TP1");
-        drawLevel(tp2, "#22c55e80", LineStyle.Dotted, "TP2");
+        const tpPalette = ["#34d399", "#22c55ecc", "#22c55e80"];
+        const tpStyles = [LineStyle.Dashed, LineStyle.Dotted, LineStyle.Dotted];
+        targets.slice(0, 3).forEach((t, i) => {
+          drawLevel(t.price, tpPalette[i] ?? "#22c55e60", tpStyles[i] ?? LineStyle.Dotted, t.label);
+        });
       }
     }
 

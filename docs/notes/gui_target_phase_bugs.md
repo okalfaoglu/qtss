@@ -20,9 +20,13 @@ Kullanıcı raporu: BTCUSDT 5m, Wyckoff overlay + setup overlay birlikte.
    - Event pin'leri (Spring/UTAD/SC/BC...) phase'e göre renk/metin seçiyor mu?
 5. Setup overlay TP label'ları — "TP1/TP2/TP3" dizilişi entry'den uzaklık yerine sabit index'e bağlı olabilir; direction-aware sırala.
 
+## Ayrı başlıklar (kullanıcı talebi, 2026-04-19)
+- **Setups overlay on Chart**: armed/live setup'ları Chart'a çizme işi ayrı başlık.
+- **Açık pozisyonlar GUI**: broker'da açık olan işlemleri Chart'a/Setups'a render etme ayrı başlık.
+
 ## 2026-04-19 ilerleme
 - Backend artık her setup için `raw_meta.structural_targets = [{price, weight, label}, ...]` ve `raw_meta.structural_subkind` yayıyor (v2_setup_loop.rs). Formation'a özel etiketler ("MM 1.0x", "Pat 1.618x", "ABCD 1.272x") burada.
-- Chart.tsx TP overlay hâlâ detection anchors'tan `computeTargets(d)` ile hesaplıyor → setup'ın gerçek armed TP'leriyle senkron değil. Yapılması gereken: setups query'sini Chart'a ekle, entry/sl/target_ref + raw_meta.structural_targets üzerinden çiz, direction-aware sırala.
+- Chart.tsx artık `computeFormationTargets(d)` ile backend `compute_structural_targets_raw` mirror'u kullanıyor. Her classical formation (double_top/bottom, H&S, triple_top/bottom, ABCD, V-spike, wedge/channel/triangle/rectangle/diamond/broadening/cup&handle/rounding/scallop), harmonic XABCD ve Elliott impulse için entry/SL/TP'ler formasyona özel label'larla ("MM 1.0x", "ABCD 1.272x", "Pat 1.618x", "AD 0.618") çiziliyor. TS mirror backend ile manuel senkron tutuluyor; backend unit-tested → truth source.
 - AI (ClassicalSource) artık `target_count`, `has_structural_targets`, `target_1_r/weight`, `target_2_r/weight` feature'larını snapshot'a yazıyor.
 
 ## Beklenen davranış

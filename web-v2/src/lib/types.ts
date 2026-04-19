@@ -371,7 +371,32 @@ export interface SetupEntry {
   /** Faz 9.7.5 — true once the watcher has armed trailing-stop mode. */
   trail_mode: boolean | null;
   confluence_id: string | null;
-  raw_meta: unknown;
+  raw_meta: SetupRawMeta | null;
+}
+
+/** Faz 10 — formation-specific structural target, carried on
+ * `setup.raw_meta.structural_targets`. `label` is emitted by the
+ * target engine (e.g. "MM 1.0x", "Pat 1.618x", "ABCD 1.272x") so the
+ * GUI can render the exact geometry the setup was armed with, instead
+ * of a generic TP1/TP2. */
+export interface StructuralTarget {
+  price: number;
+  weight: number;
+  label: string;
+}
+
+export interface SetupRawMeta {
+  profile?: string;
+  alt_type?: string | null;
+  ema50?: number | null;
+  ema200?: number | null;
+  atr?: number | null;
+  guven?: number | null;
+  correlation_groups?: unknown;
+  ai?: unknown;
+  structural_targets?: StructuralTarget[];
+  structural_subkind?: string | null;
+  [k: string]: unknown;
 }
 
 export interface SetupFeed {
