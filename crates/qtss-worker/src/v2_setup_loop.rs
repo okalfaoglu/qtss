@@ -135,6 +135,17 @@ async fn load_profile(pool: &PgPool, p: Profile) -> ProfileConfig {
             },
         )
         .await,
+        // bug_negative_target_price.md — guard against negative
+        // target_ref on wide-stop short setups. Same default as
+        // wyckoff.plan.min_target_price_frac.
+        min_target_price_frac: resolve_system_f64(
+            pool,
+            "setup",
+            &format!("profile.{slug}.min_target_price_frac"),
+            "",
+            0.001,
+        )
+        .await,
     };
     ProfileConfig { guard }
 }

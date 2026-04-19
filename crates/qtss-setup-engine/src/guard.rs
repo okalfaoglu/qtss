@@ -42,6 +42,12 @@ pub struct PositionGuardConfig {
     /// `guven` threshold above which a reverse signal force-closes
     /// the setup.
     pub reverse_guven_threshold: f64,
+    /// Hard floor for target/SL prices as fraction of entry. Mirrors
+    /// `wyckoff.plan.min_target_price_frac` — guards the ATR-fallback
+    /// guard against producing sub-zero `target_ref` on wide-stop
+    /// short setups (entry - stop_distance * target_ref_r). See
+    /// docs/notes/bug_negative_target_price.md. Default 0.001.
+    pub min_target_price_frac: f64,
 }
 
 /// Structural target from a detection (measured move, fib extension, etc.).
@@ -76,8 +82,13 @@ impl PositionGuard {
     pub fn new(entry: f64, atr: f64, cfg: &PositionGuardConfig, direction: Direction) -> Self {
         let stop_distance = atr * cfg.entry_sl_atr_mult;
         let sign = direction.sign();
-        let entry_sl = entry - sign * stop_distance;
-        let target_ref = entry + sign * stop_distance * cfg.target_ref_r;
+        let price_floor = entry.abs() * cfg.min_target_price_frac;
+        // bug_negative_target_price.md — short-side entry_sl/target_ref
+        // can dive below zero on wide ATR stops. Clamp to a positive
+        // floor so downstream renderers never see an "impossible"
+        // sub-zero price. Long side stays as-is (entry + positive).
+        let entry_sl = (entry - sign * stop_distance).max(price_floor);
+        let target_ref = (entry + sign * stop_distance * cfg.target_ref_r).max(price_floor);
         Self {
             entry,
             entry_sl,
@@ -102,9 +113,12 @@ impl PositionGuard {
     ) -> Self {
         // SL = invalidation price (where the pattern breaks).
         let entry_sl = invalidation_price;
+        let price_floor = entry.abs() * cfg.min_target_price_frac;
 
-        // Validate SL is on the correct side of entry.
-        let sl_valid = match direction {
+        // Validate SL is on the correct side of entry AND above the
+        // price floor (bug_negative_target_price.md — detector-side
+        // structural prices can also leak negative on wide patterns).
+        let sl_valid = entry_sl > price_floor && match direction {
             Direction::Long => entry_sl < entry,
             Direction::Short => entry_sl > entry,
             Direction::Neutral => false,
@@ -120,10 +134,15 @@ impl PositionGuard {
         sorted.sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap_or(std::cmp::Ordering::Equal));
 
         let target_ref = sorted[0].price;
-        let target_ref2 = sorted.get(1).map(|t| t.price);
+        // Drop a TP2 that fell below the price floor (e.g. measured-move
+        // for short on a wide head-and-shoulders projecting sub-zero).
+        let target_ref2 = sorted.get(1)
+            .map(|t| t.price)
+            .filter(|p| *p > price_floor);
 
-        // Validate target is on the correct side of entry.
-        let tp_valid = match direction {
+        // Validate target is on the correct side of entry AND above
+        // the price floor.
+        let tp_valid = target_ref > price_floor && match direction {
             Direction::Long => target_ref > entry,
             Direction::Short => target_ref < entry,
             Direction::Neutral => false,
@@ -211,6 +230,7 @@ mod tests {
             risk_pct: 0.5,
             max_concurrent: 3,
             reverse_guven_threshold: 0.55,
+            min_target_price_frac: 0.001,
         }
     }
 

@@ -129,6 +129,10 @@ async fn load_config(pool: &PgPool) -> LoopConfig {
         risk_pct,
         max_concurrent: 999, // allocator limits come from global config; this field is for live watcher budgeting
         reverse_guven_threshold: 0.55,
+        // bug_negative_target_price.md — same default as live loop
+        // (0.1% of entry). Backtest mode shares the floor so historical
+        // setups don't render impossible TP prices in the GUI either.
+        min_target_price_frac: 0.001,
     };
 
     LoopConfig {
