@@ -108,9 +108,17 @@ async fn run_pass(pool: &PgPool) -> Result<usize, Box<dyn std::error::Error + Se
         pool, "setup", "wyckoff.plan.use_vprofile_tp", "", true,
     )
     .await;
+    // bug_negative_target_price.md — TP/SL price floor as fraction of
+    // entry. Default 0.001 (0.1%) prevents R-multiple short ladders
+    // from leaking sub-zero target prices to the GUI / Telegram card.
+    let min_target_price_frac = resolve_system_f64(
+        pool, "setup", "wyckoff.plan.min_target_price_frac", "", 0.001,
+    )
+    .await;
     let mut planner_cfg = TradePlannerConfig::default();
     planner_cfg.sl_policy = qtss_wyckoff::trade_planner::SlPolicy::from_str(&sl_policy_raw);
     planner_cfg.use_vprofile_tp = use_vprofile_tp;
+    planner_cfg.min_target_price_frac = min_target_price_frac;
 
     let emit_cfg = EmitterConfig {
         min_score,

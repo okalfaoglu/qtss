@@ -74,6 +74,14 @@ pub struct TradePlannerConfig {
     /// TP ladder rungs collapse onto entry. Default 0.001 (= 0.1% of
     /// entry). Config key: `wyckoff.plan.min_risk_frac`.
     pub min_risk_frac: f64,
+    /// Hard floor for TP/SL prices as a fraction of entry. Guards against
+    /// the R-multiple projection (entry ± k*R) on wide-SL short setups
+    /// pushing target prices to zero or below — physically impossible
+    /// in any spot/perp market. See `docs/notes/bug_negative_target_price.md`
+    /// (RAVEUSDT SHORT 1h: entry 1.18, SL 1.747, k=2.5 → TP1 = -0.234).
+    /// Default 0.001 = 0.1% of entry. Config key:
+    /// `wyckoff.plan.min_target_price_frac`.
+    pub min_target_price_frac: f64,
     /// P7.4 — when true, overwrite TP1 with the nearest HVN / naked VPOC
     /// / prior-swing level if one exists between entry and the range
     /// cap. Villahermosa *Wyckoff 2.0* §7.4.3: "targets cluster at
@@ -133,6 +141,7 @@ impl Default for TradePlannerConfig {
             d_entry_sl_atr_mult: 2.5,
             q_entry_sl_atr_mult: 1.5,
             min_risk_frac: 0.001,
+            min_target_price_frac: 0.001,
             use_vprofile_tp: true,
         }
     }
@@ -208,6 +217,12 @@ pub enum RejectReason {
     NoBucket,
     InvalidGeometry,    // entry == sl, etc.
     EmptyTpLadder,
+    /// All TPs (including TP1) projected below the price floor (e.g.
+    /// short-side R-multiple ladder produced sub-zero or near-zero
+    /// targets). Distinct from `EmptyTpLadder` so telemetry can detect
+    /// chronically over-aggressive cause-effect / R multipliers per
+    /// symbol+TF. See bug_negative_target_price.md.
+    NegativeTargetProjection,
 }
 
 // =========================================================================
@@ -325,16 +340,37 @@ pub fn plan_with_vp(
     cap_ladder_to(&mut ladder, range_cap, dir);
 
     // ── Classical L1 cap (P&F target) ─────────────────────────
+    // For short setups, pnf_target = range_bottom - cause_effect*range_h
+    // can dive below zero on wide ranges — clamp to the price floor so
+    // the cap itself never injects a sub-floor target.
+    let price_floor = cand.entry.abs() * cfg.min_target_price_frac;
+    let pnf_capped = match dir {
+        SetupDirection::Long  => cand.pnf_target,
+        SetupDirection::Short => cand.pnf_target.max(price_floor),
+    };
     if cfg.classical_cap_enabled {
-        cap_ladder_to(&mut ladder, cand.pnf_target, dir);
+        cap_ladder_to(&mut ladder, pnf_capped, dir);
     }
 
     // ── Drop rungs that ended up on wrong side of entry ───────
     ladder.retain(|t| (t.price - cand.entry) * dir.sign() > 0.0);
 
+    // ── Hard floor: physically valid prices only. R-multiple ──
+    // projection on wide-SL shorts (entry - k*R) can push TP below
+    // zero — the chart then renders e.g. "TP1 -0.234". See
+    // bug_negative_target_price.md (RAVEUSDT 1h SHORT).
+    let pre_floor_len = ladder.len();
+    ladder.retain(|t| t.price >= price_floor);
+    let dropped_to_floor = pre_floor_len > ladder.len();
+
     if ladder.is_empty() {
+        let reason = if dropped_to_floor {
+            RejectReason::NegativeTargetProjection
+        } else {
+            RejectReason::EmptyTpLadder
+        };
         return reject(cand, profile, final_sl, classical_sl, adaptive_sl, structural_sl, atr_pct,
-                      cfg.commission_bps, RejectReason::EmptyTpLadder);
+                      cfg.commission_bps, reason);
     }
 
     // ── Net RR gate (commission, weighted by qty_split) ───────
@@ -537,6 +573,36 @@ mod test {
             assert!(w[1].price <= w[0].price, "short ladder descends");
         }
         assert!(plan.entry_sl > plan.entry);
+    }
+
+    #[test]
+    fn raveusdt_short_negative_tp_is_rejected_or_clamped() {
+        // Repro of bug_negative_target_price.md — RAVEUSDT 1h SHORT
+        // Q-profile setup: entry 1.18133, SL 1.747431 → R≈0.566.
+        // Adaptive bucket TP3 = entry - 4*R = -1.083, even TP1 = -0.235.
+        // Before the fix the chart rendered TP1 = -0.234. After the fix:
+        // every rung must be > 0, otherwise the setup is rejected with
+        // NegativeTargetProjection.
+        let mut cand = long_cand(1.18133, 0.61527, 0.05, 60.0); // long shape first
+        cand.direction = SetupDirection::Short;
+        cand.setup_type = WyckoffSetupType::Lpsy;
+        cand.entry = 1.18133;
+        cand.sl = 1.747431;       // SL above entry for short → risk = 0.566
+        cand.sl_wide = 1.80;
+        cand.range_top = 1.80;
+        cand.range_bottom = 1.0;
+        cand.range_height = 0.8;
+        cand.pnf_target = 1.0 - 0.8 * 1.5; // -0.2 — replicates the leak
+
+        let plan = plan(&cand, Profile::Q, &TradePlannerConfig::default());
+        // Either: every surviving rung is strictly positive, OR the
+        // setup was rejected because the floor wiped them all.
+        for r in &plan.tp_ladder {
+            assert!(r.price > 0.0, "TP rung leaked sub-zero price: {:?}", r);
+        }
+        if plan.tp_ladder.is_empty() {
+            assert_eq!(plan.rejected, Some(RejectReason::NegativeTargetProjection));
+        }
     }
 
     #[test]
