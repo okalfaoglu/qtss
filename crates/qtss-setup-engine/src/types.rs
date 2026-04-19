@@ -237,12 +237,19 @@ pub enum CloseReason {
 }
 
 impl CloseReason {
+    /// Must stay in sync with `qtss_setups.close_reason_chk` — the DB
+    /// constraint only accepts the canonical v2 lexicon
+    /// (`tp_final | sl_hit | trail_stop | invalidated | cancelled`).
+    /// The older `target_hit/stop_hit/reverse_signal/manual` strings
+    /// were Faz 8 names that never matched the migration; every close
+    /// via this path rejected with `qtss_setups_close_reason_chk`
+    /// (tens of thousands of warnings, 0 v2_setup_loop closes).
     pub fn as_str(self) -> &'static str {
         match self {
-            CloseReason::TargetHit => "target_hit",
-            CloseReason::StopHit => "stop_hit",
-            CloseReason::ReverseSignal => "reverse_signal",
-            CloseReason::Manual => "manual",
+            CloseReason::TargetHit => "tp_final",
+            CloseReason::StopHit => "sl_hit",
+            CloseReason::ReverseSignal => "invalidated",
+            CloseReason::Manual => "cancelled",
         }
     }
 }
