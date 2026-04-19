@@ -1808,9 +1808,28 @@ export function Chart() {
       // Event horizontal lines (like AlphaExtract's box.new for each event)
       const eventLines: Array<{ idx: number; price: number; color: string; label: string }> = [];
 
+      // Build unix-seconds → candle-index map for time_ms alignment.
+      // Backend events have GLOBAL bar_index (relative to symbol's full
+      // history; structure.rs:144) which always overshoots the visible
+      // chart window — only time_ms aligns reliably. Frontend events
+      // use chart-relative bar_index, so the fallback covers them.
+      const overlayTimeToIdx = new Map<number, number>();
+      for (let i = 0; i < merged.candles.length; i++) {
+        overlayTimeToIdx.set(isoToUnix(merged.candles[i].open_time) as number, i);
+      }
+
       for (const ev of sortedEvts) {
-        const idx = ev.bar_index;
-        if (idx < 0 || idx >= merged.candles.length) continue;
+        let idx: number;
+        const evTimeMs = (ev as { time_ms?: number | null }).time_ms;
+        if (evTimeMs != null) {
+          const sec = Math.floor(evTimeMs / 1000);
+          const found = overlayTimeToIdx.get(sec);
+          if (found === undefined) continue;
+          idx = found;
+        } else {
+          idx = ev.bar_index;
+          if (idx < 0 || idx >= merged.candles.length) continue;
+        }
         const meta = eventMeta[ev.event] ?? { label: ev.event.toUpperCase(), color: "#9ca3af", pos: "aboveBar" as const };
 
         // Pin price to the candle's wick tip (Pine: high for top events, low for bottom).
@@ -1892,9 +1911,31 @@ export function Chart() {
         placedKeys.add(`${String(m.time)}|${m.position}`);
       }
 
+      // Build a unix-seconds → candle-index map. Wyckoff events_json
+      // stores GLOBAL bar_index (relative to the symbol's full history,
+      // see structure.rs:144) — the visible chart window only holds
+      // ~1000 bars, so bar_index alone always misses. We use time_ms
+      // (Unix epoch ms) to align each event to its candle.
+      const timeToIdx = new Map<number, number>();
+      for (let i = 0; i < merged.candles.length; i++) {
+        const t = isoToUnix(merged.candles[i].open_time) as number;
+        timeToIdx.set(t, i);
+      }
+
       for (const ev of auditEvents) {
-        const idx = ev.bar_index;
-        if (idx === null || idx < 0 || idx >= merged.candles.length) continue;
+        // Time-based match (preferred). Fall back to bar_index ONLY
+        // when time_ms is missing AND the bar_index fits the window.
+        let idx: number | null = null;
+        if (ev.time_ms != null) {
+          const sec = Math.floor(ev.time_ms / 1000);
+          idx = timeToIdx.get(sec) ?? null;
+        }
+        if (idx === null && ev.bar_index !== null
+            && ev.bar_index >= 0
+            && ev.bar_index < merged.candles.length) {
+          idx = ev.bar_index;
+        }
+        if (idx === null) continue;
         const serdeKey = codeToSerde[ev.event_code] ?? "";
         const meta = auditEventMeta[serdeKey] ?? {
           label: ev.event_code, color: "#9ca3af", pos: "aboveBar" as const,
