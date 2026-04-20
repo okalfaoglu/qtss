@@ -50,6 +50,7 @@ pub mod rules;
 mod targets;
 mod triangle;
 mod truncated_fifth;
+pub mod validator;
 pub mod zigzag;
 
 #[cfg(test)]
