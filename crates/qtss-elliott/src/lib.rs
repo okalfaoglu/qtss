@@ -27,6 +27,7 @@
 //!   `qtss-domain` makes this enforced at the type level.
 
 mod aggregator;
+pub mod backtest;
 mod combination;
 mod common;
 mod corrective;
