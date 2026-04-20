@@ -29,6 +29,7 @@
 mod aggregator;
 mod combination;
 mod common;
+mod corrective;
 mod decomposition;
 mod config;
 mod detector;
@@ -39,13 +40,14 @@ mod fibs;
 mod flat;
 mod formation;
 mod forming;
+mod motive;
 mod nascent;
 mod projection;
 pub mod projection_engine;
 pub mod rules;
 mod triangle;
 mod truncated_fifth;
-mod zigzag;
+pub mod zigzag;
 
 #[cfg(test)]
 mod tests;

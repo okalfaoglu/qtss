@@ -24,6 +24,12 @@ pub struct ElliottConfig {
     /// Minimum structural score (0..1) below which the detector
     /// suppresses the candidate. Validator may still raise the bar.
     pub min_structural_score: f32,
+    /// ZigZag lookback window for pivot high detection (bars).
+    /// LuxAlgo default: 4. Read from qtss-config.
+    pub zigzag_lookback_high: usize,
+    /// ZigZag lookback window for pivot low detection (bars).
+    /// LuxAlgo default: 4. Read from qtss-config.
+    pub zigzag_lookback_low: usize,
 }
 
 impl ElliottConfig {
@@ -39,6 +45,8 @@ impl ElliottConfig {
             // downstream, so being more permissive at the detector
             // layer produces more candidates, not more false positives.
             min_structural_score: 0.45,
+            zigzag_lookback_high: 4,  // LuxAlgo: len1
+            zigzag_lookback_low: 4,   // LuxAlgo: len1
         }
     }
 
@@ -51,6 +59,16 @@ impl ElliottConfig {
         if !(0.0..=1.0).contains(&(self.min_structural_score as f64)) {
             return Err(ElliottError::InvalidConfig(
                 "min_structural_score must be in 0..=1".into(),
+            ));
+        }
+        if self.zigzag_lookback_high == 0 {
+            return Err(ElliottError::InvalidConfig(
+                "zigzag_lookback_high must be > 0".into(),
+            ));
+        }
+        if self.zigzag_lookback_low == 0 {
+            return Err(ElliottError::InvalidConfig(
+                "zigzag_lookback_low must be > 0".into(),
             ));
         }
         Ok(())

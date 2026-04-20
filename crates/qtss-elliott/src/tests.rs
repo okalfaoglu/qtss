@@ -425,3 +425,116 @@ fn combo_skips_when_score_floor_too_high() {
         .detect(&tree_from(imperfect), &instrument(), Timeframe::H4, &regime())
         .is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// LuxAlgo ZigZag + Motive + Corrective pipeline tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn luxalgo_zigzag_pivot_detection() {
+    use crate::zigzag::{ZigZag, process_bar};
+    use qtss_domain::v2::bar::Bar;
+    use chrono::Utc;
+
+    let mut zz = ZigZag::new(11);
+    let mut bars = Vec::new();
+
+    // Build simple uptrend with alternating pivots.
+    let base_time = Utc::now();
+    for (i, (h, l, c)) in [
+        (100.0, 95.0, 99.0),
+        (105.0, 100.0, 104.0),
+        (110.0, 105.0, 109.0), // Pivot high at 110
+        (108.0, 103.0, 105.0),
+        (115.0, 105.0, 114.0), // Next pivot high at 115
+    ]
+    .iter()
+    .enumerate()
+    {
+        bars.push(Bar {
+            instrument: instrument(),
+            timeframe: Timeframe::M1,
+            open_time: base_time + chrono::Duration::minutes(i as i64),
+            open: dec!(*c),
+            high: dec!(*h),
+            low: dec!(*l),
+            close: dec!(*c),
+            volume: dec!(1000),
+            closed: true,
+        });
+        process_bar(&mut zz, &bars, 4, 4);
+    }
+
+    // Should detect pivot highs
+    assert!(zz.last().is_some());
+}
+
+#[test]
+fn luxalgo_motive_wave_bullish() {
+    use crate::motive::detect_motive;
+    use crate::zigzag::ZigZagPoint;
+
+    let points = vec![
+        ZigZagPoint {
+            bars_ago: 4,
+            price: 100.0,
+            direction: 1,
+        },
+        ZigZagPoint {
+            bars_ago: 3,
+            price: 95.0,
+            direction: -1,
+        },
+        ZigZagPoint {
+            bars_ago: 2,
+            price: 110.0,
+            direction: 1,
+        },
+        ZigZagPoint {
+            bars_ago: 1,
+            price: 105.0,
+            direction: -1,
+        },
+        ZigZagPoint {
+            bars_ago: 0,
+            price: 115.0,
+            direction: 1,
+        },
+    ];
+
+    let motive = detect_motive(&points);
+    assert!(motive.is_some());
+    let m = motive.unwrap();
+    assert_eq!(m.direction, 1);
+    assert!(m.score > 0.0);
+}
+
+#[test]
+fn luxalgo_corrective_wave_abc() {
+    use crate::corrective::detect_corrective;
+    use crate::zigzag::ZigZagPoint;
+
+    let points = vec![
+        ZigZagPoint {
+            bars_ago: 2,
+            price: 100.0,
+            direction: 1,
+        },
+        ZigZagPoint {
+            bars_ago: 1,
+            price: 95.0,
+            direction: -1,
+        },
+        ZigZagPoint {
+            bars_ago: 0,
+            price: 85.0,
+            direction: 1,
+        },
+    ];
+
+    let corr = detect_corrective(&points);
+    assert!(corr.is_some());
+    let c = corr.unwrap();
+    assert_eq!(c.direction, -1); // Downward correction
+    assert!(c.score > 0.0);
+}
