@@ -53,6 +53,7 @@ mod targets;
 mod triangle;
 mod truncated_fifth;
 pub mod validator;
+pub mod setup_creator;
 pub mod zigzag;
 
 #[cfg(test)]
