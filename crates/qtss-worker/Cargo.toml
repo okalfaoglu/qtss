@@ -36,9 +36,13 @@ qtss-onchain.workspace = true
 qtss-confluence.workspace = true
 qtss-setup-engine.workspace = true
 qtss-indicators.workspace = true
+qtss-pivot-reversal.workspace = true
 qtss-validator = { path = "../qtss-validator" }
 qtss-eventbus = { path = "../qtss-eventbus" }
 qtss-risk = { path = "../qtss-risk" }
+qtss-config = { path = "../qtss-config" }
+qtss-symbol-intel = { path = "../qtss-symbol-intel" }
+dotenvy.workspace = true
 sqlx.workspace = true
 axum.workspace = true
 serde.workspace = true
@@ -57,6 +61,7 @@ plotters = { version = "0.3.7", default-features = false, features = ["ab_glyph"
 tempfile = "3"
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
 rand.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [[bin]]
 name = "qtss-worker"
@@ -69,3 +74,39 @@ path = "src/bin/reset.rs"
 [[bin]]
 name = "qtss-wyckoff-replay"
 path = "src/bin/wyckoff_replay.rs"
+
+[[bin]]
+name = "harmonic-backtest-sweep"
+path = "src/bin/harmonic_backtest_sweep.rs"
+
+[[bin]]
+name = "harmonic-outcome-eval"
+path = "src/bin/harmonic_outcome_eval.rs"
+
+[[bin]]
+name = "classical-backtest-sweep"
+path = "src/bin/classical_backtest_sweep.rs"
+
+[[bin]]
+name = "elliott-backtest-sweep"
+path = "src/bin/elliott_backtest_sweep.rs"
+
+[[bin]]
+name = "wyckoff-backtest-sweep"
+path = "src/bin/wyckoff_backtest_sweep.rs"
+
+[[bin]]
+name = "backtest-outcome-eval"
+path = "src/bin/backtest_outcome_eval.rs"
+
+[[bin]]
+name = "pivot-reversal-backtest-sweep"
+path = "src/bin/pivot_reversal_backtest_sweep.rs"
+
+[[bin]]
+name = "symbol-catalog-refresh"
+path = "src/bin/symbol_catalog_refresh.rs"
+
+[[bin]]
+name = "market-regime-tick"
+path = "src/bin/market_regime_tick.rs"

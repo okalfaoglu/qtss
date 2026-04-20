@@ -53,6 +53,14 @@ pub struct ChartQuery {
     /// `open_time < before`. The frontend passes its current oldest
     /// candle's `open_time` to walk back through history.
     pub before: Option<chrono::DateTime<chrono::Utc>>,
+    /// Faz 12 — which detection modes to overlay. Accepts a
+    /// comma-separated list of `live,dry,backtest`. Defaults to
+    /// `live,dry` (legacy behaviour).
+    pub modes: Option<String>,
+    /// Faz 12 — CSV of pivot levels (`L0,L1,L2,L3`) the frontend
+    /// wants to see. Filters backtest overlays to the levels whose
+    /// toggle button is ON. Defaults to all four.
+    pub levels: Option<String>,
 }
 
 pub fn v2_chart_router() -> Router<SharedState> {
@@ -161,7 +169,9 @@ async fn get_chart(
     let renko = build_renko(&candles, brick_size);
 
     let positions = positions_for(&st, &symbol).await;
-    let detections = detections_for(&st, &venue, &symbol, &tf).await;
+    let modes = parse_csv_lower(q.modes.as_deref(), &["live", "dry"]);
+    let levels = parse_csv_upper(q.levels.as_deref(), &["L0", "L1", "L2", "L3"]);
+    let detections = detections_for(&st, &venue, &symbol, &tf, &modes, &levels).await;
     let open_orders: Vec<OpenOrderOverlay> = Vec::new();
 
     Ok(Json(ChartWorkspace {
@@ -202,6 +212,8 @@ async fn detections_for(
     venue: &str,
     symbol: &str,
     tf: &str,
+    modes: &[String],
+    levels: &[String],
 ) -> Vec<DetectionOverlay> {
     let limit = qtss_storage::resolve_system_u64(
         &st.pool,
@@ -214,13 +226,40 @@ async fn detections_for(
     )
     .await as i64;
     let repo = V2DetectionRepository::new(st.pool.clone());
-    let rows = match repo.list_for_chart(venue, symbol, tf, limit).await {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!(%e, "v2 chart: list_for_chart failed");
-            return Vec::new();
+    let mut rows: Vec<DetectionRow> = Vec::new();
+
+    let want_live = modes.iter().any(|m| m == "live" || m == "dry");
+    if want_live {
+        match repo.list_for_chart(venue, symbol, tf, limit).await {
+            Ok(r) => rows.extend(r),
+            Err(e) => tracing::warn!(%e, "v2 chart: list_for_chart failed"),
         }
-    };
+    }
+
+    let want_backtest = modes.iter().any(|m| m == "backtest");
+    if want_backtest {
+        // Backtest overlays are bulkier: allow a wider cap so the
+        // chart actually shows multi-level sweep output. Driven
+        // from system_config so operators can shrink under load.
+        let bt_limit = qtss_storage::resolve_system_u64(
+            &st.pool,
+            "detection",
+            "chart_overlay.backtest_limit",
+            "QTSS_DETECTION_CHART_BACKTEST_LIMIT",
+            500,
+            1,
+            5000,
+        )
+        .await as i64;
+        match repo
+            .list_backtest_for_chart(venue, symbol, tf, levels, bt_limit)
+            .await
+        {
+            Ok(r) => rows.extend(r),
+            Err(e) => tracing::warn!(%e, "v2 chart: list_backtest_for_chart failed"),
+        }
+    }
+
     let mut overlays: Vec<DetectionOverlay> = rows.into_iter().map(detection_row_to_overlay).collect();
 
     // Enrich elliott detections with wave_chain ancestor breadcrumb + has_children
@@ -298,6 +337,42 @@ fn detection_row_to_overlay(row: DetectionRow) -> DetectionOverlay {
         render_geometry: row.render_geometry,
         render_style: row.render_style,
         render_labels: row.render_labels,
+        pivot_level: row.pivot_level,
+        mode: Some(row.mode),
+        outcome: row.outcome,
+        outcome_pnl_pct: row.outcome_pnl_pct,
+        outcome_entry_price: row.outcome_entry_price,
+        outcome_exit_price: row.outcome_exit_price,
+        outcome_close_reason: row.outcome_close_reason,
+        // Faz 13 — passthrough raw_meta.targets for families that
+        // emit explicit A+B target packs (currently `pivot_reversal`).
+        targets: row.raw_meta.get("targets").cloned(),
+    }
+}
+
+/// Parse a comma-separated query param, lower-cased, falling back to
+/// `defaults` when missing/empty.
+fn parse_csv_lower(raw: Option<&str>, defaults: &[&str]) -> Vec<String> {
+    parse_csv_with(raw, defaults, |s| s.to_ascii_lowercase())
+}
+
+/// Parse a comma-separated query param, upper-cased, falling back to
+/// `defaults` when missing/empty.
+fn parse_csv_upper(raw: Option<&str>, defaults: &[&str]) -> Vec<String> {
+    parse_csv_with(raw, defaults, |s| s.to_ascii_uppercase())
+}
+
+fn parse_csv_with(raw: Option<&str>, defaults: &[&str], normalize: fn(&str) -> String) -> Vec<String> {
+    let parsed: Vec<String> = raw
+        .unwrap_or("")
+        .split(',')
+        .map(|s| normalize(s.trim()))
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parsed.is_empty() {
+        defaults.iter().map(|s| normalize(s)).collect()
+    } else {
+        parsed
     }
 }
 

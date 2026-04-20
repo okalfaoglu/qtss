@@ -40,7 +40,7 @@ mod flat;
 mod formation;
 mod projection;
 pub mod projection_engine;
-mod rules;
+pub mod rules;
 mod triangle;
 mod truncated_fifth;
 mod zigzag;
@@ -60,3 +60,11 @@ pub use formation::FormationDetector;
 pub use triangle::TriangleDetector;
 pub use truncated_fifth::TruncatedFifthDetector;
 pub use zigzag::ZigzagDetector;
+
+// Faz 12.C — re-exports for `elliott-backtest-sweep`. The binary mimics
+// `ImpulseDetector::detect_all` inline (to avoid building a full
+// `PivotTree` per level just to discard 3 of its 4 slots), but must use
+// the crate's authoritative rule table + scorer so backtest never
+// drifts from live semantics.
+pub use rules::{ImpulsePoints, Rule, RULES};
+pub use detector::score_impulse;

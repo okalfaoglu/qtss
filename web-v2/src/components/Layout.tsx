@@ -10,13 +10,23 @@ interface NavEntry {
   label: string;
   to: string;
   enabled: boolean;
+  children?: NavEntry[];
 }
 
 const NAV_ENTRIES: NavEntry[] = [
   { label: "Dashboard", to: "/v2/dashboard", enabled: true },
   { label: "Chart", to: "/v2/chart", enabled: true },
   { label: "Detections", to: "/v2/detections", enabled: true },
+  {
+    label: "Rapor",
+    to: "/v2/reports",
+    enabled: true,
+    children: [
+      { label: "Backtest Performansı", to: "/v2/reports/backtest", enabled: true },
+    ],
+  },
   { label: "TBM", to: "/v2/tbm", enabled: true },
+  { label: "Dip/Tepe Radarı", to: "/v2/reversal-radar", enabled: true },
   { label: "Onchain", to: "/v2/onchain", enabled: true },
   { label: "Regime", to: "/v2/regime", enabled: true },
   { label: "Wave Tree", to: "/v2/wave-tree", enabled: true },
@@ -39,7 +49,77 @@ const NAV_ENTRIES: NavEntry[] = [
   { label: "Audit", to: "/v2/audit", enabled: true },
   { label: "Users", to: "/v2/users", enabled: true },
   { label: "Engine Symbols", to: "/v2/engine-symbols", enabled: true },
+  { label: "Symbols (Intel)", to: "/v2/symbols", enabled: true },
 ];
+
+// One sidebar row. Parents with `children` render as a collapsible group;
+// leaves render as NavLinks. Kept flat (no recursion beyond one level) —
+// all we need for now is "Rapor" > "Backtest".
+function NavEntryRow({
+  entry,
+  onNavigate,
+}: {
+  entry: NavEntry;
+  onNavigate: () => void;
+}) {
+  const [open, setOpen] = useState(true);
+  if (!entry.enabled) {
+    return (
+      <span
+        className="cursor-not-allowed rounded px-3 py-2 text-sm text-zinc-600"
+        title="coming soon"
+      >
+        {entry.label}
+      </span>
+    );
+  }
+  if (entry.children && entry.children.length > 0) {
+    return (
+      <div className="flex flex-col gap-0.5">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="flex items-center justify-between rounded px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800/70 hover:text-zinc-100"
+        >
+          <span>{entry.label}</span>
+          <span className="text-zinc-500">{open ? "−" : "+"}</span>
+        </button>
+        {open &&
+          entry.children.map((c) => (
+            <NavLink
+              key={c.to}
+              to={c.to}
+              onClick={onNavigate}
+              className={({ isActive }) =>
+                `ml-4 rounded px-3 py-1.5 text-sm transition ${
+                  isActive
+                    ? "bg-emerald-500/15 text-emerald-300"
+                    : "text-zinc-400 hover:bg-zinc-800/70 hover:text-zinc-100"
+                }`
+              }
+            >
+              {c.label}
+            </NavLink>
+          ))}
+      </div>
+    );
+  }
+  return (
+    <NavLink
+      to={entry.to}
+      onClick={onNavigate}
+      className={({ isActive }) =>
+        `rounded px-3 py-2 text-sm transition ${
+          isActive
+            ? "bg-emerald-500/15 text-emerald-300"
+            : "text-zinc-300 hover:bg-zinc-800/70 hover:text-zinc-100"
+        }`
+      }
+    >
+      {entry.label}
+    </NavLink>
+  );
+}
 
 export function Layout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
@@ -66,32 +146,13 @@ export function Layout({ children }: { children: ReactNode }) {
           QTSS <span className="text-emerald-400">v2</span>
         </div>
         <nav className="flex flex-col gap-1 px-2 pb-4">
-          {NAV_ENTRIES.map((entry) =>
-            entry.enabled ? (
-              <NavLink
-                key={entry.to}
-                to={entry.to}
-                onClick={() => setNavOpen(false)}
-                className={({ isActive }) =>
-                  `rounded px-3 py-2 text-sm transition ${
-                    isActive
-                      ? "bg-emerald-500/15 text-emerald-300"
-                      : "text-zinc-300 hover:bg-zinc-800/70 hover:text-zinc-100"
-                  }`
-                }
-              >
-                {entry.label}
-              </NavLink>
-            ) : (
-              <span
-                key={entry.to}
-                className="cursor-not-allowed rounded px-3 py-2 text-sm text-zinc-600"
-                title="coming soon"
-              >
-                {entry.label}
-              </span>
-            ),
-          )}
+          {NAV_ENTRIES.map((entry) => (
+            <NavEntryRow
+              key={entry.to}
+              entry={entry}
+              onNavigate={() => setNavOpen(false)}
+            />
+          ))}
         </nav>
       </aside>
       <div className="flex min-h-screen flex-1 flex-col">

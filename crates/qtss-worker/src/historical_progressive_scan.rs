@@ -397,6 +397,12 @@ async fn scan_symbol(
                         render_geometry,
                         render_style: detection.render_style.as_deref(),
                         render_labels: detection.render_labels.clone(),
+                        // Faz 12 — inherit pivot level from anchors
+                        // (see v2_detection_orchestrator for rationale).
+                        pivot_level: detection
+                            .anchors
+                            .first()
+                            .map(|a| a.level.as_str()),
                     };
                     let new_id = new_row.id;
                     if let Err(e) = repo.insert(new_row).await {

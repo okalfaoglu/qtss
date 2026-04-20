@@ -49,6 +49,8 @@ members = [
     "crates/qtss-vprofile",
     "crates/qtss-gap",
     "crates/qtss-candles",
+    "crates/qtss-pivot-reversal",
+    "crates/qtss-symbol-intel",
 ]
 
 [workspace.package]
@@ -123,6 +125,8 @@ qtss-range = { path = "crates/qtss-range" }
 qtss-vprofile = { path = "crates/qtss-vprofile" }
 qtss-gap = { path = "crates/qtss-gap" }
 qtss-candles = { path = "crates/qtss-candles" }
+qtss-pivot-reversal = { path = "crates/qtss-pivot-reversal" }
+qtss-symbol-intel = { path = "crates/qtss-symbol-intel" }
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 hmac = "0.12"

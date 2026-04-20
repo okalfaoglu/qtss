@@ -60,6 +60,9 @@ mod v2_users;
 mod v2_wave_projections;
 mod v2_wave_tree;
 mod v2_wyckoff;
+mod v2_reports;
+mod v2_reversal_radar;
+mod v2_symbols;
 
 pub use v2_ai_decisions::v2_ai_decisions_router;
 pub use v2_live_positions::v2_live_positions_router;
@@ -97,6 +100,9 @@ pub use v2_users::v2_users_router;
 pub use v2_wave_projections::v2_wave_projections_router;
 pub use v2_wave_tree::v2_wave_tree_router;
 pub use v2_wyckoff::v2_wyckoff_router;
+pub use v2_reports::v2_reports_router;
+pub use v2_reversal_radar::v2_reversal_radar_router;
+pub use v2_symbols::v2_symbols_router;
 
 use axum::middleware::from_fn;
 use axum::middleware::from_fn_with_state;
@@ -160,6 +166,9 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_wave_tree_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_wave_projections_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_wyckoff_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_reports_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_reversal_radar_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_symbols_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_reconcile_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_backtest_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_blotter_router().layer(from_fn(require_dashboard_roles)))

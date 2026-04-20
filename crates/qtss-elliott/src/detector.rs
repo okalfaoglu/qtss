@@ -148,7 +148,7 @@ fn collect_points(tail: &[Pivot], negate: bool) -> ImpulsePoints {
     }
 }
 
-fn score_impulse(p: &[f64; 6]) -> f64 {
+pub fn score_impulse(p: &[f64; 6]) -> f64 {
     let w1 = p[1] - p[0];
     let w3 = p[3] - p[2];
     let w5 = p[5] - p[4];

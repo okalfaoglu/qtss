@@ -2194,6 +2194,7 @@ dependencies = [
  "qtss-binance",
  "qtss-chart-patterns",
  "qtss-common",
+ "qtss-config",
  "qtss-domain",
  "qtss-eventbus",
  "qtss-execution",
@@ -2205,6 +2206,7 @@ dependencies = [
  "qtss-reporting",
  "qtss-risk",
  "qtss-storage",
+ "qtss-symbol-intel",
  "qtss-telegram-setup-analysis",
  "qtss-wyckoff",
  "rand 0.8.5",
@@ -2595,6 +2597,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "qtss-pivot-reversal"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "qtss-domain",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "qtss-pivots"
 version = "0.1.0"
 dependencies = [
@@ -2797,6 +2815,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "qtss-symbol-intel"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "qtss-config",
+ "rust_decimal",
+ "rust_decimal_macros",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "qtss-target-engine"
 version = "0.1.0"
 dependencies = [
@@ -2875,6 +2909,7 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
+ "dotenvy",
  "futures-util",
  "plotters",
  "qtss-ai",
@@ -2884,6 +2919,7 @@ dependencies = [
  "qtss-chart-patterns",
  "qtss-classical",
  "qtss-common",
+ "qtss-config",
  "qtss-confluence",
  "qtss-domain",
  "qtss-elliott",
@@ -2895,6 +2931,7 @@ dependencies = [
  "qtss-nansen",
  "qtss-notify",
  "qtss-onchain",
+ "qtss-pivot-reversal",
  "qtss-pivots",
  "qtss-range",
  "qtss-reconcile",
@@ -2903,6 +2940,7 @@ dependencies = [
  "qtss-setup-engine",
  "qtss-storage",
  "qtss-strategy",
+ "qtss-symbol-intel",
  "qtss-tbm",
  "qtss-validator",
  "qtss-wyckoff",
@@ -2917,6 +2955,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

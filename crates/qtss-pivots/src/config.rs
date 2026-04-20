@@ -20,12 +20,21 @@ pub struct PivotConfig {
 }
 
 impl PivotConfig {
-    /// Defaults that mirror migration 0016. Used by tests so they don't
-    /// need to wire qtss-config in.
+    /// Defaults that mirror migration 0016 + 0191 (Fibonacci-B series
+    /// [2, 3, 5, 8]). Chosen over the earlier geometric-2× dizisi
+    /// `[1.5, 3, 6, 12]` because:
+    ///   - k=2 at L0 reduces micro-noise (median gap ~4 → ~7 bars)
+    ///   - k=8 at L3 preserves macro character while giving ~1.6× more
+    ///     L3 pivots on 4h+ TFs, where the 12× variant starved harmonic
+    ///     / Elliott detectors.
+    ///   - L1 (k=3) unchanged — it is the default harmonic/classical
+    ///     detector seviyesi; stability matters.
+    /// See `docs/PIVOT_ATR_MULTIPLIER_RATIONALE.md` (empirical analysis
+    /// against ~300k BTC/ETH pivots across 5m/15m/1h/4h).
     pub fn defaults() -> Self {
         Self {
             atr_period: 14,
-            atr_mult: [dec!(1.5), dec!(3.0), dec!(6.0), dec!(12.0)],
+            atr_mult: [dec!(2.0), dec!(3.0), dec!(5.0), dec!(8.0)],
         }
     }
 

@@ -308,31 +308,54 @@ fn build_two_lines(_: &str, pts: &[Anchor]) -> Option<Value> {
     if pts.len() < 4 {
         return None;
     }
-    // Split alternating anchors into upper / lower. Within each pair of
-    // adjacent anchors, the higher price is upper. For 4 pivots this
-    // produces the canonical two-trendline form used by wedges,
-    // channels, rectangles, triangles, broadenings.
+    // Rectangles / channels / wedges / triangles / broadenings all have
+    // a bimodal price distribution — touches cluster around an upper
+    // band and a lower band. Previous implementation paired anchors
+    // step-by-2 and picked the higher of each pair as "upper". That
+    // only works when the detector emits strictly alternating
+    // upper/lower touches. Real detectors emit touches in time order,
+    // so two consecutive upper touches (e.g. R1,R1,S1,S1,S2,S2,R2,R2)
+    // would mis-classify one as lower, producing the cross-slanted
+    // "rectangle" the user reported.
+    //
+    // Correct split: rank anchors by price; top half → upper band,
+    // bottom half → lower band. This works uniformly for every
+    // two-trendline family because all of them have a clear bimodal
+    // price structure by construction, and it is immune to ordering /
+    // duplicate-label / odd-count artefacts from the detector side.
+    let prices: Vec<f64> = pts
+        .iter()
+        .map(|a| a.price.parse::<f64>().unwrap_or(0.0))
+        .collect();
+    let mut idx: Vec<usize> = (0..pts.len()).collect();
+    idx.sort_by(|&i, &j| {
+        prices[j]
+            .partial_cmp(&prices[i])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let split = pts.len() / 2;
     let mut upper: Vec<Value> = Vec::new();
     let mut lower: Vec<Value> = Vec::new();
-    for i in (0..pts.len()).step_by(2) {
-        if i + 1 >= pts.len() {
-            break;
-        }
-        let a = &pts[i];
-        let b = &pts[i + 1];
-        let ap = a.price.parse::<f64>().unwrap_or(0.0);
-        let bp = b.price.parse::<f64>().unwrap_or(0.0);
-        if ap >= bp {
-            upper.push(pt(a, None));
-            lower.push(pt(b, None));
+    for (rank, &orig) in idx.iter().enumerate() {
+        if rank < split {
+            upper.push(pt(&pts[orig], None));
         } else {
-            upper.push(pt(b, None));
-            lower.push(pt(a, None));
+            lower.push(pt(&pts[orig], None));
         }
     }
     if upper.len() < 2 || lower.len() < 2 {
         return None;
     }
+    // Sort each band by time so the resulting polyline traces left-to-
+    // right. ISO-8601 lexical order = chronological order.
+    let by_time = |a: &Value, b: &Value| {
+        a.get("time")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .cmp(b.get("time").and_then(|v| v.as_str()).unwrap_or(""))
+    };
+    upper.sort_by(by_time);
+    lower.sort_by(by_time);
     Some(json!({
         "kind": "two_lines",
         "payload": { "upper": upper, "lower": lower }
@@ -353,10 +376,14 @@ fn build_harmonic(_: &str, pts: &[Anchor]) -> Option<Value> {
     if pts.len() < 5 {
         return None;
     }
+    // Harmonic XABCD — emit dedicated `harmonic` kind so the frontend
+    // can render two filled triangles (X-A-B and B-C-D) plus the
+    // skeleton polyline and a dashed X-D chord, matching classical TA
+    // charting software. See drawHarmonic in render-kind-registry.ts.
     let labels = ["X", "A", "B", "C", "D"];
     Some(json!({
-        "kind": "polyline",
-        "payload": { "points": labelled_points(&pts[..5], &labels) }
+        "kind": "harmonic",
+        "payload": { "xabcd": labelled_points(&pts[..5], &labels) }
     }))
 }
 
@@ -464,8 +491,8 @@ mod tests {
             ("2024-01-05T00:00:00Z", "95"),
         ]);
         let g = derive("harmonic", "gartley_bull", &a).unwrap();
-        assert_eq!(g["kind"], "polyline");
-        let pts = g["payload"]["points"].as_array().unwrap();
+        assert_eq!(g["kind"], "harmonic");
+        let pts = g["payload"]["xabcd"].as_array().unwrap();
         assert_eq!(pts[0]["label"], "X");
         assert_eq!(pts[4]["label"], "D");
     }

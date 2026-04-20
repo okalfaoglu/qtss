@@ -62,6 +62,15 @@ const FAMILY_COLORS: Record<string, string> = {
   tbm: "#fb923c",
   candle: "#fca5a5",
   gap: "#38bdf8",
+  // Faz 12 — zigzag is not a detection family server-side; it's a
+  // pseudo-entry in this map so the family-toggle row renders a
+  // ZigZag button alongside elliott/harmonic/etc. The actual render
+  // of pivot-cache polylines is gated by `familyModes.zigzag` AND
+  // the per-level L0..L3 toggles.
+  zigzag: "#f5d16e",
+  // Faz 12.E — pivot-based major reversal detector (separate family
+  // from TBM which is reactive/indicator based).
+  pivot_reversal: "#22d3ee",
   custom: "#d4d4d8",
 };
 
@@ -79,6 +88,8 @@ const FAMILY_DISPLAY: Record<string, string> = {
   tbm: "tbm",
   candle: "mum",
   gap: "boşluk",
+  zigzag: "zigzag",
+  pivot_reversal: "major dip/tepe",
   custom: "custom",
 };
 
@@ -704,6 +715,70 @@ export function Chart() {
   // is an independent toggle so the operator can stack or isolate the
   // cascaded pivot scales.
   const zigzagCfg = useZigzagLevelConfig();
+  // Faz 12.R — state toggles: Active (forming/validated), Completed
+  // (backtest wins), Cancelled (backtest losses + invalidated live).
+  // Expired backtest rows follow "Completed" track since they finished
+  // their forward walk even without a TP hit.
+  const [stateToggles, setStateToggles] = useState<{
+    active: boolean;
+    completed: boolean;
+    cancelled: boolean;
+  }>({ active: true, completed: true, cancelled: true });
+  // Faz 12.R — info panel: which detection is currently selected for
+  // the small detail popup. `null` = panel hidden.
+  const [selectedDetection, setSelectedDetection] =
+    useState<DetectionOverlay | null>(null);
+
+  // Faz 13 — pivot_reversal detection seçildiğinde B-Fib seviyelerini +
+  // A hedeflerini (entry/SL/TP1/TP2) mum serisine yatay price-line
+  // olarak bindir. Seçim değişince eski line'lar temizlenir. Başka
+  // aile (harmonic/elliott/…) için no-op; böylece performans etkisi
+  // sadece bir satır selected detection'a ödenir.
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+    const sel = selectedDetection;
+    if (!sel || sel.family !== "pivot_reversal" || !sel.targets) return;
+    const lines: ReturnType<typeof series.createPriceLine>[] = [];
+    const a = sel.targets.a;
+    const b = sel.targets.b;
+    const bearish = sel.subkind.includes("_bear_");
+    if (a) {
+      lines.push(series.createPriceLine({
+        price: a.entry, color: "#f0f0f0", lineWidth: 1,
+        lineStyle: LineStyle.Solid, axisLabelVisible: true, title: "Entry",
+      }));
+      lines.push(series.createPriceLine({
+        price: a.sl, color: "#f43f5e", lineWidth: 1,
+        lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "SL",
+      }));
+      lines.push(series.createPriceLine({
+        price: a.tp1, color: "#10b981", lineWidth: 1,
+        lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "TP1",
+      }));
+      lines.push(series.createPriceLine({
+        price: a.tp2, color: "#059669", lineWidth: 1,
+        lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "TP2",
+      }));
+    }
+    if (b) {
+      for (const [k, v] of Object.entries(b.fib)) {
+        lines.push(series.createPriceLine({
+          price: v,
+          color: bearish ? "#67e8f9" : "#38bdf8",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          axisLabelVisible: true,
+          title: `Fib ${k}`,
+        }));
+      }
+    }
+    return () => {
+      lines.forEach((l) => {
+        try { series.removePriceLine(l); } catch { /* series torn down */ }
+      });
+    };
+  }, [selectedDetection]);
   const [levelEnabled, setLevelEnabled] = useState<Record<PivotLevel, boolean>>({
     L0: zigzagCfg.levels.L0.enabledByDefault,
     L1: zigzagCfg.levels.L1.enabledByDefault,
@@ -796,12 +871,22 @@ export function Chart() {
   const venueOptions = venuesQuery.data ?? [];
 
   // ─── Data queries ───────────────────────────────────────────────
+  // Faz 12 — enabled-levels CSV drives both the pivot_cache endpoint
+  // and the detection overlay filter. Computed here (not inline in
+  // the queryKey) so both queries share the same normalized string.
+  const enabledLevelsCsv = (["L0", "L1", "L2", "L3"] as PivotLevel[])
+    .filter((l) => levelEnabled[l])
+    .join(",");
   const query = useQuery({
-    queryKey: ["v2", "chart", debounced],
-    queryFn: () =>
-      apiFetch<ChartWorkspace>(
-        `/v2/chart/${debounced.venue}/${debounced.symbol}/${debounced.timeframe}?limit=${PAGE_SIZE}&segment=${debounced.segment}`,
-      ),
+    queryKey: ["v2", "chart", debounced, enabledLevelsCsv],
+    queryFn: () => {
+      const levelsParam = enabledLevelsCsv || "L0,L1,L2,L3";
+      return apiFetch<ChartWorkspace>(
+        `/v2/chart/${debounced.venue}/${debounced.symbol}/${debounced.timeframe}` +
+          `?limit=${PAGE_SIZE}&segment=${debounced.segment}` +
+          `&modes=live,dry,backtest&levels=${levelsParam}`,
+      );
+    },
     refetchInterval: 30_000,
     structuralSharing: true,
   });
@@ -1007,6 +1092,26 @@ export function Chart() {
       if (!d.anchors?.length) return false;
       // Hide invalidated detections unless in detail mode
       if (d.state === "invalidated" && (familyModes[d.family] ?? "on") !== "detail") return false;
+      // Faz 12 — if the detection was produced at a cascaded pivot
+      // level (L0..L3), its visibility is ALSO gated by the matching
+      // level toggle. This means "harmonic + L2" buttons together
+      // show only L2 harmonic patterns, which is the operator-facing
+      // contract (pattern_on AND level_on). Detections without a
+      // pivot_level (e.g. TBM) are unaffected.
+      if (d.pivot_level && !levelEnabled[d.pivot_level as PivotLevel]) return false;
+      // Faz 12.R — state bucket filter. Detection falls into one bucket:
+      //   cancelled = state=invalidated OR outcome=loss
+      //   completed = outcome=win OR outcome=expired
+      //   active    = everything else (forming/validated w/o outcome)
+      const bucket =
+        d.state === "invalidated" || d.outcome === "loss"
+          ? "cancelled"
+          : d.outcome === "win" || d.outcome === "expired"
+          ? "completed"
+          : "active";
+      if (bucket === "active" && !stateToggles.active) return false;
+      if (bucket === "completed" && !stateToggles.completed) return false;
+      if (bucket === "cancelled" && !stateToggles.cancelled) return false;
       // At least one anchor must be within the candle range
       const lastAnchor = d.anchors[d.anchors.length - 1]?.time;
       const firstAnchor = d.anchors[0]?.time;
@@ -1082,7 +1187,7 @@ export function Chart() {
         : MAX_DETECTIONS_PER_FAMILY;
       return countByFamily[d.family] <= cap;
     });
-  }, [merged, familyModes]);
+  }, [merged, familyModes, levelEnabled, stateToggles]);
 
   // ─── Prefetch older history ─────────────────────────────────────
   const fetchOlder = useCallback(async () => {
@@ -1751,7 +1856,12 @@ export function Chart() {
     // returns up to max_points_per_level pivots spanning the full
     // pivot_cache history, which would otherwise drag the zigzag out
     // into ancient price regions (the chart paginates candles lazily).
-    if (merged.candles.length > 0) {
+    // Faz 12 — ZigZag master toggle. The pseudo-family "zigzag" button in
+    // the family-toggle row lets the operator hide every level's polyline
+    // at once (like elliott/harmonic). Per-level L0..L3 buttons still
+    // gate each individual level — visibility is AND of the two.
+    const zigzagMasterOn = (familyModes["zigzag"] ?? "on") !== "off";
+    if (merged.candles.length > 0 && zigzagMasterOn) {
       const firstCandleTime = Number(isoToUnix(merged.candles[0].open_time));
       const lastCandleTime = Number(
         isoToUnix(merged.candles[merged.candles.length - 1].open_time),
@@ -1791,6 +1901,38 @@ export function Chart() {
         });
         line.setData(dedupeLineData(inWindow));
         overlayLinesRef.current.push(line);
+
+        // HH / HL / LH / LL swing-type labels. The backend classifier
+        // (`qtss_pivots::engine::classify_swing`) writes these into
+        // `pivot_cache.swing_type`; we surface them as colored markers
+        // on the candle series so the operator can read market
+        // structure at a glance (higher-high uptrend, lower-low
+        // downtrend, etc.). Gated by `showLabels` so the toolbar's
+        // existing "labels" toggle also silences swing text.
+        if (showLabels) {
+          // Kind→position mapping keeps highs above the bar, lows below
+          // — matches the visual convention used by other anchor
+          // markers in this file (L1857 isTop branch).
+          const swingColor: Record<string, string> = {
+            HH: "#22c55e",  // bullish continuation
+            HL: "#86efac",  // bullish pullback
+            LH: "#fca5a5",  // bearish pullback
+            LL: "#ef4444",  // bearish continuation
+          };
+          for (const p of series.points) {
+            const t = Math.floor(new Date(p.open_time).getTime() / 1000);
+            if (t < firstCandleTime || t > lastCandleTime) continue;
+            const sw = p.swing_type;
+            if (!sw) continue;
+            allMarkers.push({
+              time: t as Time,
+              position: p.kind === "High" ? "aboveBar" as const : "belowBar" as const,
+              color: swingColor[sw] ?? st.color,
+              shape: "circle" as const,
+              text: `${lvl}·${sw}`,
+            });
+          }
+        }
       }
     }
 
@@ -1865,21 +2007,65 @@ export function Chart() {
                 : a.label,
             });
           }
-          // Subkind + confidence label at last anchor
+          // Subkind + confidence label at last anchor.
+          // Faz 12.R — for harmonic, the last anchor is "D" — bullish
+          // patterns are green (buy-the-D), bearish are red (sell-the-D).
+          // Label reads "FormationName (xx%)" per operator spec.
           const lastAnchor = d.anchors[d.anchors.length - 1];
           if (lastAnchor) {
             const conf = Number(d.confidence) || 0;
-            const confPct = conf > 0 ? ` ${(conf * 100).toFixed(0)}%` : "";
+            const confPct = conf > 0 ? ` (${(conf * 100).toFixed(0)}%)` : "";
+            const bearish =
+              d.subkind.includes("bear") || d.subkind.includes("top");
+            // Faz 12.R — also tint by outcome if available so completed
+            // wins read green, losses red, expired amber. Falls back to
+            // bull/bear semantic for still-active detections.
+            const labelColor =
+              d.outcome === "win"
+                ? "#10b981"
+                : d.outcome === "loss"
+                ? "#f43f5e"
+                : d.outcome === "expired"
+                ? "#f59e0b"
+                : d.family === "harmonic"
+                ? bearish
+                  ? "#f43f5e"
+                  : "#10b981"
+                : color;
+            // Faz 13 — pivot_reversal subkind = {tier}_{event}_{dir}_{level}.
+            // Extract pieces for tier-aware marker styling.
+            const prParts = d.family === "pivot_reversal" ? d.subkind.split("_") : [];
+            const prTier  = prParts[0] ?? "";
+            const prEvent = prParts[1] ?? "";
+            const displayName =
+              d.family === "classical"
+                ? classicalSubkindLabel(d.subkind)
+                : d.family === "harmonic"
+                ? d.subkind.replace(/_(bull|bear)$/, "")
+                : d.family === "pivot_reversal"
+                ? `${prTier === "major" ? "◆ " : "· "}${prEvent.toUpperCase()}`
+                : d.subkind;
+            // Bullish patterns complete at a low pivot → label below the
+            // bar so it doesn't obscure the wick; bearish at a high → above.
+            const position =
+              d.family === "harmonic" || d.family === "pivot_reversal"
+                ? bearish ? ("aboveBar" as const) : ("belowBar" as const)
+                : ("aboveBar" as const);
+            // Faz 13 — CHoCH=circle (reversal), BOS=square (continuation),
+            // neutral=circle (minor). Major tier stays full opacity; reactive
+            // dimmed via a more muted color fallback.
+            const shape: "square" | "circle" =
+              d.family === "pivot_reversal" && prEvent === "choch"
+                ? "circle"
+                : d.family === "pivot_reversal" && prEvent === "bos"
+                ? "square"
+                : "square";
             allMarkers.push({
               time: isoToUnix(lastAnchor.time),
-              position: "aboveBar" as const,
-              color,
-              shape: "square" as const,
-              text: `${d.has_children ? "＋ " : ""}${
-                d.family === "classical"
-                  ? classicalSubkindLabel(d.subkind)
-                  : d.subkind
-              }${confPct}`,
+              position,
+              color: labelColor,
+              shape,
+              text: `${d.has_children ? "＋ " : ""}${displayName}${confPct}`,
             });
           }
         }
@@ -2613,6 +2799,34 @@ export function Chart() {
             </button>
           );
         })}
+        {/* Faz 12.R — State bucket toggles: Active / Completed / Cancelled.
+            Controls visibility of detections based on outcome + state. */}
+        {(["active", "completed", "cancelled"] as const).map((bucket) => {
+          const on = stateToggles[bucket];
+          const label = bucket === "active" ? "A" : bucket === "completed" ? "✓" : "✕";
+          const color =
+            bucket === "active" ? "#38bdf8" : bucket === "completed" ? "#10b981" : "#f43f5e";
+          const title =
+            bucket === "active"
+              ? "Aktif formasyonlar"
+              : bucket === "completed"
+              ? "Başarıyla tamamlanan"
+              : "İptal / kayıp";
+          return (
+            <button
+              key={bucket}
+              type="button"
+              onClick={() => setStateToggles((p) => ({ ...p, [bucket]: !p[bucket] }))}
+              title={on ? `${title} gizle` : `${title} göster`}
+              style={on ? { backgroundColor: color + "33", color, borderColor: color } : undefined}
+              className={`flex h-8 w-8 items-center justify-center rounded border text-[10px] font-bold transition ${
+                on ? "border-current" : "border-transparent text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
         {/* Labels toggle */}
         <button
           type="button"
@@ -2889,6 +3103,17 @@ export function Chart() {
             aria-label={`${debounced.symbol} ${debounced.timeframe} fiyat grafiği, ${visibleDetections.length} overlay`}
             tabIndex={0}
           />
+          {/* Faz 12.R — Detection info panel. Opens when a detection is
+              clicked (see below — dispatched via the sr-only list which
+              is the only click-through surface the lightweight-charts
+              canvas doesn't absorb). Shows targets + backtest outcome
+              when available. */}
+          {selectedDetection && (
+            <DetectionInfoPanel
+              detection={selectedDetection}
+              onClose={() => setSelectedDetection(null)}
+            />
+          )}
           {/* Aşama 5.C — visually-hidden overlay descriptor for screen
               readers. The canvas itself has no semantic content so we
               mirror active detections into a list the AT can walk. */}
@@ -2901,6 +3126,12 @@ export function Chart() {
               </li>
             ))}
           </ul>
+          {/* Faz 12.R — clickable detection picker (top-right). */}
+          <DetectionPicker
+            detections={visibleDetections}
+            selectedId={selectedDetection?.id ?? null}
+            onPick={(d) => setSelectedDetection(d)}
+          />
           {/* ── Market Phase Panel (AlphaExtract style) ── */}
           {wyckoffQuery.data?.overlay && (familyModes["wyckoff"] ?? "on") !== "off" && (() => {
             const wo = wyckoffQuery.data.overlay;
@@ -3024,3 +3255,162 @@ export function Chart() {
 }
 
 export default Chart;
+
+// ─── Faz 12.R helper components ────────────────────────────────────
+
+function DetectionPicker({
+  detections,
+  selectedId,
+  onPick,
+}: {
+  detections: DetectionOverlay[];
+  selectedId: string | null;
+  onPick: (d: DetectionOverlay) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  if (detections.length === 0) return null;
+  return (
+    <div className="absolute right-2 top-2 z-20 w-64">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full rounded border border-zinc-700 bg-zinc-900/80 px-2 py-1 text-left text-xs text-zinc-200 hover:border-zinc-500"
+      >
+        Formasyonlar ({detections.length}) {open ? "▾" : "▸"}
+      </button>
+      {open && (
+        <ul className="mt-1 max-h-80 overflow-auto rounded border border-zinc-800 bg-zinc-900/90 text-xs shadow-lg">
+          {detections.map((d) => {
+            const bearish = d.subkind.includes("bear") || d.subkind.includes("top");
+            const sel = selectedId === d.id;
+            const outcomeColor =
+              d.outcome === "win"
+                ? "text-emerald-400"
+                : d.outcome === "loss"
+                ? "text-rose-400"
+                : d.outcome === "expired"
+                ? "text-amber-400"
+                : "text-zinc-500";
+            return (
+              <li key={d.id}>
+                <button
+                  type="button"
+                  onClick={() => onPick(d)}
+                  className={`block w-full border-l-2 px-2 py-1 text-left transition ${
+                    sel
+                      ? "border-sky-400 bg-zinc-800 text-zinc-100"
+                      : "border-transparent text-zinc-300 hover:bg-zinc-800/60"
+                  }`}
+                >
+                  <span className={bearish ? "text-rose-300" : "text-emerald-300"}>
+                    {d.family}/{d.subkind}
+                  </span>
+                  <span className="ml-1 text-zinc-500">· {d.pivot_level ?? "—"}</span>
+                  {d.outcome && (
+                    <span className={`ml-1 ${outcomeColor}`}>
+                      · {d.outcome}
+                      {typeof d.outcome_pnl_pct === "number" &&
+                        ` (${d.outcome_pnl_pct.toFixed(1)}%)`}
+                    </span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function DetectionInfoPanel({
+  detection,
+  onClose,
+}: {
+  detection: DetectionOverlay;
+  onClose: () => void;
+}) {
+  const d = detection;
+  const bearish = d.subkind.includes("bear") || d.subkind.includes("top");
+  const lastAnchor = d.anchors[d.anchors.length - 1];
+  const outcomeBadge =
+    d.outcome === "win"
+      ? { text: "Başarılı (Win)", color: "bg-emerald-500/20 text-emerald-300" }
+      : d.outcome === "loss"
+      ? { text: "Kayıp (Loss)", color: "bg-rose-500/20 text-rose-300" }
+      : d.outcome === "expired"
+      ? { text: "Süresi Doldu", color: "bg-amber-500/20 text-amber-300" }
+      : { text: "Aktif", color: "bg-sky-500/20 text-sky-300" };
+  return (
+    <div className="absolute bottom-3 left-3 z-30 w-80 rounded-lg border border-zinc-700 bg-zinc-900/95 p-3 text-xs text-zinc-200 shadow-2xl">
+      <div className="mb-2 flex items-start justify-between">
+        <div>
+          <div className={`font-semibold ${bearish ? "text-rose-300" : "text-emerald-300"}`}>
+            {d.family} / {d.subkind}
+          </div>
+          <div className="mt-0.5 text-[10px] text-zinc-500">
+            {d.pivot_level ?? "—"} · mode={d.mode ?? "—"} · state={d.state}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-zinc-500 hover:text-zinc-200"
+        >
+          ✕
+        </button>
+      </div>
+      <span
+        className={`inline-block rounded px-2 py-0.5 text-[10px] uppercase ${outcomeBadge.color}`}
+      >
+        {outcomeBadge.text}
+      </span>
+      <div className="mt-2 grid grid-cols-2 gap-y-1">
+        <span className="text-zinc-500">Anchor Time</span>
+        <span className="text-right">
+          {new Date(d.anchor_time).toISOString().slice(0, 16).replace("T", " ")}
+        </span>
+        <span className="text-zinc-500">Structural</span>
+        <span className="text-right">{Number(d.confidence).toFixed(3)}</span>
+        <span className="text-zinc-500">Invalidation</span>
+        <span className="text-right">{d.invalidation_price}</span>
+        {lastAnchor && (
+          <>
+            <span className="text-zinc-500">D Noktası</span>
+            <span className="text-right">{lastAnchor.price}</span>
+          </>
+        )}
+        {typeof d.outcome_entry_price === "number" && (
+          <>
+            <span className="text-zinc-500">Giriş</span>
+            <span className="text-right">{d.outcome_entry_price.toFixed(4)}</span>
+          </>
+        )}
+        {typeof d.outcome_exit_price === "number" && (
+          <>
+            <span className="text-zinc-500">Çıkış</span>
+            <span className="text-right">{d.outcome_exit_price.toFixed(4)}</span>
+          </>
+        )}
+        {typeof d.outcome_pnl_pct === "number" && (
+          <>
+            <span className="text-zinc-500">PnL%</span>
+            <span
+              className={`text-right ${
+                d.outcome_pnl_pct >= 0 ? "text-emerald-400" : "text-rose-400"
+              }`}
+            >
+              {d.outcome_pnl_pct.toFixed(2)}%
+            </span>
+          </>
+        )}
+        {d.outcome_close_reason && (
+          <>
+            <span className="text-zinc-500">Kapanış</span>
+            <span className="text-right">{d.outcome_close_reason}</span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

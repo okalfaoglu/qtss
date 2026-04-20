@@ -766,6 +766,9 @@ async fn process_symbol(
                 render_geometry: None,
                 render_style: None,
                 render_labels: None,
+                // TBM (Three Bar Motion) is candle-only; no pivot-tree
+                // dependency, so no level tag.
+                pivot_level: None,
             };
             repo.insert(row).await?;
             stats.inserted += 1;

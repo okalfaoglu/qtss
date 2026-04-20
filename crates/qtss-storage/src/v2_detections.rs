@@ -45,6 +45,23 @@ pub struct DetectionRow {
     pub render_geometry: Option<Json>,
     pub render_style: Option<String>,
     pub render_labels: Option<Json>,
+    /// Faz 12 — detectors that consume `PivotTree` tag the level they
+    /// ran on (`L0`..`L3`). NULL for detectors that don't depend on
+    /// pivots (TBM, candle patterns, gaps).
+    pub pivot_level: Option<String>,
+    /// Faz 12.R — populated only by the backtest-chart query (LEFT JOIN
+    /// `qtss_v2_detection_outcomes`). NULL for live rows and for
+    /// backtest rows that haven't been evaluated yet.
+    #[sqlx(default)]
+    pub outcome: Option<String>,
+    #[sqlx(default)]
+    pub outcome_pnl_pct: Option<f32>,
+    #[sqlx(default)]
+    pub outcome_entry_price: Option<f32>,
+    #[sqlx(default)]
+    pub outcome_exit_price: Option<f32>,
+    #[sqlx(default)]
+    pub outcome_close_reason: Option<String>,
 }
 
 /// Insert payload. Borrows where possible so the orchestrator does not
@@ -71,6 +88,8 @@ pub struct NewDetection<'a> {
     pub render_geometry: Option<Json>,
     pub render_style: Option<&'a str>,
     pub render_labels: Option<Json>,
+    /// Faz 12 — pivot level tag. See `DetectionRow::pivot_level`.
+    pub pivot_level: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -129,18 +148,21 @@ impl V2DetectionRepository {
                    id, detected_at, exchange, symbol, timeframe,
                    family, subkind, state, structural_score,
                    invalidation_price, anchors, regime, raw_meta, mode,
-                   render_geometry, render_style, render_labels
+                   render_geometry, render_style, render_labels,
+                   pivot_level
                ) VALUES (
                    $1, $2, $3, $4, $5,
                    $6, $7, $8, $9,
                    $10, $11, $12, $13, $14,
-                   $15, $16, $17
+                   $15, $16, $17,
+                   $18
                )
                RETURNING id, detected_at, exchange, symbol, timeframe,
                          family, subkind, state, structural_score, confidence,
                          invalidation_price, anchors, regime, channel_scores,
                          raw_meta, validated_at, mode, created_at, updated_at,
-                         render_geometry, render_style, render_labels"#,
+                         render_geometry, render_style, render_labels,
+                         pivot_level"#,
         )
         .bind(d.id)
         .bind(d.detected_at)
@@ -159,6 +181,7 @@ impl V2DetectionRepository {
         .bind(d.render_geometry)
         .bind(d.render_style)
         .bind(d.render_labels)
+        .bind(d.pivot_level)
         .fetch_one(&self.pool)
         .await?;
         Ok(row)
@@ -242,7 +265,8 @@ impl V2DetectionRepository {
                       family, subkind, state, structural_score, confidence,
                       invalidation_price, anchors, regime, channel_scores,
                       raw_meta, validated_at, mode, created_at, updated_at,
-                      render_geometry, render_style, render_labels
+                      render_geometry, render_style, render_labels,
+                      pivot_level
                  FROM qtss_v2_detections
                 WHERE exchange  = $1
                   AND symbol    = $2
@@ -314,6 +338,9 @@ impl V2DetectionRepository {
         timeframe: &str,
         limit: i64,
     ) -> Result<Vec<DetectionRow>, StorageError> {
+        // Live-only view keeps the legacy collapse: one row per
+        // (family, subkind) so Forming→Confirmed lifecycle doesn't
+        // double-render.
         let rows = sqlx::query_as::<_, DetectionRow>(
             r#"SELECT * FROM (
                   SELECT DISTINCT ON (family, subkind)
@@ -321,12 +348,14 @@ impl V2DetectionRepository {
                          family, subkind, state, structural_score, confidence,
                          invalidation_price, anchors, regime, channel_scores,
                          raw_meta, validated_at, mode, created_at, updated_at,
-                      render_geometry, render_style, render_labels
+                      render_geometry, render_style, render_labels,
+                      pivot_level
                     FROM qtss_v2_detections
                    WHERE exchange = $1
                      AND symbol   = $2
                      AND timeframe = $3
                      AND state <> 'invalidated'
+                     AND mode <> 'backtest'
                    ORDER BY family, subkind, detected_at DESC
                ) latest
                ORDER BY detected_at DESC
@@ -335,6 +364,57 @@ impl V2DetectionRepository {
         .bind(exchange)
         .bind(symbol)
         .bind(timeframe)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Faz 12 — backtest harmonic overlays for the chart.
+    ///
+    /// Unlike `list_for_chart`, this does NOT collapse across
+    /// `pivot_level`: the backtest sweep emits many detections per
+    /// (family, subkind) across L0..L3 and we want the operator to
+    /// see every one so the level-toggle comparison is meaningful.
+    /// Rows are filtered by `pivot_level IN (...)` from the request
+    /// so only enabled levels cross the wire.
+    pub async fn list_backtest_for_chart(
+        &self,
+        exchange: &str,
+        symbol: &str,
+        timeframe: &str,
+        levels: &[String],
+        limit: i64,
+    ) -> Result<Vec<DetectionRow>, StorageError> {
+        if levels.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query_as::<_, DetectionRow>(
+            r#"SELECT d.id, d.detected_at, d.exchange, d.symbol, d.timeframe,
+                      d.family, d.subkind, d.state, d.structural_score, d.confidence,
+                      d.invalidation_price, d.anchors, d.regime, d.channel_scores,
+                      d.raw_meta, d.validated_at, d.mode, d.created_at, d.updated_at,
+                      d.render_geometry, d.render_style, d.render_labels,
+                      d.pivot_level,
+                      o.outcome AS outcome,
+                      o.pnl_pct AS outcome_pnl_pct,
+                      o.entry_price AS outcome_entry_price,
+                      o.exit_price AS outcome_exit_price,
+                      o.close_reason AS outcome_close_reason
+                 FROM qtss_v2_detections d
+                 LEFT JOIN qtss_v2_detection_outcomes o ON o.detection_id = d.id
+                WHERE d.exchange  = $1
+                  AND d.symbol    = $2
+                  AND d.timeframe = $3
+                  AND d.mode      = 'backtest'
+                  AND d.pivot_level = ANY($4)
+                ORDER BY d.detected_at DESC
+                LIMIT $5"#,
+        )
+        .bind(exchange)
+        .bind(symbol)
+        .bind(timeframe)
+        .bind(levels)
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
@@ -389,7 +469,8 @@ impl V2DetectionRepository {
                       family, subkind, state, structural_score, confidence,
                       invalidation_price, anchors, regime, channel_scores,
                       raw_meta, validated_at, mode, created_at, updated_at,
-                      render_geometry, render_style, render_labels
+                      render_geometry, render_style, render_labels,
+                      pivot_level
                  FROM qtss_v2_detections
                 WHERE exchange = $1
                   AND symbol   = $2
@@ -419,7 +500,8 @@ impl V2DetectionRepository {
                       family, subkind, state, structural_score, confidence,
                       invalidation_price, anchors, regime, channel_scores,
                       raw_meta, validated_at, mode, created_at, updated_at,
-                      render_geometry, render_style, render_labels
+                      render_geometry, render_style, render_labels,
+                      pivot_level
                  FROM qtss_v2_detections
                 WHERE confidence IS NULL
                   AND state = 'forming'
@@ -529,7 +611,8 @@ impl V2DetectionRepository {
                       family, subkind, state, structural_score, confidence,
                       invalidation_price, anchors, regime, channel_scores,
                       raw_meta, validated_at, mode, created_at, updated_at,
-                      render_geometry, render_style, render_labels
+                      render_geometry, render_style, render_labels,
+                      pivot_level
                  FROM qtss_v2_detections
                 WHERE ($1::text IS NULL OR exchange  = $1)
                   AND ($2::text IS NULL OR symbol    = $2)
@@ -567,7 +650,8 @@ impl V2DetectionRepository {
                       d.family, d.subkind, d.state, d.structural_score, d.confidence,
                       d.invalidation_price, d.anchors, d.regime, d.channel_scores,
                       d.raw_meta, d.validated_at, d.mode, d.created_at, d.updated_at,
-                      d.render_geometry, d.render_style, d.render_labels
+                      d.render_geometry, d.render_style, d.render_labels,
+                      d.pivot_level
                  FROM qtss_v2_detections d
                  LEFT JOIN qtss_setups s ON s.detection_id = d.id
                 WHERE d.state = 'confirmed'

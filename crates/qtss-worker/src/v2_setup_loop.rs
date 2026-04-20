@@ -24,7 +24,9 @@ use qtss_setup_engine::{
     GateContext, OpenSetupSummary, PositionGuard, PositionGuardConfig, Profile, RejectReason,
     SetupState, StructuralTarget, VenueClass,
 };
+use qtss_config::PgConfigStore;
 use qtss_storage::v2_confluence::fetch_latest_v2_confluence;
+use qtss_symbol_intel::{IntelError, SymbolIntel};
 use qtss_storage::{
     insert_v2_setup, insert_v2_setup_event, insert_v2_setup_rejection, list_enabled_engine_symbols,
     list_groups_for_symbol, list_open_v2_setups, list_recent_bars, mark_v2_setup_tp1_hit,
@@ -1411,7 +1413,63 @@ async fn try_arm_new_setup(
         }
     }
 
-    let pcfg = cfg.profiles[&profile].guard;
+    let mut pcfg = cfg.profiles[&profile].guard;
+
+    // Faz 14.A7 — per-symbol intel override. Replaces the static
+    // profile.risk_pct with `SymbolIntel::compute_budget`, which
+    // factors in risk_tier cap, regime multiplier, fundamentals and
+    // liquidity haircut. Silent fall-back to the profile default when
+    // the symbol hasn't been catalogued yet (new listing) so live
+    // trading isn't blocked on `catalog_refresh` catching up.
+    let intel_notes: Vec<String> = {
+        let intel = SymbolIntel::new(
+            pool.clone(),
+            std::sync::Arc::new(PgConfigStore::new(pool.clone())),
+        );
+        match intel.compute_budget(&sym.exchange, &sym.symbol).await {
+            Ok(budget) => {
+                let before = pcfg.risk_pct;
+                let after = budget
+                    .effective_risk_pct
+                    .to_f64()
+                    .unwrap_or(before)
+                    * 100.0; // Decimal stores 0.07 → config expects 7.0? No — see below.
+                // Config `profile.*.risk_pct` convention stores 0.5 meaning 0.5%.
+                // SymbolIntel returns Decimal fraction (0.05 = 5%). Convert to pct.
+                let after_pct = budget
+                    .effective_risk_pct
+                    .to_f64()
+                    .unwrap_or(before / 100.0)
+                    * 100.0;
+                let _ = after;
+                pcfg.risk_pct = after_pct;
+                info!(
+                    symbol = %sym.symbol,
+                    risk_tier = %budget.risk_tier,
+                    regime = %budget.regime,
+                    before, after_pct,
+                    "symbol-intel sizer override"
+                );
+                budget.notes
+            }
+            Err(IntelError::ProfileMissing { .. }) => {
+                debug!(symbol = %sym.symbol, "no symbol profile; using static risk_pct");
+                Vec::new()
+            }
+            Err(IntelError::PanicRegime) => {
+                warn!(symbol = %sym.symbol, "panic regime — skipping setup");
+                return Ok(());
+            }
+            Err(IntelError::LiquidityBelowFloor) => {
+                warn!(symbol = %sym.symbol, "liquidity below floor — skipping setup");
+                return Ok(());
+            }
+            Err(e) => {
+                warn!(symbol = %sym.symbol, error = %e, "symbol-intel error; using static risk_pct");
+                Vec::new()
+            }
+        }
+    };
 
     // Try structural guard: use detection invalidation + target-engine
     // measured-move targets instead of ATR-based fallback.
@@ -2012,6 +2070,7 @@ async fn try_arm_new_setup(
                 "target_ref2": guard.target_ref2,
                 "structural": guard.structural,
                 "risk_pct": pcfg.risk_pct,
+                "symbol_intel_notes": intel_notes,
                 "confluence_id": conf.id,
                 "ema50": ema50,
                 "ema200": ema200,

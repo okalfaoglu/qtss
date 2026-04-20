@@ -50,6 +50,10 @@ use qtss_domain::v2::regime::RegimeSnapshot;
 use qtss_domain::v2::timeframe::Timeframe;
 use qtss_elliott::{ElliottConfig, ElliottDetectorSet, ElliottFormationToggles};
 use qtss_harmonic::{HarmonicConfig, HarmonicDetector};
+use qtss_pivot_reversal::{
+    build_detection as pr_build_detection, features_for as pr_features_for,
+    PivotRow as PrPivotRow, ReversalConfig as PrConfig,
+};
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
 use qtss_pivots::{PivotConfig, PivotEngine};
@@ -1402,14 +1406,16 @@ async fn process_symbol(
     // Adaptive ATR multipliers: fewer bars → lower thresholds to produce
     // enough pivots for pattern detection (need ≥6 for impulse).
     let pivot_cfg = if chronological.len() <= 120 {
-        // Low-bar TFs (e.g. 1M with ~80 bars): halve the multipliers
+        // Low-bar TFs (e.g. 1M with ~80 bars): halve the Fibo-B defaults
+        // [2, 3, 5, 8] → [1.0, 1.5, 2.5, 4.0] so sparse history still
+        // produces ≥6 pivots for impulse/XABCD detectors.
         PivotConfig {
             atr_period: 10,
             atr_mult: [
-                Decimal::new(8, 1),   // 0.8
-                Decimal::new(16, 1),  // 1.6
-                Decimal::new(32, 1),  // 3.2
-                Decimal::new(64, 1),  // 6.4
+                Decimal::new(10, 1),  // 1.0
+                Decimal::new(15, 1),  // 1.5
+                Decimal::new(25, 1),  // 2.5
+                Decimal::new(40, 1),  // 4.0
             ],
         }
     } else {
@@ -1886,6 +1892,15 @@ async fn process_symbol(
                     render_geometry,
                     render_style: detection.render_style.as_deref(),
                     render_labels: detection.render_labels.clone(),
+                    // Faz 12 — pivot-consuming detectors (harmonic,
+                    // classical, elliott, wyckoff, range) inherit the
+                    // level from anchor[0]. Non-pivot detectors (TBM,
+                    // candle, gap) simply yield None because `anchors`
+                    // stays empty or carries no `level`.
+                    pivot_level: detection
+                        .anchors
+                        .first()
+                        .map(|a| a.level.as_str()),
                 };
                 let new_id = new_row.id;
                 repo.insert(new_row).await?;
@@ -1988,7 +2003,168 @@ async fn process_symbol(
         }
     }
 
+    // ───────── Faz 13 — pivot_reversal live hook ─────────
+    //
+    // pivot_reversal isn't a DetectorRunner (it consumes the pivot
+    // cache directly, not the runner bar stream). After the runner
+    // loop, scan the most recent confirmed pivots at each level, run
+    // `qtss_pivot_reversal::build_detection` on the tail, and persist
+    // a `mode=<runtime>` row the same way the backtest sweep does —
+    // just incrementally + idempotently on (symbol, tf, level,
+    // detected_at). Any failure is warn-logged so the main detection
+    // loop never blocks.
+    if let Err(e) = run_pivot_reversal_live(pool, sym, mode).await {
+        warn!(symbol = %sym.symbol, %e, "pivot_reversal live hook failed");
+    }
+
     Ok(stats)
+}
+
+/// Faz 13 live hook: read latest pivots per level for (sym, tf),
+/// classify the tail via `build_detection`, and persist each new
+/// detection+feature snapshot exactly once. Idempotency is keyed on
+/// (exchange, symbol, tf, family='pivot_reversal', pivot_level,
+/// detected_at) — `detected_at` equals the confirmation pivot's
+/// open_time so reruns collapse to no-ops.
+async fn run_pivot_reversal_live(
+    pool: &PgPool,
+    sym: &EngineSymbolRow,
+    mode: &str,
+) -> anyhow::Result<()> {
+    let cfg = PrConfig::load(pool).await.unwrap_or_default();
+    // Tail window: only the most recent N pivots per level are needed
+    // to classify the newest confirmation. Keep it small so each tick
+    // touches at most a handful of rows.
+    const TAIL_N: i64 = 32;
+    for level in [PivotLevel::L0, PivotLevel::L1, PivotLevel::L2, PivotLevel::L3] {
+        let rows = sqlx::query(
+            r#"SELECT bar_index, open_time, price, kind, prominence, swing_type
+                 FROM pivot_cache
+                WHERE exchange = $1 AND symbol = $2
+                  AND timeframe = $3 AND level = $4
+                ORDER BY bar_index DESC
+                LIMIT $5"#,
+        )
+        .bind(&sym.exchange)
+        .bind(&sym.symbol)
+        .bind(&sym.interval)
+        .bind(level.as_str())
+        .bind(TAIL_N)
+        .fetch_all(pool)
+        .await?;
+        if rows.len() < 3 {
+            continue;
+        }
+        use sqlx::Row;
+        // Rebuild chronological order for build_detection.
+        let mut pivots: Vec<PrPivotRow> = rows
+            .into_iter()
+            .rev()
+            .map(|r| {
+                let prom: Option<Decimal> = r.get("prominence");
+                PrPivotRow {
+                    bar_index: r.get("bar_index"),
+                    open_time: r.get("open_time"),
+                    price: r.get("price"),
+                    kind: r.get("kind"),
+                    prominence: prom.and_then(|d| d.to_f64()),
+                    swing_type: r.get("swing_type"),
+                }
+            })
+            .collect();
+        if pivots.len() < 3 {
+            continue;
+        }
+        // Only classify the tail (last pivot). Older pivots were
+        // already handled by previous ticks (idempotent guard below).
+        let i = pivots.len() - 1;
+        let Some(draft) = pr_build_detection(&pivots, i, level, &cfg) else {
+            continue;
+        };
+        // Idempotent guard — skip if we already wrote this confirm.
+        let exists: Option<Uuid> = sqlx::query_scalar(
+            r#"SELECT id FROM qtss_v2_detections
+                WHERE family = 'pivot_reversal'
+                  AND exchange = $1 AND symbol = $2 AND timeframe = $3
+                  AND pivot_level = $4 AND detected_at = $5
+                LIMIT 1"#,
+        )
+        .bind(&sym.exchange)
+        .bind(&sym.symbol)
+        .bind(&sym.interval)
+        .bind(level.as_str())
+        .bind(draft.detected_at)
+        .fetch_optional(pool)
+        .await?;
+        if exists.is_some() {
+            continue;
+        }
+        let detection_id = Uuid::new_v4();
+        let mut raw_meta = draft.raw_meta.clone();
+        if let Some(obj) = raw_meta.as_object_mut() {
+            obj.insert("source".to_string(), serde_json::Value::String("live_hook".to_string()));
+        }
+        let regime = serde_json::json!({ "live_hook": true });
+        sqlx::query(
+            r#"INSERT INTO qtss_v2_detections (
+                   id, detected_at, exchange, symbol, timeframe,
+                   family, subkind, state, structural_score,
+                   invalidation_price, anchors, regime, raw_meta, mode,
+                   pivot_level
+               ) VALUES (
+                   $1, $2, $3, $4, $5,
+                   'pivot_reversal', $6, 'confirmed', $7,
+                   $8, $9, $10, $11, $12,
+                   $13
+               )"#,
+        )
+        .bind(detection_id)
+        .bind(draft.detected_at)
+        .bind(&sym.exchange)
+        .bind(&sym.symbol)
+        .bind(&sym.interval)
+        .bind(&draft.subkind)
+        .bind(draft.structural_score)
+        .bind(draft.invalidation_price)
+        .bind(&draft.anchors)
+        .bind(&regime)
+        .bind(&raw_meta)
+        .bind(mode)
+        .bind(level.as_str())
+        .execute(pool)
+        .await?;
+        // AI feature snapshot.
+        let fj = pr_features_for(&draft);
+        let _ = sqlx::query(
+            r#"INSERT INTO qtss_features_snapshot
+                   (detection_id, exchange, symbol, timeframe,
+                    source, feature_spec_version, features_json, meta_json)
+               VALUES ($1, $2, $3, $4, 'pivot_reversal', 1, $5, $6)
+               ON CONFLICT (detection_id, source, feature_spec_version) DO NOTHING"#,
+        )
+        .bind(detection_id)
+        .bind(&sym.exchange)
+        .bind(&sym.symbol)
+        .bind(&sym.interval)
+        .bind(&fj)
+        .bind(serde_json::json!({
+            "tier":  draft.tier.as_str(),
+            "event": draft.event.event_tag(),
+            "level": draft.pivot_level.as_str(),
+            "mode":  mode,
+            "via":   "live_hook",
+        }))
+        .execute(pool)
+        .await;
+        // Touch pivots to avoid the "unused" lint in release profile
+        // where the vec is otherwise consumed inside the loop.
+        pivots.truncate(pivots.len());
+        tracing::debug!(
+            symbol = %sym.symbol, tf = %sym.interval, level = %level.as_str(),
+            subkind = %draft.subkind, "pivot_reversal live detection inserted"
+        );
+    }
+    Ok(())
 }
 
 /// Feed a Wyckoff detection into the persistent structure tracker.

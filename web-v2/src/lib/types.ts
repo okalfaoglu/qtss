@@ -211,6 +211,34 @@ export interface DetectionOverlay {
   render_geometry?: { kind: string; payload: unknown } | null;
   render_style?: string | null;
   render_labels?: unknown;
+  /** Faz 12 — cascaded pivot level this detection came from (L0..L3). */
+  pivot_level?: string | null;
+  /** Faz 12 — "live" | "dry" | "backtest". */
+  mode?: string | null;
+  /** Faz 12.R — outcome evaluator fields, populated only for backtest rows. */
+  outcome?: "win" | "loss" | "expired" | null;
+  outcome_pnl_pct?: number | null;
+  outcome_entry_price?: number | null;
+  outcome_exit_price?: number | null;
+  outcome_close_reason?: "tp_hit" | "sl_hit" | "time_stop" | null;
+  /** Faz 13 — A (R-multiple) + B (Fib) target pack from raw_meta.targets.
+   *  Currently populated for `family='pivot_reversal'` only. */
+  targets?: {
+    a?: {
+      entry: number;
+      sl: number;
+      tp1: number;
+      tp2: number;
+      tp1_r: number;
+      tp2_r: number;
+      risk_dist: number;
+    };
+    b?: {
+      impulse_lo: number;
+      impulse_hi: number;
+      fib: Record<string, number>;
+    };
+  } | null;
 }
 
 export interface OpenOrderOverlay {

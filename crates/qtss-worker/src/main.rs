@@ -33,6 +33,7 @@ mod outcome_labeler_loop;
 mod position_manager;
 mod price_tick_ws;
 mod setup_watcher;
+mod symbol_intel_loops;
 mod x_publisher;
 mod digest_loop;
 mod report_scheduler_loop;
@@ -268,6 +269,11 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(nansen_credit_monitor::nansen_credit_monitor_loop(nansen_cm));
         let setup_pool = pool.clone();
         tokio::spawn(setup_scan_engine::nansen_setup_scan_loop(setup_pool));
+        // Faz 14.A — per-symbol intel & market regime.
+        let sym_pool = pool.clone();
+        tokio::spawn(symbol_intel_loops::symbol_catalog_refresh_loop(sym_pool));
+        let reg_pool = pool.clone();
+        tokio::spawn(symbol_intel_loops::market_regime_tick_loop(reg_pool));
         // Auto-sync: aktif engine_symbols için eksik Binance veri kaynaklarını oluştur
         match qtss_storage::ensure_binance_sources_for_active_symbols(&pool).await {
             Ok(n) if n > 0 => tracing::info!(created = n, "Binance veri kaynakları otomatik oluşturuldu"),

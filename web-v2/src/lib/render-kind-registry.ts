@@ -13,6 +13,7 @@ import type { ISeriesApi, IChartApi, SeriesMarker, Time } from "lightweight-char
 import { LineSeries, LineStyle } from "lightweight-charts";
 
 import { RectanglePrimitive, type RectangleOptions } from "./rectangle-primitive";
+import { PolygonPrimitive, type PolygonOptions } from "./polygon-primitive";
 
 /** Side-effect sinks — Chart.tsx re-uses its existing arrays so cleanup
  *  runs through one path. */
@@ -20,6 +21,7 @@ export interface RenderSinks {
   rects: RectanglePrimitive[];
   lines: ISeriesApi<"Line">[];
   markers: SeriesMarker<Time>[];
+  polygons?: PolygonPrimitive[];
 }
 
 export interface RenderContext {
@@ -38,6 +40,7 @@ export type RenderKind =
   | "horizontal_band"
   | "head_shoulders"
   | "double_pattern"
+  | "harmonic"
   | "arc"
   | "v_spike"
   | "gap_marker"
@@ -62,13 +65,29 @@ interface Point {
 }
 
 function toLineData(points: Point[], ctx: RenderContext) {
-  return dedupe(
-    points.map(p => ({ time: ctx.isoToUnix(p.time), value: Number(p.price) })),
-  );
+  // lightweight-charts requires data sorted strictly ascending by time
+  // and silently rejects series that violate this. Some detectors
+  // (Elliott impulse, harmonic XABCD, anything with labelled legs) emit
+  // anchors in pivot / pattern order, which is NOT always time-order.
+  // Earlier we dedup'd consecutive duplicates only and passed through
+  // whatever order the backend sent — that is why Elliott impulse
+  // detections showed markers but no connecting polyline: setData
+  // rejected the out-of-order array.
+  //
+  // Sort first (stable), then drop equal-time duplicates (lightweight-
+  // charts forbids equal times too). The sort is cheap (≤ dozen points)
+  // and time-ordering is universally correct for every line overlay we
+  // draw.
+  const mapped = points.map((p) => ({
+    time: ctx.isoToUnix(p.time),
+    value: Number(p.price),
+  }));
+  mapped.sort((a, b) => Number(a.time) - Number(b.time));
+  return dedupe(mapped);
 }
 
-/** Drop consecutive duplicates on `time` — lightweight-charts rejects
- *  equal timestamps. */
+/** Drop duplicates on `time` — lightweight-charts rejects equal
+ *  timestamps. Called after sort, so we only need a single pass. */
 function dedupe<T extends { time: Time }>(data: T[]): T[] {
   const out: T[] = [];
   let last: unknown = null;
@@ -99,25 +118,30 @@ function pushLine(
   });
   series.setData(toLineData(points, ctx));
   ctx.sinks.lines.push(series);
-  // Leg labels — push anchor labels as markers so we don't juggle a
-  // second text primitive.
-  for (const p of points) {
-    if (p.label) {
-      ctx.sinks.markers.push({
-        time: ctx.isoToUnix(p.time),
-        position: "aboveBar",
-        color: opts.color ?? ctx.familyColor,
-        shape: "circle",
-        text: p.label,
-      });
-    }
-  }
+  // Anchor-label markers are drawn by Chart.tsx's second-pass marker
+  // loop (one-size-fits-all positioning, elliott-degree remapping,
+  // confidence chip). Pushing them here too produces stacked duplicate
+  // labels (X/X, A/A, B/B … on harmonic; i/[i] on Elliott). Intentional
+  // no-op.
 }
 
 function pushRect(ctx: RenderContext, o: RectangleOptions) {
   const prim = new RectanglePrimitive(o);
   ctx.candleSeries.attachPrimitive(prim);
   ctx.sinks.rects.push(prim);
+}
+
+function pushPolygon(ctx: RenderContext, o: PolygonOptions) {
+  const prim = new PolygonPrimitive(o);
+  ctx.candleSeries.attachPrimitive(prim);
+  // Tracked in the polygons sink when available, otherwise piggy-backs
+  // on the rects sink — both primitive types share the same
+  // detachPrimitive() cleanup call site in Chart.tsx.
+  if (ctx.sinks.polygons) {
+    ctx.sinks.polygons.push(prim);
+  } else {
+    (ctx.sinks.rects as unknown as PolygonPrimitive[]).push(prim);
+  }
 }
 
 // ── Kind implementations ──────────────────────────────────────────────
@@ -191,6 +215,26 @@ const drawHeadShoulders: RenderDrawFn = (payload, ctx) => {
  * top/bottom. Draws the two peaks + optional neckline as a horizontal
  * reference. `trough` connects them visually.
  */
+/**
+ * Double top (M) / double bottom (W).
+ *
+ * Anchors from detector: [extreme1, trough/peak, extreme2]. Drawing only
+ * those 3 points yields a bare `\/` or `/\` — the middle of an M/W,
+ * missing the outer legs, so users complained it does not look like a
+ * proper M / W.
+ *
+ * Fix: synthesize a pre-leg and post-leg at the neck level so the full
+ * shape is 5 points:
+ *
+ *   M (double top):    neck ─ /\  ─ \/ ─ /\  ─ neck
+ *                             p1   trough  p2
+ *   W (double bottom): neck ─ \/  ─ /\ ─ \/  ─ neck
+ *                             t1    peak   t2
+ *
+ * Leg width = gap between the middle (trough/peak) and extreme2, so the
+ * silhouette is symmetric. Neckline dashed line is also extended to span
+ * the full M/W width.
+ */
 const drawDoublePattern: RenderDrawFn = (payload, ctx) => {
   const p = payload as {
     peaks?: [Point, Point];
@@ -198,27 +242,132 @@ const drawDoublePattern: RenderDrawFn = (payload, ctx) => {
     neck?: number | string;
   };
   if (!p.peaks || p.peaks.length !== 2) return;
-  const path: Point[] = p.trough
-    ? [
-        { ...p.peaks[0], label: p.peaks[0].label ?? "1" },
-        { ...p.trough, label: p.trough.label ?? "N" },
-        { ...p.peaks[1], label: p.peaks[1].label ?? "2" },
-      ]
-    : [
-        { ...p.peaks[0], label: p.peaks[0].label ?? "1" },
-        { ...p.peaks[1], label: p.peaks[1].label ?? "2" },
-      ];
-  pushLine(ctx, path);
-  if (p.neck != null) {
-    pushLine(
-      ctx,
-      [
-        { time: p.peaks[0].time, price: p.neck },
-        { time: p.peaks[1].time, price: p.neck },
-      ],
-      { width: 1, style: LineStyle.Dashed },
-    );
+
+  const e1 = p.peaks[0];
+  const e2 = p.peaks[1];
+  const mid = p.trough;
+
+  if (!mid) {
+    // Degenerate — detector gave only two extremes, no neck. Fall back
+    // to straight line; nothing M/W-shaped possible.
+    pushLine(ctx, [
+      { ...e1, label: e1.label ?? "1" },
+      { ...e2, label: e2.label ?? "2" },
+    ]);
+    return;
   }
+
+  const neckPrice = p.neck != null ? Number(p.neck) : Number(mid.price);
+  const peak1Price = Number(e1.price);
+  const peak2Price = Number(e2.price);
+  const troughPrice = Number(mid.price);
+  const t1 = Date.parse(e1.time);
+  const tMid = Date.parse(mid.time);
+  const t2 = Date.parse(e2.time);
+  if (!isFinite(t1) || !isFinite(tMid) || !isFinite(t2)) return;
+
+  // Letter-M / W geometry. Four equal strokes, middle valley at ~50% of
+  // peak-to-baseline amplitude. Previous version terminated outer legs
+  // at neck level, which made the shape look like two adjacent triangles
+  // (the middle V reached the same baseline as the outer starts). A
+  // real letter M keeps the middle dip shallower than the outer tails.
+  //
+  //   baseline  = trough − 0.5 × (peakAvg − trough)        for double top
+  //             = trough + 0.5 × (trough  − peakAvg)       for double bottom
+  //   (signed `h` handles both symmetrically)
+  const peakAvg = (peak1Price + peak2Price) / 2;
+  const h = peakAvg - troughPrice; // +ve double top, −ve double bottom
+  const outerPrice = troughPrice - h * 0.5;
+
+  // Symmetric leg width — use the wider inner span so legs stay in
+  // proportion even when the detector's peaks/trough are time-skewed.
+  const legMs = Math.max(Math.abs(tMid - t1), Math.abs(t2 - tMid));
+  const preIso = new Date(t1 - legMs).toISOString();
+  const postIso = new Date(t2 + legMs).toISOString();
+
+  const fullPath: Point[] = [
+    { time: preIso, price: outerPrice },
+    { ...e1, label: e1.label ?? "1" },
+    { ...mid, label: mid.label ?? "N" },
+    { ...e2, label: e2.label ?? "2" },
+    { time: postIso, price: outerPrice },
+  ];
+  pushLine(ctx, fullPath);
+
+  // Dashed neckline at the REAL neck (trough level) — the break level
+  // users care about, not the synthetic outer baseline. Extended across
+  // the full M/W width for visual anchoring.
+  pushLine(
+    ctx,
+    [
+      { time: preIso, price: neckPrice },
+      { time: postIso, price: neckPrice },
+    ],
+    { width: 1, style: LineStyle.Dashed },
+  );
+};
+
+/**
+ * `{ xabcd: [X, A, B, C, D] }` — harmonic Gartley/Bat/Butterfly/Crab/
+ * Shark/Cypher. Rendered the way classical TA charting software draws
+ * them: two filled triangles (X-A-B and B-C-D) plus the skeleton
+ * polyline X→A→B→C→D and a dashed X→D reference chord. Fib ratio
+ * labels (e.g. "0,618", "1,272") can ride on the polyline labels.
+ *
+ * Why two triangles and not one polygon: the correct harmonic visual
+ * has the two "wings" (AB-leg down, CD-leg down in a bullish pattern)
+ * filled independently so the shape reads as two connected lobes. A
+ * single pentagon fill would smear across the B pivot and lose the
+ * pattern's visual identity.
+ */
+const drawHarmonic: RenderDrawFn = (payload, ctx) => {
+  const p = payload as {
+    xabcd?: Point[];
+  };
+  const pts = p.xabcd;
+  if (!pts || pts.length < 5) return;
+
+  const [X, A, B, C, D] = pts;
+  const toVertex = (pt: Point) => ({
+    time: ctx.isoToUnix(pt.time),
+    price: Number(pt.price),
+  });
+  const fill = withAlpha(ctx.familyColor, ctx.faded ? 0.06 : 0.18);
+  const border = withAlpha(ctx.familyColor, ctx.faded ? 0.3 : 0.55);
+
+  // Triangle 1 — X-A-B (left wing).
+  pushPolygon(ctx, {
+    vertices: [toVertex(X), toVertex(A), toVertex(B)],
+    fillColor: fill,
+    borderColor: border,
+    borderWidth: 0,
+  });
+  // Triangle 2 — B-C-D (right wing).
+  pushPolygon(ctx, {
+    vertices: [toVertex(B), toVertex(C), toVertex(D)],
+    fillColor: fill,
+    borderColor: border,
+    borderWidth: 0,
+  });
+
+  // Skeleton polyline X → A → B → C → D with letter labels.
+  pushLine(ctx, [
+    { ...X, label: X.label ?? "X" },
+    { ...A, label: A.label ?? "A" },
+    { ...B, label: B.label ?? "B" },
+    { ...C, label: C.label ?? "C" },
+    { ...D, label: D.label ?? "D" },
+  ]);
+
+  // Dashed X-D reference chord (the pattern's base).
+  pushLine(
+    ctx,
+    [
+      { time: X.time, price: X.price },
+      { time: D.time, price: D.price },
+    ],
+    { width: 1, style: LineStyle.Dashed },
+  );
 };
 
 /**
@@ -370,6 +519,7 @@ export const RENDER_KIND_REGISTRY: Record<RenderKind, RenderDrawFn> = {
   horizontal_band: drawHorizontalBand,
   head_shoulders: drawHeadShoulders,
   double_pattern: drawDoublePattern,
+  harmonic: drawHarmonic,
   arc: drawArc,
   v_spike: drawVSpike,
   gap_marker: drawGapMarker,

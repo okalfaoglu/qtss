@@ -64,6 +64,18 @@ impl PivotLevel {
             PivotLevel::L3 => 3,
         }
     }
+
+    /// Canonical DB/JSON string form. Matches migration 0192's
+    /// `qtss_v2_detections.pivot_level` CHECK ('L0'..'L3') and the
+    /// harmonic backtest sweep's level filter.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PivotLevel::L0 => "L0",
+            PivotLevel::L1 => "L1",
+            PivotLevel::L2 => "L2",
+            PivotLevel::L3 => "L3",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

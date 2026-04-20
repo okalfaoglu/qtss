@@ -99,6 +99,37 @@ pub struct DetectionOverlay {
     /// Aşama 5 — anchor/leg label notes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_labels: Option<serde_json::Value>,
+    /// Faz 12 — which cascaded pivot level this detection came from.
+    /// `"L0".."L3"` for harmonic/classical/elliott; `None` for TBM and
+    /// other non-pivot-anchored families. The chart uses this to bind
+    /// overlay visibility to the L0–L3 toggle buttons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pivot_level: Option<String>,
+    /// Faz 12 — `"live" | "dry" | "backtest"`. Frontend filters by this
+    /// so backtest sweep detections don't leak into the live view
+    /// unless the operator explicitly asks for them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Faz 12.R — outcome evaluator results for this detection (only
+    /// populated for `mode='backtest'` rows that have been evaluated).
+    /// Used by the chart's info panel + state-based color tinting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,           // "win" | "loss" | "expired"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_pnl_pct: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_entry_price: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_exit_price: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_close_reason: Option<String>, // "tp_hit" | "sl_hit" | "time_stop"
+    /// Faz 13 — `raw_meta.targets` projection for families that produce
+    /// explicit A (R-multiple) + B (Fib) target packs (currently
+    /// `pivot_reversal`). Shape: `{ a: {...}, b: {...} }`. Used by the
+    /// chart to draw Fib overlay price lines when a detection is
+    /// selected. Other families leave this None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targets: Option<serde_json::Value>,
 }
 
 /// One resting/working order overlay.
