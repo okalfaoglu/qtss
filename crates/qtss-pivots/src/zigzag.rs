@@ -1,32 +1,48 @@
-//! Pivot-window ZigZag detector (LuxAlgo-parity).
+//! ZigZag detector — LuxAlgo Pine `zigzag()` birebir parite.
 //!
-//! # Algorithm
+//! Referans (LuxAlgo Elliott Waves Pine):
+//! ```pine
+//! export method pivots(int length, bool patternWaitForClose) =>
+//!     float phigh = ta.highestbars(src, length) == 0 ? high : na
+//!     float plow  = ta.lowestbars(src, length)  == 0 ? low  : na
+//!     dir = 0
+//!     iff_1 = plow and na(phigh) ? -1 : dir[1]
+//!     dir := phigh and na(plow) ? 1  : iff_1
+//!     [dir, phigh, plow]
 //!
-//! A pivot at bar `i` is any bar whose price is the extremum over a
-//! window of `length` bars on each side:
+//! export method zigzag(length, ..., zigzagpivots, zigzagpivotbars, ...) =>
+//!     [dir, phigh, plow] = pivots(length, patternWaitForClose)
+//!     dirchanged = ta.change(dir)
+//!     if phigh or plow
+//!         value = dir == 1 ? phigh : plow
+//!         bar   = bar_index
+//!         if not dirchanged and size >= 1
+//!             pivot = shift()
+//!             useNewValues = value * pivotdir < pivot * pivotdir
+//!             value := useNewValues ? pivot : value
+//!         unshift(pivots, value)
+//! ```
 //!
-//!   - **Pivot High**: `high[i]` is the maximum of `high[i-length..=i+length]`
-//!   - **Pivot Low**:  `low[i]`  is the minimum of `low[i-length..=i+length]`
+//! # Çeviri
 //!
-//! The detector keeps a ring buffer of the last `2*length + 1` bars and,
-//! on every incoming bar, evaluates whether the **centre** of the buffer
-//! (bar index `current - length`) qualifies as a pivot. Confirmation lag
-//! is therefore exactly `length` bars.
+//! * `ta.highestbars(high, length) == 0` ⇔ current bar, son `length` barlık
+//!   **trailing** pencerede maksimum. Pencere tek taraflı (yalnızca geriye
+//!   bakar). Bu yüzden LuxAlgo pivotu anlık — confirm lag yok, ZigZag
+//!   çizgisi son muma kadar uzanır.
+//! * Direction: phigh-only → +1, plow-only → -1, hem de/hem de yok → önceki
+//!   dir korunur.
+//! * Direction değişmediyse (`!dirchanged`): en son pivotu POP et, yeni aday
+//!   daha mı ekstrem kontrol et; değilse eski değeri geri yaz (running
+//!   extreme update).
+//! * Direction değiştiyse: önceki pivot kilitlenir (emit edilir), yeni aday
+//!   yeni pending olur.
 //!
-//! # ZigZag alternation
+//! # Bizim API
 //!
-//! Raw pivot-window output can flag the same bar as both a high and a
-//! low when the range is wide; it can also emit two highs in a row
-//! (two consecutive swing tops). We apply ZigZag-style alternation on
-//! top: track the direction of the last confirmed pivot; same-kind
-//! candidates replace the previous extreme if they are more extreme,
-//! opposite-kind candidates trigger emission and flip direction.
-//!
-//! The running extreme (the pivot we *would* emit if the next bar
-//! closed the window) is exposed via [`ZigZag::provisional_extreme`] so
-//! charts can render a pivot marker on the most recent bars — matching
-//! LuxAlgo's visual behaviour where the ZigZag line reaches to the
-//! current bar.
+//! ZigZag'in C ABI'si aynen: `push(&Sample) -> Option<ConfirmedPivot>`.
+//! Pivot ancak **direction flip** anında emit edilir — böylece aynı swing
+//! içinde running update'ler `pending` olarak kalır, `provisional_extreme`
+//! ile dışarıya açılır (render tarafı son muma kadar çizebilsin).
 
 use chrono::{DateTime, Utc};
 use qtss_domain::v2::pivot::PivotKind;
@@ -34,7 +50,6 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::VecDeque;
 
-/// One observation — a bar's (high, low) range plus volume.
 #[derive(Debug, Clone)]
 pub struct Sample {
     pub bar_index: u64,
@@ -54,8 +69,10 @@ pub struct ConfirmedPivot {
     pub volume_at_pivot: Decimal,
 }
 
-/// Unconfirmed running extreme — the pivot currently "leading" the
-/// swing. Exposed for chart rendering; never persisted.
+/// Unconfirmed running extreme — the "front" of the pivot array in
+/// LuxAlgo's model. Updated every bar a same-direction extreme appears;
+/// emitted (and locked) on direction flip. Exposed for chart rendering
+/// so the ZigZag line can reach the current bar.
 #[derive(Debug, Clone)]
 pub struct ProvisionalExtreme {
     pub bar_index: u64,
@@ -83,141 +100,132 @@ struct Candidate {
 
 #[derive(Debug, Clone)]
 pub struct ZigZag {
-    /// Window radius — `length` bars on each side for pivot-window test.
+    /// `length` as in LuxAlgo — trailing window size. Current bar is a
+    /// pivot high/low iff it is the extremum of the last `length` bars
+    /// (current bar included).
     length: u32,
-    /// Ring buffer of the last `2*length + 1` samples.
+    /// Rolling buffer of the last `length` samples.
     buf: VecDeque<Sample>,
-    /// Direction of the last confirmed (or provisional) pivot — used
-    /// for ZigZag alternation on top of the raw pivot-window output.
+    /// Current swing direction. `Unknown` until the first
+    /// phigh-xor-plow resolves it.
     direction: Direction,
-    /// Running extreme in the current swing (provisional — may still
-    /// be replaced if a more extreme same-kind pivot appears before
-    /// the opposite side confirms).
+    /// Running extreme — equivalent to Pine's `array.get(pivots, 0)`.
+    /// Locked (emitted) on direction flip.
     pending: Option<Candidate>,
-    /// Last confirmed pivot price — used to compute prominence.
+    /// Last **confirmed** pivot price — for prominence computation.
     last_confirmed_price: Option<Decimal>,
 }
 
 impl ZigZag {
-    /// Construct a pivot-window ZigZag with the given window radius.
-    /// `length >= 1`. A pivot at bar `i` requires `length` bars on each
-    /// side to evaluate, so confirmation lag is `length` bars.
+    /// Construct with LuxAlgo `length`. The pivot-window is one-sided
+    /// (trailing) so confirmation lag is zero — the running extreme
+    /// updates on every qualifying bar and locks only on direction flip.
     pub fn with_length(length: u32) -> Self {
         Self {
             length: length.max(1),
-            buf: VecDeque::with_capacity((2 * length.max(1) + 1) as usize),
+            buf: VecDeque::with_capacity(length.max(1) as usize),
             direction: Direction::Unknown,
             pending: None,
             last_confirmed_price: None,
         }
     }
 
-    /// Legacy no-arg constructor — defaults to length 4 (LuxAlgo L0).
+    /// Back-compat alias — defaults to length 4 (LuxAlgo L0).
     pub fn new() -> Self {
         Self::with_length(4)
     }
 
-    /// Feed one sample. Returns at most one newly-confirmed pivot.
+    /// Back-compat shim for the old ATR-threshold API signature. The
+    /// `_unused_threshold` is discarded — kept only so callers that
+    /// still pass ATR values compile.
     pub fn on_sample(&mut self, s: &Sample, _unused_threshold: Decimal) -> Option<ConfirmedPivot> {
         self.push(s)
     }
 
-    /// Feed one sample (preferred call site — no dummy threshold).
+    /// Feed one bar. Returns a pivot only on **direction flip** — that
+    /// is the moment the previous running extreme becomes structurally
+    /// fixed in LuxAlgo's model. Same-direction updates are absorbed
+    /// silently into `pending` (visible via `provisional_extreme`).
     pub fn push(&mut self, s: &Sample) -> Option<ConfirmedPivot> {
         self.buf.push_back(s.clone());
-        let cap = (2 * self.length + 1) as usize;
-        while self.buf.len() > cap {
+        while self.buf.len() > self.length as usize {
             self.buf.pop_front();
         }
-        // Need a full window before the centre bar can be evaluated.
-        if self.buf.len() < cap {
+        if self.buf.len() < self.length as usize {
             return None;
         }
-        let centre_idx = self.length as usize;
-        let centre = self.buf[centre_idx].clone();
 
-        // Pivot-window test: is `centre` the extremum of the window?
-        let mut is_high = true;
-        let mut is_low = true;
-        for (k, b) in self.buf.iter().enumerate() {
-            if k == centre_idx {
-                continue;
-            }
-            if b.high > centre.high {
-                is_high = false;
-            }
-            if b.low < centre.low {
-                is_low = false;
-            }
-            if !is_high && !is_low {
-                break;
-            }
+        // `ta.highestbars(high, length) == 0`  ⇔ current bar is the
+        // MAX of the last `length` bars (current included). Non-strict
+        // (`<=`) so ties still qualify — matches Pine's `ta.highestbars`
+        // which returns 0 for the most recent bar when tied.
+        let current = self.buf.back().cloned()?;
+        let is_high = self.buf.iter().all(|b| b.high <= current.high);
+        let is_low  = self.buf.iter().all(|b| b.low  >= current.low);
+
+        // Pine's dir resolver:
+        //   iff_1 = plow  and na(phigh) ? -1 : dir[1]
+        //   dir  := phigh and na(plow)  ? +1 : iff_1
+        // i.e. a *pure* high → Up, a *pure* low → Down, both-or-neither
+        // → keep previous direction.
+        let prev_dir = self.direction;
+        let new_dir = match (is_high, is_low) {
+            (true, false) => Direction::Up,
+            (false, true) => Direction::Down,
+            _             => prev_dir,
+        };
+        let dir_changed = new_dir != prev_dir && prev_dir != Direction::Unknown;
+        self.direction = new_dir;
+
+        // If neither phigh nor plow, nothing to do — Pine exits early
+        // via `if phigh or plow`.
+        if !is_high && !is_low {
+            return None;
+        }
+        // Direction still unknown (first bar that qualifies) → seed.
+        if new_dir == Direction::Unknown {
+            return None;
         }
 
-        // Pick the qualifying kind. In the rare case the centre is both
-        // (e.g. gigantic outside bar), prefer the direction that
-        // continues the current swing — it produces smoother alternation.
-        let candidate_kind = match (is_high, is_low) {
-            (true, false) => Some(PivotKind::High),
-            (false, true) => Some(PivotKind::Low),
-            (true, true) => Some(match self.direction {
-                Direction::Up => PivotKind::High,
-                Direction::Down => PivotKind::Low,
-                Direction::Unknown => PivotKind::High,
-            }),
-            (false, false) => None,
-        }?;
-
+        let (kind, price) = match new_dir {
+            Direction::Up   => (PivotKind::High, current.high),
+            Direction::Down => (PivotKind::Low,  current.low),
+            Direction::Unknown => unreachable!(),
+        };
         let candidate = Candidate {
-            bar_index: centre.bar_index,
-            time: centre.time,
-            price: match candidate_kind {
-                PivotKind::High => centre.high,
-                PivotKind::Low => centre.low,
-            },
-            kind: candidate_kind,
-            volume: centre.volume,
+            bar_index: current.bar_index,
+            time: current.time,
+            price,
+            kind,
+            volume: current.volume,
         };
 
-        self.apply_alternation(candidate)
-    }
-
-    /// Apply ZigZag alternation rules against the current pending
-    /// extreme. Returns the pivot to emit, if any.
-    fn apply_alternation(&mut self, c: Candidate) -> Option<ConfirmedPivot> {
-        match &self.pending {
+        match self.pending.take() {
             None => {
-                // First ever candidate — seed direction, don't emit yet
-                // (we have nothing to anchor prominence against).
-                self.direction = match c.kind {
-                    PivotKind::High => Direction::Up,
-                    PivotKind::Low => Direction::Down,
-                };
-                self.pending = Some(c);
+                // First pivot ever — seed pending, nothing to emit yet.
+                self.pending = Some(candidate);
                 None
             }
-            Some(prev) if prev.kind == c.kind => {
-                // Same kind — replace if more extreme (LuxAlgo collapses
-                // consecutive same-direction pivots to the extremum).
-                let replace = match c.kind {
-                    PivotKind::High => c.price > prev.price,
-                    PivotKind::Low => c.price < prev.price,
+            Some(prev) if !dir_changed => {
+                // Same direction — Pine's rollback branch:
+                //   useNewValues = value * pivotdir < pivot * pivotdir
+                //   (true → revert to previous pivot)
+                // For High (dir=+1): useNewValues = value < pivot → keep old
+                // For Low  (dir=-1): useNewValues = -value < -pivot → value>pivot → keep old
+                // I.e. keep whichever is more extreme in the swing direction.
+                let keep_new = match kind {
+                    PivotKind::High => candidate.price >= prev.price,
+                    PivotKind::Low  => candidate.price <= prev.price,
                 };
-                if replace {
-                    self.pending = Some(c);
-                }
+                self.pending = Some(if keep_new { candidate } else { prev });
                 None
             }
             Some(prev) => {
-                // Opposite kind → emit the previous pending pivot, then
-                // the new candidate becomes the next pending.
-                let prev_cloned = prev.clone();
-                let pivot = self.emit(&prev_cloned);
-                self.direction = match c.kind {
-                    PivotKind::High => Direction::Up,
-                    PivotKind::Low => Direction::Down,
-                };
-                self.pending = Some(c);
+                // Direction flip — lock the previous running extreme as
+                // a confirmed pivot; the new candidate becomes the new
+                // pending.
+                let pivot = self.emit(&prev);
+                self.pending = Some(candidate);
                 Some(pivot)
             }
         }
@@ -239,9 +247,9 @@ impl ZigZag {
         }
     }
 
-    /// The pivot we would emit if the next opposite-kind candidate
-    /// arrived. Matches LuxAlgo's visual ZigZag line reaching the
-    /// current bar. `None` before the first pivot-window confirms.
+    /// Current running extreme (Pine's `array.get(pivots, 0)`). Always
+    /// reachable to the latest bar that qualified as phigh/plow —
+    /// matches LuxAlgo's visual ZigZag which reaches the current bar.
     pub fn provisional_extreme(&self) -> Option<ProvisionalExtreme> {
         self.pending.as_ref().map(|c| ProvisionalExtreme {
             bar_index: c.bar_index,

@@ -2233,7 +2233,15 @@ export function Chart() {
         const dLayers = detailLayers[d.family] ?? new Set(["entry_tp_sl", "labels"]);
         const isDetailMode = (familyModes[d.family] ?? "off") === "detail";
         if (isDetailMode && !dLayers.has("labels")) continue;
-        const baseMarkerColor = familyColor(d.family, d.subkind, debounced.timeframe);
+        // Faz 14.A15 — anchor markers colored by pivot level so operators
+        // can tell L0/L1/L2/L3 formations apart at a glance when multiple
+        // levels fire on the same window (user feedback 2026-04-21).
+        // Falls back to family color for detections without a pivot_level
+        // (Wyckoff, TBM, candle, gap).
+        const baseMarkerColor = d.pivot_level
+          ? zigzagCfg.levels[d.pivot_level as PivotLevel]?.color
+            ?? familyColor(d.family, d.subkind, debounced.timeframe)
+          : familyColor(d.family, d.subkind, debounced.timeframe);
         // Faz 14 — lifecycle opacity on markers (mirrors line logic).
         const mLifecycle: "live" | "stale" | "ghost" =
           d.state === "invalidated"
