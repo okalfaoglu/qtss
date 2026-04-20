@@ -1423,24 +1423,12 @@ async fn process_symbol(
     let mut chronological = raw_bars;
     chronological.reverse();
 
-    // Adaptive ATR multipliers: fewer bars → lower thresholds to produce
-    // enough pivots for pattern detection (need ≥6 for impulse).
+    // Faz 14.A15 — pivot-window (LuxAlgo-parite). Adaptive window
+    // lengths for sparse history: short TFs with <=120 bars need
+    // tighter windows so ≥6 pivots exist for Elliott/XABCD detection.
     let pivot_cfg = if chronological.len() <= 120 {
-        // Low-bar TFs (e.g. 1M with ~80 bars): halve the Fibo-B defaults
-        // [2, 3, 5, 8] → [1.0, 1.5, 2.5, 4.0] so sparse history still
-        // produces ≥6 pivots for impulse/XABCD detectors.
         PivotConfig {
-            atr_period: 10,
-            atr_mult: [
-                Decimal::new(10, 1),  // 1.0
-                Decimal::new(15, 1),  // 1.5
-                Decimal::new(25, 1),  // 2.5
-                Decimal::new(40, 1),  // 4.0
-            ],
-            // Fix B — sparse-history mode still gates against
-            // next-bar punch-through, but with shallower L2/L3
-            // hold so detectors aren't starved.
-            min_hold_bars: [1, 2, 3, 4],
+            lengths: [2, 4, 8, 16],
         }
     } else {
         PivotConfig::defaults()

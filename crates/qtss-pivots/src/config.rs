@@ -1,98 +1,56 @@
 //! Pivot engine configuration.
 //!
-//! All numbers in here ultimately come from `qtss-config` (see migration
-//! 0016 for the seeded keys: `pivots.zigzag.atr_period`, `atr_mult_l0..l3`).
+//! **Faz 14.A15 — LuxAlgo birebir parite.** Previous iterations used an
+//! ATR-threshold ZigZag (reversal >= `atr_mult * ATR`). We have switched
+//! to a pure **pivot-window** detector, matching LuxAlgo's Elliott Waves
+//! indicator 1:1:
+//!   - A pivot High at bar `i` is any bar whose high is the maximum
+//!     within the window `[i-length, i+length]`.
+//!   - A pivot Low is the symmetric condition on lows.
+//!   - ZigZag alternation is applied on top: consecutive same-kind
+//!     candidates collapse to the most extreme one.
+//!
+//! Four window lengths correspond to four pivot levels. Lengths must be
+//! strictly increasing so higher levels are guaranteed subsets of lower
+//! levels (a length-8 pivot is necessarily also a length-4 pivot at the
+//! same index — bigger window is a superset of the condition).
+//!
 //! The crate itself never touches the DB — the caller resolves the values
-//! and constructs a `PivotConfig`. This keeps the crate pure and trivial
-//! to unit-test with arbitrary thresholds.
+//! from `qtss-config` and constructs a `PivotConfig`.
 
 use crate::error::{PivotError, PivotResult};
-use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
 
 #[derive(Debug, Clone)]
 pub struct PivotConfig {
-    pub atr_period: usize,
-    /// Reversal multipliers per level. Index 0 = L0, index 3 = L3.
-    /// Each multiplier MUST be strictly greater than the previous one
-    /// so higher levels are guaranteed to be subsets of lower levels.
-    pub atr_mult: [Decimal; 4],
-    /// **Fix B (Faz 13)** — minimum bars the candidate extreme must hold
-    /// before a reversal can confirm a pivot. Uses raw bar-index delta;
-    /// works identically through the higher-level cascade because
-    /// `Sample.bar_index` carries the original bar index through
-    /// synthetic samples.
+    /// Pivot-window length per level (bars on each side). Index 0 = L0,
+    /// index 3 = L3. Must be strictly increasing.
     ///
-    /// Intent: kill "immediate reversal" false pivots where the extreme
-    /// is punched through on the very next bar (reaction bottoms sold as
-    /// major dips). The pivot must "live" at least N bars to qualify
-    /// as structural.
-    ///
-    /// Defaults follow the same Fibonacci-B progression as the ATR
-    /// multipliers — L0 pivots should hold ≥2 bars, L3 ≥8.
-    pub min_hold_bars: [u32; 4],
+    /// Defaults `[4, 8, 16, 32]` mirror the LuxAlgo Elliott Waves
+    /// indicator's common multi-scale configuration.
+    pub lengths: [u32; 4],
 }
 
 impl PivotConfig {
-    /// Defaults that mirror migration 0016 + 0191 (Fibonacci-B series
-    /// [2, 3, 5, 8]). Chosen over the earlier geometric-2× dizisi
-    /// `[1.5, 3, 6, 12]` because:
-    ///   - k=2 at L0 reduces micro-noise (median gap ~4 → ~7 bars)
-    ///   - k=8 at L3 preserves macro character while giving ~1.6× more
-    ///     L3 pivots on 4h+ TFs, where the 12× variant starved harmonic
-    ///     / Elliott detectors.
-    ///   - L1 (k=3) unchanged — it is the default harmonic/classical
-    ///     detector seviyesi; stability matters.
-    /// See `docs/PIVOT_ATR_MULTIPLIER_RATIONALE.md` (empirical analysis
-    /// against ~300k BTC/ETH pivots across 5m/15m/1h/4h).
+    /// Defaults — LuxAlgo Elliott Waves parity.
     pub fn defaults() -> Self {
         Self {
-            atr_period: 14,
-            // Faz 14.A12 — LuxAlgo-ZigZag parity. Previous defaults
-            // [2, 3, 5, 8] put L0 above typical wave-2/wave-4 retraces
-            // (1-1.5× ATR), so the Elliott detector starved: pivots that
-            // structurally exist on the chart never made it into the
-            // tree. New progression shifts every level down one notch so
-            // sub-impulse pivots land in L0, the old L0 becomes L1 (the
-            // harmonic/classical default), L2/L3 stay macro.
-            atr_mult: [dec!(1.0), dec!(2.0), dec!(3.5), dec!(6.0)],
-            // Matching hold-time relaxation: at 1× ATR even a 1-bar
-            // punch-through is rarely structural, but at L0 we now
-            // accept a single bar so nascent waves surface one bar
-            // sooner. L2/L3 still demand multi-bar persistence.
-            min_hold_bars: [1, 2, 3, 5],
+            lengths: [4, 8, 16, 32],
         }
     }
 
-    /// Validate the invariants the engine relies on. Called by
-    /// `PivotEngine::new` so misconfiguration fails loud at startup
-    /// instead of silently producing degenerate trees.
+    /// Validate the invariants the engine relies on.
     pub fn validate(&self) -> PivotResult<()> {
-        if self.atr_period < 2 {
-            return Err(PivotError::InvalidConfig(
-                "atr_period must be >= 2".into(),
-            ));
-        }
-        for (i, m) in self.atr_mult.iter().enumerate() {
-            if *m <= dec!(0) {
+        for (i, l) in self.lengths.iter().enumerate() {
+            if *l == 0 {
                 return Err(PivotError::InvalidConfig(format!(
-                    "atr_mult[{i}] must be positive"
+                    "lengths[{i}] must be >= 1"
                 )));
             }
         }
         for i in 1..4 {
-            if self.atr_mult[i] <= self.atr_mult[i - 1] {
+            if self.lengths[i] <= self.lengths[i - 1] {
                 return Err(PivotError::InvalidConfig(format!(
-                    "atr_mult must be strictly increasing (level {i})"
-                )));
-            }
-        }
-        // Fix B — monotone-non-decreasing: higher levels need at least
-        // as much hold-time as lower ones (structural, not noise).
-        for i in 1..4 {
-            if self.min_hold_bars[i] < self.min_hold_bars[i - 1] {
-                return Err(PivotError::InvalidConfig(format!(
-                    "min_hold_bars must be non-decreasing (level {i})"
+                    "lengths must be strictly increasing (level {i})"
                 )));
             }
         }

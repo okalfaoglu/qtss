@@ -35,6 +35,6 @@ mod tests;
 
 pub use atr::AtrState;
 pub use config::PivotConfig;
-pub use engine::{NewPivot, PivotEngine};
+pub use engine::{NewPivot, PivotEngine, ProvisionalPivot};
 pub use error::{PivotError, PivotResult};
-pub use zigzag::{Sample, ZigZag};
+pub use zigzag::{ProvisionalExtreme, Sample, ZigZag};

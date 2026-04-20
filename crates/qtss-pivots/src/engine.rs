@@ -1,36 +1,38 @@
-//! Multi-level pivot engine.
+//! Multi-level pivot engine (LuxAlgo pivot-window parity).
 //!
-//! Owns one ATR estimator + four parallel ZigZag instances (one per level).
-//! On each new bar:
-//!   1. Update ATR.
-//!   2. Feed the bar to the L0 zigzag with `atr * mult[0]`.
-//!   3. If a pivot is confirmed at L0, feed it as a synthetic sample to
-//!      the L1 zigzag with `atr * mult[1]`. If L1 confirms, cascade to L2,
-//!      and so on.
+//! Runs four parallel [`ZigZag`] detectors, one per level, each with a
+//! different window length (see [`PivotConfig::lengths`]). Unlike the
+//! previous ATR-threshold design, levels are **independent** — no
+//! cascade needed because pivot-window is inherently subset-preserving:
+//! a bar that is the extremum of a ±L_big window is necessarily also
+//! the extremum of any smaller ±L_small window at the same index.
 //!
-//! That cascade is exactly what enforces the subset invariant — a level-N
-//! pivot can only ever exist at a bar index that already cleared level N-1.
+//! No ATR, no warm-up — the only lag is `length` bars per level before
+//! a pivot can confirm.
 
-use crate::atr::AtrState;
 use crate::config::PivotConfig;
 use crate::error::PivotResult;
-use crate::zigzag::{ConfirmedPivot, Sample, ZigZag};
+use crate::zigzag::{ConfirmedPivot, ProvisionalExtreme, Sample, ZigZag};
 use qtss_domain::v2::bar::Bar;
 use qtss_domain::v2::pivot::{Pivot, PivotLevel, PivotTree};
-use rust_decimal::Decimal;
 
 /// A pivot the engine just confirmed, tagged with the level it was
-/// emitted at. Useful for callers that want to publish events
-/// (`pivot.updated`) per level rather than diff a snapshot.
+/// emitted at.
 #[derive(Debug, Clone)]
 pub struct NewPivot {
     pub level: PivotLevel,
     pub pivot: Pivot,
 }
 
+/// Level-tagged provisional pivot — the current running extreme of a
+/// ZigZag. Chart-only; never stored, never consumed by detectors.
+#[derive(Debug, Clone)]
+pub struct ProvisionalPivot {
+    pub level: PivotLevel,
+    pub extreme: ProvisionalExtreme,
+}
+
 pub struct PivotEngine {
-    config: PivotConfig,
-    atr: AtrState,
     bar_index: u64,
     last_time: Option<chrono::DateTime<chrono::Utc>>,
     zigzags: [ZigZag; 4],
@@ -40,20 +42,14 @@ pub struct PivotEngine {
 impl PivotEngine {
     pub fn new(config: PivotConfig) -> PivotResult<Self> {
         config.validate()?;
-        // **Fix B** — construct each level's ZigZag with its own
-        // `min_hold_bars` gate. Higher levels are more tolerant of
-        // noise (larger threshold) AND required to hold longer (larger
-        // min_hold_bars) so structural pivots dominate.
-        let mh = config.min_hold_bars;
+        let l = config.lengths;
         let zigzags = [
-            ZigZag::with_min_hold_bars(mh[0]),
-            ZigZag::with_min_hold_bars(mh[1]),
-            ZigZag::with_min_hold_bars(mh[2]),
-            ZigZag::with_min_hold_bars(mh[3]),
+            ZigZag::with_length(l[0]),
+            ZigZag::with_length(l[1]),
+            ZigZag::with_length(l[2]),
+            ZigZag::with_length(l[3]),
         ];
         Ok(Self {
-            atr: AtrState::new(config.atr_period),
-            config,
             bar_index: 0,
             last_time: None,
             zigzags,
@@ -61,26 +57,18 @@ impl PivotEngine {
         })
     }
 
-    /// Feed one bar. Returns the list of pivots confirmed by this bar
-    /// across all levels (often empty, occasionally one or more).
+    /// Feed one bar. Returns pivots confirmed across all levels by
+    /// this bar (often empty, occasionally one or more).
     pub fn on_bar(&mut self, bar: &Bar) -> PivotResult<Vec<NewPivot>> {
         let idx = self.bar_index;
         self.bar_index += 1;
-        // Monotonic-time guard. Out-of-order bars would corrupt the
-        // ATR state and produce nonsense pivots; surface as an error
-        // so the caller can drop or reorder.
+
         if let Some(prev) = self.last_time {
             if bar.open_time < prev {
                 return Err(crate::error::PivotError::NonMonotonic(idx));
             }
         }
         self.last_time = Some(bar.open_time);
-
-        let atr = match self.atr.update(bar.high, bar.low, bar.close) {
-            Some(v) => v,
-            // Still warming up — no pivots can be produced yet.
-            None => return Ok(vec![]),
-        };
 
         let sample = Sample {
             bar_index: idx,
@@ -90,40 +78,19 @@ impl PivotEngine {
             volume: bar.volume,
         };
 
-        // Cascade through the levels. Each level emits at most one pivot
-        // per bar; if it does, the same pivot is fed forward as a sample
-        // to the next, finer-to-coarser, threshold.
         let mut emitted = Vec::new();
-        let mut next_sample = Some(sample);
         for (i, level) in PivotLevel::ALL.into_iter().enumerate() {
-            let Some(s) = next_sample.take() else { break };
-            let threshold = atr * self.config.atr_mult[i];
-            let confirmed = self.zigzags[i].on_sample(&s, threshold);
-            if let Some(cp) = confirmed {
+            if let Some(cp) = self.zigzags[i].push(&sample) {
                 let mut pivot = build_pivot(&cp, level);
-                // Classify swing type (HH/HL/LH/LL) vs previous same-kind pivot.
                 pivot.swing_type = classify_swing(&self.confirmed[i], &pivot);
                 self.confirmed[i].push(pivot.clone());
                 emitted.push(NewPivot { level, pivot });
-                // Cascade: feed this confirmation forward as a synthetic
-                // sample to the next coarser level. high == low == price
-                // because higher-level zigzags compare against pivot prices,
-                // not bar ranges.
-                next_sample = Some(Sample {
-                    bar_index: cp.bar_index,
-                    time: cp.time,
-                    high: cp.price,
-                    low: cp.price,
-                    volume: cp.volume_at_pivot,
-                });
-            } else {
-                next_sample = None;
             }
         }
         Ok(emitted)
     }
 
-    /// Snapshot the current pivot tree. Cheap clone of the four vectors.
+    /// Snapshot the current pivot tree. Cheap clone.
     pub fn snapshot(&self) -> PivotTree {
         PivotTree::new(
             self.confirmed[0].clone(),
@@ -133,9 +100,16 @@ impl PivotEngine {
         )
     }
 
-    /// Current ATR, exposed for diagnostics. `None` while warming up.
-    pub fn current_atr(&self) -> Option<Decimal> {
-        self.atr.value()
+    /// Provisional (unconfirmed) running extreme per level. Never fed
+    /// into detectors; render-only.
+    pub fn provisional_extremes(&self) -> [Option<ProvisionalPivot>; 4] {
+        let mut out: [Option<ProvisionalPivot>; 4] = [None, None, None, None];
+        for (i, level) in PivotLevel::ALL.into_iter().enumerate() {
+            if let Some(e) = self.zigzags[i].provisional_extreme() {
+                out[i] = Some(ProvisionalPivot { level, extreme: e });
+            }
+        }
+        out
     }
 }
 
@@ -148,27 +122,22 @@ fn build_pivot(cp: &ConfirmedPivot, level: PivotLevel) -> Pivot {
         level,
         prominence: cp.prominence,
         volume_at_pivot: cp.volume_at_pivot,
-        swing_type: None, // Set by classify_swing after construction.
+        swing_type: None,
     }
 }
 
-/// Compare a new pivot with the previous pivot of the same kind at the
-/// same level. Produces HH/HL/LH/LL classification (PineScript dir=±2).
 fn classify_swing(
     confirmed: &[Pivot],
     new: &Pivot,
 ) -> Option<qtss_domain::v2::pivot::SwingType> {
     use qtss_domain::v2::pivot::{PivotKind, SwingType};
-    // Find the last pivot of the same kind (High→last High, Low→last Low).
     let prev = confirmed.iter().rev().find(|p| p.kind == new.kind)?;
     match new.kind {
         PivotKind::High => {
-            if new.price >= prev.price { Some(SwingType::HH) }
-            else { Some(SwingType::LH) }
+            if new.price >= prev.price { Some(SwingType::HH) } else { Some(SwingType::LH) }
         }
         PivotKind::Low => {
-            if new.price <= prev.price { Some(SwingType::LL) }
-            else { Some(SwingType::HL) }
+            if new.price <= prev.price { Some(SwingType::LL) } else { Some(SwingType::HL) }
         }
     }
 }

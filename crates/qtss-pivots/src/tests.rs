@@ -44,11 +44,6 @@ fn bar(i: i64, o: Decimal, h: Decimal, l: Decimal, c: Decimal) -> Bar {
     }
 }
 
-/// Symmetric bar: triangular (price = open = close = mid).
-fn flat(i: i64, p: Decimal) -> Bar {
-    bar(i, p, p, p, p)
-}
-
 // ---------------------------------------------------------------------------
 // PivotConfig validation
 // ---------------------------------------------------------------------------
@@ -59,21 +54,22 @@ fn config_defaults_validate() {
 }
 
 #[test]
-fn config_rejects_short_atr_period() {
+fn config_rejects_zero_length() {
     let mut c = PivotConfig::defaults();
-    c.atr_period = 1;
+    c.lengths[0] = 0;
     assert!(matches!(c.validate(), Err(PivotError::InvalidConfig(_))));
 }
 
 #[test]
-fn config_rejects_non_increasing_multipliers() {
+fn config_rejects_non_increasing_lengths() {
     let mut c = PivotConfig::defaults();
-    c.atr_mult = [dec!(1), dec!(2), dec!(2), dec!(3)];
+    c.lengths = [4, 4, 8, 16];
     assert!(matches!(c.validate(), Err(PivotError::InvalidConfig(_))));
 }
 
 // ---------------------------------------------------------------------------
-// ATR
+// ATR (kept as a generic utility even though the pivot engine no longer
+// uses it — other crates may still import AtrState).
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -82,7 +78,7 @@ fn atr_warms_up_then_smooths() {
     assert_eq!(atr.update(dec!(10), dec!(8), dec!(9)), None);
     assert_eq!(atr.update(dec!(11), dec!(9), dec!(10)), None);
     let v = atr.update(dec!(12), dec!(10), dec!(11)).unwrap();
-    assert!(v > dec!(0), "ATR should be positive after warm-up");
+    assert!(v > dec!(0));
     let next = atr.update(dec!(15), dec!(11), dec!(14)).unwrap();
     assert!(next > dec!(0));
 }
@@ -92,28 +88,22 @@ fn atr_warms_up_then_smooths() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn warmup_period_emits_no_pivots() {
+fn short_series_emits_no_pivots() {
+    // Fewer bars than 2*length+1 → no window ever fills → no pivots.
     let mut eng = PivotEngine::new(PivotConfig::defaults()).unwrap();
-    for i in 0..10 {
-        let b = flat(i, dec!(100) + Decimal::from(i));
+    for i in 0..5 {
+        let b = bar(i, dec!(100), dec!(101), dec!(99), dec!(100));
         let out = eng.on_bar(&b).unwrap();
-        assert!(out.is_empty(), "no pivots before ATR warm-up completes");
+        assert!(out.is_empty());
     }
 }
 
 #[test]
 fn synthetic_swing_produces_l0_pivots() {
-    // Build a deliberately swingy series so the L0 zigzag has plenty to chew on.
-    let cfg = PivotConfig {
-        atr_period: 5,
-        atr_mult: [dec!(0.5), dec!(1.0), dec!(2.0), dec!(4.0)],
-        // Fix B gate disabled for this synthetic series — the 5-bar
-        // swings are too short to clear even min_hold_bars=2.
-        min_hold_bars: [0, 0, 0, 0],
-    };
+    // L0 length = 2 so a full window only needs 5 bars.
+    let cfg = PivotConfig { lengths: [2, 4, 8, 16] };
     let mut eng = PivotEngine::new(cfg).unwrap();
 
-    // Up 5, down 5, up 5, down 5 ... over 40 bars.
     let mut price = dec!(100);
     let mut up = true;
     for i in 0..40 {
@@ -126,12 +116,7 @@ fn synthetic_swing_produces_l0_pivots() {
     }
     let tree = eng.snapshot();
     let l0 = tree.at_level(PivotLevel::L0);
-    assert!(
-        l0.len() >= 3,
-        "expected several L0 pivots, got {}",
-        l0.len()
-    );
-    // Pivots must alternate high/low.
+    assert!(l0.len() >= 3, "expected several L0 pivots, got {}", l0.len());
     for w in l0.windows(2) {
         assert_ne!(w[0].kind, w[1].kind, "pivots should alternate kind");
     }
@@ -139,16 +124,9 @@ fn synthetic_swing_produces_l0_pivots() {
 
 #[test]
 fn higher_levels_are_subsets_of_lower_levels() {
-    // Use a tighter L0 threshold and a much wider L3 to force a real
-    // hierarchy with cascade emissions on multiple levels.
-    let cfg = PivotConfig {
-        atr_period: 5,
-        atr_mult: [dec!(0.3), dec!(1.0), dec!(2.5), dec!(5.0)],
-        min_hold_bars: [0, 0, 0, 0],
-    };
+    let cfg = PivotConfig { lengths: [2, 4, 8, 16] };
     let mut eng = PivotEngine::new(cfg).unwrap();
 
-    // Big swings then small swings then big again — should produce L1+ pivots.
     let pattern: Vec<Decimal> = vec![
         dec!(100), dec!(102), dec!(104), dec!(108), dec!(115), dec!(120),
         dec!(118), dec!(112), dec!(105), dec!(100), dec!(95),  dec!(90),
@@ -188,11 +166,7 @@ fn rejects_non_monotonic_bars() {
 
 #[test]
 fn snapshot_pivot_kind_alternation_holds_per_level() {
-    let cfg = PivotConfig {
-        atr_period: 4,
-        atr_mult: [dec!(0.5), dec!(1.5), dec!(3.0), dec!(6.0)],
-        min_hold_bars: [0, 0, 0, 0],
-    };
+    let cfg = PivotConfig { lengths: [2, 4, 8, 16] };
     let mut eng = PivotEngine::new(cfg).unwrap();
     let mut price = dec!(50);
     let mut step = dec!(3);
@@ -217,16 +191,12 @@ fn snapshot_pivot_kind_alternation_holds_per_level() {
     }
 }
 
-// Compile-time guard: PivotKind is exported under the path the engine
-// builds Pivot values with. Catches accidental rename.
 #[test]
 fn pivot_kind_is_high_or_low() {
     let _ = PivotKind::High;
     let _ = PivotKind::Low;
 }
 
-// Suppress unused-import warning if the helper isn't used by every test
-// after future trimming.
 #[test]
 fn duration_helper_compiles() {
     let _ = Duration::seconds(60);

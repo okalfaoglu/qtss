@@ -1,26 +1,40 @@
-//! Streaming zigzag detector.
+//! Pivot-window ZigZag detector (LuxAlgo-parity).
 //!
-//! Generic over a sample shape so the same algorithm can run twice:
-//!   1. on raw bars (to produce L0 pivots), and
-//!   2. on previously-confirmed pivots (to produce higher levels).
+//! # Algorithm
 //!
-//! That second pass is what guarantees the subset invariant — a level-N
-//! pivot can only exist at a bar index that already exists at level N-1.
+//! A pivot at bar `i` is any bar whose price is the extremum over a
+//! window of `length` bars on each side:
 //!
-//! ## Algorithm
+//!   - **Pivot High**: `high[i]` is the maximum of `high[i-length..=i+length]`
+//!   - **Pivot Low**:  `low[i]`  is the minimum of `low[i-length..=i+length]`
 //!
-//! Track the running extreme in the current swing direction. A reversal
-//! is *confirmed* when the price moves against the extreme by more than
-//! `threshold` (typically `atr_mult * ATR`). On confirmation we emit the
-//! previous extreme as a pivot and flip direction.
+//! The detector keeps a ring buffer of the last `2*length + 1` bars and,
+//! on every incoming bar, evaluates whether the **centre** of the buffer
+//! (bar index `current - length`) qualifies as a pivot. Confirmation lag
+//! is therefore exactly `length` bars.
+//!
+//! # ZigZag alternation
+//!
+//! Raw pivot-window output can flag the same bar as both a high and a
+//! low when the range is wide; it can also emit two highs in a row
+//! (two consecutive swing tops). We apply ZigZag-style alternation on
+//! top: track the direction of the last confirmed pivot; same-kind
+//! candidates replace the previous extreme if they are more extreme,
+//! opposite-kind candidates trigger emission and flip direction.
+//!
+//! The running extreme (the pivot we *would* emit if the next bar
+//! closed the window) is exposed via [`ZigZag::provisional_extreme`] so
+//! charts can render a pivot marker on the most recent bars — matching
+//! LuxAlgo's visual behaviour where the ZigZag line reaches to the
+//! current bar.
 
 use chrono::{DateTime, Utc};
 use qtss_domain::v2::pivot::PivotKind;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
+use std::collections::VecDeque;
 
-/// One observation that the zigzag operates on. Either a raw bar (high,
-/// low, close) or a previously-detected pivot (high == low == price).
+/// One observation — a bar's (high, low) range plus volume.
 #[derive(Debug, Clone)]
 pub struct Sample {
     pub bar_index: u64,
@@ -40,6 +54,17 @@ pub struct ConfirmedPivot {
     pub volume_at_pivot: Decimal,
 }
 
+/// Unconfirmed running extreme — the pivot currently "leading" the
+/// swing. Exposed for chart rendering; never persisted.
+#[derive(Debug, Clone)]
+pub struct ProvisionalExtreme {
+    pub bar_index: u64,
+    pub time: DateTime<Utc>,
+    pub price: Decimal,
+    pub kind: PivotKind,
+    pub volume_at_pivot: Decimal,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Direction {
     Unknown,
@@ -48,135 +73,183 @@ enum Direction {
 }
 
 #[derive(Debug, Clone)]
+struct Candidate {
+    bar_index: u64,
+    time: DateTime<Utc>,
+    price: Decimal,
+    kind: PivotKind,
+    volume: Decimal,
+}
+
+#[derive(Debug, Clone)]
 pub struct ZigZag {
+    /// Window radius — `length` bars on each side for pivot-window test.
+    length: u32,
+    /// Ring buffer of the last `2*length + 1` samples.
+    buf: VecDeque<Sample>,
+    /// Direction of the last confirmed (or provisional) pivot — used
+    /// for ZigZag alternation on top of the raw pivot-window output.
     direction: Direction,
-    extreme_idx: u64,
-    extreme_time: DateTime<Utc>,
-    extreme_price: Decimal,
-    extreme_volume: Decimal,
-    /// Last confirmed pivot price — used to compute prominence on the
-    /// next confirmation. None until the very first pivot is emitted.
+    /// Running extreme in the current swing (provisional — may still
+    /// be replaced if a more extreme same-kind pivot appears before
+    /// the opposite side confirms).
+    pending: Option<Candidate>,
+    /// Last confirmed pivot price — used to compute prominence.
     last_confirmed_price: Option<Decimal>,
-    /// **Fix B** — minimum raw-bar distance that must elapse between
-    /// the extreme and the candidate reversal before the pivot is
-    /// emitted. Raw bar distance (from `Sample.bar_index`) is used so
-    /// the gate behaves the same on higher levels where samples are
-    /// synthesised from lower-level pivots.
-    min_hold_bars: u32,
 }
 
 impl ZigZag {
-    /// Backwards-compatible constructor with no hold gate. Prefer
-    /// `with_min_hold_bars` in production code.
-    pub fn new() -> Self {
-        Self::with_min_hold_bars(0)
+    /// Construct a pivot-window ZigZag with the given window radius.
+    /// `length >= 1`. A pivot at bar `i` requires `length` bars on each
+    /// side to evaluate, so confirmation lag is `length` bars.
+    pub fn with_length(length: u32) -> Self {
+        Self {
+            length: length.max(1),
+            buf: VecDeque::with_capacity((2 * length.max(1) + 1) as usize),
+            direction: Direction::Unknown,
+            pending: None,
+            last_confirmed_price: None,
+        }
     }
 
-    /// Construct with a Fix-B hold gate. `min_hold_bars = 0` disables
-    /// the gate and restores the legacy behaviour.
-    pub fn with_min_hold_bars(min_hold_bars: u32) -> Self {
-        Self {
-            direction: Direction::Unknown,
-            extreme_idx: 0,
-            extreme_time: chrono::DateTime::<Utc>::MIN_UTC,
-            extreme_price: dec!(0),
-            extreme_volume: dec!(0),
-            last_confirmed_price: None,
-            min_hold_bars,
-        }
+    /// Legacy no-arg constructor — defaults to length 4 (LuxAlgo L0).
+    pub fn new() -> Self {
+        Self::with_length(4)
     }
 
     /// Feed one sample. Returns at most one newly-confirmed pivot.
-    /// Threshold is the absolute (not percent) reversal distance — the
-    /// caller multiplies ATR by the level multiplier and passes the
-    /// product here.
-    pub fn on_sample(&mut self, s: &Sample, threshold: Decimal) -> Option<ConfirmedPivot> {
-        if self.direction == Direction::Unknown {
-            // Bootstrap: anchor on the very first sample. We don't yet
-            // know which way the swing goes, so just hold the extreme.
-            self.extreme_idx = s.bar_index;
-            self.extreme_time = s.time;
-            self.extreme_price = s.high; // arbitrary; refined below
-            self.extreme_volume = s.volume;
-            self.direction = Direction::Up;
+    pub fn on_sample(&mut self, s: &Sample, _unused_threshold: Decimal) -> Option<ConfirmedPivot> {
+        self.push(s)
+    }
+
+    /// Feed one sample (preferred call site — no dummy threshold).
+    pub fn push(&mut self, s: &Sample) -> Option<ConfirmedPivot> {
+        self.buf.push_back(s.clone());
+        let cap = (2 * self.length + 1) as usize;
+        while self.buf.len() > cap {
+            self.buf.pop_front();
+        }
+        // Need a full window before the centre bar can be evaluated.
+        if self.buf.len() < cap {
             return None;
         }
+        let centre_idx = self.length as usize;
+        let centre = self.buf[centre_idx].clone();
 
-        match self.direction {
-            Direction::Up => self.handle_up(s, threshold),
-            Direction::Down => self.handle_down(s, threshold),
-            Direction::Unknown => unreachable!("bootstrapped above"),
+        // Pivot-window test: is `centre` the extremum of the window?
+        let mut is_high = true;
+        let mut is_low = true;
+        for (k, b) in self.buf.iter().enumerate() {
+            if k == centre_idx {
+                continue;
+            }
+            if b.high > centre.high {
+                is_high = false;
+            }
+            if b.low < centre.low {
+                is_low = false;
+            }
+            if !is_high && !is_low {
+                break;
+            }
+        }
+
+        // Pick the qualifying kind. In the rare case the centre is both
+        // (e.g. gigantic outside bar), prefer the direction that
+        // continues the current swing — it produces smoother alternation.
+        let candidate_kind = match (is_high, is_low) {
+            (true, false) => Some(PivotKind::High),
+            (false, true) => Some(PivotKind::Low),
+            (true, true) => Some(match self.direction {
+                Direction::Up => PivotKind::High,
+                Direction::Down => PivotKind::Low,
+                Direction::Unknown => PivotKind::High,
+            }),
+            (false, false) => None,
+        }?;
+
+        let candidate = Candidate {
+            bar_index: centre.bar_index,
+            time: centre.time,
+            price: match candidate_kind {
+                PivotKind::High => centre.high,
+                PivotKind::Low => centre.low,
+            },
+            kind: candidate_kind,
+            volume: centre.volume,
+        };
+
+        self.apply_alternation(candidate)
+    }
+
+    /// Apply ZigZag alternation rules against the current pending
+    /// extreme. Returns the pivot to emit, if any.
+    fn apply_alternation(&mut self, c: Candidate) -> Option<ConfirmedPivot> {
+        match &self.pending {
+            None => {
+                // First ever candidate — seed direction, don't emit yet
+                // (we have nothing to anchor prominence against).
+                self.direction = match c.kind {
+                    PivotKind::High => Direction::Up,
+                    PivotKind::Low => Direction::Down,
+                };
+                self.pending = Some(c);
+                None
+            }
+            Some(prev) if prev.kind == c.kind => {
+                // Same kind — replace if more extreme (LuxAlgo collapses
+                // consecutive same-direction pivots to the extremum).
+                let replace = match c.kind {
+                    PivotKind::High => c.price > prev.price,
+                    PivotKind::Low => c.price < prev.price,
+                };
+                if replace {
+                    self.pending = Some(c);
+                }
+                None
+            }
+            Some(prev) => {
+                // Opposite kind → emit the previous pending pivot, then
+                // the new candidate becomes the next pending.
+                let prev_cloned = prev.clone();
+                let pivot = self.emit(&prev_cloned);
+                self.direction = match c.kind {
+                    PivotKind::High => Direction::Up,
+                    PivotKind::Low => Direction::Down,
+                };
+                self.pending = Some(c);
+                Some(pivot)
+            }
         }
     }
 
-    fn handle_up(&mut self, s: &Sample, threshold: Decimal) -> Option<ConfirmedPivot> {
-        // Extending the up-swing: track new highs.
-        if s.high >= self.extreme_price {
-            self.extreme_idx = s.bar_index;
-            self.extreme_time = s.time;
-            self.extreme_price = s.high;
-            self.extreme_volume = s.volume;
-            return None;
-        }
-        // Check for reversal — threshold AND Fix-B hold gate.
-        if self.extreme_price - s.low >= threshold && self.hold_gate_passes(s) {
-            let pivot = self.emit(PivotKind::High);
-            self.direction = Direction::Down;
-            self.extreme_idx = s.bar_index;
-            self.extreme_time = s.time;
-            self.extreme_price = s.low;
-            self.extreme_volume = s.volume;
-            return Some(pivot);
-        }
-        None
-    }
-
-    fn handle_down(&mut self, s: &Sample, threshold: Decimal) -> Option<ConfirmedPivot> {
-        if s.low <= self.extreme_price {
-            self.extreme_idx = s.bar_index;
-            self.extreme_time = s.time;
-            self.extreme_price = s.low;
-            self.extreme_volume = s.volume;
-            return None;
-        }
-        if s.high - self.extreme_price >= threshold && self.hold_gate_passes(s) {
-            let pivot = self.emit(PivotKind::Low);
-            self.direction = Direction::Up;
-            self.extreme_idx = s.bar_index;
-            self.extreme_time = s.time;
-            self.extreme_price = s.high;
-            self.extreme_volume = s.volume;
-            return Some(pivot);
-        }
-        None
-    }
-
-    /// **Fix B** — pivot emission gated on raw-bar hold duration. The
-    /// extreme must have stood for at least `min_hold_bars` raw bars
-    /// before the opposite-side threshold can confirm a reversal. A
-    /// value of 0 is a no-op (legacy behaviour).
-    #[inline]
-    fn hold_gate_passes(&self, s: &Sample) -> bool {
-        if self.min_hold_bars == 0 {
-            return true;
-        }
-        s.bar_index.saturating_sub(self.extreme_idx) >= self.min_hold_bars as u64
-    }
-
-    fn emit(&mut self, kind: PivotKind) -> ConfirmedPivot {
+    fn emit(&mut self, prev: &Candidate) -> ConfirmedPivot {
         let prominence = match self.last_confirmed_price {
-            Some(prev) => (self.extreme_price - prev).abs(),
+            Some(p) => (prev.price - p).abs(),
             None => dec!(0),
         };
-        self.last_confirmed_price = Some(self.extreme_price);
+        self.last_confirmed_price = Some(prev.price);
         ConfirmedPivot {
-            bar_index: self.extreme_idx,
-            time: self.extreme_time,
-            price: self.extreme_price,
-            kind,
+            bar_index: prev.bar_index,
+            time: prev.time,
+            price: prev.price,
+            kind: prev.kind,
             prominence,
-            volume_at_pivot: self.extreme_volume,
+            volume_at_pivot: prev.volume,
         }
+    }
+
+    /// The pivot we would emit if the next opposite-kind candidate
+    /// arrived. Matches LuxAlgo's visual ZigZag line reaching the
+    /// current bar. `None` before the first pivot-window confirms.
+    pub fn provisional_extreme(&self) -> Option<ProvisionalExtreme> {
+        self.pending.as_ref().map(|c| ProvisionalExtreme {
+            bar_index: c.bar_index,
+            time: c.time,
+            price: c.price,
+            kind: c.kind,
+            volume_at_pivot: c.volume,
+        })
     }
 }
 
