@@ -2136,8 +2136,17 @@ export function Chart() {
         if (!levelEnabled[lvl]) continue;
         const series = pivotsQuery.data?.levels.find((s) => s.level === lvl);
         if (!series || series.points.length < 2) continue;
-        // Convert + clamp to visible candle window.
-        const inWindow = series.points
+        // Faz 14.A16 — LuxAlgo parity: the ZigZag line connects only
+        // **major** pivots (HH / LL), skipping LH / HL. This mirrors
+        // Pine's ±2 vs ±1 newDir flag — LuxAlgo's visible line is a
+        // chain of major pivots; intermediate LH/HL pivots are tracked
+        // internally but not drawn as line vertices. Missing swing_type
+        // (very first pivot before classifier has a peer) falls through
+        // so the line still has a starting anchor.
+        const isMajor = (sw: string | null | undefined) =>
+          sw == null || sw === "HH" || sw === "LL";
+        const pointsFiltered = series.points.filter((p) => isMajor(p.swing_type));
+        const inWindow = pointsFiltered
           .map((p) => ({
             time: Math.floor(new Date(p.open_time).getTime() / 1000) as Time,
             value: Number(p.price),
