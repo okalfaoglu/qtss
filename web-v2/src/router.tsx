@@ -30,6 +30,7 @@ import { Wyckoff } from "./pages/Wyckoff";
 import { AiShadow } from "./pages/AiShadow";
 import { FeatureInspector } from "./pages/FeatureInspector";
 import { Reports } from "./pages/Reports";
+import { PerformanceReport } from "./pages/PerformanceReport";
 import { ReversalRadar } from "./pages/ReversalRadar";
 import { Symbols } from "./pages/Symbols";
 
@@ -81,6 +82,7 @@ export const router = createBrowserRouter([
       { path: "ai-shadow", element: <AiShadow /> },
       { path: "feature-inspector", element: <FeatureInspector /> },
       { path: "reports/backtest", element: <Reports /> },
+      { path: "reports/performance", element: <PerformanceReport /> },
       { path: "reversal-radar", element: <ReversalRadar /> },
       { path: "symbols", element: <Symbols /> },
     ],

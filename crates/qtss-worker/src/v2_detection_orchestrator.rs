@@ -1027,6 +1027,18 @@ async fn resolve_elliott_toggles(pool: &PgPool) -> ElliottFormationToggles {
         pool, "detection", "elliott.impulse.enabled",
         "QTSS_DETECTION_ELLIOTT_IMPULSE_ENABLED", true,
     ).await;
+    // Faz 15 — nascent (4-pivot) impulse early warning. Default ON so
+    // the setup engine can size wave-3 extensions before wave 5.
+    t.nascent_impulse = resolve_worker_enabled_flag(
+        pool, "detection", "elliott.nascent_impulse.enabled",
+        "QTSS_DETECTION_ELLIOTT_NASCENT_IMPULSE_ENABLED", true,
+    ).await;
+    // Faz 14.A13 — bridges the 4-pivot nascent and 6-pivot full impulse
+    // detectors. Picks up wave-4 completion before wave 5 fires.
+    t.forming_impulse = resolve_worker_enabled_flag(
+        pool, "detection", "elliott.forming_impulse.enabled",
+        "QTSS_DETECTION_ELLIOTT_FORMING_IMPULSE_ENABLED", true,
+    ).await;
     t.leading_diagonal = resolve_worker_enabled_flag(
         pool, "detection", "elliott.leading_diagonal.enabled",
         "QTSS_DETECTION_ELLIOTT_LEADING_DIAGONAL_ENABLED", false,
@@ -1078,10 +1090,18 @@ pub(crate) async fn build_runners(pool: &PgPool) -> Vec<Box<dyn DetectorRunner>>
     .await
     {
         let toggles = resolve_elliott_toggles(pool).await;
-        // Run Elliott at both L0 (fine) and L1 (coarse) pivot levels.
-        // L0 catches more formations (like LuxAlgo's short zigzag),
-        // L1 catches larger structural moves.
-        for level in [PivotLevel::L0, PivotLevel::L1] {
+        // Faz 13.UI — multi-level Elliott: config-driven level list
+        // (default "L0,L1,L2,L3"). Each level captures a different
+        // degree of Elliott structure — L0 sub-minute zigzags up to L3
+        // primary-degree motives. Cross-level duplicates (same anchors
+        // matching at multiple levels) are handled by the upsert unique
+        // index on qtss_v2_detections, not by skipping levels.
+        let levels_str = resolve_system_string(
+            pool, "detection", "elliott.pivot_levels",
+            "QTSS_DETECTION_ELLIOTT_PIVOT_LEVELS", "L0,L1,L2,L3",
+        ).await;
+        for token in levels_str.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            let level = parse_pivot_level(token);
             let mut cfg = ElliottConfig::defaults();
             cfg.pivot_level = level;
             match ElliottDetectorSet::new(cfg, &toggles) {
@@ -1417,6 +1437,10 @@ async fn process_symbol(
                 Decimal::new(25, 1),  // 2.5
                 Decimal::new(40, 1),  // 4.0
             ],
+            // Fix B — sparse-history mode still gates against
+            // next-bar punch-through, but with shallower L2/L3
+            // hold so detectors aren't starved.
+            min_hold_bars: [1, 2, 3, 4],
         }
     } else {
         PivotConfig::defaults()
@@ -1620,6 +1644,7 @@ async fn process_symbol(
             family,
             subkind,
             last_anchor_idx,
+            detection.anchors.first().map(|a| a.level.as_str()),
         )
         .await?
         {
@@ -1829,6 +1854,7 @@ async fn process_symbol(
                 &sym.interval,
                 family,
                 subkind,
+                detection.anchors.first().map(|a| a.level.as_str()),
             )
             .await?
         } else {
@@ -2116,7 +2142,19 @@ async fn run_pivot_reversal_live(
                    'pivot_reversal', $6, 'confirmed', $7,
                    $8, $9, $10, $11, $12,
                    $13
-               )"#,
+               )
+               ON CONFLICT (
+                   exchange, symbol, timeframe, family, subkind,
+                   (COALESCE(pivot_level, '')),
+                   ((anchors->0->>'time')),
+                   ((anchors->-1->>'time'))
+               ) DO UPDATE SET
+                   detected_at       = EXCLUDED.detected_at,
+                   structural_score  = EXCLUDED.structural_score,
+                   invalidation_price = EXCLUDED.invalidation_price,
+                   anchors           = EXCLUDED.anchors,
+                   regime            = EXCLUDED.regime,
+                   raw_meta          = EXCLUDED.raw_meta"#,
         )
         .bind(detection_id)
         .bind(draft.detected_at)
@@ -2946,9 +2984,13 @@ async fn dedup_open(
     symbol: &str,
     timeframe: &str,
     family: &str,
-    _subkind: &str,
+    subkind: &str,
     last_anchor_idx: u64,
+    pivot_level: Option<&str>,
 ) -> anyhow::Result<Option<Uuid>> {
+    // Faz 14.A9 — broader filter, then narrow in Rust. `DetectionFilter`
+    // doesn't carry subkind/pivot_level yet so we do the final match
+    // here. Keeps the identity tuple consistent with `list_open_by_key`.
     let rows = repo
         .list_filtered(DetectionFilter {
             exchange: Some(exchange),
@@ -2957,11 +2999,17 @@ async fn dedup_open(
             family: Some(family),
             state: Some("forming"),
             mode: None,
-            limit: 5,
+            limit: 32,
         })
         .await?;
 
     for row in rows {
+        if row.subkind != subkind {
+            continue;
+        }
+        if row.pivot_level.as_deref() != pivot_level {
+            continue;
+        }
         if let Some(idx) = row
             .raw_meta
             .get("last_anchor_idx")

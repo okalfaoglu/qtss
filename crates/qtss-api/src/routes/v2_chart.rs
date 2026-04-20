@@ -79,6 +79,11 @@ struct ChartVenueOption {
     segment: String,
     symbols: Vec<String>,
     intervals: Vec<String>,
+    /// Faz 13.UI — per-symbol interval lookup. Keyed by symbol, lists
+    /// which timeframes are `enabled=true` for that specific symbol.
+    /// GUI uses this to gray out timeframe buttons that have no data
+    /// for the currently selected symbol.
+    symbol_intervals: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 async fn list_chart_venues(
@@ -100,25 +105,36 @@ async fn list_chart_venues(
     .map_err(|e| ApiError::new(axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     use std::collections::BTreeMap;
-    let mut grouped: BTreeMap<(String, String), (Vec<String>, Vec<String>)> = BTreeMap::new();
+    #[derive(Default)]
+    struct Acc {
+        symbols: Vec<String>,
+        intervals: Vec<String>,
+        per_symbol: BTreeMap<String, Vec<String>>,
+    }
+    let mut grouped: BTreeMap<(String, String), Acc> = BTreeMap::new();
     for (exchange, segment, symbol, interval) in rows {
         let entry = grouped.entry((exchange, segment)).or_default();
-        if !entry.0.contains(&symbol) {
-            entry.0.push(symbol);
+        if !entry.symbols.contains(&symbol) {
+            entry.symbols.push(symbol.clone());
         }
-        if !entry.1.contains(&interval) {
-            entry.1.push(interval);
+        if !entry.intervals.contains(&interval) {
+            entry.intervals.push(interval.clone());
+        }
+        let per = entry.per_symbol.entry(symbol).or_default();
+        if !per.contains(&interval) {
+            per.push(interval);
         }
     }
 
     Ok(Json(
         grouped
             .into_iter()
-            .map(|((exchange, segment), (symbols, intervals))| ChartVenueOption {
+            .map(|((exchange, segment), acc)| ChartVenueOption {
                 exchange,
                 segment,
-                symbols,
-                intervals,
+                symbols: acc.symbols,
+                intervals: acc.intervals,
+                symbol_intervals: acc.per_symbol,
             })
             .collect(),
     ))

@@ -144,6 +144,12 @@ impl V2DetectionRepository {
 
     pub async fn insert(&self, d: NewDetection<'_>) -> Result<DetectionRow, StorageError> {
         let row = sqlx::query_as::<_, DetectionRow>(
+            // Faz 13.UI — identity = (exchange, symbol, tf, family,
+            // subkind, pivot_level, anchor_span). Migration 0202 adds
+            // the matching unique index. A re-detection of the same
+            // pattern on a later sweep UPDATEs detected_at / anchors /
+            // scores instead of inserting a duplicate row. This kills
+            // both cross-level and cross-sweep write amplification.
             r#"INSERT INTO qtss_v2_detections (
                    id, detected_at, exchange, symbol, timeframe,
                    family, subkind, state, structural_score,
@@ -157,6 +163,22 @@ impl V2DetectionRepository {
                    $15, $16, $17,
                    $18
                )
+               ON CONFLICT (
+                   exchange, symbol, timeframe, family, subkind,
+                   (COALESCE(pivot_level, '')),
+                   ((anchors->0->>'time')),
+                   ((anchors->-1->>'time'))
+               ) DO UPDATE SET
+                   detected_at       = EXCLUDED.detected_at,
+                   state             = EXCLUDED.state,
+                   structural_score  = EXCLUDED.structural_score,
+                   invalidation_price = EXCLUDED.invalidation_price,
+                   anchors           = EXCLUDED.anchors,
+                   regime            = EXCLUDED.regime,
+                   raw_meta          = EXCLUDED.raw_meta,
+                   render_geometry   = EXCLUDED.render_geometry,
+                   render_style      = EXCLUDED.render_style,
+                   render_labels     = EXCLUDED.render_labels
                RETURNING id, detected_at, exchange, symbol, timeframe,
                          family, subkind, state, structural_score, confidence,
                          invalidation_price, anchors, regime, channel_scores,
@@ -259,7 +281,14 @@ impl V2DetectionRepository {
         timeframe: &str,
         family: &str,
         subkind: &str,
+        pivot_level: Option<&str>,
     ) -> Result<Vec<DetectionRow>, StorageError> {
+        // Faz 14.A9 — multi-level Elliott: the identity tuple must
+        // include `pivot_level`. Without it an L0 impulse and an L2
+        // impulse on the same (symbol, tf, family, subkind) collapse
+        // into one "primary" row and the other levels get invalidated
+        // as duplicates. We treat NULL level (TBM / candle) as a
+        // distinct bucket via `IS NOT DISTINCT FROM`.
         let rows = sqlx::query_as::<_, DetectionRow>(
             r#"SELECT id, detected_at, exchange, symbol, timeframe,
                       family, subkind, state, structural_score, confidence,
@@ -273,6 +302,7 @@ impl V2DetectionRepository {
                   AND timeframe = $3
                   AND family    = $4
                   AND subkind   = $5
+                  AND pivot_level IS NOT DISTINCT FROM $6
                   AND state    <> 'invalidated'
                 ORDER BY detected_at DESC"#,
         )
@@ -281,6 +311,7 @@ impl V2DetectionRepository {
         .bind(timeframe)
         .bind(family)
         .bind(subkind)
+        .bind(pivot_level)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)

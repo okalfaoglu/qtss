@@ -57,10 +57,24 @@ pub struct ZigZag {
     /// Last confirmed pivot price — used to compute prominence on the
     /// next confirmation. None until the very first pivot is emitted.
     last_confirmed_price: Option<Decimal>,
+    /// **Fix B** — minimum raw-bar distance that must elapse between
+    /// the extreme and the candidate reversal before the pivot is
+    /// emitted. Raw bar distance (from `Sample.bar_index`) is used so
+    /// the gate behaves the same on higher levels where samples are
+    /// synthesised from lower-level pivots.
+    min_hold_bars: u32,
 }
 
 impl ZigZag {
+    /// Backwards-compatible constructor with no hold gate. Prefer
+    /// `with_min_hold_bars` in production code.
     pub fn new() -> Self {
+        Self::with_min_hold_bars(0)
+    }
+
+    /// Construct with a Fix-B hold gate. `min_hold_bars = 0` disables
+    /// the gate and restores the legacy behaviour.
+    pub fn with_min_hold_bars(min_hold_bars: u32) -> Self {
         Self {
             direction: Direction::Unknown,
             extreme_idx: 0,
@@ -68,6 +82,7 @@ impl ZigZag {
             extreme_price: dec!(0),
             extreme_volume: dec!(0),
             last_confirmed_price: None,
+            min_hold_bars,
         }
     }
 
@@ -103,8 +118,8 @@ impl ZigZag {
             self.extreme_volume = s.volume;
             return None;
         }
-        // Check for reversal.
-        if self.extreme_price - s.low >= threshold {
+        // Check for reversal — threshold AND Fix-B hold gate.
+        if self.extreme_price - s.low >= threshold && self.hold_gate_passes(s) {
             let pivot = self.emit(PivotKind::High);
             self.direction = Direction::Down;
             self.extreme_idx = s.bar_index;
@@ -124,7 +139,7 @@ impl ZigZag {
             self.extreme_volume = s.volume;
             return None;
         }
-        if s.high - self.extreme_price >= threshold {
+        if s.high - self.extreme_price >= threshold && self.hold_gate_passes(s) {
             let pivot = self.emit(PivotKind::Low);
             self.direction = Direction::Up;
             self.extreme_idx = s.bar_index;
@@ -134,6 +149,18 @@ impl ZigZag {
             return Some(pivot);
         }
         None
+    }
+
+    /// **Fix B** — pivot emission gated on raw-bar hold duration. The
+    /// extreme must have stood for at least `min_hold_bars` raw bars
+    /// before the opposite-side threshold can confirm a reversal. A
+    /// value of 0 is a no-op (legacy behaviour).
+    #[inline]
+    fn hold_gate_passes(&self, s: &Sample) -> bool {
+        if self.min_hold_bars == 0 {
+            return true;
+        }
+        s.bar_index.saturating_sub(self.extreme_idx) >= self.min_hold_bars as u64
     }
 
     fn emit(&mut self, kind: PivotKind) -> ConfirmedPivot {

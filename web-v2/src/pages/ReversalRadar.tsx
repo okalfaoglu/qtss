@@ -45,7 +45,10 @@ interface RadarEntry {
   outcome: string | null;
   pnl_pct: number | null;
   close_reason: string | null;
+  maturity: string | null;
   targets: TargetsPack | null;
+  swing_type_curr: string | null;
+  swing_type_prev_opp: string | null;
 }
 
 interface RadarFeed {
@@ -88,7 +91,10 @@ function fmtPrice(v: number | undefined | null): string {
 }
 
 export function ReversalRadar() {
-  const [tier, setTier] = useState("");
+  // Default = "major" — L0/L1 pivotlar "tepki dibi" kalitesinde olup
+  // backtest kayıp oranını şişiriyor. Operatör reactive'ları görmek
+  // isterse filtreyi açıkça değiştirir.
+  const [tier, setTier] = useState("major");
   const [event, setEvent] = useState("");
   const [direction, setDirection] = useState("");
   const [level, setLevel] = useState("");
@@ -113,18 +119,25 @@ export function ReversalRadar() {
     refetchOnWindowFocus: false,
   });
 
+  // Immature'ları (tepki dibi) win-rate'den hariç tut; ayrı sayaçta göster.
   const stats = useMemo(() => {
     const entries = data?.entries ?? [];
     const byTier: Record<string, number> = { major: 0, reactive: 0 };
-    let wins = 0, losses = 0, expired = 0, active = 0;
+    const byLevelWin: Record<string, { w: number; l: number }> = {};
+    let wins = 0, losses = 0, expired = 0, active = 0, immature = 0;
     for (const e of entries) {
       byTier[e.tier] = (byTier[e.tier] ?? 0) + 1;
-      if (e.outcome === "win") wins++;
-      else if (e.outcome === "loss") losses++;
+      if (e.maturity === "immature") { immature++; continue; }
+      const lvl = e.pivot_level || "-";
+      byLevelWin[lvl] ??= { w: 0, l: 0 };
+      if (e.outcome === "win") { wins++; byLevelWin[lvl].w++; }
+      else if (e.outcome === "loss") { losses++; byLevelWin[lvl].l++; }
       else if (e.outcome === "expired") expired++;
       else active++;
     }
-    return { byTier, wins, losses, expired, active };
+    const decided = wins + losses;
+    const winRate = decided > 0 ? (wins / decided) * 100 : null;
+    return { byTier, byLevelWin, wins, losses, expired, active, immature, winRate };
   }, [data]);
 
   return (
@@ -163,13 +176,38 @@ export function ReversalRadar() {
       </div>
 
       {/* Top KPI strip */}
-      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-6">
+      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-7">
         <Kpi title="Toplam" value={data?.entries.length ?? 0} />
         <Kpi title="Major" value={stats.byTier.major} color="text-cyan-300" />
         <Kpi title="Reactive" value={stats.byTier.reactive} color="text-zinc-300" />
         <Kpi title="Kazanç" value={stats.wins} color="text-emerald-400" />
         <Kpi title="Kayıp" value={stats.losses} color="text-rose-400" />
         <Kpi title="Beklemede" value={stats.active + stats.expired} color="text-amber-300" />
+        <Kpi title="Immature" value={stats.immature} color="text-zinc-500" />
+      </div>
+
+      {/* Seviye bazlı win-rate dökümü — L0/L1'in yüksek kayıp oranı
+          "tepki dibi"nin major diye işaretlendiğinin göstergesidir.
+          Pivot-hardening (min_hold_bars) sonrası L2/L3 kalitesi netleşir. */}
+      <div className="flex flex-wrap gap-2 text-xs">
+        <span className="text-zinc-500">Seviye başı:</span>
+        {Object.entries(stats.byLevelWin)
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([lvl, v]) => {
+            const dec = v.w + v.l;
+            const wr = dec > 0 ? ((v.w / dec) * 100).toFixed(1) : "—";
+            return (
+              <span key={lvl} className="rounded border border-zinc-700 bg-zinc-900/40 px-2 py-0.5 text-zinc-300">
+                {lvl}: <span className="text-emerald-400">{v.w}W</span>/<span className="text-rose-400">{v.l}L</span>
+                {" "}<span className="text-zinc-500">({wr}%)</span>
+              </span>
+            );
+          })}
+        {stats.winRate != null && (
+          <span className="ml-auto rounded bg-zinc-800 px-2 py-0.5 text-zinc-200">
+            Genel win-rate: <span className="font-semibold text-emerald-300">{stats.winRate.toFixed(1)}%</span>
+          </span>
+        )}
       </div>
 
       {isLoading && <div className="text-zinc-400">Yükleniyor…</div>}
@@ -187,6 +225,7 @@ export function ReversalRadar() {
                 <Th>Tier</Th>
                 <Th>Event</Th>
                 <Th>Yön</Th>
+                <Th>Swing</Th>
                 <Th className="text-right">Skor</Th>
                 <Th className="text-right">Entry</Th>
                 <Th className="text-right">SL</Th>
@@ -194,6 +233,7 @@ export function ReversalRadar() {
                 <Th className="text-right">TP2</Th>
                 <Th>State</Th>
                 <Th>Outcome</Th>
+                <Th>Matürite</Th>
                 <Th className="text-right">PnL %</Th>
               </tr>
             </thead>
@@ -217,6 +257,9 @@ export function ReversalRadar() {
                   <td className={`px-3 py-1.5 font-medium ${DIR_COLOR[e.direction] ?? "text-zinc-400"}`}>
                     {e.direction}
                   </td>
+                  <td className="px-3 py-1.5 text-[11px] text-zinc-300 tabular-nums">
+                    {e.swing_type_prev_opp ?? "?"} → <span className="font-semibold text-zinc-100">{e.swing_type_curr ?? "?"}</span>
+                  </td>
                   <td className="px-3 py-1.5 text-right text-zinc-200">{e.structural_score.toFixed(2)}</td>
                   <td className="px-3 py-1.5 text-right text-zinc-200 tabular-nums">{fmtPrice(e.targets?.a?.entry)}</td>
                   <td className="px-3 py-1.5 text-right text-rose-300 tabular-nums">{fmtPrice(e.targets?.a?.sl)}</td>
@@ -225,6 +268,19 @@ export function ReversalRadar() {
                   <td className="px-3 py-1.5 text-zinc-400">{e.state}</td>
                   <td className={`px-3 py-1.5 ${OUTCOME_COLOR[e.outcome ?? ""] ?? "text-zinc-500"}`}>
                     {e.outcome ?? "—"}
+                  </td>
+                  <td className="px-3 py-1.5">
+                    {e.maturity === "immature" ? (
+                      <span className="rounded bg-zinc-800 px-2 py-0.5 text-[11px] text-zinc-400" title="Pivot ilk N barda kırıldı — tepki dibi">
+                        immature
+                      </span>
+                    ) : e.maturity === "mature" ? (
+                      <span className="rounded bg-emerald-900/30 px-2 py-0.5 text-[11px] text-emerald-300">
+                        mature
+                      </span>
+                    ) : (
+                      <span className="text-zinc-600">—</span>
+                    )}
                   </td>
                   <td className={`px-3 py-1.5 text-right ${
                     (e.pnl_pct ?? 0) > 0 ? "text-emerald-400"
@@ -236,7 +292,7 @@ export function ReversalRadar() {
               ))}
               {data.entries.length === 0 && (
                 <tr>
-                  <td colSpan={15} className="px-3 py-6 text-center text-zinc-500">
+                  <td colSpan={17} className="px-3 py-6 text-center text-zinc-500">
                     Kayıt bulunamadı. Filtreyi gevşet veya sweep'i çalıştır.
                   </td>
                 </tr>

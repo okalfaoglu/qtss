@@ -23,6 +23,7 @@ const NAV_ENTRIES: NavEntry[] = [
     enabled: true,
     children: [
       { label: "Backtest Performansı", to: "/v2/reports/backtest", enabled: true },
+      { label: "Performans (QTSS)", to: "/v2/reports/performance", enabled: true },
     ],
   },
   { label: "TBM", to: "/v2/tbm", enabled: true },

@@ -301,17 +301,31 @@ pub fn build_detection(
     let entry_anchor = if ev.is_choch() { prev_opp } else { curr };
     // SL = structural invalidation. For BOS the prev_opp is the
     // natural stop (entry=curr, SL=opposite). For CHoCH the
-    // entry_anchor *is* prev_opp, so SL must look one pivot further
-    // back — the previous same-kind pivot before entry_anchor. That
-    // Low-before-the-Low (bull CHoCH) / High-before-the-High (bear)
-    // is the level which, if broken, invalidates the reversal thesis.
+    // entry_anchor *is* prev_opp (the last swing high/low before the
+    // reversal). The SL must sit on the OPPOSITE side of entry to
+    // invalidate the reversal thesis — above entry for a bearish
+    // reversal, below entry for a bullish reversal.
+    //
+    // Earlier version took nth(1) of same-kind prior pivots, but in
+    // an uptrend those are lower highs (not higher), producing an SL
+    // below entry for a bearish CHoCH — geometrically impossible for
+    // a short. Fix: scan same-kind prior pivots and pick the one on
+    // the right side of entry. Fallback to prev_opp-based buffered SL
+    // if no such pivot exists.
     let sl_anchor = if ev.is_choch() {
-        pivots[..i]
+        let candidates: Vec<&_> = pivots[..i]
             .iter()
             .rev()
             .filter(|p| p.kind == entry_anchor.kind)
-            .nth(1)
-            .unwrap_or(prev_same)
+            .collect();
+        let right_side = candidates.iter().find(|p| {
+            if bearish {
+                p.price > entry_anchor.price
+            } else {
+                p.price < entry_anchor.price
+            }
+        });
+        right_side.copied().unwrap_or(prev_same)
     } else {
         prev_opp
     };

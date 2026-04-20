@@ -32,7 +32,13 @@ impl ElliottConfig {
             pivot_level: PivotLevel::L1,
             max_wave2_retracement: 0.99,
             strict_no_overlap: true,
-            min_structural_score: 0.60,
+            // Faz 14.A14 — lowered from 0.60 to 0.45. 0.60 silenced
+            // meşru impulses whose fib ratios sat in the ~10-15%
+            // tolerance band (eg. wave-2 retrace 0.47 vs 0.5). The
+            // validator still gets to re-check with its own threshold
+            // downstream, so being more permissive at the detector
+            // layer produces more candidates, not more false positives.
+            min_structural_score: 0.45,
         }
     }
 

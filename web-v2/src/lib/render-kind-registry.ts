@@ -146,19 +146,128 @@ function pushPolygon(ctx: RenderContext, o: PolygonOptions) {
 
 // ── Kind implementations ──────────────────────────────────────────────
 
-/** `{ points: [{time, price, label?}, ...] }` — single polyline. */
+/** Faz 14 — LuxAlgo-style invalidation envelope projecting forward
+ *  from the last anchor of an Elliott ABC / triangle pattern. Drawn
+ *  as a semi-transparent filled rectangle with a thin border in the
+ *  family color. Backend emits this as an optional `break_box` field
+ *  inside `polyline` / `two_lines` payloads (see build_break_box in
+ *  v2_render_geometry.rs). */
+interface BreakBox {
+  time_start?: string;
+  time_end?: string;
+  price_top?: number | string;
+  price_bot?: number | string;
+  side?: "bull" | "bear";
+}
+function pushBreakBox(ctx: RenderContext, bb?: BreakBox) {
+  if (!bb?.time_start || !bb?.time_end) return;
+  if (bb.price_top == null || bb.price_bot == null) return;
+  pushRect(ctx, {
+    time1: ctx.isoToUnix(bb.time_start),
+    time2: ctx.isoToUnix(bb.time_end),
+    priceTop: Math.max(Number(bb.price_top), Number(bb.price_bot)),
+    priceBottom: Math.min(Number(bb.price_top), Number(bb.price_bot)),
+    fillColor: withAlpha(ctx.familyColor, ctx.faded ? 0.04 : 0.10),
+    borderColor: withAlpha(ctx.familyColor, ctx.faded ? 0.20 : 0.45),
+    borderWidth: 1,
+  });
+}
+
+/** Faz 14.A10 — LuxAlgo-style dynamic fib retracement overlay, shipped
+ *  as an optional `fib` block on Elliott impulse polylines. Break-state
+ *  (has price already crossed this level?) is derived at render time
+ *  from the current candle snapshot: crossed levels switch from dotted
+ *  → dashed and fade out, mirroring LuxAlgo's "broken level" look. */
+interface FibOverlay {
+  base?: Point;
+  target?: Point;
+  ratios?: number[];
+  bear?: boolean;
+}
+function pushFibOverlay(ctx: RenderContext, fib?: FibOverlay) {
+  if (!fib?.base || !fib?.target) return;
+  const ratios =
+    fib.ratios ??
+    (isCompactViewport() ? [0.382, 0.618, 1.0] : [0.236, 0.382, 0.5, 0.618, 0.786, 1.0]);
+  const basePrice = Number(fib.base.price);
+  const targetPrice = Number(fib.target.price);
+  if (!isFinite(basePrice) || !isFinite(targetPrice)) return;
+  // Current price for break-state eval. lightweight-charts v5 exposes
+  // the last value via `dataByIndex`, but the simplest read is the
+  // series' price line — if unavailable we degrade to "no break state"
+  // and draw every level as dotted (same as pre-A10 behaviour).
+  const lastPrice = readLastPrice(ctx.candleSeries);
+  // Extend the fib ruler forward from `target.time` by the pattern's
+  // own width so the overlay spans a familiar horizon without stealing
+  // the whole viewport (LuxAlgo does the same).
+  const tStart = Date.parse(fib.target.time);
+  const tBase = Date.parse(fib.base.time);
+  if (!isFinite(tStart) || !isFinite(tBase)) return;
+  const widthMs = Math.max(tStart - tBase, 60_000);
+  const t2Iso = new Date(tStart + widthMs).toISOString();
+  for (const r of ratios) {
+    const y = targetPrice + (basePrice - targetPrice) * r;
+    // Break-state: fib target is "above" target price for bull impulses
+    // (retracement back down toward 0). A level is considered broken
+    // once the last close has crossed past it on the retracement side.
+    const broken =
+      lastPrice != null && (fib.bear
+        ? lastPrice >= y
+        : lastPrice <= y);
+    pushLine(
+      ctx,
+      [
+        { time: fib.target.time, price: y, label: `${(r * 100).toFixed(1)}%` },
+        { time: t2Iso, price: y },
+      ],
+      {
+        width: 1,
+        style: broken ? LineStyle.Dashed : LineStyle.Dotted,
+        color: withAlpha(ctx.familyColor, broken ? 0.35 : ctx.faded ? 0.4 : 0.7),
+      },
+    );
+  }
+}
+
+function readLastPrice(series: ISeriesApi<"Candlestick">): number | null {
+  try {
+    // lightweight-charts v5: data() returns the in-memory snapshot.
+    const data = (series as unknown as { data?: () => Array<{ close?: number }> }).data?.();
+    if (!data || data.length === 0) return null;
+    const last = data[data.length - 1];
+    return typeof last.close === "number" ? last.close : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `{ points: [{time, price, label?}, ...], break_box?, fib? }` — single
+ *  polyline, optionally with an Elliott forward-projecting
+ *  invalidation envelope and/or a fib retracement overlay. */
 const drawPolyline: RenderDrawFn = (payload, ctx) => {
-  const p = payload as { points?: Point[] };
+  const p = payload as {
+    points?: Point[];
+    break_box?: BreakBox;
+    fib?: FibOverlay;
+  };
   if (!p.points?.length) return;
   pushLine(ctx, p.points);
+  pushBreakBox(ctx, p.break_box);
+  pushFibOverlay(ctx, p.fib);
 };
 
-/** `{ upper: Point[], lower: Point[] }` — two trendlines (triangles,
- *  wedges, channels, rectangles, broadenings). */
+/** `{ upper: Point[], lower: Point[], break_box? }` — two trendlines
+ *  (triangles, wedges, channels, rectangles, broadenings). Elliott
+ *  triangles also ship a break_box. */
 const drawTwoLines: RenderDrawFn = (payload, ctx) => {
-  const p = payload as { upper?: Point[]; lower?: Point[] };
+  const p = payload as {
+    upper?: Point[];
+    lower?: Point[];
+    break_box?: BreakBox;
+  };
   if (p.upper) pushLine(ctx, p.upper);
   if (p.lower) pushLine(ctx, p.lower);
+  pushBreakBox(ctx, p.break_box);
 };
 
 /** `{ time_start, time_end, price_low, price_high }` — opaque band. */

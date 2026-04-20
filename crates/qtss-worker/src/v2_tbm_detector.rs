@@ -708,6 +708,7 @@ async fn process_symbol(
                 &sym.interval,
                 "tbm",
                 subkind,
+                None,
             )
             .await?;
 

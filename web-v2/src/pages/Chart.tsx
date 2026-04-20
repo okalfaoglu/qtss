@@ -46,7 +46,7 @@ import type { CandleBar, ChartWorkspace, DetectionOverlay } from "../lib/types";
 
 // ─── Constants ───────────────────────────────────────────────────────
 const DEFAULTS = { venue: "binance", segment: "futures", symbol: "BTCUSDT", timeframe: "1h" };
-const PAGE_SIZE = 500;
+const PAGE_SIZE = 1000;
 const PREFETCH_THRESHOLD = 50;
 
 // Bootstrap defaults — `useChartPalette` overwrites this object when
@@ -324,13 +324,20 @@ function elliottLabel(
     ? WAVE_DEGREE_LABELS[degree].motive
     : WAVE_DEGREE_LABELS[degree].corrective;
 
+  // Faz 13.UI — corrective patterns ship 6 anchors: ["0","A","B","C","D","E"]
+  // where "0" is the wave origin (pre-A pivot). The old mapping collapsed
+  // BOTH "0" and "A" to "[a]", producing two identical markers per triangle.
+  // Treat "0" as a structural origin with no display label — triangles
+  // then read cleanly as A-B-C-D-E (5 labels, Elliott convention).
+  if (!isMotive && anchorLabel === "0") return "";
+
   // Map anchor label (0,1,2,3,4,5 or 0,A,B,C) to degree notation
   if (isMotive) {
     const idx = parseInt(anchorLabel, 10);
     if (!isNaN(idx) && idx >= 0 && idx < labels.length) return labels[idx];
   } else {
     // Corrective: map A/B/C/D/E to degree notation
-    const map: Record<string, number> = { "0": -1, A: 0, B: 1, C: 2, D: 3, E: 4 };
+    const map: Record<string, number> = { A: 0, B: 1, C: 2, D: 3, E: 4 };
     const i = map[anchorLabel];
     if (i !== undefined && i >= 0 && i < labels.length) {
       return labels[i];
@@ -442,6 +449,10 @@ interface ChartVenueOption {
   segment: string;
   symbols: string[];
   intervals: string[];
+  /** Faz 13.UI — per-symbol interval lookup. Keyed by symbol, lists
+   *  active timeframes for that specific symbol. Absent or empty for
+   *  backward compat with pre-upgrade servers. */
+  symbol_intervals?: Record<string, string[]>;
 }
 
 // ─── Compute Entry/TP/SL from detection geometry ─────────────────────
@@ -488,6 +499,50 @@ function computeFormationTargets(d: DetectionOverlay): {
   const sub = d.subkind;
   const sign = directionSign(sub);
   const empty = { entry: null as number | null, sl, targets: [] as StructuralLevel[] };
+
+  // pivot_reversal — Faz 13. Entry/SL/TP1/TP2 comes pre-computed in
+  // raw_meta.targets.a (surfaced as d.targets.a). Use it directly so
+  // the chart renders the full Entry / SL / TP ladder — not just SL.
+  // Also produces a meaningful `entry` value so drawLevel picks it up.
+  if (d.family === "pivot_reversal" && d.targets?.a) {
+    const a = d.targets.a;
+    const entryPx = Number(a.entry);
+    let slPx = Number.isFinite(Number(a.sl)) ? Number(a.sl) : sl;
+    const tp1 = Number(a.tp1);
+    const tp2 = Number(a.tp2);
+    // Direction from subkind ({tier}_{event}_{dir}_{level}).
+    const prDir = d.subkind.split("_")[2] ?? "";
+    const isLong = prDir === "bull"
+      ? true
+      : prDir === "bear"
+      ? false
+      : Number.isFinite(tp1) && Number.isFinite(entryPx)
+      ? tp1 > entryPx
+      : true;
+    // Backend CHoCH sl_anchor selection can yield an SL on the wrong side
+    // of Entry (bear CHoCH picks the prior HH which is LOWER than the
+    // entry HH in an uptrend — geometric artefact of nth(1) filter).
+    // Mirror the SL across Entry so the risk visualisation is at least
+    // directionally correct until the Rust fix lands. Also flip sign on
+    // TPs if they were computed off the bad SL.
+    if (
+      Number.isFinite(entryPx) &&
+      Number.isFinite(Number(slPx)) &&
+      ((isLong && (slPx as number) > entryPx) || (!isLong && (slPx as number) < entryPx))
+    ) {
+      const risk = Math.abs(entryPx - (slPx as number));
+      slPx = isLong ? entryPx - risk : entryPx + risk;
+    }
+    const targets: StructuralLevel[] = [];
+    if (Number.isFinite(tp1)) {
+      targets.push({ price: tp1, label: `TP (${a.tp1_r?.toFixed?.(1) ?? "1"}R)` });
+    }
+    if (Number.isFinite(tp2)) {
+      targets.push({ price: tp2, label: `TP (${a.tp2_r?.toFixed?.(1) ?? "2"}R)` });
+    }
+    return { entry: Number.isFinite(entryPx) ? entryPx : null, sl: slPx, targets };
+  }
+
   if (sign === 0 || anchors.length === 0) return empty;
 
   // double_top / double_bottom — 3 anchors, project from neckline
@@ -779,11 +834,12 @@ export function Chart() {
       });
     };
   }, [selectedDetection]);
+  // Default OFF: kullanıcı buton varsayılanlarının kapalı başlamasını istedi.
   const [levelEnabled, setLevelEnabled] = useState<Record<PivotLevel, boolean>>({
-    L0: zigzagCfg.levels.L0.enabledByDefault,
-    L1: zigzagCfg.levels.L1.enabledByDefault,
-    L2: zigzagCfg.levels.L2.enabledByDefault,
-    L3: zigzagCfg.levels.L3.enabledByDefault,
+    L0: false,
+    L1: false,
+    L2: false,
+    L3: false,
   });
   const [showVolume, setShowVolume] = useState(true);
   const [familyModes, setFamilyModes] = useState<Record<string, FamilyMode>>({});
@@ -823,7 +879,7 @@ export function Chart() {
   // ─── Derived state ──────────────────────────────────────────────
   const cycleFamily = useCallback((family: string) => {
     setFamilyModes((prev) => {
-      const cur = prev[family] ?? "on";
+      const cur = prev[family] ?? "off";
       // Simple toggle: on ↔ off (detail via long-press / right-click)
       const next: FamilyMode = cur === "off" ? "on" : "off";
       return { ...prev, [family]: next };
@@ -833,7 +889,7 @@ export function Chart() {
   // Long-press or right-click → detail mode
   const detailFamily = useCallback((family: string) => {
     setFamilyModes((prev) => {
-      const cur = prev[family] ?? "on";
+      const cur = prev[family] ?? "off";
       const next: FamilyMode = cur === "detail" ? "on" : "detail";
       if (next === "detail") {
         setDetailLayers((dl) => ({ ...dl, [family]: new Set(["entry_tp_sl", "labels"]) }));
@@ -953,7 +1009,7 @@ export function Chart() {
     violation: { kind: string; reason: string } | null;
   }
   const wyckEventsQuery = useQuery({
-    enabled: (familyModes["wyckoff"] ?? "on") !== "off",
+    enabled: (familyModes["wyckoff"] ?? "off") !== "off",
     queryKey: ["v2", "wyckoff", "events", debounced.symbol, debounced.timeframe],
     queryFn: () =>
       apiFetch<{ events: WyckEventRow[]; violation_count: number }>(
@@ -1084,14 +1140,49 @@ export function Chart() {
   const MAX_DETECTIONS_PER_FAMILY = 5;
   const visibleDetections = useMemo(() => {
     if (!merged || !merged.candles?.length) return [];
-    // Only show detections whose anchors overlap with visible candle range
-    const firstTime = merged.candles[0].open_time;
-    const lastTime = merged.candles[merged.candles.length - 1].open_time;
+    // Only show detections whose anchors overlap with visible candle range.
+    // Faz 13.UI — compare as unix seconds, not ISO strings. String
+    // comparison broke when backend rows mixed "+00:00" and "Z" suffixes
+    // (lexically different, chronologically equal) — anchors preceding
+    // the first candle slipped through the filter and floated in the
+    // pre-series void on the chart's left side.
+    const firstTimeUnix = Number(isoToUnix(merged.candles[0].open_time));
+    const lastTimeUnix  = Number(isoToUnix(merged.candles[merged.candles.length - 1].open_time));
+    // Faz 13.UI — build per-time price envelope [min_low, max_high] from
+    // the loaded candles. A detection whose anchor price lands outside
+    // this envelope (± 3% slack) at its own timestamp is a stale or
+    // mis-mapped draw — hide it instead of floating it in empty space.
+    // O(log N) lookup via sorted open_time array + binary search.
+    const candleTimes = merged.candles.map((c) => c.open_time);
+    const candleLows  = merged.candles.map((c) => Number(c.low));
+    const candleHighs = merged.candles.map((c) => Number(c.high));
+    const priceNear = (t: string, p: number): boolean => {
+      // Find the candle index whose open_time matches t (or nearest).
+      let lo = 0, hi = candleTimes.length - 1, idx = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const cmp = candleTimes[mid].localeCompare(t);
+        if (cmp === 0) { idx = mid; break; }
+        if (cmp < 0) { lo = mid + 1; } else { hi = mid - 1; }
+      }
+      if (idx < 0) idx = Math.max(0, Math.min(candleTimes.length - 1, lo));
+      // Ring of ±3 bars — small tolerance for anchor timestamp rounding.
+      const r0 = Math.max(0, idx - 3);
+      const r1 = Math.min(candleTimes.length - 1, idx + 3);
+      let lo_ = Infinity, hi_ = -Infinity;
+      for (let i = r0; i <= r1; i++) {
+        if (candleLows[i]  < lo_) lo_ = candleLows[i];
+        if (candleHighs[i] > hi_) hi_ = candleHighs[i];
+      }
+      if (!Number.isFinite(lo_) || !Number.isFinite(hi_)) return true;
+      const slack = (hi_ - lo_) * 0.05 + Math.abs(lo_) * 0.01;
+      return p >= lo_ - slack && p <= hi_ + slack;
+    };
     const filtered = merged.detections.filter((d) => {
-      if ((familyModes[d.family] ?? "on") === "off") return false;
+      if ((familyModes[d.family] ?? "off") === "off") return false;
       if (!d.anchors?.length) return false;
       // Hide invalidated detections unless in detail mode
-      if (d.state === "invalidated" && (familyModes[d.family] ?? "on") !== "detail") return false;
+      if (d.state === "invalidated" && (familyModes[d.family] ?? "off") !== "detail") return false;
       // Faz 12 — if the detection was produced at a cascaded pivot
       // level (L0..L3), its visibility is ALSO gated by the matching
       // level toggle. This means "harmonic + L2" buttons together
@@ -1112,10 +1203,25 @@ export function Chart() {
       if (bucket === "active" && !stateToggles.active) return false;
       if (bucket === "completed" && !stateToggles.completed) return false;
       if (bucket === "cancelled" && !stateToggles.cancelled) return false;
-      // At least one anchor must be within the candle range
-      const lastAnchor = d.anchors[d.anchors.length - 1]?.time;
-      const firstAnchor = d.anchors[0]?.time;
-      return lastAnchor >= firstTime && firstAnchor <= lastTime;
+      // Faz 13.UI — require FULL containment inside the visible candle
+      // range. Partial overlap caused polylines to be drawn from a
+      // clipped edge anchor, giving the "line is somewhere else" look
+      // the user flagged. Drawings whose endpoints sit outside the
+      // loaded bars stay hidden until the user scrolls/zooms to them.
+      const lastAnchorUnix  = Number(isoToUnix(d.anchors[d.anchors.length - 1]?.time));
+      const firstAnchorUnix = Number(isoToUnix(d.anchors[0]?.time));
+      if (!Number.isFinite(firstAnchorUnix) || !Number.isFinite(lastAnchorUnix)) return false;
+      if (firstAnchorUnix < firstTimeUnix || lastAnchorUnix > lastTimeUnix) return false;
+      // Faz 13.UI — price-band sanity: every anchor price must land near
+      // the candle wick range at its own timestamp. Hides stale Elliott
+      // drawings that float in empty space because their recorded
+      // prices drift from the current market_bars slice.
+      for (const a of d.anchors) {
+        const p = Number(a.price);
+        if (!Number.isFinite(p)) continue;
+        if (!priceNear(a.time, p)) return false;
+      }
+      return true;
     });
     // Sort by score descending
     const sorted = [...filtered].sort((a, b) => ((b as any).score ?? 0) - ((a as any).score ?? 0));
@@ -1128,17 +1234,33 @@ export function Chart() {
       const dStart = new Date(d.anchors[0].time).getTime();
       const dEnd = new Date(d.anchors[d.anchors.length - 1].time).getTime();
       const dSpan = Math.max(dEnd - dStart, 1);
+      const dAnchorTs = new Set(d.anchors.map((a) => new Date(a.time).getTime()));
       const dominated = kept.some((k) => {
         if (k.family !== d.family) return false;
+        // Faz 13.UI — dedup is per (family, pivot_level). L0 is a
+        // superset of L1/L2/L3 so their patterns often share anchor
+        // timestamps/spans; collapsing them here hid L1-L3 entirely
+        // in the GUI even though DB had 58/18/15 rows.
+        if ((k.pivot_level ?? "") !== (d.pivot_level ?? "")) return false;
         const kStart = new Date(k.anchors[0].time).getTime();
         const kEnd = new Date(k.anchors[k.anchors.length - 1].time).getTime();
         const kSpan = Math.max(kEnd - kStart, 1);
+        // Faz 13.UI — if two detections in the same family share ANY
+        // anchor timestamp, the lower-scoring one is dropped. This kills
+        // duplicate label clusters (e.g. two `[a]` markers within one
+        // triangle) that the 50% time-overlap rule let through when
+        // detections sat side-by-side on adjacent swings.
+        for (const a of k.anchors) {
+          if (dAnchorTs.has(new Date(a.time).getTime())) return true;
+        }
         const overlapStart = Math.max(dStart, kStart);
         const overlapEnd = Math.min(dEnd, kEnd);
         if (overlapEnd <= overlapStart) return false;
         const overlap = overlapEnd - overlapStart;
-        // Dominated if overlap covers >50% of EITHER detection's span
-        return overlap / dSpan > 0.5 || overlap / kSpan > 0.5;
+        // Dominated if overlap covers >30% of EITHER detection's span
+        // (tightened from 50% — adjacent-span duplicates slip through
+        // otherwise).
+        return overlap / dSpan > 0.3 || overlap / kSpan > 0.3;
       });
       if (!dominated) kept.push(d);
     }
@@ -1178,14 +1300,18 @@ export function Chart() {
     // Limit per family to avoid clutter. Zones get a tighter cap
     // than structural detections — even after price dedup, stacking
     // 5 FVG/OB/LP boxes makes labels unreadable.
-    const countByFamily: Record<string, number> = {};
+    // Faz 13.UI — cap per (family, pivot_level) not just family. With a
+    // shared cap, L0 (highest density) consumed the entire quota and
+    // L1/L2/L3 never rendered. Each level now gets its own budget.
+    const countByKey: Record<string, number> = {};
     const MAX_PER_FAMILY_ZONE = 3;
     return zoneKept.filter((d) => {
-      countByFamily[d.family] = (countByFamily[d.family] ?? 0) + 1;
+      const key = `${d.family}|${d.pivot_level ?? ""}`;
+      countByKey[key] = (countByKey[key] ?? 0) + 1;
       const cap = d.family === "range"
         ? MAX_PER_FAMILY_ZONE
         : MAX_DETECTIONS_PER_FAMILY;
-      return countByFamily[d.family] <= cap;
+      return countByKey[key] <= cap;
     });
   }, [merged, familyModes, levelEnabled, stateToggles]);
 
@@ -1199,7 +1325,20 @@ export function Chart() {
         `/v2/chart/${debounced.venue}/${debounced.symbol}/${debounced.timeframe}?limit=${PAGE_SIZE}&segment=${debounced.segment}&before=${encodeURIComponent(oldest)}`,
       );
       if (page.candles.length > 0) {
-        setOlderPages((prev) => [page, ...prev]);
+        // Faz 14.A11 — cap retained history. With PAGE_SIZE=1000 and no
+        // bound, aggressive pan-left could keep appending pages until
+        // the tab ran out of memory (each page carries candles +
+        // detections + pivots). We keep the most recent MAX_OLDER_PAGES
+        // prefetched segments, drop the oldest when the cap is hit.
+        // Scrolling past the cap simply re-fetches on demand, which is
+        // already debounced by `fetchingOlderRef`.
+        const MAX_OLDER_PAGES = 5; // 5 * 1000 = 5k bars of back-history
+        setOlderPages((prev) => {
+          const next = [page, ...prev];
+          return next.length > MAX_OLDER_PAGES
+            ? next.slice(0, MAX_OLDER_PAGES)
+            : next;
+        });
       }
     } catch (err) {
       console.error("pan-left fetch failed", err);
@@ -1356,11 +1495,38 @@ export function Chart() {
     // ── Detection overlays ──
     // For each detection, draw line series for the formation + projections
     for (const d of visibleDetections) {
-      const color = familyColor(d.family, d.subkind, debounced.timeframe);
+      const baseColor = familyColor(d.family, d.subkind, debounced.timeframe);
       const isZone = ZONE_BOX_SUBKINDS.has(d.subkind);
       const isInvalidated = d.state === "invalidated";
+      // Faz 14 — LuxAlgo-style lifecycle visual vocabulary (madde #5).
+      // `live`  → solid, full opacity  (default, in-play pattern)
+      // `stale` → dashed, 60% opacity  (expired / loss — pattern ran its
+      //           course without hitting TP; kept visible so the operator
+      //           sees historical structure without confusing it for an
+      //           active setup)
+      // `ghost` → dotted, 35% opacity  (invalidated — rule broken, e.g.
+      //           W4 overlapped W1 territory, or price crossed break-box)
+      const lifecycle: "live" | "stale" | "ghost" = isInvalidated
+        ? "ghost"
+        : d.outcome === "loss" || d.outcome === "expired"
+        ? "stale"
+        : "live";
+      const opacity =
+        lifecycle === "ghost" ? 0.35 : lifecycle === "stale" ? 0.6 : 1.0;
+      const lineStyleForState =
+        lifecycle === "ghost"
+          ? LineStyle.Dotted
+          : lifecycle === "stale"
+          ? LineStyle.Dashed
+          : LineStyle.Solid;
+      // Apply alpha to the hex color (#RRGGBB → #RRGGBBAA).
+      const alphaHex = Math.round(opacity * 255)
+        .toString(16)
+        .padStart(2, "0");
+      const color =
+        baseColor.length === 7 ? `${baseColor}${alphaHex}` : baseColor;
       const isHov = hoveredRef.current === d.id;
-      const isDetailMode = (familyModes[d.family] ?? "on") === "detail";
+      const isDetailMode = (familyModes[d.family] ?? "off") === "detail";
       const layers = detailLayers[d.family] ?? new Set(["entry_tp_sl", "labels"]);
       // In detail mode, only show projections/TP/SL for the top-scoring detection per family
       const isTopInFamily = (() => {
@@ -1440,33 +1606,108 @@ export function Chart() {
       // polylines — a line through [open, close] is visually useless for
       // 2-bar patterns.
       const isBandFamily = d.family === "candle" || d.family === "gap";
+      // Faz 13 — pivot_reversal (major dip/tepe) uses its own rendering:
+      // a single dot marker at the entry anchor (dip/top) + Entry/SL/TP
+      // horizontal lines. No multi-anchor polyline — the prev_opp→confirm
+      // diagonal was confusing (see user feedback 2026-04-20).
+      if (d.family === "pivot_reversal" && d.anchors.length >= 2) {
+        // Middle anchor is the structural entry pivot the detector calls
+        // out. Fallback: middle index if the label doesn't match.
+        const entryAnchor =
+          d.anchors.find((a) => a.label === "bottom" || a.label === "top") ??
+          d.anchors[1];
+        // Subkind = {tier}_{event}_{dir}_{level}, dir ∈ {bull, bear}.
+        // Trade direction drives UX label: bull → DİP (long setup),
+        // bear → TEPE (short setup). Anchor's backend "bottom/top"
+        // label reflects direction not physical price, so relying on
+        // price-vs-SL is more robust when subkind parsing fails.
+        const prParts = d.subkind.split("_");
+        const prTier  = prParts[0] ?? "";
+        const ev      = prParts[1] ?? "";
+        const prDir   = prParts[2] ?? "";
+        const entryPx = Number(entryAnchor.price);
+        const slPx    = Number(d.invalidation_price);
+        const isLong  = prDir === "bull"
+          ? true
+          : prDir === "bear"
+          ? false
+          : Number.isFinite(entryPx) && Number.isFinite(slPx)
+          ? entryPx > slPx
+          : true;
+        // CHoCH = reversal (gerçek dip/tepe çağrısı)
+        // BOS   = continuation breakout (kırım — dip/tepe değil, devam sinyali)
+        const semantic = ev === "choch"
+          ? (isLong ? "DİP" : "TEPE")
+          : ev === "bos"
+          ? (isLong ? "KIRIM ↑" : "KIRIM ↓")
+          : ev.toUpperCase();
+        // Arrow placement uses isLong (long → arrowUp below, short →
+        // arrowDown above). Mirrors trader bias regardless of anchor side.
+        const isBottom = isLong;
+        const confPct = d.confidence ? ` (${(Number(d.confidence) * 100).toFixed(0)}%)` : "";
+        const prLabel = `${semantic} · ${prTier.toUpperCase()}${confPct}`;
+        allMarkers.push({
+          time: isoToUnix(entryAnchor.time),
+          position: isBottom ? "belowBar" : "aboveBar",
+          color,
+          shape: isBottom ? "arrowUp" : "arrowDown",
+          text: prLabel,
+          size: 2,
+        } as unknown as SeriesMarker<Time>);
+        // Entry/SL/TP horizontal lines rendered below via drawFormationEntryTpSl
+        drawFormationEntryTpSl(d, {
+          chart: chartRef.current!,
+          candles: merged.candles,
+          isoToUnix,
+          layers,
+          showDetail,
+          overlayLines: overlayLinesRef.current,
+        });
+        continue;
+      }
       if (d.anchors.length >= 2 && !isZone && d.family !== "wyckoff" && !isBandFamily) {
         // P5 — for two-trendline classical patterns (rectangle, channel,
         // wedge, triangle, flag, pennant, diamond), split alternating
         // anchors into UPPER and LOWER polylines so the chart shows
         // proper trendlines instead of a zigzag through all pivots.
+        // Elliott triangles (contracting/expanding) have 5 alternating
+        // a-b-c-d-e points and read as two converging/diverging trendlines
+        // — same geometric shape as classical triangles. Route them
+        // through the two-line splitter for a proper triangle visual
+        // instead of a 5-point zigzag.
+        const isElliottTriangle =
+          d.family === "elliott" && d.subkind.startsWith("triangle_");
         const useTwoLines =
-          d.family === "classical" &&
           d.anchors.length >= 4 &&
-          isTwoTrendlinePattern(d.subkind);
+          ((d.family === "classical" && isTwoTrendlinePattern(d.subkind)) ||
+            isElliottTriangle);
 
         if (useTwoLines) {
+          // Faz 13.UI — Elliott backends ship a leading "0" wave-origin
+          // anchor (pre-[a]) that has no label. Markers already skip it
+          // (elliottLabel("0") → ""); the line pass must drop it too,
+          // otherwise a ghost dot appears to the left of [a] and drags
+          // the upper/lower polyline past the labelled triangle body.
+          const anchorsForLine =
+            d.family === "elliott"
+              ? d.anchors.filter((a) => a.label !== "0")
+              : d.anchors;
           // Partition anchors by price rank (top half → upper band,
           // bottom half → lower band). Earlier neighbour-comparison
           // logic mis-classified anchors when the detector emitted
           // non-alternating touches (e.g. R1,R1,S1,S1,S2,S2,R2,R2
           // for a rectangle) — see build_two_lines() in
           // v2_render_geometry.rs for the same fix on the backend.
-          const pricesArr = d.anchors.map(a => Number(a.price));
+          const pricesArr = anchorsForLine.map(a => Number(a.price));
           const sortedIdx = pricesArr
             .map((_, i) => i)
             .sort((i, j) => pricesArr[j] - pricesArr[i]);
-          const splitAt = Math.floor(d.anchors.length / 2);
+          const splitAt = Math.floor(anchorsForLine.length / 2);
           const upperIdx = new Set(sortedIdx.slice(0, splitAt));
           const upper: { time: Time; value: number }[] = [];
           const lower: { time: Time; value: number }[] = [];
-          for (let i = 0; i < d.anchors.length; i++) {
-            const a = d.anchors[i];
+          for (let i = 0; i < anchorsForLine.length; i++) {
+            const a = anchorsForLine[i];
             const point = { time: isoToUnix(a.time), value: Number(a.price) };
             if (upperIdx.has(i)) upper.push(point);
             else lower.push(point);
@@ -1478,17 +1719,25 @@ export function Chart() {
             if (pts.length < 2) return;
             const ln = chart.addSeries(LineSeries, {
               color: color,
-              lineWidth: isInvalidated ? 1 : 2,
-              lineStyle: isInvalidated ? LineStyle.Dotted : LineStyle.Solid,
+              lineWidth: lifecycle === "ghost" ? 1 : 2,
+              lineStyle: lineStyleForState,
               crosshairMarkerVisible: false,
               lastValueVisible: false,
               priceLineVisible: false,
               pointMarkersVisible: true,
-              pointMarkersRadius: 3,
+              pointMarkersRadius: 4,
+              // Faz 13.UI — keep line out of Y autoscale. Otherwise
+              // stale/mis-mapped anchor prices pulled the candle pane
+              // tight and the two-trendline polylines floated in empty
+              // space at the edges. Candles own the scale; overlays
+              // follow, not the other way around.
+              autoscaleInfoProvider: () => null,
             });
             ln.setData(dedupeLineData(pts));
             overlayLinesRef.current.push(ln);
           };
+          // eslint-disable-next-line no-console
+          console.debug("[ELL-LINE]", d.subkind, d.pivot_level, "upper=", upper.map(p => ({t: new Date(Number(p.time)*1000).toISOString(), v: p.value})), "lower=", lower.map(p => ({t: new Date(Number(p.time)*1000).toISOString(), v: p.value})));
           mkLine(upper);
           mkLine(lower);
         } else {
@@ -1496,19 +1745,28 @@ export function Chart() {
           // H&S, harmonic XABCD, elliott impulse, cup&handle, rounding).
           const formLine = chart.addSeries(LineSeries, {
             color: color,
-            lineWidth: isInvalidated ? 1 : 3,
-            lineStyle: isInvalidated ? LineStyle.Dotted : LineStyle.Solid,
+            lineWidth: lifecycle === "ghost" ? 1 : 3,
+            lineStyle: lineStyleForState,
             crosshairMarkerVisible: false,
             lastValueVisible: false,
             priceLineVisible: false,
             pointMarkersVisible: true,
-            pointMarkersRadius: 3,
+            pointMarkersRadius: 4,
+            autoscaleInfoProvider: () => null,
           });
 
-          const lineData = d.anchors.map((a) => ({
+          // Faz 13.UI — drop Elliott "0" wave-origin from line data
+          // (see useTwoLines branch above for rationale).
+          const lineAnchors =
+            d.family === "elliott"
+              ? d.anchors.filter((a) => a.label !== "0")
+              : d.anchors;
+          const lineData = lineAnchors.map((a) => ({
             time: isoToUnix(a.time),
             value: Number(a.price),
           }));
+          // eslint-disable-next-line no-console
+          console.debug("[FORM-LINE]", d.family, d.subkind, d.pivot_level, "pts=", lineData.map(p => ({t: new Date(Number(p.time)*1000).toISOString(), v: p.value})));
           formLine.setData(dedupeLineData(lineData));
           overlayLinesRef.current.push(formLine);
         }
@@ -1525,6 +1783,7 @@ export function Chart() {
             priceLineVisible: false,
             pointMarkersVisible: true,
             pointMarkersRadius: 2,
+            autoscaleInfoProvider: () => null,
           });
           const lastAnchor = d.anchors[d.anchors.length - 1];
           const projData = [
@@ -1552,6 +1811,7 @@ export function Chart() {
               priceLineVisible: false,
               pointMarkersVisible: true,
               pointMarkersRadius: 2,
+              autoscaleInfoProvider: () => null,
             });
             swLine.setData(dedupeLineData(seg.map((a) => ({
               time: isoToUnix(a.time),
@@ -1860,7 +2120,7 @@ export function Chart() {
     // the family-toggle row lets the operator hide every level's polyline
     // at once (like elliott/harmonic). Per-level L0..L3 buttons still
     // gate each individual level — visibility is AND of the two.
-    const zigzagMasterOn = (familyModes["zigzag"] ?? "on") !== "off";
+    const zigzagMasterOn = (familyModes["zigzag"] ?? "off") !== "off";
     if (merged.candles.length > 0 && zigzagMasterOn) {
       const firstCandleTime = Number(isoToUnix(merged.candles[0].open_time));
       const lastCandleTime = Number(
@@ -1964,11 +2224,47 @@ export function Chart() {
         // Wyckoff has its own dedicated event markers (PS/SC/Spring/LPS/…) drawn
         // further below — skip the generic "Pn" anchor labels to avoid clutter.
         if (d.family === "wyckoff") continue;
+        // Faz 13 — pivot_reversal ships its own single-dot marker in
+        // the geometry pass above (DİP/TEPE arrow + confidence). Skip
+        // the generic per-anchor label loop to avoid prev_opp/bottom/
+        // confirm triple-label clutter.
+        if (d.family === "pivot_reversal") continue;
         // In detail mode, respect the "labels" layer toggle
         const dLayers = detailLayers[d.family] ?? new Set(["entry_tp_sl", "labels"]);
-        const isDetailMode = (familyModes[d.family] ?? "on") === "detail";
+        const isDetailMode = (familyModes[d.family] ?? "off") === "detail";
         if (isDetailMode && !dLayers.has("labels")) continue;
-        const color = familyColor(d.family, d.subkind, debounced.timeframe);
+        const baseMarkerColor = familyColor(d.family, d.subkind, debounced.timeframe);
+        // Faz 14 — lifecycle opacity on markers (mirrors line logic).
+        const mLifecycle: "live" | "stale" | "ghost" =
+          d.state === "invalidated"
+            ? "ghost"
+            : d.outcome === "loss" || d.outcome === "expired"
+            ? "stale"
+            : "live";
+        const mOpacity =
+          mLifecycle === "ghost" ? 0.35 : mLifecycle === "stale" ? 0.6 : 1.0;
+        const mAlpha = Math.round(mOpacity * 255)
+          .toString(16)
+          .padStart(2, "0");
+        const color =
+          baseMarkerColor.length === 7
+            ? `${baseMarkerColor}${mAlpha}`
+            : baseMarkerColor;
+        // Faz 14 — multi-degree marker sizing (madde #7). Higher pivot
+        // levels (L3 > L2 > L1 > L0) render with larger glyphs so that
+        // when multiple levels overlap in time, the "big-picture"
+        // structural wave dominates the visual weight. Levels without
+        // an explicit pivot_level (e.g. Wyckoff phases, TBM) default
+        // to size 1 — the tightest marker.
+        const levelSize: Record<string, 1 | 2 | 3 | 4> = {
+          L0: 1,
+          L1: 2,
+          L2: 3,
+          L3: 4,
+        };
+        const markerSize = d.pivot_level
+          ? levelSize[d.pivot_level] ?? 1
+          : 1;
         // P21b — TBM detections have a single anchor + signal strength
         // label. Drawing both a per-anchor circle ("Weak") and a
         // summary square ("bottom_setup 42%") on the same bar doubled
@@ -1991,6 +2287,13 @@ export function Chart() {
         } else {
           for (const a of d.anchors) {
             if (!a.label) continue;
+            // Faz 13.UI — Elliott corrective "0" (wave origin) maps to "";
+            // skip its marker so triangles don't render two "[a]" circles.
+            const labelText =
+              d.family === "elliott"
+                ? elliottLabel(a.label, d.subkind, debounced.timeframe)
+                : a.label;
+            if (!labelText) continue;
             const price = Number(a.price);
             // Determine if anchor is a local high or low relative to neighbors
             const anchorIdx = d.anchors.indexOf(a);
@@ -2002,9 +2305,8 @@ export function Chart() {
               position: isTop ? "aboveBar" as const : "belowBar" as const,
               color,
               shape: "circle" as const,
-              text: d.family === "elliott"
-                ? elliottLabel(a.label, d.subkind, debounced.timeframe)
-                : a.label,
+              text: labelText,
+              size: markerSize,
             });
           }
           // Subkind + confidence label at last anchor.
@@ -2095,7 +2397,7 @@ export function Chart() {
 
     // ── Wyckoff event markers (AlphaExtract-style with overlap prevention) ──
     const wyckOverlay = wyckoffQuery.data?.overlay ?? null;
-    if (wyckOverlay && (familyModes["wyckoff"] ?? "on") !== "off" && merged.candles?.length) {
+    if (wyckOverlay && (familyModes["wyckoff"] ?? "off") !== "off" && merged.candles?.length) {
       const wEvts = wyckOverlay.events ?? [];
       // Colors matching AlphaExtract indicator
       const eventMeta: Record<string, { label: string; color: string; pos: "aboveBar" | "belowBar" }> = {
@@ -2278,7 +2580,7 @@ export function Chart() {
     const auditEvents = wyckEventsQuery.data?.events ?? [];
     if (
       auditEvents.length > 0 &&
-      (familyModes["wyckoff"] ?? "on") !== "off" &&
+      (familyModes["wyckoff"] ?? "off") !== "off" &&
       merged.candles?.length
     ) {
       // Reuse the same eventMeta dispatch as the active-overlay path.
@@ -2404,7 +2706,7 @@ export function Chart() {
 
     // ── Wyckoff overlay ──
     const wyckoffOverlay = wyckoffQuery.data?.overlay ?? null;
-    if (wyckoffOverlay && (familyModes["wyckoff"] ?? "on") !== "off" && merged.candles?.length) {
+    if (wyckoffOverlay && (familyModes["wyckoff"] ?? "off") !== "off" && merged.candles?.length) {
       const { range: wRange, creek, ice } = wyckoffOverlay;
       const isAccum = wyckoffOverlay.schematic === "accumulation" || wyckoffOverlay.schematic === "reaccumulation";
       const lastT = isoToUnix(merged.candles[merged.candles.length - 1].open_time);
@@ -2730,6 +3032,19 @@ export function Chart() {
   // RENDER
   // ═══════════════════════════════════════════════════════════════
 
+  // Faz 13.UI — chartDisabled = seçilen (venue,segment,symbol,timeframe)
+  // için DB'de hiç mum yok. Sembol listede olmayabilir ya da sembol
+  // var ama bu interval'da veri gelmemiş olabilir. Her iki durumda da
+  // analiz butonlarını (family/level/state/overlay) devre dışı bırak.
+  // Timeframe + symbol/exchange seçicileri AÇIK kalır ki kullanıcı
+  // veri olan bir kombinasyona geçebilsin.
+  const chartDisabled =
+    !query.isLoading &&
+    (query.isError || !query.data || (query.data.candles?.length ?? 0) === 0);
+  const disabledCls = chartDisabled
+    ? "pointer-events-none opacity-40"
+    : "";
+
   return (
     <div className="flex h-[calc(100vh-3rem)]">
       {/* ── Left Toolbar ────────────────────────────────────────── */}
@@ -2750,6 +3065,12 @@ export function Chart() {
           </button>
         ))}
         <div className="my-1 h-px w-6 bg-zinc-800" />
+        {/* Faz 13.UI — analiz toggle'ları (Volume, ZigZag, L0-L3,
+            State bucket, Labels, Projections) veri yoksa devre dışı. */}
+        <div
+          className={`flex flex-col items-center gap-1 ${disabledCls}`}
+          aria-disabled={chartDisabled}
+        >
         {/* Volume toggle */}
         <button
           type="button"
@@ -2853,6 +3174,7 @@ export function Chart() {
         >
           🔮
         </button>
+        </div>
       </div>
 
       {/* ── Main Area ───────────────────────────────────────────── */}
@@ -2939,33 +3261,67 @@ export function Chart() {
           {/* Separator */}
           <div className="h-5 w-px bg-zinc-700" />
 
-          {/* Timeframes */}
-          <div className="flex items-center gap-0.5">
-            {TIMEFRAMES.map((tf) => (
-              <button
-                key={tf}
-                type="button"
-                onClick={() => setForm({ ...form, timeframe: tf })}
-                className={`rounded px-1.5 py-0.5 text-[11px] font-medium transition ${
-                  tf === form.timeframe
+          {/* Timeframes — Faz 13.UI: seçili sembol için DB'de aktif
+              olmayan interval'lar görünür ama disabled + farklı renk.
+              Backend `symbol_intervals[symbol]` listesi yetkili kaynak;
+              alan yoksa (eski backend) tüm TF'ler açık kalır. */}
+          {(() => {
+            const currentVenue = venueOptions.find(
+              (v) => v.exchange === form.venue && v.segment === form.segment,
+            );
+            const symIntervals =
+              currentVenue?.symbol_intervals?.[form.symbol];
+            const activeSet = symIntervals
+              ? new Set(symIntervals)
+              : null; // null → legacy backend, hepsi aktif say
+            return (
+              <div className="flex items-center gap-0.5">
+                {TIMEFRAMES.map((tf) => {
+                  const isActive = activeSet === null || activeSet.has(tf);
+                  const isSelected = tf === form.timeframe;
+                  const cls = isSelected
                     ? "bg-zinc-700 text-zinc-100"
-                    : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
-                }`}
-              >
-                {tf}
-              </button>
-            ))}
-          </div>
+                    : isActive
+                    ? "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+                    : "text-zinc-700 bg-zinc-900/40 cursor-not-allowed";
+                  return (
+                    <button
+                      key={tf}
+                      type="button"
+                      disabled={!isActive}
+                      onClick={() =>
+                        isActive && setForm({ ...form, timeframe: tf })
+                      }
+                      title={
+                        isActive
+                          ? tf
+                          : `${tf} — bu sembol için DB'de veri yok`
+                      }
+                      className={`rounded px-1.5 py-0.5 text-[11px] font-medium transition ${cls}`}
+                    >
+                      {tf}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
 
           {/* Separator */}
           <div className="h-5 w-px bg-zinc-700" />
 
+          {/* Faz 13.UI — Analiz toggle'ları (Family + Setup/Pozisyon):
+              seçili sembol+interval için DB'de mum yoksa devre dışı. */}
+          <div
+            className={`flex items-center gap-2 ${disabledCls}`}
+            aria-disabled={chartDisabled}
+          >
           {/* Family toggles (compact) */}
           <div className="flex items-center gap-1">
             {Object.entries(FAMILY_COLORS)
               .filter(([k]) => k !== "custom")
               .map(([family, color]) => {
-                const mode = familyModes[family] ?? "on";
+                const mode = familyModes[family] ?? "off";
                 const isOff = mode === "off";
                 const isDetail = mode === "detail";
                 return (
@@ -3029,9 +3385,15 @@ export function Chart() {
               </button>
             ))}
           </div>
+          </div>
 
           {/* Right side: info */}
           <div className="ml-auto flex items-center gap-3 text-[10px] text-zinc-600">
+            {chartDisabled && (
+              <span className="rounded border border-rose-700/60 bg-rose-900/30 px-1.5 py-0.5 text-rose-300">
+                veri yok · bu interval için mum/tespit bulunamadı
+              </span>
+            )}
             {merged && (
               <span>
                 {merged.candles.length} mum · {visibleDetections.length}/{merged.detections.length} tespit
@@ -3048,7 +3410,7 @@ export function Chart() {
         {Object.entries(familyModes).some(([, m]) => m === "detail") && (
           <div className="flex items-center gap-1 border-b border-zinc-800/60 bg-zinc-900/80 px-3 py-1">
             {Object.entries(FAMILY_COLORS)
-              .filter(([f]) => (familyModes[f] ?? "on") === "detail")
+              .filter(([f]) => (familyModes[f] ?? "off") === "detail")
               .map(([family, color]) => {
                 const layers = detailLayers[family] ?? new Set(["entry_tp_sl"]);
                 return (
@@ -3133,7 +3495,7 @@ export function Chart() {
             onPick={(d) => setSelectedDetection(d)}
           />
           {/* ── Market Phase Panel (AlphaExtract style) ── */}
-          {wyckoffQuery.data?.overlay && (familyModes["wyckoff"] ?? "on") !== "off" && (() => {
+          {wyckoffQuery.data?.overlay && (familyModes["wyckoff"] ?? "off") !== "off" && (() => {
             const wo = wyckoffQuery.data.overlay;
             if (!wo) return null;
             const isAcc = wo.schematic === "accumulation" || wo.schematic === "reaccumulation";
@@ -3181,6 +3543,7 @@ export function Chart() {
               <thead className="sticky top-0 bg-zinc-900 text-[10px] uppercase text-zinc-500">
                 <tr>
                   <th className="px-2 py-1 text-left">Kind</th>
+                  <th className="px-2 py-1 text-left">Pivot</th>
                   <th className="px-2 py-1 text-left">State</th>
                   <th className="px-2 py-1 text-left">When</th>
                   <th className="px-2 py-1 text-right">Price</th>
@@ -3189,7 +3552,7 @@ export function Chart() {
                 </tr>
               </thead>
               <tbody className="font-mono text-zinc-100">
-                {merged.detections.map((d) => (
+                {visibleDetections.map((d) => (
                   <Fragment key={d.id}>
                   <tr
                     className={`border-t border-zinc-800/40 transition-colors ${
@@ -3230,6 +3593,17 @@ export function Chart() {
                       {d.has_children && <span className="text-yellow-400 mr-1 cursor-pointer" title="Alt dalga var — çift tıkla">＋</span>}
                       {d.subkind}
                     </td>
+                    <td className="px-2 py-0.5 text-center">
+                      {d.pivot_level ? (
+                        <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${
+                          d.pivot_level === "L0" ? "bg-blue-900/60 text-blue-300" :
+                          d.pivot_level === "L1" ? "bg-emerald-900/60 text-emerald-300" :
+                          d.pivot_level === "L2" ? "bg-amber-900/60 text-amber-300" :
+                          d.pivot_level === "L3" ? "bg-rose-900/60 text-rose-300" :
+                          "bg-zinc-800 text-zinc-400"
+                        }`}>{d.pivot_level}</span>
+                      ) : <span className="text-zinc-600">—</span>}
+                    </td>
                     <td className="px-2 py-0.5 text-zinc-400">{d.state}</td>
                     <td className="px-2 py-0.5 text-zinc-500">{d.anchor_time}</td>
                     <td className="px-2 py-0.5 text-right">{d.anchor_price}</td>
@@ -3238,7 +3612,7 @@ export function Chart() {
                   </tr>
                   {d.wave_context && (
                     <tr className="border-t border-zinc-800/20">
-                      <td colSpan={6} className="px-2 py-0.5 text-[10px] text-sky-400/70">
+                      <td colSpan={7} className="px-2 py-0.5 text-[10px] text-sky-400/70">
                         📐 {d.wave_context}
                       </td>
                     </tr>

@@ -330,6 +330,7 @@ async fn scan_symbol(
                             &sym.interval,
                             family,
                             subkind,
+                            detection.anchors.first().map(|a| a.level.as_str()),
                         )
                         .await
                     {

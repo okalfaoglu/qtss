@@ -151,6 +151,16 @@ const RULES: &[Rule] = &[
         matches: |fam, _| fam == "harmonic",
         build: build_harmonic,
     },
+    // Elliott nascent impulse (4 anchors, wave 3 in progress) — polyline
+    // 0-1-2-3 with a projection hint toward the expected wave-5 target.
+    Rule {
+        matches: |fam, sk| fam == "elliott" && sk.starts_with("impulse_nascent"),
+        build: build_elliott_nascent,
+    },
+    Rule {
+        matches: |fam, sk| fam == "elliott" && sk.starts_with("impulse_forming"),
+        build: build_elliott_forming,
+    },
     // Elliott impulse (5 waves = 6 anchors) → polyline 0-1-2-3-4-5.
     Rule {
         matches: |fam, sk| {
@@ -304,7 +314,7 @@ fn build_diamond(_: &str, pts: &[Anchor]) -> Option<Value> {
     }))
 }
 
-fn build_two_lines(_: &str, pts: &[Anchor]) -> Option<Value> {
+fn build_two_lines(subkind: &str, pts: &[Anchor]) -> Option<Value> {
     if pts.len() < 4 {
         return None;
     }
@@ -356,9 +366,63 @@ fn build_two_lines(_: &str, pts: &[Anchor]) -> Option<Value> {
     };
     upper.sort_by(by_time);
     lower.sort_by(by_time);
+    // Faz 14 — break-box on Elliott triangles (madde #2). Classical
+    // two-line patterns (rectangle/wedge/flag/...) don't carry EW
+    // semantics so they skip the break-box; only when the subkind
+    // starts with "triangle_" (always Elliott-coded here since the
+    // rule table routes classical triangles to the same builder but
+    // without the EW prefix) do we project the envelope.
+    let is_ew_triangle = subkind.starts_with("triangle_");
+    let mut payload = json!({ "upper": upper, "lower": lower });
+    if is_ew_triangle {
+        if let Some(b) = build_break_box(pts, subkind.contains("bull")) {
+            payload["break_box"] = b;
+        }
+    }
+    Some(json!({ "kind": "two_lines", "payload": payload }))
+}
+
+/// Faz 14 — LuxAlgo-style forward-projecting invalidation box.
+/// Returns `{ time_start, time_end, price_top, price_bot, side }`.
+/// `bull=true` means the ABC/triangle is resolved upward; breakdown
+/// through `price_bot` invalidates. `bull=false` → the mirror.
+fn build_break_box(pts: &[Anchor], bull: bool) -> Option<Value> {
+    if pts.len() < 2 {
+        return None;
+    }
+    let first = pts.first()?;
+    let last = pts.last()?;
+    // Parse ISO-8601 into unix seconds. On failure skip rather than
+    // emit a malformed box.
+    let t_first = chrono::DateTime::parse_from_rfc3339(&first.time).ok()?;
+    let t_last = chrono::DateTime::parse_from_rfc3339(&last.time).ok()?;
+    let width = (t_last.timestamp() - t_first.timestamp()).max(60);
+    let t_end = t_last.timestamp() + width;
+    let prices: Vec<f64> = pts
+        .iter()
+        .filter_map(|a| a.price.parse::<f64>().ok())
+        .collect();
+    if prices.len() < 2 {
+        return None;
+    }
+    let last_px: f64 = last.price.parse().ok()?;
+    let hi = prices.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let lo = prices.iter().cloned().fold(f64::INFINITY, f64::min);
+    // Bull corrective/triangle → invalidation below `last`; top = last,
+    // bottom = lo of interior (A/B/… range). Bear → mirror.
+    let (price_top, price_bot, side) = if bull {
+        (last_px.max(hi), lo, "bull")
+    } else {
+        (hi, last_px.min(lo), "bear")
+    };
+    let t_end_iso = chrono::DateTime::from_timestamp(t_end, 0)?
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     Some(json!({
-        "kind": "two_lines",
-        "payload": { "upper": upper, "lower": lower }
+        "time_start": last.time.clone(),
+        "time_end":   t_end_iso,
+        "price_top":  price_top.to_string(),
+        "price_bot":  price_bot.to_string(),
+        "side":       side,
     }))
 }
 
@@ -387,28 +451,116 @@ fn build_harmonic(_: &str, pts: &[Anchor]) -> Option<Value> {
     }))
 }
 
-fn build_elliott_impulse(_: &str, pts: &[Anchor]) -> Option<Value> {
+/// Faz 15 — nascent impulse: 4 realized anchors (0,1,2,3) + forward
+/// projected wave-5 target so the chart signals the setup early.
+fn build_elliott_nascent(_subkind: &str, pts: &[Anchor]) -> Option<Value> {
+    let labels = ["0", "1", "2", "3"];
+    let take = pts.len().min(labels.len());
+    if take < 4 {
+        return None;
+    }
+    let mut payload = json!({
+        "points": labelled_points(&pts[..take], &labels[..take]),
+    });
+    // Fib overlay 0↔3 so operators see how deep wave-3 has extended.
+    // `bear` flag follows the 0↔3 direction: descending = bear.
+    let bear = pts[0].price.parse::<f64>().ok()
+        .and_then(|a| pts[3].price.parse::<f64>().ok().map(|b| b < a))
+        .unwrap_or(false);
+    if let Some(fib) = build_fib_overlay(&pts[..take], bear) {
+        payload["fib"] = fib;
+    }
+    Some(json!({ "kind": "polyline", "payload": payload }))
+}
+
+/// Faz 14.A13 — 5-anchor forming impulse (wave 5 in progress).
+/// Same polyline treatment as the full impulse, minus the final leg.
+fn build_elliott_forming(_subkind: &str, pts: &[Anchor]) -> Option<Value> {
+    let labels = ["0", "1", "2", "3", "4"];
+    let take = pts.len().min(labels.len());
+    if take < 5 {
+        return None;
+    }
+    let mut payload = json!({
+        "points": labelled_points(&pts[..take], &labels[..take]),
+    });
+    let bear = pts[0].price.parse::<f64>().ok()
+        .and_then(|a| pts[3].price.parse::<f64>().ok().map(|b| b < a))
+        .unwrap_or(false);
+    if let Some(fib) = build_fib_overlay(&pts[..take], bear) {
+        payload["fib"] = fib;
+    }
+    Some(json!({ "kind": "polyline", "payload": payload }))
+}
+
+fn build_elliott_impulse(subkind: &str, pts: &[Anchor]) -> Option<Value> {
     let labels = ["0", "1", "2", "3", "4", "5"];
     let take = pts.len().min(labels.len());
     if take < 4 {
         return None;
     }
+    // Faz 14.A10 — dynamic Fibonacci retracement overlay (madde #3).
+    // After a 5-wave impulse (or diagonal) the post-pattern price action
+    // typically retraces into a well-known fib zone. We emit the 0↔5
+    // range + standard ratios and let the frontend draw dotted
+    // horizontals forward. Frontend evaluates break-state against the
+    // current candle. Pattern uses the same mechanism `break_box` does:
+    // an optional sub-field inside the polyline payload.
+    let mut payload = json!({
+        "points": labelled_points(&pts[..take], &labels[..take]),
+    });
+    if let Some(fib) = build_fib_overlay(&pts[..take], subkind.contains("bear")) {
+        payload["fib"] = fib;
+    }
+    Some(json!({ "kind": "polyline", "payload": payload }))
+}
+
+/// Faz 14.A10 — LuxAlgo-style fib retracement block carried inside the
+/// polyline payload. `base` is wave 0, `target` is the last labelled
+/// leg (wave 5 / C / Y). `ratios` are the canonical Elliott retracement
+/// levels. Frontend draws them dotted from `target.time` and flips to
+/// dashed once a level is crossed (break-state).
+fn build_fib_overlay(pts: &[Anchor], bear: bool) -> Option<Value> {
+    if pts.len() < 2 {
+        return None;
+    }
+    let base = pts.first()?;
+    let target = pts.last()?;
+    // Skip degenerate patterns where 0 and 5 landed at the same price —
+    // the ratios would collapse into one line and add noise, not value.
+    let bp: f64 = base.price.parse().ok()?;
+    let tp: f64 = target.price.parse().ok()?;
+    if (tp - bp).abs() < f64::EPSILON {
+        return None;
+    }
     Some(json!({
-        "kind": "polyline",
-        "payload": { "points": labelled_points(&pts[..take], &labels[..take]) }
+        "base":   pt(base, Some("0")),
+        "target": pt(target, None),
+        "ratios": [0.236, 0.382, 0.5, 0.618, 0.786, 1.0],
+        "bear":   bear,
     }))
 }
 
-fn build_elliott_correction(_: &str, pts: &[Anchor]) -> Option<Value> {
+fn build_elliott_correction(subkind: &str, pts: &[Anchor]) -> Option<Value> {
     let labels = ["0", "A", "B", "C"];
     let take = pts.len().min(labels.len());
     if take < 4 {
         return None;
     }
-    Some(json!({
-        "kind": "polyline",
-        "payload": { "points": labelled_points(&pts[..take], &labels[..take]) }
-    }))
+    // Faz 14 — LuxAlgo-style break-box (madde #2). Forward-projects the
+    // invalidation envelope after (C). If the post-C price action re-
+    // enters and crosses through this box, the corrective wave is void
+    // → worker flips `state` to invalidated and the setup (if any) is
+    // cancelled. Geometry: from C forward by (C - 0) time-width, price
+    // band between C and the opposite extreme of the correction body.
+    let bb = build_break_box(&pts[..take], subkind.contains("bull"));
+    let mut payload = json!({
+        "points": labelled_points(&pts[..take], &labels[..take])
+    });
+    if let Some(b) = bb {
+        payload["break_box"] = b;
+    }
+    Some(json!({ "kind": "polyline", "payload": payload }))
 }
 
 fn build_elliott_combination(_: &str, pts: &[Anchor]) -> Option<Value> {

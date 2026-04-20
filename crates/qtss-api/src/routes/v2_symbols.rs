@@ -69,11 +69,11 @@ pub fn v2_symbols_router() -> Router<SharedState> {
     Router::new()
         .route("/v2/symbols", get(list_symbols))
         .route(
-            "/v2/symbols/:exchange/:symbol/override",
+            "/v2/symbols/{exchange}/{symbol}/override",
             post(patch_override),
         )
         .route(
-            "/v2/symbols/:exchange/:symbol/budget",
+            "/v2/symbols/{exchange}/{symbol}/budget",
             get(get_budget),
         )
 }

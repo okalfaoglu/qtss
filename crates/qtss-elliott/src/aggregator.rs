@@ -17,6 +17,8 @@ use crate::error::ElliottResult;
 use crate::extended_impulse::ExtendedImpulseDetector;
 use crate::flat::FlatDetector;
 use crate::formation::FormationDetector;
+use crate::forming::FormingImpulseDetector;
+use crate::nascent::NascentImpulseDetector;
 use crate::triangle::TriangleDetector;
 use crate::truncated_fifth::TruncatedFifthDetector;
 use crate::zigzag::ZigzagDetector;
@@ -32,6 +34,10 @@ use qtss_domain::v2::timeframe::Timeframe;
 #[derive(Debug, Clone)]
 pub struct ElliottFormationToggles {
     pub impulse: bool,
+    /// Faz 15 — early 4-pivot impulse detection (nascent wave 3).
+    pub nascent_impulse: bool,
+    /// Faz 14.A13 — 5-pivot forming impulse (wave 5 in progress).
+    pub forming_impulse: bool,
     pub leading_diagonal: bool,
     pub ending_diagonal: bool,
     pub zigzag: bool,
@@ -46,6 +52,10 @@ impl ElliottFormationToggles {
     pub fn defaults() -> Self {
         Self {
             impulse: true,
+            // Defaults-on — low-cost, high-value early signal. Operators
+            // can disable via `detection.elliott.nascent_impulse.enabled`.
+            nascent_impulse: true,
+            forming_impulse: true,
             leading_diagonal: true,
             ending_diagonal: true,
             zigzag: true,
@@ -93,6 +103,12 @@ impl ElliottDetectorSet {
 
         if toggles.impulse {
             formations.push(Box::new(ImpulseAdapter(ImpulseDetector::new(base.clone())?)));
+        }
+        if toggles.nascent_impulse {
+            formations.push(Box::new(NascentImpulseDetector::new(base.clone())?));
+        }
+        if toggles.forming_impulse {
+            formations.push(Box::new(FormingImpulseDetector::new(base.clone())?));
         }
         if toggles.leading_diagonal {
             formations.push(Box::new(DiagonalDetector::new(

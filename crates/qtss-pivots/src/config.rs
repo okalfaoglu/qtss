@@ -17,6 +17,20 @@ pub struct PivotConfig {
     /// Each multiplier MUST be strictly greater than the previous one
     /// so higher levels are guaranteed to be subsets of lower levels.
     pub atr_mult: [Decimal; 4],
+    /// **Fix B (Faz 13)** — minimum bars the candidate extreme must hold
+    /// before a reversal can confirm a pivot. Uses raw bar-index delta;
+    /// works identically through the higher-level cascade because
+    /// `Sample.bar_index` carries the original bar index through
+    /// synthetic samples.
+    ///
+    /// Intent: kill "immediate reversal" false pivots where the extreme
+    /// is punched through on the very next bar (reaction bottoms sold as
+    /// major dips). The pivot must "live" at least N bars to qualify
+    /// as structural.
+    ///
+    /// Defaults follow the same Fibonacci-B progression as the ATR
+    /// multipliers — L0 pivots should hold ≥2 bars, L3 ≥8.
+    pub min_hold_bars: [u32; 4],
 }
 
 impl PivotConfig {
@@ -34,7 +48,19 @@ impl PivotConfig {
     pub fn defaults() -> Self {
         Self {
             atr_period: 14,
-            atr_mult: [dec!(2.0), dec!(3.0), dec!(5.0), dec!(8.0)],
+            // Faz 14.A12 — LuxAlgo-ZigZag parity. Previous defaults
+            // [2, 3, 5, 8] put L0 above typical wave-2/wave-4 retraces
+            // (1-1.5× ATR), so the Elliott detector starved: pivots that
+            // structurally exist on the chart never made it into the
+            // tree. New progression shifts every level down one notch so
+            // sub-impulse pivots land in L0, the old L0 becomes L1 (the
+            // harmonic/classical default), L2/L3 stay macro.
+            atr_mult: [dec!(1.0), dec!(2.0), dec!(3.5), dec!(6.0)],
+            // Matching hold-time relaxation: at 1× ATR even a 1-bar
+            // punch-through is rarely structural, but at L0 we now
+            // accept a single bar so nascent waves surface one bar
+            // sooner. L2/L3 still demand multi-bar persistence.
+            min_hold_bars: [1, 2, 3, 5],
         }
     }
 
@@ -58,6 +84,15 @@ impl PivotConfig {
             if self.atr_mult[i] <= self.atr_mult[i - 1] {
                 return Err(PivotError::InvalidConfig(format!(
                     "atr_mult must be strictly increasing (level {i})"
+                )));
+            }
+        }
+        // Fix B — monotone-non-decreasing: higher levels need at least
+        // as much hold-time as lower ones (structural, not noise).
+        for i in 1..4 {
+            if self.min_hold_bars[i] < self.min_hold_bars[i - 1] {
+                return Err(PivotError::InvalidConfig(format!(
+                    "min_hold_bars must be non-decreasing (level {i})"
                 )));
             }
         }

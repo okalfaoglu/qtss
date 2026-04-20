@@ -83,6 +83,9 @@ struct EvalConfig {
     pr_major_tp1_r: f64,
     pr_major_tp2_r: f64,
     pr_major_expiry_bars_mult: u32,
+    // Fix C — pivot_reversal için "immature" penceresi (per-level).
+    // Pivot fiyatı bu kadar bar içinde kırılırsa → tepki dibi.
+    pr_immature_bars: [u32; 4], // L0..L3
 }
 
 /// Resolve (tp1_r, tp2_r, expiry_bars_multiplier) for a given row.
@@ -183,11 +186,52 @@ async fn load_config(pool: &PgPool) -> anyhow::Result<EvalConfig> {
     let pr_major_tp2_r     = fetch(pool, "eval.pivot_reversal.major.tp2_r", 3.0).await;
     let pr_major_expiry    = fetch(pool, "eval.pivot_reversal.major.expiry_bars_mult", 60.0).await.round() as u32;
 
+    let imm_l0 = fetch(pool, "eval.pivot_reversal.immature_window_bars.L0", 3.0).await.round() as u32;
+    let imm_l1 = fetch(pool, "eval.pivot_reversal.immature_window_bars.L1", 5.0).await.round() as u32;
+    let imm_l2 = fetch(pool, "eval.pivot_reversal.immature_window_bars.L2", 8.0).await.round() as u32;
+    let imm_l3 = fetch(pool, "eval.pivot_reversal.immature_window_bars.L3", 12.0).await.round() as u32;
+
     Ok(EvalConfig {
         tp1_r, tp2_r, sl_buffer_atr, time_stop_legs, commission_bps, families,
         pr_reactive_tp1_r, pr_reactive_tp2_r, pr_reactive_expiry_bars_mult: pr_reactive_expiry,
         pr_major_tp1_r,    pr_major_tp2_r,    pr_major_expiry_bars_mult:    pr_major_expiry,
+        pr_immature_bars: [imm_l0, imm_l1, imm_l2, imm_l3],
     })
+}
+
+/// Fix C — pivot_reversal detection'ı için "immature" flag'ı.
+/// Bullish setup (entry bir Low pivotunda): ilk N bar'da lows pivot
+/// fiyatının ALTINA inmişse pivot geç/erken; aynısı bearish için
+/// highs pivot fiyatının ÜSTÜNE çıkması. `None` = pivot_reversal
+/// değil, ya da entry_anchor raw_meta'da yok.
+fn maturity_flag(
+    row: &Row1, bars: &[Bar], bearish: bool, cfg: &EvalConfig,
+) -> Option<&'static str> {
+    if row.family != "pivot_reversal" {
+        return None;
+    }
+    // anchors[2] = curr (pivot); anchors[1] = entry_anchor (trade edilen pivot);
+    // anchors[0] = sl_anchor. Entry price = entry_anchor.price.
+    let pivot_price = row.anchors.as_array()
+        .and_then(|a| a.get(1))
+        .and_then(|o| o.get("price"))
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<f64>().ok())?;
+    let level_idx = match row.pivot_level.as_str() {
+        "L0" => 0, "L1" => 1, "L2" => 2, "L3" => 3,
+        _ => return None,
+    };
+    let window = cfg.pr_immature_bars[level_idx] as usize;
+    let start = bars.iter().position(|b| b.open_time > row.detected_at).unwrap_or(bars.len());
+    let end = (start + window).min(bars.len());
+    let mut breached = false;
+    for b in &bars[start..end] {
+        let hi = b.high.to_f64().unwrap_or(0.0);
+        let lo = b.low.to_f64().unwrap_or(0.0);
+        if bearish && hi > pivot_price { breached = true; break; }
+        if !bearish && lo < pivot_price { breached = true; break; }
+    }
+    Some(if breached { "immature" } else { "mature" })
 }
 
 async fn pending_batch(pool: &PgPool, families: &[String], limit: i64) -> anyhow::Result<Vec<Row1>> {
@@ -342,12 +386,15 @@ async fn evaluate_and_record(
     let pnl_pct = gross - commission_pct;
     let duration_secs = (exit_time - row.detected_at).num_seconds().max(0);
 
+    let maturity = maturity_flag(row, bars, bearish, cfg);
+
     sqlx::query(
         r#"INSERT INTO qtss_v2_detection_outcomes
                (id, detection_id, outcome, close_reason,
-                pnl_pct, entry_price, exit_price, duration_secs, resolved_at)
+                pnl_pct, entry_price, exit_price, duration_secs, resolved_at,
+                maturity)
            VALUES
-               (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, now())
+               (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, now(), $8)
            ON CONFLICT (detection_id) DO NOTHING"#,
     )
     .bind(row.id)
@@ -357,6 +404,7 @@ async fn evaluate_and_record(
     .bind(entry as f32)
     .bind(exit_price as f32)
     .bind(duration_secs)
+    .bind(maturity)
     .execute(pool).await?;
     // Family is kept for logging/telemetry extensions.
     let _ = row.family.as_str();

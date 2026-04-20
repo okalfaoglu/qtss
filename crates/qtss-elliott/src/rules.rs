@@ -61,9 +61,15 @@ fn rule_alternation(p: &[f64; 6]) -> Result<(), &'static str> {
     }
 }
 
-/// Rule 1: wave 2 may not retrace past the start of wave 1.
+/// Rule 1: wave 2 may not retrace **past** the start of wave 1.
+/// Frost & Prechter phrasing — a *touch* of p0 is tolerated, only a
+/// clean break below (bullish frame) violates the rule. Earlier `p[2]
+/// > p[0]` rejected valid impulses that retraced to round-number
+/// levels pinned to p0 (common at 1.0000, 100, 100k). We allow a
+/// 0.1% tolerance to absorb float / decimal-to-f64 rounding too.
 fn rule_wave2_no_break_below_start(p: &[f64; 6]) -> Result<(), &'static str> {
-    if p[2] > p[0] {
+    let tolerance = p[0].abs() * 1e-3;
+    if p[2] >= p[0] - tolerance {
         Ok(())
     } else {
         Err("wave 2 retraced past wave 1 start")

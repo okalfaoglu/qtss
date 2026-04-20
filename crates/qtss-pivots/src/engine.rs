@@ -40,12 +40,23 @@ pub struct PivotEngine {
 impl PivotEngine {
     pub fn new(config: PivotConfig) -> PivotResult<Self> {
         config.validate()?;
+        // **Fix B** — construct each level's ZigZag with its own
+        // `min_hold_bars` gate. Higher levels are more tolerant of
+        // noise (larger threshold) AND required to hold longer (larger
+        // min_hold_bars) so structural pivots dominate.
+        let mh = config.min_hold_bars;
+        let zigzags = [
+            ZigZag::with_min_hold_bars(mh[0]),
+            ZigZag::with_min_hold_bars(mh[1]),
+            ZigZag::with_min_hold_bars(mh[2]),
+            ZigZag::with_min_hold_bars(mh[3]),
+        ];
         Ok(Self {
             atr: AtrState::new(config.atr_period),
             config,
             bar_index: 0,
             last_time: None,
-            zigzags: [ZigZag::new(), ZigZag::new(), ZigZag::new(), ZigZag::new()],
+            zigzags,
             confirmed: [vec![], vec![], vec![], vec![]],
         })
     }

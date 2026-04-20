@@ -64,8 +64,15 @@ pub struct RadarEntry {
     pub outcome: Option<String>,
     pub pnl_pct: Option<f64>,
     pub close_reason: Option<String>,
+    /// Fix C — `mature`/`immature`/null. Immature = pivot ilk N barda kırıldı
+    /// (tepki dibi). UI default olarak immature'ları win-rate'den dışlar.
+    pub maturity: Option<String>,
     // Faz 13 — A (R-multiple) + B (Fib) hedefleri raw_meta.targets'tan.
     pub targets: Option<serde_json::Value>,
+    // Yapısal kalite göstergeleri — curr pivot'un swing tipi
+    // (HH/HL/LH/LL) ve önceki zıt-kind pivotun swing tipi.
+    pub swing_type_curr: Option<String>,
+    pub swing_type_prev_opp: Option<String>,
 }
 
 pub fn v2_reversal_radar_router() -> Router<SharedState> {
@@ -88,7 +95,9 @@ async fn get_radar(
                d.subkind, d.state, d.mode, d.pivot_level,
                d.structural_score, d.invalidation_price,
                d.raw_meta->'targets' AS targets,
-               o.outcome, o.pnl_pct, o.close_reason
+               d.raw_meta->>'swing_type_curr'     AS swing_type_curr,
+               d.raw_meta->>'swing_type_prev_opp' AS swing_type_prev_opp,
+               o.outcome, o.pnl_pct, o.close_reason, o.maturity
           FROM qtss_v2_detections d
           LEFT JOIN qtss_v2_detection_outcomes o ON o.detection_id = d.id
          WHERE d.family = 'pivot_reversal'
@@ -149,7 +158,10 @@ async fn get_radar(
                 outcome: r.try_get("outcome").ok(),
                 pnl_pct: r.try_get::<f32, _>("pnl_pct").ok().map(|x| x as f64),
                 close_reason: r.try_get("close_reason").ok(),
+                maturity: r.try_get("maturity").ok(),
                 targets: r.try_get::<Option<serde_json::Value>, _>("targets").ok().flatten(),
+                swing_type_curr: r.try_get("swing_type_curr").ok(),
+                swing_type_prev_opp: r.try_get("swing_type_prev_opp").ok(),
             }
         })
         .collect();

@@ -107,6 +107,9 @@ fn synthetic_swing_produces_l0_pivots() {
     let cfg = PivotConfig {
         atr_period: 5,
         atr_mult: [dec!(0.5), dec!(1.0), dec!(2.0), dec!(4.0)],
+        // Fix B gate disabled for this synthetic series — the 5-bar
+        // swings are too short to clear even min_hold_bars=2.
+        min_hold_bars: [0, 0, 0, 0],
     };
     let mut eng = PivotEngine::new(cfg).unwrap();
 
@@ -141,6 +144,7 @@ fn higher_levels_are_subsets_of_lower_levels() {
     let cfg = PivotConfig {
         atr_period: 5,
         atr_mult: [dec!(0.3), dec!(1.0), dec!(2.5), dec!(5.0)],
+        min_hold_bars: [0, 0, 0, 0],
     };
     let mut eng = PivotEngine::new(cfg).unwrap();
 
@@ -187,6 +191,7 @@ fn snapshot_pivot_kind_alternation_holds_per_level() {
     let cfg = PivotConfig {
         atr_period: 4,
         atr_mult: [dec!(0.5), dec!(1.5), dec!(3.0), dec!(6.0)],
+        min_hold_bars: [0, 0, 0, 0],
     };
     let mut eng = PivotEngine::new(cfg).unwrap();
     let mut price = dec!(50);
