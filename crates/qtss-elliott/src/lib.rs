@@ -40,6 +40,7 @@ mod fibs;
 mod flat;
 mod formation;
 mod forming;
+mod luxalgo_detector;
 mod motive;
 mod nascent;
 mod projection;

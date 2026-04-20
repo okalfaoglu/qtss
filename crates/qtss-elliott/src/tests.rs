@@ -538,3 +538,42 @@ fn luxalgo_corrective_wave_abc() {
     assert_eq!(c.direction, -1); // Downward correction
     assert!(c.score > 0.0);
 }
+
+#[test]
+fn luxalgo_detector_integration() {
+    use crate::aggregator::{ElliottDetectorSet, ElliottFormationToggles};
+    use crate::formation::FormationDetector;
+
+    let mut toggles = ElliottFormationToggles::defaults();
+    toggles.impulse = false; // Disable other detectors for cleaner test
+    toggles.nascent_impulse = false;
+    toggles.forming_impulse = false;
+    toggles.leading_diagonal = false;
+    toggles.ending_diagonal = false;
+    toggles.zigzag = false;
+    toggles.flat = false;
+    toggles.triangle = false;
+    toggles.extended_impulse = false;
+    toggles.truncated_fifth = false;
+    toggles.combination = false;
+
+    let mut config = ElliottConfig::defaults();
+    config.pivot_level = PivotLevel::L1;
+
+    let detector_set = ElliottDetectorSet::new(config, &toggles).unwrap();
+
+    // Build a simple 5-pivot impulse structure
+    let pivots = vec![
+        pivot(0, dec!(100), PivotKind::Low),
+        pivot(1, dec!(110), PivotKind::High),
+        pivot(2, dec!(105), PivotKind::Low),
+        pivot(3, dec!(120), PivotKind::High),
+        pivot(4, dec!(115), PivotKind::Low),
+    ];
+
+    let tree = tree_from(pivots);
+    let detections = detector_set.detect_all(&tree, &instrument(), Timeframe::H4, &regime());
+
+    // Should detect at least one pattern (motive or corrective)
+    assert!(!detections.is_empty());
+}

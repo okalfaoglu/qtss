@@ -46,6 +46,8 @@ pub struct ElliottFormationToggles {
     pub extended_impulse: bool,
     pub truncated_fifth: bool,
     pub combination: bool,
+    /// LuxAlgo motive + corrective detector (5-wave + 3-wave patterns).
+    pub luxalgo: bool,
 }
 
 impl ElliottFormationToggles {
@@ -64,6 +66,7 @@ impl ElliottFormationToggles {
             extended_impulse: true,
             truncated_fifth: true,
             combination: true,
+            luxalgo: true,
         }
     }
 }
@@ -138,7 +141,10 @@ impl ElliottDetectorSet {
             formations.push(Box::new(TruncatedFifthDetector::new(base.clone())?));
         }
         if toggles.combination {
-            formations.push(Box::new(CombinationDetector::new(base)?));
+            formations.push(Box::new(CombinationDetector::new(base.clone())?));
+        }
+        if toggles.luxalgo {
+            formations.push(Box::new(crate::luxalgo_detector::LuxAlgoDetector::new(base)));
         }
 
         Ok(Self { formations })
