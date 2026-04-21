@@ -39,7 +39,7 @@ pub use ws::{
     public_spot_kline_url, public_usdm_combined_kline_url, public_usdm_combined_streams_url,
     public_usdm_kline_url, spot_user_data_stream_url, usdm_user_data_stream_url, WsStream,
 };
-pub use ws_kline::{parse_closed_kline_json, ClosedKline};
+pub use ws_kline::{parse_closed_kline_json, parse_kline_frame_json, ClosedKline, KlineFrame};
 pub use types::{
     insert_opt, FuturesOrderType, OrderSide, SpotOrderType, TimeInForce,
 };

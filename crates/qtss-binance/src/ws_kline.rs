@@ -16,6 +16,25 @@ pub struct ClosedKline {
     pub trade_count: Option<u64>,
 }
 
+/// Any kline frame — closed OR still forming. `is_final=true` means the bar
+/// just closed and should be archived into `market_bars`. `is_final=false`
+/// is a running tick and should overwrite `market_bars_open` only.
+#[derive(Debug, Clone)]
+pub struct KlineFrame {
+    pub symbol: String,
+    pub interval: String,
+    pub open_time_ms: i64,
+    pub close_time_ms: i64,
+    pub open: String,
+    pub high: String,
+    pub low: String,
+    pub close: String,
+    pub volume: String,
+    pub quote_volume: Option<String>,
+    pub trade_count: Option<u64>,
+    pub is_final: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct KlineEventTop {
     #[serde(rename = "e")]
@@ -28,7 +47,6 @@ struct KlineEventTop {
 struct KlineK {
     t: i64,
     #[serde(rename = "T")]
-    #[allow(dead_code)]
     close_time: Option<i64>,
     s: Option<String>,
     #[serde(rename = "i")]
@@ -46,6 +64,30 @@ struct KlineK {
 
 /// `data` sarmalayıcı (birleşik akış) veya düz `kline` olayı.
 pub fn parse_closed_kline_json(text: &str) -> Option<ClosedKline> {
+    let frame = parse_kline_frame_json(text)?;
+    if !frame.is_final {
+        return None;
+    }
+    Some(ClosedKline {
+        symbol: frame.symbol,
+        interval: frame.interval,
+        open_time_ms: frame.open_time_ms,
+        open: frame.open,
+        high: frame.high,
+        low: frame.low,
+        close: frame.close,
+        volume: frame.volume,
+        quote_volume: frame.quote_volume,
+        trade_count: frame.trade_count,
+    })
+}
+
+/// Same shape as `parse_closed_kline_json` but returns every frame — open or
+/// closed — with an `is_final` flag. Lets the worker route final frames to
+/// the archive (`market_bars`) and running frames to the live ticker
+/// (`market_bars_open`) off the same WebSocket stream, without doubling
+/// the subscription count.
+pub fn parse_kline_frame_json(text: &str) -> Option<KlineFrame> {
     let top: serde_json::Value = serde_json::from_str(text).ok()?;
     let ev = if let Some(d) = top.get("data") {
         serde_json::from_value::<KlineEventTop>(d.clone()).ok()?
@@ -56,15 +98,15 @@ pub fn parse_closed_kline_json(text: &str) -> Option<ClosedKline> {
         return None;
     }
     let k = ev.k?;
-    if !k.is_final.unwrap_or(false) {
-        return None;
-    }
     let symbol = k.s.or(ev.s).filter(|s| !s.is_empty())?;
     let interval = k.interval?.to_string();
-    Some(ClosedKline {
+    Some(KlineFrame {
         symbol,
         interval,
         open_time_ms: k.t,
+        // Binance may omit `T` for single-stream frames; fall back to
+        // open_time so the ticker row still carries a sane close_time.
+        close_time_ms: k.close_time.unwrap_or(k.t),
         open: k.o,
         high: k.h,
         low: k.l,
@@ -72,6 +114,7 @@ pub fn parse_closed_kline_json(text: &str) -> Option<ClosedKline> {
         volume: k.v,
         quote_volume: k.q,
         trade_count: k.n,
+        is_final: k.is_final.unwrap_or(false),
     })
 }
 

@@ -7,10 +7,11 @@
 //!   - Max consecutive losses
 
 use crate::corrective::CorrectiveWave;
-use crate::invalidation::{check_corrective_invalid, check_motive_invalid, corrective_invalidation_level, motive_invalidation_level};
+use crate::invalidation::{corrective_invalidation_level, motive_invalidation_level};
 use crate::motive::MotiveWave;
 use crate::targets::{corrective_primary_target, motive_primary_target, project_corrective_targets, project_motive_targets};
 use qtss_domain::v2::bar::Bar;
+use rust_decimal::prelude::ToPrimitive;
 use std::collections::VecDeque;
 
 /// Trade outcome from a detected pattern.
@@ -252,7 +253,7 @@ pub fn calculate_stats(trades: &[PatternTrade]) -> BacktestStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::zigzag::ZigZagPoint;
+    use crate::luxalgo_zigzag::ZigZagPoint;
     use chrono::Utc;
     use qtss_domain::v2::instrument::{AssetClass, Instrument, SessionCalendar, Venue};
     use qtss_domain::v2::timeframe::Timeframe;

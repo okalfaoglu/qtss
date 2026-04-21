@@ -13,6 +13,7 @@ tracing.workspace = true
 rust_decimal = { version = "1.36", features = ["serde"] }
 rust_decimal_macros.workspace = true
 qtss-domain.workspace = true
+qtss-pivots.workspace = true
 
 [dev-dependencies]
 rust_decimal_macros.workspace = true

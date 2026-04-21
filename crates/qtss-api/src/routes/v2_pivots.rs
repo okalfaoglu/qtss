@@ -6,10 +6,9 @@
 //! independently (CLAUDE.md #2 — per-level style is driven by config,
 //! not hardcoded).
 //!
-//! Data source: `pivot_cache` table (authoritative, written by both the
-//! live detection orchestrator and the hourly historical backfill
-//! worker). Bar indexes are globally consistent so the frontend can
-//! join pivots to candles by `open_time`.
+//! Data source: `pivots` table — written by `pivot_writer_loop`. Joined
+//! through `engine_symbols` so the (exchange, symbol, interval) URL
+//! params translate to the series UUID the table keys on.
 
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
@@ -78,32 +77,36 @@ async fn get_pivots(
             .collect(),
     };
 
-    // NOTE: qtss_storage::list_pivot_cache does `ORDER BY bar_index ASC
-    // LIMIT N` which returns the OLDEST pivots when the cache holds
-    // more than N rows — wrong for a chart overlay whose visible
-    // window is always the RECENT candles. We inline a DESC+reverse
-    // query here instead so the frontend receives the latest `limit`
-    // pivots per level in ascending time order.
+    // ORDER BY bar_index DESC + LIMIT + outer ASC gives us the newest N
+    // rows in chronological order — the only shape the chart overlay
+    // needs. Reading `pivots` JOIN `engine_symbols` so the old
+    // (exchange, symbol, timeframe) key keeps working without a segment
+    // param on the URL; segment is fixed to `futures` for now (matches
+    // every live series) but explicit enough to fix later.
     let mut out: Vec<PivotLevelSeries> = Vec::with_capacity(requested_levels.len());
     for level in requested_levels {
+        let level_i: i16 = level[1..].parse().unwrap_or(0);
         let rows = sqlx::query_as::<
             _,
             (
                 i64,
                 chrono::DateTime<chrono::Utc>,
                 rust_decimal::Decimal,
-                String,
+                i16,
                 Option<String>,
             ),
         >(
             r#"
-            SELECT bar_index, open_time, price, kind, swing_type
+            SELECT bar_index, open_time, price, direction, swing_tag
               FROM (
-                SELECT bar_index, open_time, price, kind, swing_type
-                  FROM pivot_cache
-                 WHERE exchange = $1 AND symbol = $2
-                   AND timeframe = $3 AND level = $4
-                 ORDER BY bar_index DESC
+                SELECT p.bar_index, p.open_time, p.price, p.direction, p.swing_tag
+                  FROM pivots p
+                  JOIN engine_symbols es ON es.id = p.engine_symbol_id
+                 WHERE es.exchange   = $1
+                   AND es.symbol     = $2
+                   AND es."interval" = $3
+                   AND p.level       = $4
+                 ORDER BY p.bar_index DESC
                  LIMIT $5
               ) t
              ORDER BY bar_index ASC
@@ -112,24 +115,24 @@ async fn get_pivots(
         .bind(&venue)
         .bind(&symbol)
         .bind(&tf)
-        .bind(level)
+        .bind(level_i)
         .bind(limit)
         .fetch_all(&st.pool)
         .await
         .map_err(|e| {
             ApiError::new(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("pivot_cache read failed: {e}"),
+                format!("pivots read failed: {e}"),
             )
         })?;
         let points = rows
             .into_iter()
-            .map(|(bar_index, open_time, price, kind, swing_type)| PivotPoint {
+            .map(|(bar_index, open_time, price, direction, swing_tag)| PivotPoint {
                 bar_index,
                 open_time,
                 price,
-                kind,
-                swing_type,
+                kind: if direction >= 1 { "High".to_string() } else { "Low".to_string() },
+                swing_type: swing_tag,
             })
             .collect();
         out.push(PivotLevelSeries {

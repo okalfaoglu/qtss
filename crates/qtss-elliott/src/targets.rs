@@ -8,6 +8,7 @@ use crate::motive::MotiveWave;
 
 /// Wave 5 target projections (common ratios).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct MotifeTargets {
     /// 1.0× of wave 1
     pub target_1_0: f64,
@@ -21,6 +22,7 @@ pub struct MotifeTargets {
 
 /// Wave C target projections.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CorrectiveTargets {
     /// 1.0× of wave A
     pub target_1_0: f64,
@@ -85,7 +87,7 @@ pub fn corrective_primary_target(targets: &CorrectiveTargets) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::zigzag::ZigZagPoint;
+    use crate::luxalgo_zigzag::ZigZagPoint;
 
     fn mock_point(bars_ago: usize, price: f64, direction: i8) -> ZigZagPoint {
         ZigZagPoint {

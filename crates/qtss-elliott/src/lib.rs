@@ -43,6 +43,8 @@ mod formation;
 mod forming;
 mod invalidation;
 mod luxalgo_detector;
+pub mod luxalgo_pine_port;
+mod luxalgo_zigzag;
 mod motive;
 pub mod multi_tf;
 mod nascent;

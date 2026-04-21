@@ -28,7 +28,7 @@ mod atr;
 mod config;
 mod engine;
 mod error;
-mod zigzag;
+pub mod zigzag;
 
 #[cfg(test)]
 mod tests;

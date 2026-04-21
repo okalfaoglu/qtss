@@ -7,7 +7,8 @@
 
 use crate::corrective::CorrectiveWave;
 use crate::motive::MotiveWave;
-use crate::zigzag::ZigZagPoint;
+#[allow(unused_imports)]
+use crate::luxalgo_zigzag::ZigZagPoint;
 
 /// Checks if a motive wave is still valid after new price data.
 /// Returns `Some(reason)` if invalid, None if still valid.

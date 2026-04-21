@@ -42,6 +42,16 @@ use uuid::Uuid;
 
 const LEVELS: [PivotLevel; 4] = [PivotLevel::L0, PivotLevel::L1, PivotLevel::L2, PivotLevel::L3];
 
+fn pivot_level_to_i16(level: PivotLevel) -> i16 {
+    match level {
+        PivotLevel::L0 => 0,
+        PivotLevel::L1 => 1,
+        PivotLevel::L2 => 2,
+        PivotLevel::L3 => 3,
+        PivotLevel::L4 => 4,
+    }
+}
+
 #[derive(Debug)]
 struct SeriesKey {
     exchange: String,
@@ -124,10 +134,11 @@ async fn list_series(
     let rows = sqlx::query(
         r#"SELECT DISTINCT mb.exchange, mb.segment, mb.symbol, mb.interval
              FROM market_bars mb
-             JOIN pivot_cache pc
-               ON pc.exchange = mb.exchange
-              AND pc.symbol   = mb.symbol
-              AND pc.timeframe = mb.interval
+             JOIN engine_symbols es
+               ON es.exchange = mb.exchange
+              AND es.symbol   = mb.symbol
+              AND es."interval" = mb.interval
+             JOIN pivots p ON p.engine_symbol_id = es.id
             WHERE ($1::text[] IS NULL OR mb.symbol   = ANY($1))
               AND ($2::text[] IS NULL OR mb.interval = ANY($2))
             ORDER BY mb.exchange, mb.symbol, mb.interval"#,
@@ -152,40 +163,40 @@ async fn load_pivots(
     s: &SeriesKey,
     level: PivotLevel,
 ) -> anyhow::Result<Vec<Pivot>> {
+    let level_i: i16 = pivot_level_to_i16(level);
     let rows = sqlx::query(
-        r#"SELECT bar_index, open_time, price, kind, prominence, volume_at_pivot
-             FROM pivot_cache
-            WHERE exchange = $1 AND symbol = $2
-              AND timeframe = $3 AND level  = $4
-            ORDER BY bar_index ASC"#,
+        r#"SELECT p.bar_index, p.open_time, p.price, p.direction,
+                  p.prominence, p.volume
+             FROM pivots p
+             JOIN engine_symbols es ON es.id = p.engine_symbol_id
+            WHERE es.exchange   = $1
+              AND es.symbol     = $2
+              AND es."interval" = $3
+              AND p.level       = $4
+            ORDER BY p.bar_index ASC"#,
     )
     .bind(&s.exchange)
     .bind(&s.symbol)
     .bind(&s.interval)
-    .bind(level.as_str())
+    .bind(level_i)
     .fetch_all(pool)
     .await?;
     Ok(rows
         .into_iter()
-        .filter_map(|r| {
-            let kind_s: String = r.get("kind");
-            let kind = match kind_s.as_str() {
-                "High" => PivotKind::High,
-                "Low" => PivotKind::Low,
-                _ => return None,
-            };
+        .map(|r| {
+            let direction: i16 = r.get("direction");
             let bar_index: i64 = r.get("bar_index");
             let open_time: DateTime<Utc> = r.get("open_time");
-            Some(Pivot {
+            Pivot {
                 bar_index: bar_index as u64,
                 time: open_time,
                 price: r.get("price"),
-                kind,
+                kind: if direction >= 1 { PivotKind::High } else { PivotKind::Low },
                 level,
                 prominence: r.get("prominence"),
-                volume_at_pivot: r.get("volume_at_pivot"),
+                volume_at_pivot: r.get("volume"),
                 swing_type: None,
-            })
+            }
         })
         .collect())
 }

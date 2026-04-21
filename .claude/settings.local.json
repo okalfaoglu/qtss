@@ -417,7 +417,25 @@
       "Bash(grep -E \"outcome_labeler_loop|tick_dispatcher_loop|position_manager\" \\\\\\\\wsl.localhost\\\\\\\\Ubuntu\\\\\\\\app\\\\\\\\qtss\\\\\\\\crates\\\\\\\\qtss-worker\\\\\\\\src\\\\\\\\main.rs)",
       "Bash(ls -la \\\\\\\\wsl.localhost\\\\\\\\Ubuntu\\\\\\\\app\\\\\\\\qtss)",
       "Bash(cmd.exe /c \"wsl -d Ubuntu -- ls /app/qtss/migrations\")",
-      "Bash(cmd.exe /c \"wsl.exe -d Ubuntu -- bash -lc 'cd /app/qtss && cargo check -p qtss-notify -p qtss-worker 2>&1 | tail -40'\")"
+      "Bash(cmd.exe /c \"wsl.exe -d Ubuntu -- bash -lc 'cd /app/qtss && cargo check -p qtss-notify -p qtss-worker 2>&1 | tail -40'\")",
+      "Bash(git stash *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git commit -m 'Add multi-timeframe confirmation for Elliott Wave patterns *)",
+      "Bash(cat C:\\\\\\\\Users\\\\\\\\oguzk\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\--wsl-localhost-Ubuntu-app-qtss--claude-worktrees-recursing-lalande-a73313\\\\\\\\ef980dce-4b38-444a-9985-de5ad4e1718b\\\\\\\\tasks\\\\\\\\bizgi5dzr.output)",
+      "Bash(git commit -m 'Add setup creator for position sizing and commission gate *)",
+      "Bash(wsl -- which cargo psql docker)",
+      "Bash(wsl -- bash -c 'cd /app/qtss && ls .env 2>/dev/null && grep -E \"DATABASE_URL|POSTGRES\" .env 2>/dev/null | head -5')",
+      "Bash(wsl -- bash -c 'PGPASSWORD=\"24Qwert12!\" psql -h 127.0.0.1 -U qtss -d qtss -c \"SELECT pivot_level, COUNT\\(*\\) FROM qtss_v2_detections WHERE family=\\\\$\\\\$elliott\\\\$\\\\$ AND subkind LIKE \\\\$\\\\$luxalgo_%\\\\$\\\\$ GROUP BY pivot_level ORDER BY pivot_level;\"')",
+      "Bash(wsl -- bash -c \"PGPASSWORD='24Qwert12!' psql -h 127.0.0.1 -U qtss -d qtss -c \\\\\"SELECT pivot_level, COUNT\\(*\\) FROM qtss_v2_detections WHERE family='elliott' AND subkind LIKE 'luxalgo_%' GROUP BY pivot_level ORDER BY pivot_level;\\\\\"\")",
+      "Bash(wsl -- bash -c \"PGPASSWORD='24Qwert12!' psql -h 127.0.0.1 -U qtss -d qtss -c \\\\\"SELECT family, COUNT\\(*\\) FROM qtss_v2_detections GROUP BY family ORDER BY 2 DESC;\\\\\"\")",
+      "Bash(wsl -- bash -c \"PGPASSWORD='24Qwert12!' psql -h 127.0.0.1 -U qtss -d qtss -c \\\\\"SELECT subkind, pivot_level, COUNT\\(*\\) FROM qtss_v2_detections WHERE family='elliott' GROUP BY subkind, pivot_level ORDER BY subkind, pivot_level;\\\\\"\")",
+      "Bash(wsl -- bash -c \"PGPASSWORD='24Qwert12!' psql -h 127.0.0.1 -U qtss -d qtss -c \\\\\"SELECT section, key, value FROM system_config WHERE key LIKE '%elliott%' OR key LIKE '%luxalgo%' ORDER BY key;\\\\\"\")",
+      "Bash(wsl -- bash -c \"PGPASSWORD='24Qwert12!' psql -h 127.0.0.1 -U qtss -d qtss -c \\\\\"\\\\d system_config\\\\\"\")",
+      "Bash(wsl -- bash -c \"PGPASSWORD='24Qwert12!' psql -h 127.0.0.1 -U qtss -d qtss -c \\\\\"SELECT module, config_key, value FROM system_config WHERE config_key LIKE '%elliott%' OR config_key LIKE '%luxalgo%' ORDER BY config_key;\\\\\"\")",
+      "Bash(wsl -- bash -c \"ps aux | grep -iE 'qtss-worker|qtss_worker' | grep -v grep | head -5\")",
+      "Bash(wsl -- bash -c \"ls -la /app/qtss/target/release/qtss-worker 2>&1; echo '---'; stat -c '%y' /app/qtss/target/release/qtss-worker 2>&1\")",
+      "Bash(wsl -- bash -c \"strings /app/qtss/target/release/qtss-worker 2>/dev/null | grep -E 'luxalgo_\\(impulse|correction\\)' | head -10\")",
+      "Bash(wsl -- bash -c \"ls ~/.cargo/bin/cargo 2>/dev/null; ls /usr/local/cargo/bin/cargo 2>/dev/null; which cargo 2>/dev/null; find /root -name cargo -type f 2>/dev/null | head -3; find /home -name cargo -type f 2>/dev/null | head -3\")"
     ]
   }
 }

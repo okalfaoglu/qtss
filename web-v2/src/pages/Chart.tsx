@@ -305,7 +305,10 @@ function waveDegreeForTimeframe(tf: string): WaveDegree {
 }
 
 function isMotiveElliott(subkind: string): boolean {
-  return subkind.startsWith("impulse") || subkind.includes("diagonal");
+  // LuxAlgo subkinds ship as `luxalgo_impulse_bull` / `luxalgo_correction_up`
+  // — include-based match catches both the legacy strict detector's
+  // `impulse_*` / `diagonal_*` and the new LuxAlgo variants.
+  return subkind.includes("impulse") || subkind.includes("diagonal");
 }
 
 function elliottColor(_subkind: string, timeframe: string): string {
@@ -845,7 +848,7 @@ export function Chart() {
   const [familyModes, setFamilyModes] = useState<Record<string, FamilyMode>>({});
   const [detailLayers, setDetailLayers] = useState<Record<string, Set<string>>>({});
   const [showLabels, setShowLabels] = useState(true);
-  const [showProjections, setShowProjections] = useState(true);
+  const [showProjections, setShowProjections] = useState(false);
   // Backlog items — Setup + Open Position overlays. Default OFF because
   // Chart already carries classical/elliott/harmonic/wyckoff/zones/tbm/
   // mum/boşluk layers; layering armed setups + live positions on top of
@@ -1181,8 +1184,9 @@ export function Chart() {
     const filtered = merged.detections.filter((d) => {
       if ((familyModes[d.family] ?? "off") === "off") return false;
       if (!d.anchors?.length) return false;
-      // Hide invalidated detections unless in detail mode
-      if (d.state === "invalidated" && (familyModes[d.family] ?? "off") !== "detail") return false;
+      // Invalidated rows are handled by the `cancelled` state bucket below
+      // (rendered as `ghost`: dotted, 35% opacity) — matching LuxAlgo's TV
+      // behavior of keeping broken patterns on-chart for context.
       // Faz 12 — if the detection was produced at a cascaded pivot
       // level (L0..L3), its visibility is ALSO gated by the matching
       // level toggle. This means "harmonic + L2" buttons together
@@ -1765,9 +1769,10 @@ export function Chart() {
             time: isoToUnix(a.time),
             value: Number(a.price),
           }));
+          const finalLineData = dedupeLineData(lineData);
           // eslint-disable-next-line no-console
-          console.debug("[FORM-LINE]", d.family, d.subkind, d.pivot_level, "pts=", lineData.map(p => ({t: new Date(Number(p.time)*1000).toISOString(), v: p.value})));
-          formLine.setData(dedupeLineData(lineData));
+          console.debug("[FORM-LINE]", d.family, d.subkind, d.pivot_level, "color=", color, "state=", lifecycle, "pts=", finalLineData.map(p => ({t: new Date(Number(p.time)*1000).toISOString(), v: p.value})));
+          formLine.setData(finalLineData);
           overlayLinesRef.current.push(formLine);
         }
 

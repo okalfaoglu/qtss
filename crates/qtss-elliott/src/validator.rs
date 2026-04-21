@@ -5,11 +5,12 @@
 //!   - Risk/reward ratio
 //!   - Invalidation distance (cushion)
 
-use crate::corrective::{detect_corrective, CorrectiveWave};
+use crate::corrective::CorrectiveWave;
 use crate::invalidation::{check_corrective_invalid, check_motive_invalid};
-use crate::motive::{detect_motive, MotiveWave};
+use crate::motive::MotiveWave;
 use crate::targets::{corrective_primary_target, motive_primary_target, project_corrective_targets, project_motive_targets};
-use crate::zigzag::ZigZagPoint;
+#[cfg(test)]
+use crate::luxalgo_zigzag::ZigZagPoint;
 
 /// Validation result for a pattern.
 #[derive(Debug, Clone)]

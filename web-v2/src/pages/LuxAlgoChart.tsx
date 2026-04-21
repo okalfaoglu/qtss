@@ -1,0 +1,671 @@
+/**
+ * ElliottChart — pure drawing layer.
+ *
+ * All Elliott logic (zigzag pivots, motive 12345, ABC correction, fib
+ * band, break box, label fusion) runs on the Rust backend:
+ *   * `GET /v2/zigzag/...`   — trailing-window pivots + provisional leg.
+ *   * `GET /v2/elliott/...`  — motive/ABC/fib/break_box computed on the
+ *                              same pivots via `qtss_elliott::luxalgo_pine_port`.
+ *
+ * This component only fetches those two endpoints and renders them on
+ * the chart. Nothing about the Elliott state machine lives in the
+ * browser anymore.
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  createChart,
+  CandlestickSeries,
+  LineSeries,
+  type IChartApi,
+  type ISeriesApi,
+  type CandlestickData,
+  type LineData,
+  type Time,
+  ColorType,
+  CrosshairMode,
+  LineStyle,
+} from "lightweight-charts";
+
+import { apiFetch } from "../lib/api";
+import { TextLabelPrimitive } from "../lib/text-label-primitive";
+import { RectanglePrimitive } from "../lib/rectangle-primitive";
+
+// Shape mirrors qtss_elliott::luxalgo_pine_port::PinePortOutput.
+// Snake-case matches serde's default (the Rust structs use plain
+// derive(Serialize) without rename_all).
+interface BackendPivotPoint {
+  direction: number;
+  bar_index: number;
+  price: number;
+  label_override?: string;
+  hide_label?: boolean;
+}
+interface BackendBreakBox {
+  left_bar: number; right_bar: number; top: number; bottom: number;
+}
+interface BackendNextMarker { direction: number; bar_index: number; price: number; }
+interface BackendAbcPattern {
+  direction: number;
+  anchors: BackendPivotPoint[];
+  invalidated: boolean;
+}
+interface BackendMotivePattern {
+  direction: number;
+  anchors: BackendPivotPoint[];
+  live: boolean;
+  next_hint: boolean;
+  abc: BackendAbcPattern | null;
+  break_box: BackendBreakBox | null;
+  next_marker: BackendNextMarker | null;
+}
+interface BackendBreakMarker { direction: number; bar_index: number; price: number; }
+interface BackendFibBand {
+  x_anchor: number; x_far: number; pole_top: number; pole_bottom: number;
+  y_500: number; y_618: number; y_764: number; y_854: number; broken: boolean;
+}
+interface BackendLevelOutput {
+  length: number;
+  color: string;
+  pivots: BackendPivotPoint[];
+  motives: BackendMotivePattern[];
+  break_markers: BackendBreakMarker[];
+  fib_band: BackendFibBand | null;
+}
+interface ElliottResponse {
+  venue: string;
+  symbol: string;
+  timeframe: string;
+  candles: Array<{ time: string; bar_index: number }>;
+  bar_count: number;
+  levels: BackendLevelOutput[];
+}
+
+type BackendPivot = {
+  bar_index: number;
+  time: string;
+  direction: number;
+  price: number;
+  volume: number;
+  swing_tag: "HH" | "HL" | "LL" | "LH" | null;
+};
+
+type BackendLevel = {
+  slot: number;
+  length: number;
+  color: string;
+  pivots: BackendPivot[];
+  provisional_pivot: BackendPivot | null;
+};
+
+type BackendCandle = {
+  time: string;
+  open: string | number;
+  high: string | number;
+  low: string | number;
+  close: string | number;
+  volume: string | number;
+  bar_index: number;
+};
+
+type ZigzagResponse = {
+  venue: string;
+  symbol: string;
+  timeframe: string;
+  candles: BackendCandle[];
+  levels: BackendLevel[];
+};
+
+type VenueOpt = {
+  exchange: string;
+  segment: string;
+  symbols: string[];
+  intervals: string[];
+  symbol_intervals: Record<string, string[]>;
+};
+
+const TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"];
+
+interface LevelSlot {
+  length: number;
+  color: string;
+  enabled: boolean;
+}
+
+const DEFAULT_SLOTS: LevelSlot[] = [
+  { length: 3,  color: "#ef4444", enabled: true },
+  { length: 5,  color: "#3b82f6", enabled: true },
+  { length: 8,  color: "#e5e7eb", enabled: false },
+  { length: 13, color: "#f59e0b", enabled: false },
+  { length: 21, color: "#a78bfa", enabled: false },
+];
+
+function dedupeByTime(pts: LineData[]): LineData[] {
+  if (pts.length === 0) return pts;
+  const out: LineData[] = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    if ((pts[i].time as number) === (out[out.length - 1].time as number)) {
+      out[out.length - 1] = pts[i];
+    } else {
+      out.push(pts[i]);
+    }
+  }
+  return out;
+}
+
+export function LuxAlgoChart() {
+  const [exchange, setExchange] = useState("binance");
+  const [segment, setSegment] = useState("futures");
+  const [symbol, setSymbol] = useState("BTCUSDT");
+  const [tf, setTf] = useState("4h");
+  const [slots, setSlots] = useState<LevelSlot[]>(DEFAULT_SLOTS);
+  const [showFibBand, setShowFibBand] = useState(true);
+  const [showHhLl, setShowHhLl] = useState(false);
+  const [onlyLatestMotive, setOnlyLatestMotive] = useState(true);
+  const [showZigzag, setShowZigzag] = useState(true);
+  const [showElliott, setShowElliott] = useState(true);
+  const [fibExtend, setFibExtend] = useState(false);
+  const [barLimit, setBarLimit] = useState(1000);
+
+  const venues = useQuery<VenueOpt[]>({
+    queryKey: ["chart-venues"],
+    queryFn: () => apiFetch("/v2/chart/venues"),
+  });
+
+  const lengthsParam = slots.map((s) => s.length).join(",");
+  const data = useQuery<ZigzagResponse>({
+    queryKey: ["zigzag", exchange, symbol, tf, segment, lengthsParam, barLimit],
+    queryFn: () =>
+      apiFetch(
+        `/v2/zigzag/${exchange}/${symbol}/${tf}?segment=${segment}&limit=${barLimit}&lengths=${lengthsParam}`
+      ),
+    refetchInterval: 15_000,
+  });
+
+  // Motive / ABC / Fib band / Break box — fetched from the backend
+  // endpoint that runs the same Rust state machine on the same zigzag
+  // pivots the /v2/zigzag route above is showing. No in-browser Elliott
+  // computation anymore; the chart is pure presentation.
+  const enabledLengths = slots.filter((s) => s.enabled).map((s) => s.length).join(",");
+  const enabledColors = slots.filter((s) => s.enabled).map((s) => s.color).join(",");
+  const elliott = useQuery<ElliottResponse>({
+    queryKey: [
+      "elliott",
+      exchange,
+      symbol,
+      tf,
+      segment,
+      enabledLengths,
+      enabledColors,
+      barLimit,
+    ],
+    queryFn: () =>
+      apiFetch(
+        `/v2/elliott/${exchange}/${symbol}/${tf}?segment=${segment}&limit=${barLimit}` +
+          `&lengths=${enabledLengths}&colors=${encodeURIComponent(enabledColors)}`
+      ),
+    enabled: enabledLengths.length > 0,
+    refetchInterval: 15_000,
+  });
+  const pineOutput = elliott.data ?? null;
+
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const overlaySeriesRef = useRef<ISeriesApi<"Line">[]>([]);
+  const labelPrimitivesRef = useRef<TextLabelPrimitive[]>([]);
+  const rectPrimitivesRef = useRef<RectanglePrimitive[]>([]);
+
+  // Mount chart
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const chart = createChart(containerRef.current, {
+      layout: {
+        background: { type: ColorType.Solid, color: "#09090b" },
+        textColor: "#d4d4d8",
+      },
+      grid: {
+        vertLines: { color: "#18181b" },
+        horzLines: { color: "#18181b" },
+      },
+      crosshair: { mode: CrosshairMode.Normal },
+      rightPriceScale: { borderColor: "#27272a" },
+      timeScale: {
+        borderColor: "#27272a",
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 12,
+        barSpacing: 8,
+        minBarSpacing: 2,
+      },
+    });
+    chartRef.current = chart;
+    candleSeriesRef.current = chart.addSeries(CandlestickSeries, {
+      upColor: "#34d399",
+      downColor: "#f87171",
+      borderUpColor: "#34d399",
+      borderDownColor: "#f87171",
+      wickUpColor: "#34d39999",
+      wickDownColor: "#f8717199",
+    });
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) {
+        const { width, height } = e.contentRect;
+        try { chart.applyOptions({ width, height }); } catch { /* disposed */ }
+      }
+    });
+    ro.observe(containerRef.current);
+    return () => {
+      ro.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+    };
+  }, []);
+
+  // Pan-left: bump limit when visible range nears left edge.
+  const loadOlder = useCallback(() => {
+    setBarLimit((n) => Math.min(n + 500, 5000));
+  }, []);
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const handler = (range: { from: number; to: number } | null) => {
+      if (!range) return;
+      if (range.from < 20) loadOlder();
+    };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(handler);
+    return () => {
+      try { chart.timeScale().unsubscribeVisibleLogicalRangeChange(handler); } catch { /* disposed */ }
+    };
+  }, [loadOlder]);
+
+  // Redraw
+  useEffect(() => {
+    const chart = chartRef.current;
+    const candleSeries = candleSeriesRef.current;
+    if (!chart || !candleSeries || !data.data) return;
+
+    for (const s of overlaySeriesRef.current) {
+      try { chart.removeSeries(s); } catch { /* disposed */ }
+    }
+    overlaySeriesRef.current = [];
+    for (const prim of labelPrimitivesRef.current) {
+      try { candleSeries.detachPrimitive(prim); } catch { /* disposed */ }
+    }
+    labelPrimitivesRef.current = [];
+    for (const prim of rectPrimitivesRef.current) {
+      try { candleSeries.detachPrimitive(prim); } catch { /* disposed */ }
+    }
+    rectPrimitivesRef.current = [];
+
+    const candles = data.data.candles;
+    const candleData: CandlestickData[] = candles.map((c) => ({
+      time: Math.floor(new Date(c.time).getTime() / 1000) as Time,
+      open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close),
+    }));
+    candleSeries.setData(candleData);
+
+    const timeAt = (barIndex: number): Time | null => {
+      if (barIndex >= 0 && barIndex < candles.length) {
+        return Math.floor(new Date(candles[barIndex].time).getTime() / 1000) as Time;
+      }
+      if (barIndex >= candles.length && candles.length >= 2) {
+        const last = candles[candles.length - 1];
+        const prev = candles[candles.length - 2];
+        const lastTs = Math.floor(new Date(last.time).getTime() / 1000);
+        const prevTs = Math.floor(new Date(prev.time).getTime() / 1000);
+        const dt = lastTs - prevTs;
+        return (lastTs + dt * (barIndex - (candles.length - 1))) as Time;
+      }
+      return null;
+    };
+
+    const attachLabel = (
+      time: Time, price: number, text: string, color: string,
+      position: "above" | "below"
+    ) => {
+      const prim = new TextLabelPrimitive({
+        time, price, text, color, position,
+        fontSize: 10, offsetPx: 8, paddingPx: 2,
+        background: "#09090bcc",
+      });
+      candleSeries.attachPrimitive(prim);
+      labelPrimitivesRef.current.push(prim);
+    };
+
+    // ── ZIGZAG (backend pivots) ──
+    for (const level of data.data.levels) {
+      const slot = slots[level.slot];
+      if (!slot?.enabled) continue;
+      const color = level.color;
+
+      const zzPts: LineData[] = dedupeByTime(
+        level.pivots
+          .map((p) => {
+            const t = timeAt(p.bar_index);
+            return t === null ? null : { time: t, value: p.price };
+          })
+          .filter((x): x is LineData => x !== null)
+      );
+      if (showZigzag && zzPts.length >= 2) {
+        const s = chart.addSeries(LineSeries, {
+          color, lineWidth: 1, lineStyle: LineStyle.Dotted,
+          priceLineVisible: false, lastValueVisible: false,
+        });
+        s.setData(zzPts);
+        overlaySeriesRef.current.push(s);
+      }
+
+      // Provisional leg — dashed line from last confirmed pivot to the
+      // current running extreme (TV's "pending" segment reaching the
+      // right edge). Plus a Pine-style filled dot at the provisional
+      // tip marking "this pivot is not yet confirmed".
+      if (showZigzag && level.provisional_pivot && level.pivots.length > 0) {
+        const lastConfirmed = level.pivots[level.pivots.length - 1];
+        const prov = level.provisional_pivot;
+        const tLast = timeAt(lastConfirmed.bar_index);
+        const tProv = timeAt(prov.bar_index);
+        if (tLast !== null && tProv !== null && (tProv as number) > (tLast as number)) {
+          const s = chart.addSeries(LineSeries, {
+            color, lineWidth: 2, lineStyle: LineStyle.Dashed,
+            priceLineVisible: false, lastValueVisible: false,
+          });
+          s.setData([
+            { time: tLast, value: lastConfirmed.price },
+            { time: tProv, value: prov.price },
+          ]);
+          overlaySeriesRef.current.push(s);
+          // Pine's red circle at the tip = "provisional / not yet
+          // confirmed". We reuse the level color so a user with Z1..Z5
+          // enabled can tell which level's tip is pending.
+          attachLabel(
+            tProv, prov.price, "●", color,
+            prov.direction === 1 ? "above" : "below"
+          );
+        }
+      }
+
+      if (showHhLl) {
+        for (const p of level.pivots) {
+          if (!p.swing_tag) continue;
+          const t = timeAt(p.bar_index);
+          if (t === null) continue;
+          attachLabel(t, p.price, p.swing_tag, color, p.direction === 1 ? "above" : "below");
+        }
+      }
+    }
+
+    // ── MOTIVE / ABC / FIB BAND / BREAK BOX (TS port) ──
+    if (!pineOutput) return;
+    for (const level of pineOutput.levels) {
+      const color = level.color;
+      // Elliott formations (motive + ABC + break box + markers) — a
+      // single toggle covers the whole family. Fib band has its own.
+      const motivesToDraw = showElliott
+        ? (onlyLatestMotive ? level.motives.slice(0, 1) : level.motives)
+        : [];
+      for (const mw of motivesToDraw) {
+        const pts: LineData[] = mw.anchors
+          .map((a) => {
+            const t = timeAt(a.bar_index);
+            return t === null ? null : { time: t, value: a.price };
+          })
+          .filter((x): x is LineData => x !== null);
+        const ptsClean = dedupeByTime(pts);
+        if (ptsClean.length < 2) continue;
+        const style = mw.live ? LineStyle.Solid : LineStyle.Dotted;
+        const s = chart.addSeries(LineSeries, {
+          color, lineWidth: 2, lineStyle: style,
+          priceLineVisible: false, lastValueVisible: false,
+        });
+        s.setData(ptsClean);
+        overlaySeriesRef.current.push(s);
+
+        if (mw.live) {
+          const labels = ["(1)", "(2)", "(3)", "(4)", "(5)"];
+          for (let i = 1; i < mw.anchors.length; i++) {
+            const a = mw.anchors[i];
+            if (a.hide_label) continue;
+            const t = timeAt(a.bar_index);
+            if (t === null) continue;
+            const aboveBar = (mw.direction === 1 && i % 2 === 1) || (mw.direction === -1 && i % 2 === 0);
+            const text = a.label_override ?? labels[i - 1];
+            attachLabel(t, a.price, text, color, aboveBar ? "above" : "below");
+          }
+        }
+
+        if (mw.abc) {
+          const abcPts: LineData[] = mw.abc.anchors
+            .map((a) => {
+              const t = timeAt(a.bar_index);
+              return t === null ? null : { time: t, value: a.price };
+            })
+            .filter((x): x is LineData => x !== null);
+          const abcClean = dedupeByTime(abcPts);
+          if (abcClean.length >= 2) {
+            const abcStyle = mw.abc.invalidated ? LineStyle.Dashed : LineStyle.Solid;
+            const abcSeries = chart.addSeries(LineSeries, {
+              color, lineWidth: 2, lineStyle: abcStyle,
+              priceLineVisible: false, lastValueVisible: false,
+            });
+            abcSeries.setData(abcClean);
+            overlaySeriesRef.current.push(abcSeries);
+          }
+          if (!mw.abc.invalidated) {
+            const abcLabels = ["(a)", "(b)", "(c)"];
+            for (let i = 1; i < mw.abc.anchors.length; i++) {
+              const a = mw.abc.anchors[i];
+              if (a.hide_label) continue;
+              const t = timeAt(a.bar_index);
+              if (t === null) continue;
+              const aboveBar = (mw.abc.direction === 1 && i % 2 === 1) || (mw.abc.direction === -1 && i % 2 === 0);
+              const text = a.label_override ?? abcLabels[i - 1];
+              attachLabel(t, a.price, text, color, aboveBar ? "above" : "below");
+            }
+          }
+        }
+
+        if (mw.break_box) {
+          const bx = mw.break_box;
+          const t1 = timeAt(bx.left_bar);
+          const t2 = timeAt(bx.right_bar);
+          if (t1 !== null && t2 !== null) {
+            const rect = new RectanglePrimitive({
+              time1: t1, time2: t2,
+              priceTop: bx.top, priceBottom: bx.bottom,
+              fillColor: `${color}1a`, borderColor: `${color}a6`, borderWidth: 1,
+            });
+            candleSeries.attachPrimitive(rect);
+            rectPrimitivesRef.current.push(rect);
+          }
+        }
+
+        if (mw.next_marker) {
+          const t = timeAt(mw.next_marker.bar_index);
+          if (t !== null) {
+            attachLabel(t, mw.next_marker.price, "•", color,
+              mw.next_marker.direction === 1 ? "above" : "below");
+          }
+        }
+      }
+
+      if (showElliott) {
+        for (const bm of level.break_markers) {
+          const t = timeAt(bm.bar_index);
+          if (t === null) continue;
+          attachLabel(t, bm.price, "✕", "#ef4444", bm.direction === 1 ? "above" : "below");
+        }
+      }
+
+      if (showFibBand && level.fib_band) {
+        const fb = level.fib_band;
+        const broken = fb.broken;
+        const fillColor = broken ? "#ef444420" : "#10b98120";
+        const tStart = timeAt(fb.x_anchor);
+        // Default: 5 bars past p5 so the band doesn't dominate the chart.
+        // `fibExtend` opts into Pine's ~10-bar extension + chart edge.
+        const shortEnd = fb.x_anchor + 5;
+        const tEnd = timeAt(fibExtend ? fb.x_far : shortEnd);
+        if (tStart !== null && tEnd !== null) {
+          const interp = (k: number) =>
+            fb.y_500 + (fb.y_854 - fb.y_500) * (k - 0.5) / (0.854 - 0.5);
+          const y_236 = interp(0.236);
+          const y_382 = interp(0.382);
+          const tuples: Array<[number, number, string]> = [
+            [y_236, 26, "0.236"],
+            [y_382, 38, "0.382"],
+            [fb.y_500, 50, "0.500"],
+            [fb.y_618, 62, "0.618"],
+            [fb.y_764, 76, "0.764"],
+            [fb.y_854, 85, "0.854"],
+          ];
+          for (const [price, alpha, label] of tuples) {
+            const segColor = `${color}${Math.round(alpha * 2.55).toString(16).padStart(2, "0")}`;
+            const s = chart.addSeries(LineSeries, {
+              color: segColor, lineWidth: 1,
+              lineStyle: broken ? LineStyle.Dotted : LineStyle.Solid,
+              priceLineVisible: false, lastValueVisible: false,
+            });
+            s.setData([
+              { time: tStart, value: price },
+              { time: tEnd, value: price },
+            ]);
+            overlaySeriesRef.current.push(s);
+            const labelPrim = new TextLabelPrimitive({
+              time: tEnd, price, text: label, color: segColor,
+              position: "above", fontSize: 9, offsetPx: 2, paddingPx: 2,
+              background: "#09090bcc",
+            });
+            candleSeries.attachPrimitive(labelPrim);
+            labelPrimitivesRef.current.push(labelPrim);
+          }
+          const rect = new RectanglePrimitive({
+            time1: tStart, time2: tEnd,
+            priceTop: Math.max(fb.y_764, fb.y_854),
+            priceBottom: Math.min(fb.y_764, fb.y_854),
+            fillColor, borderColor: fillColor, borderWidth: 0,
+          });
+          candleSeries.attachPrimitive(rect);
+          rectPrimitivesRef.current.push(rect);
+        }
+      }
+    }
+  }, [data.data, pineOutput, slots, showFibBand, showHhLl, onlyLatestMotive, showZigzag, showElliott, fibExtend]);
+
+  const venueList: VenueOpt[] = venues.data ?? [];
+  const venueOpt = useMemo(
+    () => venueList.find((v) => v.exchange === exchange && v.segment === segment),
+    [venueList, exchange, segment]
+  );
+  const updateSlot = (idx: number, patch: Partial<LevelSlot>) => {
+    setSlots((prev) => prev.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
+  };
+  const totalMotives = pineOutput
+    ? pineOutput.levels.reduce((s, l) => s + l.motives.length, 0)
+    : 0;
+
+  return (
+    <div className="flex h-full flex-col gap-3 p-3">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <select
+          className="rounded bg-zinc-900 px-2 py-1"
+          value={`${exchange}:${segment}`}
+          onChange={(e) => {
+            const [ex, sg] = e.target.value.split(":");
+            setExchange(ex); setSegment(sg);
+          }}
+        >
+          {venueList.map((v) => (
+            <option key={`${v.exchange}:${v.segment}`} value={`${v.exchange}:${v.segment}`}>
+              {v.exchange} · {v.segment}
+            </option>
+          ))}
+        </select>
+        <select
+          className="rounded bg-zinc-900 px-2 py-1"
+          value={symbol}
+          onChange={(e) => setSymbol(e.target.value)}
+        >
+          {(venueOpt?.symbols ?? [symbol]).map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+        <div className="flex gap-1">
+          {TIMEFRAMES.map((t) => (
+            <button
+              key={t}
+              onClick={() => setTf(t)}
+              className={`rounded px-2 py-1 text-xs ${tf === t ? "bg-zinc-700 text-white" : "bg-zinc-900 text-zinc-400"}`}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+        <div className="ml-4 flex flex-wrap items-center gap-3">
+          {slots.map((slot, idx) => (
+            <div key={idx} className="flex items-center gap-1 rounded bg-zinc-900 px-2 py-1 text-xs">
+              <input
+                type="checkbox"
+                checked={slot.enabled}
+                onChange={(e) => updateSlot(idx, { enabled: e.target.checked })}
+              />
+              <span className="font-mono text-zinc-400">{`Z${idx + 1}`}</span>
+              <input
+                type="number" min={1} max={256} step={1}
+                value={slot.length}
+                onChange={(e) => {
+                  const n = Math.max(1, Math.min(256, Number(e.target.value) || 1));
+                  updateSlot(idx, { length: n });
+                }}
+                className="w-14 rounded bg-zinc-800 px-1 text-right"
+              />
+              <input
+                type="color"
+                value={slot.color}
+                onChange={(e) => updateSlot(idx, { color: e.target.value })}
+                className="h-5 w-5 cursor-pointer rounded border-none bg-transparent p-0"
+              />
+            </div>
+          ))}
+          <label className="flex cursor-pointer items-center gap-1 text-xs">
+            <input type="checkbox" checked={showZigzag} onChange={(e) => setShowZigzag(e.target.checked)} />
+            Zigzag
+          </label>
+          <label className="flex cursor-pointer items-center gap-1 text-xs">
+            <input type="checkbox" checked={showElliott} onChange={(e) => setShowElliott(e.target.checked)} />
+            Elliott formations
+          </label>
+          <label className="flex cursor-pointer items-center gap-1 text-xs">
+            <input type="checkbox" checked={showFibBand} onChange={(e) => setShowFibBand(e.target.checked)} />
+            Fib band
+          </label>
+          <label className="flex cursor-pointer items-center gap-1 text-xs">
+            <input type="checkbox" checked={fibExtend} onChange={(e) => setFibExtend(e.target.checked)} />
+            Fib extend
+          </label>
+          <label className="flex cursor-pointer items-center gap-1 text-xs">
+            <input type="checkbox" checked={showHhLl} onChange={(e) => setShowHhLl(e.target.checked)} />
+            HH/HL/LL/LH
+          </label>
+          <label className="flex cursor-pointer items-center gap-1 text-xs">
+            <input type="checkbox" checked={onlyLatestMotive} onChange={(e) => setOnlyLatestMotive(e.target.checked)} />
+            Only latest motive
+          </label>
+        </div>
+        <div className="ml-auto text-xs text-zinc-500">
+          {data.isFetching ? "Fetching… " : ""}
+          {data.data && `${data.data.candles.length} candles · ${totalMotives} motive`}
+        </div>
+      </div>
+
+      <div ref={containerRef} className="flex-1 rounded border border-zinc-800" />
+
+      <div className="text-xs text-zinc-500">
+        Zigzag: <code className="rounded bg-zinc-900 px-1">GET /v2/zigzag/...</code> ·
+        Elliott: <code className="rounded bg-zinc-900 px-1">GET /v2/elliott/...</code>
+      </div>
+    </div>
+  );
+}

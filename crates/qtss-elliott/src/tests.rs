@@ -432,7 +432,7 @@ fn combo_skips_when_score_floor_too_high() {
 
 #[test]
 fn luxalgo_zigzag_pivot_detection() {
-    use crate::zigzag::{ZigZag, process_bar};
+    use crate::luxalgo_zigzag::{ZigZag, process_bar};
     use qtss_domain::v2::bar::Bar;
     use chrono::Utc;
 
@@ -472,7 +472,7 @@ fn luxalgo_zigzag_pivot_detection() {
 #[test]
 fn luxalgo_motive_wave_bullish() {
     use crate::motive::detect_motive;
-    use crate::zigzag::ZigZagPoint;
+    use crate::luxalgo_zigzag::ZigZagPoint;
 
     let points = vec![
         ZigZagPoint {
@@ -512,7 +512,7 @@ fn luxalgo_motive_wave_bullish() {
 #[test]
 fn luxalgo_corrective_wave_abc() {
     use crate::corrective::detect_corrective;
-    use crate::zigzag::ZigZagPoint;
+    use crate::luxalgo_zigzag::ZigZagPoint;
 
     let points = vec![
         ZigZagPoint {

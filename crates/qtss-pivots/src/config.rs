@@ -22,19 +22,20 @@ use crate::error::{PivotError, PivotResult};
 
 #[derive(Debug, Clone)]
 pub struct PivotConfig {
-    /// Pivot-window length per level (bars on each side). Index 0 = L0,
-    /// index 3 = L3. Must be strictly increasing.
+    /// Pivot-window `left` length per level. Index 0 = L0, index 4 = L4.
+    /// Must be strictly increasing so higher levels remain subsets of
+    /// lower ones.
     ///
-    /// Defaults `[4, 8, 16, 32]` mirror the LuxAlgo Elliott Waves
-    /// indicator's common multi-scale configuration.
-    pub lengths: [u32; 4],
+    /// Defaults `[3, 5, 8, 13, 21]` — five Fibonacci slots, matching
+    /// the `system_config.zigzag.slot_0..slot_4` seed.
+    pub lengths: [u32; 5],
 }
 
 impl PivotConfig {
-    /// Defaults — LuxAlgo Elliott Waves parity.
+    /// Defaults — five Fibonacci zigzag slots (3, 5, 8, 13, 21).
     pub fn defaults() -> Self {
         Self {
-            lengths: [4, 8, 16, 32],
+            lengths: [3, 5, 8, 13, 21],
         }
     }
 
@@ -47,7 +48,7 @@ impl PivotConfig {
                 )));
             }
         }
-        for i in 1..4 {
+        for i in 1..self.lengths.len() {
             if self.lengths[i] <= self.lengths[i - 1] {
                 return Err(PivotError::InvalidConfig(format!(
                     "lengths must be strictly increasing (level {i})"

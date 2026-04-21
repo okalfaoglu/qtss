@@ -87,16 +87,27 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn pivot_level_to_i16(level: PivotLevel) -> i16 {
+    match level {
+        PivotLevel::L0 => 0,
+        PivotLevel::L1 => 1,
+        PivotLevel::L2 => 2,
+        PivotLevel::L3 => 3,
+        PivotLevel::L4 => 4,
+    }
+}
+
 async fn list_series(
     pool: &PgPool,
     symbols: Option<&[String]>,
     intervals: Option<&[String]>,
 ) -> anyhow::Result<Vec<SeriesKey>> {
     let rows = sqlx::query(
-        r#"SELECT DISTINCT pc.exchange, pc.symbol, pc.timeframe AS interval
-             FROM pivot_cache pc
-            WHERE ($1::text[] IS NULL OR pc.symbol    = ANY($1))
-              AND ($2::text[] IS NULL OR pc.timeframe = ANY($2))
+        r#"SELECT DISTINCT es.exchange, es.symbol, es."interval" AS interval
+             FROM pivots p
+             JOIN engine_symbols es ON es.id = p.engine_symbol_id
+            WHERE ($1::text[] IS NULL OR es.symbol     = ANY($1))
+              AND ($2::text[] IS NULL OR es."interval" = ANY($2))
             ORDER BY 1, 2, 3"#,
     )
     .bind(symbols)
@@ -118,30 +129,36 @@ async fn load_pivots(
     s: &SeriesKey,
     level: PivotLevel,
 ) -> anyhow::Result<Vec<PivotRow>> {
+    let level_i: i16 = pivot_level_to_i16(level);
     let rows = sqlx::query(
-        r#"SELECT bar_index, open_time, price, kind, prominence, swing_type
-             FROM pivot_cache
-            WHERE exchange = $1 AND symbol = $2
-              AND timeframe = $3 AND level  = $4
-            ORDER BY bar_index ASC"#,
+        r#"SELECT p.bar_index, p.open_time, p.price, p.direction,
+                  p.prominence, p.swing_tag
+             FROM pivots p
+             JOIN engine_symbols es ON es.id = p.engine_symbol_id
+            WHERE es.exchange   = $1
+              AND es.symbol     = $2
+              AND es."interval" = $3
+              AND p.level       = $4
+            ORDER BY p.bar_index ASC"#,
     )
     .bind(&s.exchange)
     .bind(&s.symbol)
     .bind(&s.interval)
-    .bind(level.as_str())
+    .bind(level_i)
     .fetch_all(pool)
     .await?;
     Ok(rows
         .into_iter()
         .map(|r| {
-            let prominence: Option<Decimal> = r.get("prominence");
+            let prominence: Decimal = r.get("prominence");
+            let direction: i16 = r.get("direction");
             PivotRow {
                 bar_index: r.get("bar_index"),
                 open_time: r.get("open_time"),
                 price: r.get("price"),
-                kind: r.get("kind"),
-                prominence: prominence.and_then(|d| d.to_f64()),
-                swing_type: r.get("swing_type"),
+                kind: if direction >= 1 { "High".to_string() } else { "Low".to_string() },
+                prominence: prominence.to_f64(),
+                swing_type: r.get("swing_tag"),
             }
         })
         .collect())

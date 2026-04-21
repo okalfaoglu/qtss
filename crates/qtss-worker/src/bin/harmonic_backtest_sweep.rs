@@ -138,10 +138,11 @@ async fn list_series(
     let rows = sqlx::query(
         r#"SELECT DISTINCT mb.exchange, mb.segment, mb.symbol, mb.interval
              FROM market_bars mb
-             JOIN pivot_cache pc
-               ON pc.exchange = mb.exchange
-              AND pc.symbol   = mb.symbol
-              AND pc.timeframe = mb.interval
+             JOIN engine_symbols es
+               ON es.exchange = mb.exchange
+              AND es.symbol   = mb.symbol
+              AND es."interval" = mb.interval
+             JOIN pivots p ON p.engine_symbol_id = es.id
             WHERE ($1::text[] IS NULL OR mb.symbol   = ANY($1))
               AND ($2::text[] IS NULL OR mb.interval = ANY($2))
             ORDER BY mb.exchange, mb.symbol, mb.interval"#,
@@ -166,26 +167,33 @@ async fn load_pivots(
     s: &SeriesKey,
     level: &str,
 ) -> anyhow::Result<Vec<PivotRow>> {
+    let level_i: i16 = level[1..].parse().unwrap_or(0);
     let rows = sqlx::query(
-        r#"SELECT bar_index, open_time, price, kind
-             FROM pivot_cache
-            WHERE exchange = $1 AND symbol = $2
-              AND timeframe = $3 AND level  = $4
-            ORDER BY bar_index ASC"#,
+        r#"SELECT p.bar_index, p.open_time, p.price, p.direction
+             FROM pivots p
+             JOIN engine_symbols es ON es.id = p.engine_symbol_id
+            WHERE es.exchange   = $1
+              AND es.symbol     = $2
+              AND es."interval" = $3
+              AND p.level       = $4
+            ORDER BY p.bar_index ASC"#,
     )
     .bind(&s.exchange)
     .bind(&s.symbol)
     .bind(&s.interval)
-    .bind(level)
+    .bind(level_i)
     .fetch_all(pool)
     .await?;
     Ok(rows
         .into_iter()
-        .map(|r| PivotRow {
-            bar_index: r.get("bar_index"),
-            open_time: r.get("open_time"),
-            price: r.get("price"),
-            kind: r.get("kind"),
+        .map(|r| {
+            let direction: i16 = r.get("direction");
+            PivotRow {
+                bar_index: r.get("bar_index"),
+                open_time: r.get("open_time"),
+                price: r.get("price"),
+                kind: if direction >= 1 { "High".to_string() } else { "Low".to_string() },
+            }
         })
         .collect())
 }

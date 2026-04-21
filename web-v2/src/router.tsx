@@ -15,6 +15,7 @@ import { Drift } from "./pages/Drift";
 import { MonteCarlo } from "./pages/MonteCarlo";
 import { Regime } from "./pages/Regime";
 import { Chart } from "./pages/Chart";
+import { LuxAlgoChart } from "./pages/LuxAlgoChart";
 import { Detections } from "./pages/Detections";
 import { Tbm } from "./pages/Tbm";
 import { Onchain } from "./pages/Onchain";
@@ -48,45 +49,61 @@ function ProtectedRoute() {
   );
 }
 
-export const router = createBrowserRouter([
-  { path: "/login", element: <Login /> },
+export const router = createBrowserRouter(
+  [
+    { path: "/login", element: <Login /> },
+    {
+      path: "/v2",
+      element: <ProtectedRoute />,
+      children: [
+        { index: true, element: <Navigate to="dashboard" replace /> },
+        { path: "dashboard", element: <Dashboard /> },
+        { path: "risk", element: <Risk /> },
+        { path: "blotter", element: <Blotter /> },
+        { path: "backtest", element: <Backtest /> },
+        { path: "setups", element: <Setups /> },
+        { path: "setup-rejections", element: <SetupRejections /> },
+        { path: "training-set", element: <TrainingSet /> },
+        { path: "models", element: <Models /> },
+        { path: "drift", element: <Drift /> },
+        { path: "montecarlo", element: <MonteCarlo /> },
+        { path: "regime", element: <Regime /> },
+        { path: "chart", element: <Chart /> },
+        { path: "elliott", element: <LuxAlgoChart /> },
+        { path: "detections", element: <Detections /> },
+        { path: "tbm", element: <Tbm /> },
+        { path: "onchain", element: <Onchain /> },
+        { path: "scenarios", element: <Scenarios /> },
+        { path: "config", element: <Config /> },
+        { path: "reconcile", element: <Reconcile /> },
+        { path: "ai-decisions", element: <AiDecisions /> },
+        { path: "audit", element: <Audit /> },
+        { path: "users", element: <Users /> },
+        { path: "engine-symbols", element: <EngineSymbols /> },
+        { path: "wave-tree", element: <WaveTree /> },
+        { path: "wyckoff", element: <Wyckoff /> },
+        { path: "ai-shadow", element: <AiShadow /> },
+        { path: "feature-inspector", element: <FeatureInspector /> },
+        { path: "reports/backtest", element: <Reports /> },
+        { path: "reports/performance", element: <PerformanceReport /> },
+        { path: "reversal-radar", element: <ReversalRadar /> },
+        { path: "symbols", element: <Symbols /> },
+      ],
+    },
+    { path: "/", element: <Navigate to="/v2/dashboard" replace /> },
+    { path: "*", element: <Navigate to="/v2/dashboard" replace /> },
+  ],
   {
-    path: "/v2",
-    element: <ProtectedRoute />,
-    children: [
-      { index: true, element: <Navigate to="dashboard" replace /> },
-      { path: "dashboard", element: <Dashboard /> },
-      { path: "risk", element: <Risk /> },
-      { path: "blotter", element: <Blotter /> },
-      { path: "backtest", element: <Backtest /> },
-      { path: "setups", element: <Setups /> },
-      { path: "setup-rejections", element: <SetupRejections /> },
-      { path: "training-set", element: <TrainingSet /> },
-      { path: "models", element: <Models /> },
-      { path: "drift", element: <Drift /> },
-      { path: "montecarlo", element: <MonteCarlo /> },
-      { path: "regime", element: <Regime /> },
-      { path: "chart", element: <Chart /> },
-      { path: "detections", element: <Detections /> },
-      { path: "tbm", element: <Tbm /> },
-      { path: "onchain", element: <Onchain /> },
-      { path: "scenarios", element: <Scenarios /> },
-      { path: "config", element: <Config /> },
-      { path: "reconcile", element: <Reconcile /> },
-      { path: "ai-decisions", element: <AiDecisions /> },
-      { path: "audit", element: <Audit /> },
-      { path: "users", element: <Users /> },
-      { path: "engine-symbols", element: <EngineSymbols /> },
-      { path: "wave-tree", element: <WaveTree /> },
-      { path: "wyckoff", element: <Wyckoff /> },
-      { path: "ai-shadow", element: <AiShadow /> },
-      { path: "feature-inspector", element: <FeatureInspector /> },
-      { path: "reports/backtest", element: <Reports /> },
-      { path: "reports/performance", element: <PerformanceReport /> },
-      { path: "reversal-radar", element: <ReversalRadar /> },
-      { path: "symbols", element: <Symbols /> },
-    ],
-  },
-  { path: "/", element: <Navigate to="/v2/dashboard" replace /> },
-  { path: "*", element: <Navigate to="/v2/dashboard" replace /> },
-]);
+    // Opt into router-level v7 behaviors while still on v6.28 (relative
+    // splat resolution, fetcher persistence, normalized form methods,
+    // partial hydration, no revalidation on action errors). The
+    // `v7_startTransition` flag lives on <RouterProvider/> — see main.tsx.
+    future: {
+      v7_relativeSplatPath: true,
+      v7_fetcherPersist: true,
+      v7_normalizeFormMethod: true,
+      v7_partialHydration: true,
+      v7_skipActionErrorRevalidation: true,
+    },
+  }
+);

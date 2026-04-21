@@ -51,10 +51,17 @@ pub enum PivotLevel {
     L1,
     L2,
     L3,
+    L4,
 }
 
 impl PivotLevel {
-    pub const ALL: [PivotLevel; 4] = [PivotLevel::L0, PivotLevel::L1, PivotLevel::L2, PivotLevel::L3];
+    pub const ALL: [PivotLevel; 5] = [
+        PivotLevel::L0,
+        PivotLevel::L1,
+        PivotLevel::L2,
+        PivotLevel::L3,
+        PivotLevel::L4,
+    ];
 
     pub fn as_index(self) -> usize {
         match self {
@@ -62,18 +69,20 @@ impl PivotLevel {
             PivotLevel::L1 => 1,
             PivotLevel::L2 => 2,
             PivotLevel::L3 => 3,
+            PivotLevel::L4 => 4,
         }
     }
 
-    /// Canonical DB/JSON string form. Matches migration 0192's
-    /// `qtss_v2_detections.pivot_level` CHECK ('L0'..'L3') and the
-    /// harmonic backtest sweep's level filter.
+    /// Canonical DB/JSON string form. Matches the `pivots` table
+    /// `level` CHECK (0..4) and the detections table
+    /// `pivot_level` CHECK ('L0'..'L4').
     pub fn as_str(self) -> &'static str {
         match self {
             PivotLevel::L0 => "L0",
             PivotLevel::L1 => "L1",
             PivotLevel::L2 => "L2",
             PivotLevel::L3 => "L3",
+            PivotLevel::L4 => "L4",
         }
     }
 }
@@ -100,17 +109,23 @@ pub struct Pivot {
 /// The `qtss-pivots` builder enforces this; consumers may rely on it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PivotTree {
-    levels: [Vec<Pivot>; 4],
+    levels: [Vec<Pivot>; 5],
 }
 
 impl PivotTree {
-    pub fn new(l0: Vec<Pivot>, l1: Vec<Pivot>, l2: Vec<Pivot>, l3: Vec<Pivot>) -> Self {
-        Self { levels: [l0, l1, l2, l3] }
+    pub fn new(
+        l0: Vec<Pivot>,
+        l1: Vec<Pivot>,
+        l2: Vec<Pivot>,
+        l3: Vec<Pivot>,
+        l4: Vec<Pivot>,
+    ) -> Self {
+        Self { levels: [l0, l1, l2, l3, l4] }
     }
 
     pub fn empty() -> Self {
         Self {
-            levels: [vec![], vec![], vec![], vec![]],
+            levels: [vec![], vec![], vec![], vec![], vec![]],
         }
     }
 

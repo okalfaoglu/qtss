@@ -35,8 +35,8 @@ pub struct ProvisionalPivot {
 pub struct PivotEngine {
     bar_index: u64,
     last_time: Option<chrono::DateTime<chrono::Utc>>,
-    zigzags: [ZigZag; 4],
-    confirmed: [Vec<Pivot>; 4],
+    zigzags: [ZigZag; 5],
+    confirmed: [Vec<Pivot>; 5],
 }
 
 impl PivotEngine {
@@ -48,12 +48,13 @@ impl PivotEngine {
             ZigZag::with_length(l[1]),
             ZigZag::with_length(l[2]),
             ZigZag::with_length(l[3]),
+            ZigZag::with_length(l[4]),
         ];
         Ok(Self {
             bar_index: 0,
             last_time: None,
             zigzags,
-            confirmed: [vec![], vec![], vec![], vec![]],
+            confirmed: [vec![], vec![], vec![], vec![], vec![]],
         })
     }
 
@@ -81,10 +82,40 @@ impl PivotEngine {
         let mut emitted = Vec::new();
         for (i, level) in PivotLevel::ALL.into_iter().enumerate() {
             if let Some(cp) = self.zigzags[i].push(&sample) {
+                // Pine zigzag alternance: same-direction runs collapse
+                // to the more extreme candidate. Without this, two
+                // consecutive highs (or lows) from the same swing end
+                // up in `confirmed[i]`, which breaks the H/L/H/L
+                // invariant every downstream detector assumes.
+                let last_same_kind = self
+                    .confirmed[i]
+                    .last()
+                    .map(|p| p.kind == cp.kind)
+                    .unwrap_or(false);
                 let mut pivot = build_pivot(&cp, level);
-                pivot.swing_type = classify_swing(&self.confirmed[i], &pivot);
-                self.confirmed[i].push(pivot.clone());
-                emitted.push(NewPivot { level, pivot });
+                if last_same_kind {
+                    let last = self.confirmed[i].last().unwrap();
+                    let keep_new = match cp.kind {
+                        qtss_domain::v2::pivot::PivotKind::High => pivot.price >= last.price,
+                        qtss_domain::v2::pivot::PivotKind::Low => pivot.price <= last.price,
+                    };
+                    if !keep_new {
+                        continue;
+                    }
+                    // Replace in place — swing_type classification
+                    // looks at pivots before this one.
+                    let before: Vec<Pivot> = self.confirmed[i]
+                        [..self.confirmed[i].len() - 1]
+                        .to_vec();
+                    pivot.swing_type = classify_swing(&before, &pivot);
+                    let idx = self.confirmed[i].len() - 1;
+                    self.confirmed[i][idx] = pivot.clone();
+                    emitted.push(NewPivot { level, pivot });
+                } else {
+                    pivot.swing_type = classify_swing(&self.confirmed[i], &pivot);
+                    self.confirmed[i].push(pivot.clone());
+                    emitted.push(NewPivot { level, pivot });
+                }
             }
         }
         Ok(emitted)
@@ -97,13 +128,14 @@ impl PivotEngine {
             self.confirmed[1].clone(),
             self.confirmed[2].clone(),
             self.confirmed[3].clone(),
+            self.confirmed[4].clone(),
         )
     }
 
     /// Provisional (unconfirmed) running extreme per level. Never fed
     /// into detectors; render-only.
-    pub fn provisional_extremes(&self) -> [Option<ProvisionalPivot>; 4] {
-        let mut out: [Option<ProvisionalPivot>; 4] = [None, None, None, None];
+    pub fn provisional_extremes(&self) -> [Option<ProvisionalPivot>; 5] {
+        let mut out: [Option<ProvisionalPivot>; 5] = [None, None, None, None, None];
         for (i, level) in PivotLevel::ALL.into_iter().enumerate() {
             if let Some(e) = self.zigzags[i].provisional_extreme() {
                 out[i] = Some(ProvisionalPivot { level, extreme: e });

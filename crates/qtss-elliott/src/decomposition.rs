@@ -34,6 +34,7 @@ fn next_finer(level: PivotLevel) -> Option<PivotLevel> {
         PivotLevel::L1 => Some(PivotLevel::L0),
         PivotLevel::L2 => Some(PivotLevel::L1),
         PivotLevel::L3 => Some(PivotLevel::L2),
+        PivotLevel::L4 => Some(PivotLevel::L3),
     }
 }
 

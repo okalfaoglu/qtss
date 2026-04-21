@@ -144,8 +144,8 @@ fn kill_worker_processes(dry_run: bool) {
 const WIPE_TABLES: &[(&str, bool)] = &[
     // Candle data
     ("market_bars", false),
-    // Pivot / zigzag
-    ("pivot_cache", true),
+    // Pivot / zigzag — canonical `pivots` table (pivot_cache retired).
+    ("pivots", true),
     // Elliott / wave
     ("qtss_v2_detections", true),
     ("qtss_v2_detection_outcomes", true),
@@ -278,7 +278,7 @@ async fn verify_clean(pool: &PgPool) -> bool {
 
     let critical_tables = [
         "market_bars",
-        "pivot_cache",
+        "pivots",
         "qtss_v2_detections",
         "wave_chain",
         "regime_snapshots",

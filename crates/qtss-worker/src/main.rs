@@ -76,7 +76,7 @@ mod v2_backtest_setup_loop;
 mod wyckoff_setup_loop;
 mod wyckoff_setup_invalidation_loop;
 mod regime_deep_loop;
-mod pivot_historical_backfill;
+mod pivot_writer_loop;
 mod historical_progressive_scan;
 mod data_health_report;
 
@@ -90,7 +90,7 @@ use chrono::{TimeZone, Utc};
 use anyhow::Context;
 use futures_util::{SinkExt, StreamExt};
 use qtss_binance::{
-    connect_url, kline_stream_path, parse_closed_kline_json, public_spot_combined_kline_url,
+    connect_url, kline_stream_path, parse_kline_frame_json, public_spot_combined_kline_url,
     public_spot_combined_streams_url, public_spot_kline_url, public_usdm_combined_kline_url,
     public_usdm_combined_streams_url, public_usdm_kline_url,
 };
@@ -99,6 +99,7 @@ use qtss_domain::ExchangeId;
 use qtss_storage::{
     create_pool, list_enabled_engine_symbols, resolve_worker_tick_secs, run_migrations,
     resolve_system_csv, resolve_system_string, upsert_market_bar, MarketBarUpsert,
+    market_bars_open::{upsert_open_bar, OpenBarUpsert},
     PnlRollupRepository,
 };
 use rust_decimal::Decimal;
@@ -471,10 +472,8 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(ai_tactical_executor::ai_tactical_executor_loop(ai_exec_pool));
         let regime_pool = pool.clone();
         tokio::spawn(regime_deep_loop::regime_deep_loop(regime_pool));
-        let pivot_bf_pool = pool.clone();
-        tokio::spawn(pivot_historical_backfill::pivot_historical_backfill_loop(
-            pivot_bf_pool,
-        ));
+        let pivot_writer_pool = pool.clone();
+        tokio::spawn(pivot_writer_loop::pivot_writer_loop(pivot_writer_pool));
         let hps_pool = pool.clone();
         tokio::spawn(
             historical_progressive_scan::historical_progressive_scan_loop(hps_pool),
@@ -740,13 +739,16 @@ fn decimal_field(s: &str, field: &'static str) -> Option<Decimal> {
     }
 }
 
-async fn persist_kline_closed_bar(
+async fn persist_kline_frame(
     pool: &PgPool,
     exchange: &str,
     seg_db: &str,
-    k: &qtss_binance::ws_kline::ClosedKline,
+    k: &qtss_binance::ws_kline::KlineFrame,
 ) -> Result<(), qtss_storage::StorageError> {
     let Some(ot) = Utc.timestamp_millis_opt(k.open_time_ms).single() else {
+        return Ok(());
+    };
+    let Some(ct) = Utc.timestamp_millis_opt(k.close_time_ms).single() else {
         return Ok(());
     };
     let Some(open) = decimal_field(&k.open, "open") else {
@@ -769,6 +771,33 @@ async fn persist_kline_closed_bar(
         .as_deref()
         .and_then(|q| decimal_field(q, "quote_volume"));
     let trade_count = k.trade_count.map(|n| n as i64);
+
+    // Live ticker row — always overwritten, regardless of finality. Lets
+    // the chart endpoints paint the current bar without waiting for the
+    // close. When a bar just closed, the next open-bar frame (one second
+    // later at most) overwrites this row with the new forming bar.
+    let open_row = OpenBarUpsert {
+        exchange: exchange.to_string(),
+        segment: seg_db.to_string(),
+        symbol: k.symbol.clone(),
+        interval: k.interval.clone(),
+        open_time: ot,
+        close_time: ct,
+        open,
+        high,
+        low,
+        close,
+        volume,
+        trade_count: trade_count.unwrap_or(0),
+    };
+    if let Err(e) = upsert_open_bar(pool, &open_row).await {
+        warn!(%e, symbol = %k.symbol, "market_bars_open upsert");
+    }
+
+    // Archive write — only on final frames. Closed bars are immutable.
+    if !k.is_final {
+        return Ok(());
+    }
     let row = MarketBarUpsert {
         exchange: exchange.to_string(),
         segment: seg_db.to_string(),
@@ -812,12 +841,12 @@ async fn multi_kline_ws_streams_loop(
                     match msg {
                         Ok(Message::Text(t)) => {
                             if let Some(pool) = pool.as_ref() {
-                                if let Some(k) = parse_closed_kline_json(&t) {
+                                if let Some(k) = parse_kline_frame_json(&t) {
                                     if let Err(e) =
-                                        persist_kline_closed_bar(pool, exchange.as_str(), seg_db, &k).await
+                                        persist_kline_frame(pool, exchange.as_str(), seg_db, &k).await
                                     {
                                         warn!(%e, symbol = %k.symbol, "market_bars upsert");
-                                    } else {
+                                    } else if k.is_final {
                                         tracing::debug!(symbol = %k.symbol, interval = %k.interval, "mum yazıldı");
                                     }
                                 }
@@ -864,12 +893,12 @@ async fn multi_kline_ws_loop(
                     match msg {
                         Ok(Message::Text(t)) => {
                             if let Some(pool) = pool.as_ref() {
-                                if let Some(k) = parse_closed_kline_json(&t) {
+                                if let Some(k) = parse_kline_frame_json(&t) {
                                     if let Err(e) =
-                                        persist_kline_closed_bar(pool, exchange.as_str(), seg_db, &k).await
+                                        persist_kline_frame(pool, exchange.as_str(), seg_db, &k).await
                                     {
                                         warn!(%e, symbol = %k.symbol, "market_bars upsert");
-                                    } else {
+                                    } else if k.is_final {
                                         tracing::debug!(symbol = %k.symbol, "mum yazıldı");
                                     }
                                 }
@@ -916,12 +945,12 @@ async fn kline_ws_loop(
                     match msg {
                         Ok(Message::Text(t)) => {
                             if let Some(pool) = pool.as_ref() {
-                                if let Some(k) = parse_closed_kline_json(&t) {
+                                if let Some(k) = parse_kline_frame_json(&t) {
                                     if let Err(e) =
-                                        persist_kline_closed_bar(pool, exchange.as_str(), seg_db, &k).await
+                                        persist_kline_frame(pool, exchange.as_str(), seg_db, &k).await
                                     {
                                         warn!(%e, symbol = %k.symbol, "market_bars upsert");
-                                    } else {
+                                    } else if k.is_final {
                                         info!(symbol = %k.symbol, interval = %k.interval, "mum yazıldı");
                                     }
                                 }

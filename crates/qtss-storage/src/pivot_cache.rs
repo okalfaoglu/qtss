@@ -1,15 +1,26 @@
-//! CRUD for `pivot_cache` — pre-computed pivot points from historical bars.
+//! Thin read-shim over the canonical `pivots` table (+ `engine_symbols`
+//! for key translation), preserving the `PivotCacheRow` row shape and
+//! call signatures used by the orchestrator, API, and backtest sweeps.
 //!
-//! The pivot cache eliminates redundant re-computation: the detection
-//! orchestrator reads cached pivots instead of rebuilding the full
-//! PivotTree from bars on every tick. Only new (uncached) bars need
-//! pivot extraction.
+//! The old `pivot_cache` physical table has been dropped — everything
+//! now reads the LuxAlgo zigzag output written by `pivot_writer_loop`.
+//! Key translation:
+//!
+//!   (exchange, symbol, timeframe) + level text "L0".."L4"
+//!      ↕
+//!   engine_symbols.id (+ matching segment) × pivots.level SMALLINT 0..4
+//!
+//! Direction: `pivots.direction` is +1 / -1; this shim maps it back to
+//! "High" / "Low" strings so the call sites that still key on text kind
+//! don't have to change in this patch.
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use sqlx::PgPool;
 
-/// Row shape for upserting into `pivot_cache`.
+/// Legacy row shape. Only the read path is preserved; there is no
+/// upsert — the `pivot_writer_loop` owns all writes to the underlying
+/// `pivots` table.
 #[derive(Debug, Clone)]
 pub struct PivotCacheRow {
     pub exchange: String,
@@ -25,144 +36,32 @@ pub struct PivotCacheRow {
     pub swing_type: Option<String>,
 }
 
-/// Upsert a single pivot into the cache (idempotent).
-pub async fn upsert_pivot_cache(pool: &PgPool, row: &PivotCacheRow) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        r#"
-        INSERT INTO pivot_cache
-            (exchange, symbol, timeframe, level, bar_index, open_time,
-             price, kind, prominence, volume_at_pivot, swing_type, computed_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
-        ON CONFLICT (exchange, symbol, timeframe, level, bar_index)
-        DO UPDATE SET
-            price = EXCLUDED.price,
-            kind = EXCLUDED.kind,
-            prominence = EXCLUDED.prominence,
-            volume_at_pivot = EXCLUDED.volume_at_pivot,
-            swing_type = EXCLUDED.swing_type,
-            computed_at = now()
-        "#,
-    )
-    .bind(&row.exchange)
-    .bind(&row.symbol)
-    .bind(&row.timeframe)
-    .bind(&row.level)
-    .bind(row.bar_index)
-    .bind(row.open_time)
-    .bind(row.price)
-    .bind(&row.kind)
-    .bind(row.prominence)
-    .bind(row.volume_at_pivot)
-    .bind(&row.swing_type)
-    .execute(pool)
-    .await?;
-    Ok(())
+/// Parse legacy level string "L0".."L4" to SMALLINT 0..4.
+/// Unknown strings map to `None` — callers get an empty result, matching
+/// the pre-migration "no rows for that level" behaviour.
+fn level_to_smallint(level: &str) -> Option<i16> {
+    match level {
+        "L0" => Some(0),
+        "L1" => Some(1),
+        "L2" => Some(2),
+        "L3" => Some(3),
+        "L4" => Some(4),
+        _ => None,
+    }
 }
 
-/// Batch upsert pivots in a **single** statement via `UNNEST` of parallel
-/// arrays. Replaces the earlier row-by-row loop which, when run
-/// concurrently by the backfill worker and the live detection
-/// orchestrator, serialised on the unique-index row lock and produced
-/// 4 s single-row waits (sqlx slow-statement alerts).
-///
-/// Why UNNEST instead of multi-VALUES: bind-count stays at 11 (one
-/// array per column) regardless of batch size, well under Postgres'
-/// 65 535 parameter ceiling, and lets us send ~10k pivots per round
-/// trip without any string templating.
-pub async fn upsert_pivot_cache_batch(
-    pool: &PgPool,
-    rows: &[PivotCacheRow],
-) -> Result<u64, sqlx::Error> {
-    if rows.is_empty() {
-        return Ok(0);
-    }
-
-    // Cap per-statement batch. A 130k-row UNNEST took ~5 s of row-lock
-    // hold time, which blocked concurrent live upserts (sqlx slow-
-    // statement alert). Chunking keeps each statement sub-second and
-    // lets the live orchestrator slot in between chunks.
-    const CHUNK: usize = 5_000;
-    if rows.len() > CHUNK {
-        let mut total = 0u64;
-        for c in rows.chunks(CHUNK) {
-            total += upsert_pivot_cache_batch_inner(pool, c).await?;
-        }
-        return Ok(total);
-    }
-    upsert_pivot_cache_batch_inner(pool, rows).await
+fn smallint_to_level(level: i16) -> String {
+    format!("L{level}")
 }
 
-async fn upsert_pivot_cache_batch_inner(
-    pool: &PgPool,
-    rows: &[PivotCacheRow],
-) -> Result<u64, sqlx::Error> {
-    let n = rows.len();
-    let mut exchange   = Vec::with_capacity(n);
-    let mut symbol     = Vec::with_capacity(n);
-    let mut timeframe  = Vec::with_capacity(n);
-    let mut level      = Vec::with_capacity(n);
-    let mut bar_index  = Vec::with_capacity(n);
-    let mut open_time  = Vec::with_capacity(n);
-    let mut price      = Vec::with_capacity(n);
-    let mut kind       = Vec::with_capacity(n);
-    let mut prominence = Vec::with_capacity(n);
-    let mut vol_at     = Vec::with_capacity(n);
-    let mut swing_type = Vec::with_capacity(n);
-
-    for r in rows {
-        exchange.push(r.exchange.clone());
-        symbol.push(r.symbol.clone());
-        timeframe.push(r.timeframe.clone());
-        level.push(r.level.clone());
-        bar_index.push(r.bar_index);
-        open_time.push(r.open_time);
-        price.push(r.price);
-        kind.push(r.kind.clone());
-        prominence.push(r.prominence);
-        vol_at.push(r.volume_at_pivot);
-        swing_type.push(r.swing_type.clone());
-    }
-
-    let res = sqlx::query(
-        r#"
-        INSERT INTO pivot_cache
-            (exchange, symbol, timeframe, level, bar_index, open_time,
-             price, kind, prominence, volume_at_pivot, swing_type, computed_at)
-        SELECT * FROM UNNEST(
-            $1::text[],  $2::text[],  $3::text[],  $4::text[],  $5::bigint[],
-            $6::timestamptz[], $7::numeric[], $8::text[], $9::numeric[],
-            $10::numeric[], $11::text[]
-        ) AS t(exchange, symbol, timeframe, level, bar_index, open_time,
-               price, kind, prominence, volume_at_pivot, swing_type)
-        CROSS JOIN LATERAL (SELECT now() AS computed_at) c
-        ON CONFLICT (exchange, symbol, timeframe, level, bar_index)
-        DO UPDATE SET
-            price           = EXCLUDED.price,
-            kind            = EXCLUDED.kind,
-            prominence      = EXCLUDED.prominence,
-            volume_at_pivot = EXCLUDED.volume_at_pivot,
-            swing_type      = EXCLUDED.swing_type,
-            computed_at     = now()
-        "#,
-    )
-    .bind(&exchange)
-    .bind(&symbol)
-    .bind(&timeframe)
-    .bind(&level)
-    .bind(&bar_index)
-    .bind(&open_time)
-    .bind(&price)
-    .bind(&kind)
-    .bind(&prominence)
-    .bind(&vol_at)
-    .bind(&swing_type)
-    .execute(pool)
-    .await?;
-
-    Ok(res.rows_affected())
+fn direction_to_kind(direction: i16) -> String {
+    if direction >= 1 { "High".to_string() } else { "Low".to_string() }
 }
 
-/// Read cached pivots for a series, ordered by bar_index ascending.
+/// Read pivots for a series + level, in ascending bar_index order.
+/// Segment defaults to `futures` — matches every call site that
+/// previously assumed USDT-M futures. Spot-aware callers should switch
+/// to a segment-explicit helper once one exists.
 pub async fn list_pivot_cache(
     pool: &PgPool,
     exchange: &str,
@@ -171,46 +70,58 @@ pub async fn list_pivot_cache(
     level: &str,
     limit: i64,
 ) -> Result<Vec<PivotCacheRow>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, (String, String, String, String, i64, DateTime<Utc>, Decimal, String, Decimal, Decimal, Option<String>)>(
+    let Some(level_i) = level_to_smallint(level) else {
+        return Ok(Vec::new());
+    };
+    let rows = sqlx::query_as::<
+        _,
+        (i64, DateTime<Utc>, Decimal, i16, Decimal, Decimal, Option<String>),
+    >(
         r#"
-        SELECT exchange, symbol, timeframe, level, bar_index, open_time,
-               price, kind, prominence, volume_at_pivot, swing_type
-        FROM pivot_cache
-        WHERE exchange = $1 AND symbol = $2 AND timeframe = $3 AND level = $4
-        ORDER BY bar_index ASC
-        LIMIT $5
+        SELECT p.bar_index, p.open_time, p.price, p.direction,
+               p.prominence, p.volume, p.swing_tag
+          FROM pivots p
+          JOIN engine_symbols es ON es.id = p.engine_symbol_id
+         WHERE es.exchange   = $1
+           AND es.symbol     = $2
+           AND es."interval" = $3
+           AND p.level       = $4
+         ORDER BY p.bar_index ASC
+         LIMIT $5
         "#,
     )
     .bind(exchange)
     .bind(symbol)
     .bind(timeframe)
-    .bind(level)
+    .bind(level_i)
     .bind(limit)
     .fetch_all(pool)
     .await?;
 
     Ok(rows
         .into_iter()
-        .map(|(exchange, symbol, timeframe, level, bar_index, open_time, price, kind, prominence, volume_at_pivot, swing_type)| {
+        .map(|(bar_index, open_time, price, direction, prominence, volume, swing_tag)| {
             PivotCacheRow {
-                exchange,
-                symbol,
-                timeframe,
-                level,
+                exchange: exchange.to_string(),
+                symbol: symbol.to_string(),
+                timeframe: timeframe.to_string(),
+                level: smallint_to_level(level_i),
                 bar_index,
                 open_time,
                 price,
-                kind,
+                kind: direction_to_kind(direction),
                 prominence,
-                volume_at_pivot,
-                swing_type,
+                volume_at_pivot: volume,
+                swing_type: swing_tag,
             }
         })
         .collect())
 }
 
-/// Get the highest bar_index in cache for a series/level.
-/// Returns None if the cache is empty for this series.
+/// Max `bar_index` on a series/level. Returns `None` when no pivots
+/// exist yet — used by the live orchestrator as a watermark for the
+/// retired pivot_cache write path (kept for API compatibility; the
+/// writer loop is now authoritative).
 pub async fn max_cached_bar_index(
     pool: &PgPool,
     exchange: &str,
@@ -218,112 +129,30 @@ pub async fn max_cached_bar_index(
     timeframe: &str,
     level: &str,
 ) -> Result<Option<i64>, sqlx::Error> {
+    let Some(level_i) = level_to_smallint(level) else {
+        return Ok(None);
+    };
     let row: (Option<i64>,) = sqlx::query_as(
         r#"
-        SELECT MAX(bar_index)
-        FROM pivot_cache
-        WHERE exchange = $1 AND symbol = $2 AND timeframe = $3 AND level = $4
+        SELECT MAX(p.bar_index)
+          FROM pivots p
+          JOIN engine_symbols es ON es.id = p.engine_symbol_id
+         WHERE es.exchange   = $1
+           AND es.symbol     = $2
+           AND es."interval" = $3
+           AND p.level       = $4
         "#,
     )
     .bind(exchange)
     .bind(symbol)
     .bind(timeframe)
-    .bind(level)
+    .bind(level_i)
     .fetch_one(pool)
     .await?;
     Ok(row.0)
 }
 
-/// Delete all cached pivots for a series across every level. Used by the
-/// historical backfill worker before a clean rebuild — prior rows were
-/// written by the live orchestrator under rolling-window bar_index
-/// semantics and are inconsistent with the GLOBAL bar_index assigned
-/// during a full replay.
-pub async fn delete_pivot_cache_for_series(
-    pool: &PgPool,
-    exchange: &str,
-    symbol: &str,
-    timeframe: &str,
-) -> Result<u64, sqlx::Error> {
-    let res = sqlx::query(
-        r#"DELETE FROM pivot_cache
-           WHERE exchange = $1 AND symbol = $2 AND timeframe = $3"#,
-    )
-    .bind(exchange)
-    .bind(symbol)
-    .bind(timeframe)
-    .execute(pool)
-    .await?;
-    Ok(res.rows_affected())
-}
-
-/// Cursor row for the pivot historical backfill worker.
-#[derive(Debug, Clone)]
-pub struct PivotBackfillState {
-    pub exchange: String,
-    pub segment: String,
-    pub symbol: String,
-    pub timeframe: String,
-    pub last_open_time: DateTime<Utc>,
-    pub bars_processed: i64,
-    pub pivots_written: i64,
-}
-
-pub async fn get_pivot_backfill_state(
-    pool: &PgPool,
-    exchange: &str,
-    segment: &str,
-    symbol: &str,
-    timeframe: &str,
-) -> Result<Option<PivotBackfillState>, sqlx::Error> {
-    let row: Option<(String, String, String, String, DateTime<Utc>, i64, i64)> = sqlx::query_as(
-        r#"SELECT exchange, segment, symbol, timeframe,
-                  last_open_time, bars_processed, pivots_written
-           FROM pivot_backfill_state
-           WHERE exchange = $1 AND segment = $2 AND symbol = $3 AND timeframe = $4"#,
-    )
-    .bind(exchange)
-    .bind(segment)
-    .bind(symbol)
-    .bind(timeframe)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.map(|(exchange, segment, symbol, timeframe, last_open_time, bars_processed, pivots_written)| {
-        PivotBackfillState {
-            exchange, segment, symbol, timeframe,
-            last_open_time, bars_processed, pivots_written,
-        }
-    }))
-}
-
-pub async fn upsert_pivot_backfill_state(
-    pool: &PgPool,
-    s: &PivotBackfillState,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        r#"INSERT INTO pivot_backfill_state
-               (exchange, segment, symbol, timeframe,
-                last_open_time, bars_processed, pivots_written, completed_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-           ON CONFLICT (exchange, segment, symbol, timeframe) DO UPDATE SET
-               last_open_time  = EXCLUDED.last_open_time,
-               bars_processed  = EXCLUDED.bars_processed,
-               pivots_written  = EXCLUDED.pivots_written,
-               completed_at    = now()"#,
-    )
-    .bind(&s.exchange)
-    .bind(&s.segment)
-    .bind(&s.symbol)
-    .bind(&s.timeframe)
-    .bind(s.last_open_time)
-    .bind(s.bars_processed)
-    .bind(s.pivots_written)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-/// Count cached pivots for a series/level.
+/// Count pivots for a series/level.
 pub async fn count_pivot_cache(
     pool: &PgPool,
     exchange: &str,
@@ -331,17 +160,24 @@ pub async fn count_pivot_cache(
     timeframe: &str,
     level: &str,
 ) -> Result<i64, sqlx::Error> {
+    let Some(level_i) = level_to_smallint(level) else {
+        return Ok(0);
+    };
     let row: (i64,) = sqlx::query_as(
         r#"
         SELECT COUNT(*)
-        FROM pivot_cache
-        WHERE exchange = $1 AND symbol = $2 AND timeframe = $3 AND level = $4
+          FROM pivots p
+          JOIN engine_symbols es ON es.id = p.engine_symbol_id
+         WHERE es.exchange   = $1
+           AND es.symbol     = $2
+           AND es."interval" = $3
+           AND p.level       = $4
         "#,
     )
     .bind(exchange)
     .bind(symbol)
     .bind(timeframe)
-    .bind(level)
+    .bind(level_i)
     .fetch_one(pool)
     .await?;
     Ok(row.0)

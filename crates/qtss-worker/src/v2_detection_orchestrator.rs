@@ -62,7 +62,6 @@ use qtss_storage::{
     list_enabled_engine_symbols, list_recent_bars, resolve_system_f64, resolve_system_string,
     resolve_system_u64, resolve_worker_enabled_flag, DetectionFilter, EngineSymbolRow,
     MarketBarRow, NewDetection, V2DetectionRepository,
-    max_cached_bar_index, upsert_pivot_cache_batch, PivotCacheRow,
 };
 use qtss_wyckoff::{WyckoffConfig, WyckoffDetector};
 use serde_json::json;
@@ -1428,7 +1427,9 @@ async fn process_symbol(
     // tighter windows so ≥6 pivots exist for Elliott/XABCD detection.
     let pivot_cfg = if chronological.len() <= 120 {
         PivotConfig {
-            lengths: [2, 4, 8, 16],
+            // Tighter windows for sparse history so ≥6 pivots surface
+            // for Elliott/XABCD. Five Fibonacci-ish slots, scaled down.
+            lengths: [2, 3, 5, 8, 13],
         }
     } else {
         PivotConfig::defaults()
@@ -1486,69 +1487,10 @@ async fn process_symbol(
         "pivot tree built"
     );
 
-    // ── Pivot cache: write newly computed pivots ──────────────────────
-    // For each level, find pivots with bar_index > max cached and batch-
-    // upsert them. This makes future ticks cheaper: only new bars need
-    // pivot extraction; everything else comes from DB.
-    {
-        let levels = [
-            (PivotLevel::L0, "L0"),
-            (PivotLevel::L1, "L1"),
-            (PivotLevel::L2, "L2"),
-            (PivotLevel::L3, "L3"),
-        ];
-        for (level, level_str) in &levels {
-            let cached_max = max_cached_bar_index(
-                pool,
-                &sym.exchange,
-                &sym.symbol,
-                &sym.interval,
-                level_str,
-            )
-            .await
-            .unwrap_or(None)
-            .unwrap_or(-1);
-
-            let new_pivots: Vec<PivotCacheRow> = tree
-                .at_level(*level)
-                .iter()
-                .filter(|p| p.bar_index as i64 > cached_max)
-                .map(|p| PivotCacheRow {
-                    exchange: sym.exchange.clone(),
-                    symbol: sym.symbol.clone(),
-                    timeframe: sym.interval.clone(),
-                    level: level_str.to_string(),
-                    bar_index: p.bar_index as i64,
-                    open_time: p.time,
-                    price: p.price,
-                    kind: match p.kind {
-                        PivotKind::High => "High".to_string(),
-                        PivotKind::Low => "Low".to_string(),
-                    },
-                    prominence: p.prominence,
-                    volume_at_pivot: p.volume_at_pivot,
-                    swing_type: p.swing_type.map(|s| format!("{:?}", s)),
-                })
-                .collect();
-
-            if !new_pivots.is_empty() {
-                match upsert_pivot_cache_batch(pool, &new_pivots).await {
-                    Ok(n) => debug!(
-                        symbol = %sym.symbol,
-                        interval = %sym.interval,
-                        level = %level_str,
-                        count = n,
-                        "pivot_cache: wrote new pivots"
-                    ),
-                    Err(e) => warn!(
-                        symbol = %sym.symbol,
-                        %e,
-                        "pivot_cache upsert failed"
-                    ),
-                }
-            }
-        }
-    }
+    // Pivot writes are owned by `pivot_writer_loop` (crates/qtss-worker/
+    // src/pivot_writer_loop.rs) — the canonical `pivots` table is the
+    // single source of truth. The orchestrator used to double-write into
+    // the retired `pivot_cache`; that write path has been removed.
 
     // Diagnostic: per-symbol pivot count at each level. Logged once per
     // symbol so we can verify detectors that require L1 (Harmonic, Wyckoff)
@@ -2051,18 +1993,29 @@ async fn run_pivot_reversal_live(
     // touches at most a handful of rows.
     const TAIL_N: i64 = 32;
     for level in [PivotLevel::L0, PivotLevel::L1, PivotLevel::L2, PivotLevel::L3] {
+        let level_i: i16 = match level {
+            PivotLevel::L0 => 0,
+            PivotLevel::L1 => 1,
+            PivotLevel::L2 => 2,
+            PivotLevel::L3 => 3,
+            PivotLevel::L4 => 4,
+        };
         let rows = sqlx::query(
-            r#"SELECT bar_index, open_time, price, kind, prominence, swing_type
-                 FROM pivot_cache
-                WHERE exchange = $1 AND symbol = $2
-                  AND timeframe = $3 AND level = $4
-                ORDER BY bar_index DESC
+            r#"SELECT p.bar_index, p.open_time, p.price, p.direction,
+                      p.prominence, p.swing_tag
+                 FROM pivots p
+                 JOIN engine_symbols es ON es.id = p.engine_symbol_id
+                WHERE es.exchange   = $1
+                  AND es.symbol     = $2
+                  AND es."interval" = $3
+                  AND p.level       = $4
+                ORDER BY p.bar_index DESC
                 LIMIT $5"#,
         )
         .bind(&sym.exchange)
         .bind(&sym.symbol)
         .bind(&sym.interval)
-        .bind(level.as_str())
+        .bind(level_i)
         .bind(TAIL_N)
         .fetch_all(pool)
         .await?;
@@ -2075,14 +2028,15 @@ async fn run_pivot_reversal_live(
             .into_iter()
             .rev()
             .map(|r| {
-                let prom: Option<Decimal> = r.get("prominence");
+                let prom: Decimal = r.get("prominence");
+                let direction: i16 = r.get("direction");
                 PrPivotRow {
                     bar_index: r.get("bar_index"),
                     open_time: r.get("open_time"),
                     price: r.get("price"),
-                    kind: r.get("kind"),
-                    prominence: prom.and_then(|d| d.to_f64()),
-                    swing_type: r.get("swing_type"),
+                    kind: if direction >= 1 { "High".to_string() } else { "Low".to_string() },
+                    prominence: prom.to_f64(),
+                    swing_type: r.get("swing_tag"),
                 }
             })
             .collect();
