@@ -20,7 +20,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
-use qtss_pivots::zigzag::{compute_pivots, Sample};
+use qtss_pivots::zigzag::{compute_pivots, filter_prominence, Sample};
 use qtss_storage::{market_bars, market_bars_open};
 
 use crate::error::ApiError;
@@ -139,13 +139,33 @@ async fn load_slot_configs(pool: &sqlx::PgPool) -> Vec<SlotConfig> {
     out
 }
 
+/// Pull `system_config.zigzag.min_prominence_pct` (swing-filter
+/// threshold). Any pivot pair whose `|Δprice| / prev_price` is below
+/// this percentage gets absorbed into the surrounding swing. Default
+/// 0.0 (no filter) if the row is missing or malformed.
+async fn load_min_prominence_pct(pool: &sqlx::PgPool) -> f64 {
+    let row = sqlx::query(
+        "SELECT value FROM system_config WHERE module = 'zigzag' AND config_key = 'min_prominence_pct'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    let Some(row) = row else { return 0.0; };
+    let val: serde_json::Value = row.try_get("value").unwrap_or(serde_json::Value::Null);
+    val.get("pct")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0)
+        .max(0.0)
+}
+
 fn classify_swing(
     prev: Option<&ZigzagPivot>,
     kind_dir: i8,
     price: f64,
 ) -> Option<&'static str> {
     let prev = prev?;
-    if prev.direction != kind_dir {
+    if prev.direction.signum() != kind_dir {
         return None;
     }
     if kind_dir == 1 {
@@ -234,18 +254,20 @@ async fn get_zigzag(
         _ => slots.iter().collect(),
     };
 
+    let min_prominence_pct = load_min_prominence_pct(&st.pool).await;
+
     let mut levels: Vec<ZigzagLevel> = Vec::with_capacity(filtered.len());
     for cfg in filtered {
-        let confirmed = compute_pivots(&samples, cfg.length);
+        let raw = compute_pivots(&samples, cfg.length);
+        let confirmed = filter_prominence(&raw, min_prominence_pct);
         let mut out_pivots: Vec<ZigzagPivot> = Vec::with_capacity(confirmed.len());
         for cp in confirmed {
-            let direction: i8 = match cp.kind {
-                qtss_domain::v2::pivot::PivotKind::High => 1,
-                qtss_domain::v2::pivot::PivotKind::Low => -1,
-            };
+            // Pine's `newDir` — ±1 normal, ±2 strong (HH/LL).
+            let direction: i8 = cp.direction;
+            let sign: i8 = direction.signum();
             let price = cp.price.to_f64().unwrap_or(0.0);
-            let prev_same = out_pivots.iter().rev().find(|p| p.direction == direction);
-            let swing_tag = classify_swing(prev_same, direction, price);
+            let prev_same = out_pivots.iter().rev().find(|p| p.direction.signum() == sign);
+            let swing_tag = classify_swing(prev_same, sign, price);
             out_pivots.push(ZigzagPivot {
                 bar_index: cp.bar_index as i64,
                 time: cp.time,

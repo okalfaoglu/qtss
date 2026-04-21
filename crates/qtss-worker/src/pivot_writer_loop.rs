@@ -166,15 +166,19 @@ async fn process_symbol(
 
     let mut written = 0usize;
     for (slot_idx, length) in slot_lengths.iter().enumerate() {
-        let confirmed = compute_pivots(&samples, *length);
+        let all = compute_pivots(&samples, *length);
+        // Drop the running head — it may still drift to a later bar on
+        // future bars (Pine's `not dirchanged` replace path), which
+        // would leave stale rows in `pivots` keyed by the old open_time.
+        // Only pivots locked in by a subsequent opposite-direction pivot
+        // are safe to persist.
+        let confirmed: &[_] = if all.is_empty() { &all } else { &all[..all.len() - 1] };
         let mut prev_same: Option<(i8, Decimal)> = None;
         for cp in confirmed {
-            let direction: i8 = match cp.kind {
-                qtss_domain::v2::pivot::PivotKind::High => 1,
-                qtss_domain::v2::pivot::PivotKind::Low => -1,
-            };
-            let swing = swing_tag_for(direction, cp.price, prev_same.as_ref());
-            prev_same = Some((direction, cp.price));
+            // Pine-style direction: ±1 (LH/HL/equal/first) or ±2 (HH/LL).
+            let direction: i8 = cp.direction;
+            let swing = swing_tag_for(direction.signum(), cp.price, prev_same.as_ref());
+            prev_same = Some((direction.signum(), cp.price));
             sqlx::query(
                 r#"INSERT INTO pivots
                       (engine_symbol_id, level, bar_index, open_time,

@@ -30,7 +30,7 @@
 //! caller (qtss-api → React chart) can draw it however it wants.
 
 use qtss_domain::v2::pivot::PivotKind;
-use qtss_pivots::zigzag::{compute_pivots, Sample};
+use qtss_pivots::zigzag::{compute_pivots, filter_prominence, Sample};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::Serialize;
@@ -81,6 +81,10 @@ pub struct PinePortConfig {
     pub fib_level_2: f64,
     pub fib_level_3: f64,
     pub fib_level_4: f64,
+    /// Swing-prominence filter shared with `/v2/zigzag` (pivot pairs
+    /// whose `|Δprice|/prev_price` is below this % get absorbed). 0.0
+    /// disables the filter — keep Pine 1:1 behaviour by default.
+    pub min_prominence_pct: f64,
 }
 
 impl Default for PinePortConfig {
@@ -97,6 +101,7 @@ impl Default for PinePortConfig {
             fib_level_2: 0.618,
             fib_level_3: 0.764,
             fib_level_4: 0.854,
+            min_prominence_pct: 0.0,
         }
     }
 }
@@ -157,6 +162,34 @@ pub struct AbcPattern {
     pub anchors: [PivotPoint; 4],
     /// `true` when the ABC was invalidated via `gEW.dash()`.
     pub invalidated: bool,
+    /// Frost & Prechter sub-type — filled by
+    /// `pine_port_corrective::classify_abc_subkind` after the state
+    /// machine has placed the 4 anchors. Values:
+    /// `"zigzag"` (default, B < 0.90 of A),
+    /// `"flat_regular"` | `"flat_expanded"` | `"flat_running"`.
+    /// Kept as `String` so adding a new subkind needs only a migration
+    /// + classifier entry, not a type change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subkind: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TrianglePattern {
+    /// `+1` = bullish triangle (first leg up), `-1` = bearish (first leg
+    /// down). Matches `AbcPattern.direction` conventions so the UI can
+    /// colour-match.
+    pub direction: i8,
+    /// Sub-type: `"triangle_contracting"` | `"triangle_expanding"` |
+    /// `"triangle_barrier"`. See
+    /// `pine_port_corrective::detect_triangle` for the classifier.
+    pub subkind: String,
+    /// 6 anchors in chronological order. Pine/LuxAlgo doesn't render
+    /// triangles, but the QTSS frontend draws them as two converging
+    /// trendlines plus labelled points A..E.
+    pub anchors: [PivotPoint; 6],
+    /// Reserved for future invalidation logic (price closing outside
+    /// the triangle's bounding trendlines). Always `false` on emit.
+    pub invalidated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -198,6 +231,13 @@ pub struct LevelOutput {
     /// freshest wave). Present only when the wave is still valid and
     /// hasn't yet spawned a full ABC beyond its 5.
     pub fib_band: Option<FibBand>,
+    /// Triangles (ABCDE, 3-3-3-3-3) found at the tail of the pivot tape
+    /// for this level. Emitted only when the final 6 alternating pivots
+    /// pass `pine_port_corrective::detect_triangle`. Usually 0 or 1 per
+    /// level — a second one is only possible after the first has been
+    /// fully superseded by new pivots.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub triangles: Vec<TrianglePattern>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -512,6 +552,7 @@ fn process_high_pivot(
                             pp(1, _6x, _6y),
                         ],
                         invalidated: false,
+                        subkind: None,
                     });
                     front.break_box = Some(BreakBox {
                         left_bar: _6x,
@@ -674,6 +715,7 @@ fn process_low_pivot(
                             pp(-1, _6x, _6y),
                         ],
                         invalidated: false,
+                        subkind: None,
                     });
                     front.break_box = Some(BreakBox {
                         left_bar: _6x,
@@ -765,7 +807,8 @@ pub fn run(bars: &[Bar], cfg: &PinePortConfig) -> PinePortOutput {
         // (compute_pivots guarantees both), so the `aZZ` ring sees the
         // exact sequence Pine would — just derived from a tie-tolerant
         // detector instead of `ta.pivothigh`.
-        let pivots = compute_pivots(&samples, level_cfg.length as u32);
+        let raw_pivots = compute_pivots(&samples, level_cfg.length as u32);
+        let pivots = filter_prominence(&raw_pivots, cfg.min_prominence_pct);
         let mut pivot_idx = 0usize;
 
         for b in 0..bars.len() {
@@ -860,13 +903,38 @@ pub fn run(bars: &[Bar], cfg: &PinePortConfig) -> PinePortOutput {
             })
         });
 
+        // Corrective refinement (Faz 7.x — Flat + Triangle).
+        //
+        // Runs strictly after the state machine so it cannot perturb
+        // motive/ABC/fib/break-box logic. Two passes:
+        //
+        //   1. Classify each motive's ABC as zigzag / flat_* — pure
+        //      look-up on (b_ratio, c_ratio).
+        //   2. Scan the last 6 alternating pivots for a triangle
+        //      (A-B-C-D-E, 3-3-3-3-3).
+        //
+        // Both produce structured sub-type strings the UI can colour
+        // differently without needing a backend schema change.
+        let mut motives_labeled = state.ew;
+        for motive in motives_labeled.iter_mut() {
+            if let Some(abc) = motive.abc.as_mut() {
+                abc.subkind = Some(
+                    crate::pine_port_corrective::classify_abc_subkind(abc).to_string(),
+                );
+            }
+        }
+        let triangles = crate::pine_port_corrective::detect_triangle(&state.pivots_log)
+            .into_iter()
+            .collect::<Vec<_>>();
+
         levels.push(LevelOutput {
             length: level_cfg.length,
             color: level_cfg.color.clone(),
             pivots: state.pivots_log,
-            motives: state.ew,
+            motives: motives_labeled,
             break_markers: state.break_markers,
             fib_band,
+            triangles,
         });
     }
 

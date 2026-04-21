@@ -50,6 +50,9 @@ interface BackendAbcPattern {
   direction: number;
   anchors: BackendPivotPoint[];
   invalidated: boolean;
+  /// "zigzag" | "flat_regular" | "flat_expanded" | "flat_running"
+  /// (server-side default is "zigzag" when B retracement < 90%).
+  subkind?: string;
 }
 interface BackendMotivePattern {
   direction: number;
@@ -65,6 +68,13 @@ interface BackendFibBand {
   x_anchor: number; x_far: number; pole_top: number; pole_bottom: number;
   y_500: number; y_618: number; y_764: number; y_854: number; broken: boolean;
 }
+interface BackendTrianglePattern {
+  direction: number;
+  /// "triangle_contracting" | "triangle_expanding" | "triangle_barrier"
+  subkind: string;
+  anchors: BackendPivotPoint[];
+  invalidated: boolean;
+}
 interface BackendLevelOutput {
   length: number;
   color: string;
@@ -72,6 +82,7 @@ interface BackendLevelOutput {
   motives: BackendMotivePattern[];
   break_markers: BackendBreakMarker[];
   fib_band: BackendFibBand | null;
+  triangles?: BackendTrianglePattern[];
 }
 interface ElliottResponse {
   venue: string;
@@ -167,6 +178,41 @@ export function LuxAlgoChart() {
   const [showElliott, setShowElliott] = useState(true);
   const [fibExtend, setFibExtend] = useState(false);
   const [barLimit, setBarLimit] = useState(1000);
+
+  // Per-formation toggles. All default on — the user can uncheck any
+  // pattern family to prove the backend really detected the remaining
+  // ones (rather than drawing defaults). A single formation off means
+  // its line(s) and label(s) are skipped on render; the API response
+  // itself is unaffected.
+  const [showImpulse, setShowImpulse] = useState(true);
+  const [showZigzagAbc, setShowZigzagAbc] = useState(true);
+  const [showFlatRegular, setShowFlatRegular] = useState(true);
+  const [showFlatExpanded, setShowFlatExpanded] = useState(true);
+  const [showFlatRunning, setShowFlatRunning] = useState(true);
+  const [showTriContracting, setShowTriContracting] = useState(true);
+  const [showTriExpanding, setShowTriExpanding] = useState(true);
+  const [showTriBarrier, setShowTriBarrier] = useState(true);
+
+  // Map subkind → toggle for the ABC classifier branch below. Keeps the
+  // draw loop a pure look-up (CLAUDE.md #1: no scattered if/else).
+  const abcVisibleFor = (subkind: string | undefined): boolean => {
+    const key = subkind ?? "zigzag";
+    switch (key) {
+      case "zigzag": return showZigzagAbc;
+      case "flat_regular": return showFlatRegular;
+      case "flat_expanded": return showFlatExpanded;
+      case "flat_running": return showFlatRunning;
+      default: return true;
+    }
+  };
+  const triangleVisibleFor = (subkind: string): boolean => {
+    switch (subkind) {
+      case "triangle_contracting": return showTriContracting;
+      case "triangle_expanding": return showTriExpanding;
+      case "triangle_barrier": return showTriBarrier;
+      default: return true;
+    }
+  };
 
   const venues = useQuery<VenueOpt[]>({
     queryKey: ["chart-venues"],
@@ -407,36 +453,41 @@ export function LuxAlgoChart() {
         ? (onlyLatestMotive ? level.motives.slice(0, 1) : level.motives)
         : [];
       for (const mw of motivesToDraw) {
-        const pts: LineData[] = mw.anchors
-          .map((a) => {
-            const t = timeAt(a.bar_index);
-            return t === null ? null : { time: t, value: a.price };
-          })
-          .filter((x): x is LineData => x !== null);
-        const ptsClean = dedupeByTime(pts);
-        if (ptsClean.length < 2) continue;
-        const style = mw.live ? LineStyle.Solid : LineStyle.Dotted;
-        const s = chart.addSeries(LineSeries, {
-          color, lineWidth: 2, lineStyle: style,
-          priceLineVisible: false, lastValueVisible: false,
-        });
-        s.setData(ptsClean);
-        overlaySeriesRef.current.push(s);
+        // Impulse toggle gates the 1-2-3-4-5 body. The motive's ABC is
+        // still evaluated below and respects its own per-subkind toggle.
+        if (showImpulse) {
+          const pts: LineData[] = mw.anchors
+            .map((a) => {
+              const t = timeAt(a.bar_index);
+              return t === null ? null : { time: t, value: a.price };
+            })
+            .filter((x): x is LineData => x !== null);
+          const ptsClean = dedupeByTime(pts);
+          if (ptsClean.length >= 2) {
+            const style = mw.live ? LineStyle.Solid : LineStyle.Dotted;
+            const s = chart.addSeries(LineSeries, {
+              color, lineWidth: 2, lineStyle: style,
+              priceLineVisible: false, lastValueVisible: false,
+            });
+            s.setData(ptsClean);
+            overlaySeriesRef.current.push(s);
 
-        if (mw.live) {
-          const labels = ["(1)", "(2)", "(3)", "(4)", "(5)"];
-          for (let i = 1; i < mw.anchors.length; i++) {
-            const a = mw.anchors[i];
-            if (a.hide_label) continue;
-            const t = timeAt(a.bar_index);
-            if (t === null) continue;
-            const aboveBar = (mw.direction === 1 && i % 2 === 1) || (mw.direction === -1 && i % 2 === 0);
-            const text = a.label_override ?? labels[i - 1];
-            attachLabel(t, a.price, text, color, aboveBar ? "above" : "below");
+            if (mw.live) {
+              const labels = ["(1)", "(2)", "(3)", "(4)", "(5)"];
+              for (let i = 1; i < mw.anchors.length; i++) {
+                const a = mw.anchors[i];
+                if (a.hide_label) continue;
+                const t = timeAt(a.bar_index);
+                if (t === null) continue;
+                const aboveBar = (mw.direction === 1 && i % 2 === 1) || (mw.direction === -1 && i % 2 === 0);
+                const text = a.label_override ?? labels[i - 1];
+                attachLabel(t, a.price, text, color, aboveBar ? "above" : "below");
+              }
+            }
           }
         }
 
-        if (mw.abc) {
+        if (mw.abc && abcVisibleFor(mw.abc.subkind)) {
           const abcPts: LineData[] = mw.abc.anchors
             .map((a) => {
               const t = timeAt(a.bar_index);
@@ -487,6 +538,41 @@ export function LuxAlgoChart() {
           if (t !== null) {
             attachLabel(t, mw.next_marker.price, "•", color,
               mw.next_marker.direction === 1 ? "above" : "below");
+          }
+        }
+      }
+
+      // Triangles (A-B-C-D-E, 3-3-3-3-3). Drawn as a single polyline
+      // through all 6 anchors — the two converging (or diverging)
+      // trendlines fall out of the alternating structure. Labels A..E
+      // mark the 5 intermediate pivots.
+      if (showElliott && level.triangles) {
+        for (const tri of level.triangles) {
+          if (!triangleVisibleFor(tri.subkind)) continue;
+          const triPts: LineData[] = tri.anchors
+            .map((a) => {
+              const t = timeAt(a.bar_index);
+              return t === null ? null : { time: t, value: a.price };
+            })
+            .filter((x): x is LineData => x !== null);
+          const triClean = dedupeByTime(triPts);
+          if (triClean.length < 2) continue;
+          const triStyle = tri.invalidated ? LineStyle.Dashed : LineStyle.Solid;
+          const tSeries = chart.addSeries(LineSeries, {
+            color, lineWidth: 2, lineStyle: triStyle,
+            priceLineVisible: false, lastValueVisible: false,
+          });
+          tSeries.setData(triClean);
+          overlaySeriesRef.current.push(tSeries);
+          const triLabels = ["", "A", "B", "C", "D", "E"];
+          for (let i = 1; i < tri.anchors.length; i++) {
+            const a = tri.anchors[i];
+            if (a.hide_label) continue;
+            const t = timeAt(a.bar_index);
+            if (t === null) continue;
+            // Labels alternate above/below matching the pivot direction.
+            attachLabel(t, a.price, triLabels[i], color,
+              a.direction === 1 ? "above" : "below");
           }
         }
       }
@@ -552,7 +638,13 @@ export function LuxAlgoChart() {
         }
       }
     }
-  }, [data.data, pineOutput, slots, showFibBand, showHhLl, onlyLatestMotive, showZigzag, showElliott, fibExtend]);
+  }, [
+    data.data, pineOutput, slots,
+    showFibBand, showHhLl, onlyLatestMotive, showZigzag, showElliott, fibExtend,
+    showImpulse, showZigzagAbc,
+    showFlatRegular, showFlatExpanded, showFlatRunning,
+    showTriContracting, showTriExpanding, showTriBarrier,
+  ]);
 
   const venueList: VenueOpt[] = venues.data ?? [];
   const venueOpt = useMemo(
@@ -652,6 +744,45 @@ export function LuxAlgoChart() {
           <label className="flex cursor-pointer items-center gap-1 text-xs">
             <input type="checkbox" checked={onlyLatestMotive} onChange={(e) => setOnlyLatestMotive(e.target.checked)} />
             Only latest motive
+          </label>
+        </div>
+        {/* Per-formation toggles — uncheck to prove the backend really
+            detected each pattern family rather than drawing defaults. */}
+        <div className="flex w-full flex-wrap items-center gap-2 rounded border border-zinc-800 bg-zinc-950/40 p-2 text-xs">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">formations</span>
+          <label className="flex cursor-pointer items-center gap-1">
+            <input type="checkbox" checked={showImpulse} onChange={(e) => setShowImpulse(e.target.checked)} />
+            Impulse
+          </label>
+          <label className="flex cursor-pointer items-center gap-1">
+            <input type="checkbox" checked={showZigzagAbc} onChange={(e) => setShowZigzagAbc(e.target.checked)} />
+            Zigzag (ABC)
+          </label>
+          <span className="text-zinc-700">·</span>
+          <label className="flex cursor-pointer items-center gap-1">
+            <input type="checkbox" checked={showFlatRegular} onChange={(e) => setShowFlatRegular(e.target.checked)} />
+            Flat regular
+          </label>
+          <label className="flex cursor-pointer items-center gap-1">
+            <input type="checkbox" checked={showFlatExpanded} onChange={(e) => setShowFlatExpanded(e.target.checked)} />
+            Flat expanded
+          </label>
+          <label className="flex cursor-pointer items-center gap-1">
+            <input type="checkbox" checked={showFlatRunning} onChange={(e) => setShowFlatRunning(e.target.checked)} />
+            Flat running
+          </label>
+          <span className="text-zinc-700">·</span>
+          <label className="flex cursor-pointer items-center gap-1">
+            <input type="checkbox" checked={showTriContracting} onChange={(e) => setShowTriContracting(e.target.checked)} />
+            Triangle contracting
+          </label>
+          <label className="flex cursor-pointer items-center gap-1">
+            <input type="checkbox" checked={showTriExpanding} onChange={(e) => setShowTriExpanding(e.target.checked)} />
+            Triangle expanding
+          </label>
+          <label className="flex cursor-pointer items-center gap-1">
+            <input type="checkbox" checked={showTriBarrier} onChange={(e) => setShowTriBarrier(e.target.checked)} />
+            Triangle barrier
           </label>
         </div>
         <div className="ml-auto text-xs text-zinc-500">
