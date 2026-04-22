@@ -114,14 +114,68 @@ fn parse_anchors(value: &serde_json::Value) -> Vec<PivotPoint> {
     serde_json::from_value(value.clone()).unwrap_or_default()
 }
 
+/// Extract per-anchor `open_time` from the JSON if the writer included
+/// it (post-migration 0215 format). Index-aligned with `parse_anchors`
+/// output. Empty vec when the field is missing (legacy rows). Callers
+/// should fall back to the stale `bar_index` in that case.
+fn parse_anchor_times(value: &serde_json::Value) -> Vec<Option<DateTime<Utc>>> {
+    value
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|item| {
+                    item.get("time")
+                        .and_then(|t| serde_json::from_value(t.clone()).ok())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Remap each anchor's `bar_index` to match the current chart window by
+/// matching its stored `time` to a candle's `open_time`. Returns `None`
+/// when any anchor falls outside the current window — the pattern
+/// can't be fully drawn so the caller drops it.
+fn remap_anchors_to_window(
+    mut anchors: Vec<PivotPoint>,
+    times: &[Option<DateTime<Utc>>],
+    candles: &[ElliottCandle],
+) -> Option<Vec<PivotPoint>> {
+    if anchors.len() != times.len() {
+        // Legacy row without per-anchor times — fall back to stored
+        // bar_index. This will look misaligned but preserves backward
+        // compat with rows written before migration 0215.
+        return Some(anchors);
+    }
+    for (i, t_opt) in times.iter().enumerate() {
+        let Some(t) = t_opt else {
+            return None;
+        };
+        // Candles are chronologically ordered; binary_search_by is O(log n).
+        let pos = candles.binary_search_by(|c| c.time.cmp(t)).ok();
+        let Some(idx) = pos else {
+            return None;
+        };
+        anchors[i].bar_index = idx as i64;
+    }
+    Some(anchors)
+}
+
 /// Group detections by (slot, family) and reconstruct PinePortOutput.
-/// ABCs are attached to the motive sharing the same slot and whose
-/// bar-range contains the ABC's start_bar — mirrors how the writer
-/// emitted them (ABC sits inside or just after its parent motive).
-fn build_pine_output(rows: Vec<DetectionRow>, bar_count: i64) -> PinePortOutput {
+/// Each row's anchors are remapped into the current chart bar-window
+/// via per-anchor `time` → `bar_index` lookup. Patterns whose anchors
+/// fall outside the window get dropped rather than rendered with
+/// stale writer-relative indices.
+///
+/// ABCs attach to the motive sharing the same slot whose `end_bar`
+/// equals the ABC's `start_bar` (the writer's canonical linkage: the
+/// ABC's first anchor coincides with its parent motive's p5).
+fn build_pine_output(
+    rows: Vec<DetectionRow>,
+    candles: &[ElliottCandle],
+) -> PinePortOutput {
     use std::collections::BTreeMap;
 
-    // Bucket per-slot rows.
     #[derive(Default)]
     struct SlotBuckets {
         motives: Vec<(DetectionRow, Vec<PivotPoint>)>,
@@ -132,12 +186,28 @@ fn build_pine_output(rows: Vec<DetectionRow>, bar_count: i64) -> PinePortOutput 
 
     for row in rows {
         let anchors = parse_anchors(&row.anchors);
-        let bucket = by_slot.entry(row.slot).or_default();
-        match row.pattern_family.as_str() {
-            "motive" => bucket.motives.push((row, anchors)),
-            "abc" => bucket.abcs.push((row, anchors)),
-            "triangle" => bucket.triangles.push((row, anchors)),
-            _ => { /* unknown family — drop silently */ }
+        let times = parse_anchor_times(&row.anchors);
+        // Remap to current window; drop the pattern entirely if any
+        // anchor is outside the visible candles.
+        let Some(mut remapped) = remap_anchors_to_window(anchors, &times, candles) else {
+            continue;
+        };
+        // After remap, also refresh start_bar / end_bar on the row
+        // to match the new window so ABC-to-motive linkage below
+        // stays consistent.
+        if let (Some(first), Some(last)) = (remapped.first(), remapped.last()) {
+            let mut r = row;
+            r.start_bar = first.bar_index;
+            r.end_bar = last.bar_index;
+            // Shift subsequent borrows of remapped — take ownership via swap.
+            let taken = std::mem::take(&mut remapped);
+            let bucket = by_slot.entry(r.slot).or_default();
+            match r.pattern_family.as_str() {
+                "motive" => bucket.motives.push((r, taken)),
+                "abc" => bucket.abcs.push((r, taken)),
+                "triangle" => bucket.triangles.push((r, taken)),
+                _ => {}
+            }
         }
     }
 
@@ -207,7 +277,10 @@ fn build_pine_output(rows: Vec<DetectionRow>, bar_count: i64) -> PinePortOutput 
         });
     }
 
-    PinePortOutput { bar_count, levels }
+    PinePortOutput {
+        bar_count: candles.len() as i64,
+        levels,
+    }
 }
 
 /// The Pine port's `MotivePattern` wants `[PivotPoint; 6]`. Anchors
@@ -255,7 +328,8 @@ async fn get_elliott_db(
         &st.pool, &venue, &segment, &symbol, &tf, q.slot, q.direction,
     )
     .await?;
-    let pine = build_pine_output(detections, bar_count);
+    let _ = bar_count; // consumed via candles.len() inside build_pine_output
+    let pine = build_pine_output(detections, &candles);
 
     Ok(Json(ElliottResponse {
         venue,

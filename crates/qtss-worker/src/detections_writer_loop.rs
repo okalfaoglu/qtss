@@ -267,7 +267,7 @@ async fn write_motive(
         end_bar,
         start_time,
         end_time,
-        &json!(motive.anchors),
+        &anchors_with_times(&motive.anchors, chrono),
         Some(motive.live),
         Some(motive.next_hint),
         false,
@@ -303,7 +303,7 @@ async fn write_abc(
         end_bar,
         start_time,
         end_time,
-        &json!(abc.anchors),
+        &anchors_with_times(&abc.anchors, chrono),
         None,
         None,
         abc.invalidated,
@@ -333,13 +333,48 @@ async fn write_triangle(
         end_bar,
         start_time,
         end_time,
-        &json!(tri.anchors),
+        &anchors_with_times(&tri.anchors, chrono),
         None,
         None,
         tri.invalidated,
         json!({}),
     )
     .await
+}
+
+/// Augment each anchor's JSON with the bar's `open_time` so the DB-read
+/// path can remap `bar_index` into whatever bar window the chart is
+/// currently showing. Without this, anchor indices stored relative to
+/// the writer's 2000-bar slice would misalign every tick as new bars
+/// shift the slice.
+fn anchors_with_times(
+    anchors: &[qtss_elliott::luxalgo_pine_port::PivotPoint],
+    chrono: &[qtss_storage::market_bars::MarketBarRow],
+) -> Value {
+    let arr: Vec<Value> = anchors
+        .iter()
+        .map(|a| {
+            let time = chrono
+                .get(a.bar_index.max(0) as usize)
+                .map(|r| r.open_time);
+            let mut obj = json!({
+                "direction": a.direction,
+                "bar_index": a.bar_index,
+                "price": a.price,
+            });
+            if let Some(t) = time {
+                obj["time"] = json!(t);
+            }
+            if let Some(lo) = &a.label_override {
+                obj["label_override"] = json!(lo);
+            }
+            if a.hide_label {
+                obj["hide_label"] = json!(true);
+            }
+            obj
+        })
+        .collect();
+    Value::Array(arr)
 }
 
 fn anchor_time_range(
@@ -385,11 +420,11 @@ async fn upsert(
                anchors, live, next_hint, invalidated, raw_meta, mode)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'live')
            ON CONFLICT (exchange, segment, symbol, timeframe, slot,
-                        pattern_family, subkind, start_bar, end_bar, mode)
+                        pattern_family, subkind, start_time, end_time, mode)
            DO UPDATE SET
                direction     = EXCLUDED.direction,
-               start_time    = EXCLUDED.start_time,
-               end_time      = EXCLUDED.end_time,
+               start_bar     = EXCLUDED.start_bar,
+               end_bar       = EXCLUDED.end_bar,
                anchors       = EXCLUDED.anchors,
                live          = EXCLUDED.live,
                next_hint     = EXCLUDED.next_hint,
