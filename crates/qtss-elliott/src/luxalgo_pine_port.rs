@@ -923,8 +923,37 @@ pub fn run(bars: &[Bar], cfg: &PinePortConfig) -> PinePortOutput {
                 );
             }
         }
-        let triangles = crate::pine_port_corrective::detect_triangle(&state.pivots_log)
+        // Triangle position filter — Frost & Prechter (Lesson 8, p.27)
+        // and Brown (Mastering EWP, p.85 rule 6) both state triangles
+        // appear only in wave-4 / wave-B / wave-X positions, never
+        // standalone alongside a completed same-degree ABC. At a single
+        // pivot level the only position we can recognise from the tape
+        // is wave-4: a triangle whose 6 anchors are fully contained in
+        // the [p3.bar_index, p4.bar_index] interval of some motive
+        // (between wave-3 end and wave-4 end, i.e. the wave-4 slot).
+        //
+        // Wave-B containment is skipped because a wave-B triangle lives
+        // one degree below the parent ABC — its 5 internal pivots sit
+        // between the ABC's `a` and `c` pivots and typically aren't
+        // visible at this level's pivot spacing. A future multi-degree
+        // engine (Faz 8+) can add wave-B + wave-X recognition.
+        //
+        // A triangle that fails containment is dropped entirely — not
+        // emitted to the UI — matching the "do not label alone" rule.
+        let raw_triangle = crate::pine_port_corrective::detect_triangle(&state.pivots_log);
+        let triangles = raw_triangle
             .into_iter()
+            .filter(|tri| {
+                let tri_min = tri.anchors.iter().map(|a| a.bar_index).min().unwrap_or(0);
+                let tri_max = tri.anchors.iter().map(|a| a.bar_index).max().unwrap_or(0);
+                motives_labeled.iter().any(|m| {
+                    // anchors = [p0, p1, p2, p3, p4, p5]; wave 4 runs
+                    // from p3 (wave-3 end) to p4 (wave-4 end).
+                    let w4_start = m.anchors[3].bar_index;
+                    let w4_end = m.anchors[4].bar_index;
+                    tri_min > w4_start && tri_max < w4_end
+                })
+            })
             .collect::<Vec<_>>();
 
         levels.push(LevelOutput {
