@@ -43,6 +43,11 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         ad: RatioRange::new(0.74, 0.82),  // ~0.786 (strict)
         extension: false,
     },
+    // ── Bat (Scott Carney) ─────────────────────────────────────────
+    // Ref: https://harmonictrader.com/harmonic-patterns/bat-pattern/
+    // Carney: "B less than 0.618, preferably 0.50 or 0.382", "BC
+    // projection minimum 1.618, ideally 1.618 or 2.0 (NOT 1.27)",
+    // "0.886 XA retracement — defining element in the PRZ".
     HarmonicSpec {
         name: "bat",
         ab: RatioRange::new(0.382, 0.50),
@@ -64,6 +69,11 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         ad: RatioRange::new(1.20, 1.65),   // 1.27..1.618 XA extension
         extension: true,
     },
+    // ── Crab (Scott Carney) ────────────────────────────────────────
+    // Ref: https://harmonictrader.com/harmonic-patterns/crab-pattern/
+    // Carney: "B retracement of XA less than 0.618", "BC projection
+    // extreme (2.24, 2.618, 3.14, 3.618)", "1.618 XA projection —
+    // THE defining level of the PRZ, exclusively".
     HarmonicSpec {
         name: "crab",
         ab: RatioRange::new(0.382, 0.618),
@@ -85,8 +95,10 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         extension: true,
     },
     // ── Shark (Scott Carney, 2011) ───────────────────────────────────
-    // 0-X-A-B-C structure mapped to XABCD. Distinctive: AD > 1.0,
-    // uses 0.886 and 1.13 pivots. Also called "5-0 precursor".
+    // Ref: https://harmonictrader.com/harmonic-patterns/shark-pattern/
+    // 0-X-A-B-C structure mapped to XABCD. Distinctive: "0.886
+    // retracement / 1.13 Reciprocal Ratio" is the core PRZ band per
+    // Carney. AD > 1.0, BC between 1.13 and 1.618, CD 1.618-2.24.
     HarmonicSpec {
         name: "shark",
         ab: RatioRange::new(0.382, 0.618),
@@ -106,7 +118,10 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         extension: false,
     },
     // ── Alt Bat (Scott Carney) ───────────────────────────────────────
-    // Variation of Bat with deeper AB (0.382) and AD at 1.13.
+    // Ref: https://harmonictrader.com/harmonic-patterns/alternate-bat-pattern/
+    // Carney: "0.382 or less at B (vs classic Bat's 0.50)", "minimum
+    // 2.0 BC projection", "1.618 AB=CD", "1.13 XA extension as the
+    // defining PRZ element". Distinguishing feature = shallow B.
     HarmonicSpec {
         name: "alt_bat",
         ab: RatioRange::new(0.33, 0.44),  // ~0.382
@@ -143,13 +158,13 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         extension: true,
     },
     // ── AB=CD (Classic, Scott Carney / Larry Pesavento) ──────────────
+    // Ref: https://harmonictrader.com/harmonic-patterns/abcd-pattern/
     // 4-point pattern (A→B→C→D). We embed it in the XABCD container
     // with intentionally loose XA/AD bounds so the earlier pivot (X)
     // acts only as a structural anchor rather than a ratio constraint.
-    // Invariants enforced:
-    //   * BC retraces 0.382–0.886 of AB (r_bc)
-    //   * CD ≈ AB (price equality) → CD/BC ≈ 1/r_bc ∈ [1.13, 2.0]
-    // Alt AB=CD (below) takes the r_cd > 2.0 branch.
+    // Carney: "C retracement 0.382–0.886 of AB", "BC projection
+    // 1.13–2.618 (reciprocals: 0.618 retrace ↔ 1.618 projection;
+    // 0.786 ↔ 1.27)", "CD = AB (price equality)".
     HarmonicSpec {
         name: "ab_cd",
         ab: RatioRange::new(0.20, 3.00),   // X unconstrained (4-point pattern)
