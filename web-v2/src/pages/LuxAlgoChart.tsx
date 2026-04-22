@@ -128,6 +128,37 @@ type ZigzagResponse = {
   levels: BackendLevel[];
 };
 
+// Harmonic (Gartley / Bat / Butterfly / Crab / Cypher / ...) —
+// mirrors both /v2/harmonic (live) and /v2/harmonic-db (persisted),
+// same JSON shape so a single fetcher handles the source toggle.
+interface HarmonicAnchor {
+  bar_index: number;
+  time: string;
+  price: number;
+  label: string; // "X" | "A" | "B" | "C" | "D"
+}
+interface HarmonicPattern {
+  slot: number;
+  subkind: string; // e.g. "cypher_bull", "gartley_bear"
+  direction: number; // +1 bullish, -1 bearish
+  start_bar: number;
+  end_bar: number;
+  start_time: string;
+  end_time: string;
+  invalidated: boolean;
+  anchors: HarmonicAnchor[];
+  score?: number;
+  ratios?: { ab?: number; bc?: number; cd?: number; ad?: number };
+  extension?: boolean;
+}
+interface HarmonicResponse {
+  venue: string;
+  symbol: string;
+  timeframe: string;
+  candles: Array<{ time: string; bar_index: number }>;
+  patterns: HarmonicPattern[];
+}
+
 type VenueOpt = {
   exchange: string;
   segment: string;
@@ -201,6 +232,13 @@ export function LuxAlgoChart() {
   // smoke test the user asked for.
   const [detectionSource, setDetectionSource] = useState<"live" | "db">("live");
 
+  // Harmonic overlay — XABCD patterns (Gartley, Bat, Butterfly, Crab,
+  // Cypher, ...). Drawn as a filled two-triangle "bow-tie" (XAB + BCD)
+  // with labels and a green PRZ rectangle at D, matching the canonical
+  // textbook rendering (Scott Carney). Source follows `detectionSource`
+  // so the live/db toggle covers both families at once.
+  const [showHarmonic, setShowHarmonic] = useState(true);
+
   // Map subkind → toggle for the ABC classifier branch below. Keeps the
   // draw loop a pure look-up (CLAUDE.md #1: no scattered if/else).
   const abcVisibleFor = (subkind: string | undefined): boolean => {
@@ -273,6 +311,29 @@ export function LuxAlgoChart() {
     refetchInterval: 15_000,
   });
   const pineOutput = elliott.data ?? null;
+
+  // Harmonic patterns — same source toggle as Elliott. The live and db
+  // endpoints return identical JSON shape so one fetcher handles both.
+  const harmonic = useQuery<HarmonicResponse>({
+    queryKey: [
+      "harmonic",
+      detectionSource,
+      exchange,
+      symbol,
+      tf,
+      segment,
+      barLimit,
+    ],
+    queryFn: () => {
+      const path = detectionSource === "db" ? "/v2/harmonic-db" : "/v2/harmonic";
+      return apiFetch(
+        `${path}/${exchange}/${symbol}/${tf}?segment=${segment}&limit=${barLimit}`
+      );
+    },
+    enabled: showHarmonic,
+    refetchInterval: 30_000,
+  });
+  const harmonicOutput = harmonic.data ?? null;
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -656,12 +717,133 @@ export function LuxAlgoChart() {
         }
       }
     }
+
+    // ── HARMONIC PATTERNS (XABCD) ─────────────────────────────────────
+    //
+    // Render style matches the Scott Carney reference: a two-triangle
+    // "bow-tie" (△XAB + △BCD) filled with a semi-transparent sign-tinted
+    // colour (blue for bullish, pink for bearish), the XABCD polyline
+    // outline on top, X/A/B/C/D labels at each anchor, and a green PRZ
+    // rectangle at D sized to the 0.786 XA retracement band — the
+    // textbook reversal zone.
+    //
+    // One "bow-tie" per pattern row; patterns are fetched separately so
+    // this block never blocks the Elliott path.
+    if (showHarmonic && harmonicOutput) {
+      for (const pat of harmonicOutput.patterns) {
+        if (pat.anchors.length !== 5) continue;
+        const pts: Array<LineData | null> = pat.anchors.map((a) => {
+          const t = timeAt(a.bar_index);
+          return t === null ? null : { time: t, value: a.price };
+        });
+        if (pts.some((p) => p === null)) continue;
+        const clean = pts as LineData[];
+
+        const bull = pat.direction === 1;
+        const fill = bull ? "#3b82f640" : "#ec489940";   // 25% alpha
+        const stroke = bull ? "#60a5faff" : "#f472b6ff"; // solid
+        const prz = "#10b98133";                         // emerald 20% alpha
+        const labelColor = bull ? "#60a5fa" : "#f472b6";
+
+        // △XAB fill — X→A→B→X polyline with fill-semantics via a
+        // background rectangle primitive attached to the candle series.
+        // Lightweight-charts doesn't support polygon fills natively, so
+        // we approximate the "bow-tie" with two overlapping rectangles
+        // bounded by the triangles' axis-aligned min/max envelopes.
+        // Not visually identical to a strict polygon fill but conveys
+        // the pattern footprint well enough for a first pass.
+        const addEnvelope = (
+          i0: number, i1: number, i2: number, color: string,
+        ) => {
+          const t1 = timeAt(pat.anchors[i0].bar_index);
+          const t3 = timeAt(pat.anchors[i2].bar_index);
+          if (t1 === null || t3 === null) return;
+          const prices = [pat.anchors[i0].price, pat.anchors[i1].price, pat.anchors[i2].price];
+          const rect = new RectanglePrimitive({
+            time1: t1,
+            time2: t3,
+            priceTop: Math.max(...prices),
+            priceBottom: Math.min(...prices),
+            fillColor: color,
+            borderColor: color,
+            borderWidth: 0,
+          });
+          candleSeries.attachPrimitive(rect);
+          rectPrimitivesRef.current.push(rect);
+        };
+        addEnvelope(0, 1, 2, fill); // △XAB envelope
+        addEnvelope(2, 3, 4, fill); // △BCD envelope
+
+        // XABCD polyline.
+        const poly = chart.addSeries(LineSeries, {
+          color: stroke,
+          lineWidth: 2,
+          lineStyle: pat.invalidated ? LineStyle.Dashed : LineStyle.Solid,
+          priceLineVisible: false,
+          lastValueVisible: false,
+        });
+        poly.setData(clean);
+        overlaySeriesRef.current.push(poly);
+
+        // Labels X/A/B/C/D — high pivots above, low pivots below.
+        // Pattern alternates: even indices (X, B, D) share X's kind,
+        // odd (A, C) are the opposite. For a bullish XABCD the start X
+        // is a low, so evens are lows and labels go below; odds are
+        // highs and go above. Mirror for bearish.
+        for (let i = 0; i < pat.anchors.length; i++) {
+          const a = pat.anchors[i];
+          const t = timeAt(a.bar_index);
+          if (t === null) continue;
+          const evenShareIsLow = bull; // bull → X low → even=low
+          const isLow = (i % 2 === 0) === evenShareIsLow;
+          attachLabel(t, a.price, a.label, labelColor, isLow ? "below" : "above");
+        }
+
+        // PRZ — Potential Reversal Zone at D. Height ≈ 2% of XA (fib
+        // cluster tolerance Carney uses in the "Harmonic Trading" books).
+        // Anchored from D's bar to end of chart so the reader can see
+        // whether price actually reverses off it.
+        const xPrice = pat.anchors[0].price;
+        const aPrice = pat.anchors[1].price;
+        const dPrice = pat.anchors[4].price;
+        const xa = Math.abs(aPrice - xPrice);
+        const przHalf = xa * 0.02;
+        const dBar = pat.anchors[4].bar_index;
+        const dTime = timeAt(dBar);
+        // PRZ extends forward ~(endBar - dBar) or 10 bars minimum.
+        const lookahead = Math.max(10, Math.floor((data.data?.candles.length ?? 0) - dBar));
+        const przEnd = timeAt(dBar + lookahead) ?? timeAt((data.data?.candles.length ?? 0) - 1);
+        if (dTime !== null && przEnd !== null) {
+          const przRect = new RectanglePrimitive({
+            time1: dTime,
+            time2: przEnd,
+            priceTop: dPrice + przHalf,
+            priceBottom: dPrice - przHalf,
+            fillColor: prz,
+            borderColor: prz,
+            borderWidth: 0,
+          });
+          candleSeries.attachPrimitive(przRect);
+          rectPrimitivesRef.current.push(przRect);
+        }
+
+        // Pattern name label — above X anchor for bullish, below for bearish.
+        const tX = timeAt(pat.anchors[0].bar_index);
+        if (tX !== null) {
+          const niceName = pat.subkind
+            .replace(/_/g, " ")
+            .replace(/\b\w/g, (c) => c.toUpperCase());
+          attachLabel(tX, pat.anchors[0].price, niceName, labelColor, bull ? "above" : "below");
+        }
+      }
+    }
   }, [
     data.data, pineOutput, slots,
     showFibBand, showHhLl, onlyLatestMotive, showZigzag, showElliott, fibExtend,
     showImpulse, showZigzagAbc,
     showFlatRegular, showFlatExpanded, showFlatRunning,
     showTriContracting, showTriExpanding, showTriBarrier,
+    showHarmonic, harmonicOutput,
   ]);
 
   const venueList: VenueOpt[] = venues.data ?? [];
@@ -820,6 +1002,16 @@ export function LuxAlgoChart() {
             <input type="checkbox" checked={showTriBarrier} onChange={(e) => setShowTriBarrier(e.target.checked)} />
             Triangle barrier
           </label>
+          <span className="text-zinc-700">·</span>
+          <label className="flex cursor-pointer items-center gap-1">
+            <input type="checkbox" checked={showHarmonic} onChange={(e) => setShowHarmonic(e.target.checked)} />
+            Harmonic (XABCD)
+          </label>
+          {showHarmonic && harmonicOutput && (
+            <span className="ml-1 font-mono text-[11px] text-zinc-400">
+              {harmonicOutput.patterns.length} pattern(s)
+            </span>
+          )}
         </div>
         <div className="ml-auto text-xs text-zinc-500">
           {data.isFetching ? "Fetching… " : ""}

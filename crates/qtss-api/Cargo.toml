@@ -25,6 +25,7 @@ qtss-backtest.workspace = true
 qtss-reporting.workspace = true
 qtss-chart-patterns.workspace = true
 qtss-elliott.workspace = true
+qtss-harmonic.workspace = true
 qtss-pivots.workspace = true
 qtss-notify.workspace = true
 qtss-ai.workspace = true

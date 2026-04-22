@@ -78,6 +78,7 @@ mod wyckoff_setup_invalidation_loop;
 mod regime_deep_loop;
 mod pivot_writer_loop;
 mod detections_writer_loop;
+mod harmonic_writer_loop;
 mod historical_progressive_scan;
 mod data_health_report;
 
@@ -482,6 +483,15 @@ async fn main() -> anyhow::Result<()> {
         let detections_writer_pool = pool.clone();
         tokio::spawn(detections_writer_loop::detections_writer_loop(
             detections_writer_pool,
+        ));
+        // Harmonic patterns — consumes the same pivots table the
+        // Elliott writer does and emits XABCD matches (Gartley, Bat,
+        // Butterfly, Crab, Cypher, etc.) into the detections table
+        // under pattern_family='harmonic'. Gated by
+        // system_config.harmonic.enabled (default true).
+        let harmonic_writer_pool = pool.clone();
+        tokio::spawn(harmonic_writer_loop::harmonic_writer_loop(
+            harmonic_writer_pool,
         ));
         let hps_pool = pool.clone();
         tokio::spawn(
