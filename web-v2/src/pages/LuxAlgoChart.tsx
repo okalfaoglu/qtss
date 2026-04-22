@@ -31,6 +31,7 @@ import {
 import { apiFetch } from "../lib/api";
 import { TextLabelPrimitive } from "../lib/text-label-primitive";
 import { RectanglePrimitive } from "../lib/rectangle-primitive";
+import { PolygonPrimitive } from "../lib/polygon-primitive";
 
 // Shape mirrors qtss_elliott::luxalgo_pine_port::PinePortOutput.
 // Snake-case matches serde's default (the Rust structs use plain
@@ -341,6 +342,7 @@ export function LuxAlgoChart() {
   const overlaySeriesRef = useRef<ISeriesApi<"Line">[]>([]);
   const labelPrimitivesRef = useRef<TextLabelPrimitive[]>([]);
   const rectPrimitivesRef = useRef<RectanglePrimitive[]>([]);
+  const polygonPrimitivesRef = useRef<PolygonPrimitive[]>([]);
 
   // Mount chart
   useEffect(() => {
@@ -424,6 +426,10 @@ export function LuxAlgoChart() {
       try { candleSeries.detachPrimitive(prim); } catch { /* disposed */ }
     }
     rectPrimitivesRef.current = [];
+    for (const prim of polygonPrimitivesRef.current) {
+      try { candleSeries.detachPrimitive(prim); } catch { /* disposed */ }
+    }
+    polygonPrimitivesRef.current = [];
 
     const candles = data.data.candles;
     const candleData: CandlestickData[] = candles.map((c) => ({
@@ -745,34 +751,32 @@ export function LuxAlgoChart() {
         const prz = "#10b98133";                         // emerald 20% alpha
         const labelColor = bull ? "#60a5fa" : "#f472b6";
 
-        // △XAB fill — X→A→B→X polyline with fill-semantics via a
-        // background rectangle primitive attached to the candle series.
-        // Lightweight-charts doesn't support polygon fills natively, so
-        // we approximate the "bow-tie" with two overlapping rectangles
-        // bounded by the triangles' axis-aligned min/max envelopes.
-        // Not visually identical to a strict polygon fill but conveys
-        // the pattern footprint well enough for a first pass.
-        const addEnvelope = (
-          i0: number, i1: number, i2: number, color: string,
-        ) => {
-          const t1 = timeAt(pat.anchors[i0].bar_index);
-          const t3 = timeAt(pat.anchors[i2].bar_index);
-          if (t1 === null || t3 === null) return;
-          const prices = [pat.anchors[i0].price, pat.anchors[i1].price, pat.anchors[i2].price];
-          const rect = new RectanglePrimitive({
-            time1: t1,
-            time2: t3,
-            priceTop: Math.max(...prices),
-            priceBottom: Math.min(...prices),
-            fillColor: color,
-            borderColor: color,
-            borderWidth: 0,
+        // True polygon fill via PolygonPrimitive (pixel-space draw on
+        // the candle pane). △XAB and △BCD each get a filled triangle;
+        // together they form the textbook bow-tie shape (Scott Carney
+        // reference rendering). Lightweight-charts' primitive API
+        // handles the per-frame time→pixel mapping so polygons stay
+        // locked to their anchor bars through zoom/pan.
+        const addTriangle = (i0: number, i1: number, i2: number) => {
+          const t0 = timeAt(pat.anchors[i0].bar_index);
+          const t1 = timeAt(pat.anchors[i1].bar_index);
+          const t2 = timeAt(pat.anchors[i2].bar_index);
+          if (t0 === null || t1 === null || t2 === null) return;
+          const poly = new PolygonPrimitive({
+            vertices: [
+              { time: t0, price: pat.anchors[i0].price },
+              { time: t1, price: pat.anchors[i1].price },
+              { time: t2, price: pat.anchors[i2].price },
+            ],
+            fillColor: fill,
+            borderColor: stroke,
+            borderWidth: 1,
           });
-          candleSeries.attachPrimitive(rect);
-          rectPrimitivesRef.current.push(rect);
+          candleSeries.attachPrimitive(poly);
+          polygonPrimitivesRef.current.push(poly);
         };
-        addEnvelope(0, 1, 2, fill); // △XAB envelope
-        addEnvelope(2, 3, 4, fill); // △BCD envelope
+        addTriangle(0, 1, 2); // △XAB
+        addTriangle(2, 3, 4); // △BCD
 
         // XABCD polyline.
         const poly = chart.addSeries(LineSeries, {
