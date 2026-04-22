@@ -77,6 +77,7 @@ mod wyckoff_setup_loop;
 mod wyckoff_setup_invalidation_loop;
 mod regime_deep_loop;
 mod pivot_writer_loop;
+mod detections_writer_loop;
 mod historical_progressive_scan;
 mod data_health_report;
 
@@ -474,6 +475,14 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(regime_deep_loop::regime_deep_loop(regime_pool));
         let pivot_writer_pool = pool.clone();
         tokio::spawn(pivot_writer_loop::pivot_writer_loop(pivot_writer_pool));
+        // Detections writer — mirrors /v2/elliott output into the new
+        // `detections` table. Gated by system_config.detections.enabled
+        // (default true — user explicitly asked for it to run). One
+        // row per motive / ABC / triangle, slot = Z-slot = wave degree.
+        let detections_writer_pool = pool.clone();
+        tokio::spawn(detections_writer_loop::detections_writer_loop(
+            detections_writer_pool,
+        ));
         let hps_pool = pool.clone();
         tokio::spawn(
             historical_progressive_scan::historical_progressive_scan_loop(hps_pool),
