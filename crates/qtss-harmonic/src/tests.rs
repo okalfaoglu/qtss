@@ -54,7 +54,7 @@ fn pivot(idx: u64, price: Decimal, kind: PivotKind) -> Pivot {
 }
 
 fn tree_from(level_pivots: Vec<Pivot>) -> PivotTree {
-    PivotTree::new(vec![], level_pivots, vec![], vec![])
+    PivotTree::new(vec![], level_pivots, vec![], vec![], vec![])
 }
 
 /// Build a textbook bullish Gartley:

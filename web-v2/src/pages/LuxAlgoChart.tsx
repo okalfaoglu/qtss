@@ -757,11 +757,9 @@ export function LuxAlgoChart() {
         const labelColor = bull ? "#60a5fa" : "#f472b6";
 
         // True polygon fill via PolygonPrimitive (pixel-space draw on
-        // the candle pane). △XAB and △BCD each get a filled triangle;
-        // together they form the textbook bow-tie shape (Scott Carney
-        // reference rendering). Lightweight-charts' primitive API
-        // handles the per-frame time→pixel mapping so polygons stay
-        // locked to their anchor bars through zoom/pan.
+        // the candle pane). Lightweight-charts' primitive API handles
+        // the per-frame time→pixel mapping so polygons stay locked to
+        // their anchor bars through zoom/pan.
         const addTriangle = (i0: number, i1: number, i2: number) => {
           const t0 = timeAt(pat.anchors[i0].bar_index);
           const t1 = timeAt(pat.anchors[i1].bar_index);
@@ -780,10 +778,42 @@ export function LuxAlgoChart() {
           candleSeries.attachPrimitive(poly);
           polygonPrimitivesRef.current.push(poly);
         };
-        addTriangle(0, 1, 2); // △XAB
-        addTriangle(2, 3, 4); // △BCD
 
-        // XABCD polyline.
+        // AB=CD family (classic + alternate) is a 4-point pattern — X
+        // is a structural pivot but not part of the shape's rules.
+        // Render △ABC + △BCD (triangles meeting along the BC edge),
+        // solid A-B-C-D polyline, dotted enclosure lines A→C and B→D.
+        // For XABCD patterns (Gartley, Bat, etc.) render the classic
+        // Carney bow-tie: △XAB + △BCD.
+        const isAbCdFamily =
+          pat.subkind.startsWith("ab_cd") || pat.subkind.startsWith("alt_ab_cd");
+        if (isAbCdFamily) {
+          addTriangle(1, 2, 3); // △ABC
+          addTriangle(2, 3, 4); // △BCD (= user's △CBD, same 3 points)
+          // Dotted enclosure A→C and B→D. Each is its own short
+          // LineSeries so the dash style is independent from the
+          // main polyline.
+          const dashSeries = (p0: LineData, p1: LineData) => {
+            const s = chart.addSeries(LineSeries, {
+              color: stroke,
+              lineWidth: 1,
+              lineStyle: LineStyle.Dotted,
+              priceLineVisible: false,
+              lastValueVisible: false,
+            });
+            s.setData([p0, p1]);
+            overlaySeriesRef.current.push(s);
+          };
+          dashSeries(clean[1], clean[3]); // A → C
+          dashSeries(clean[2], clean[4]); // B → D
+        } else {
+          addTriangle(0, 1, 2); // △XAB
+          addTriangle(2, 3, 4); // △BCD
+        }
+
+        // Main polyline — solid A-B-C-D (AB=CD family, 4 points) or
+        // X-A-B-C-D (XABCD family, 5 points). Dashed when invalidated.
+        const polyPts = isAbCdFamily ? clean.slice(1) : clean;
         const poly = chart.addSeries(LineSeries, {
           color: stroke,
           lineWidth: 2,
@@ -791,15 +821,16 @@ export function LuxAlgoChart() {
           priceLineVisible: false,
           lastValueVisible: false,
         });
-        poly.setData(clean);
+        poly.setData(polyPts);
         overlaySeriesRef.current.push(poly);
 
-        // Labels X/A/B/C/D — high pivots above, low pivots below.
+        // Labels — high pivots above, low pivots below. AB=CD skips the
+        // "X" label since that anchor is structural only; XABCD shows all 5.
         // Pattern alternates: even indices (X, B, D) share X's kind,
         // odd (A, C) are the opposite. For a bullish XABCD the start X
-        // is a low, so evens are lows and labels go below; odds are
-        // highs and go above. Mirror for bearish.
-        for (let i = 0; i < pat.anchors.length; i++) {
+        // is a low, so evens are lows; mirror for bearish.
+        const labelStart = isAbCdFamily ? 1 : 0;
+        for (let i = labelStart; i < pat.anchors.length; i++) {
           const a = pat.anchors[i];
           const t = timeAt(a.bar_index);
           if (t === null) continue;
@@ -808,15 +839,19 @@ export function LuxAlgoChart() {
           attachLabel(t, a.price, a.label, labelColor, isLow ? "below" : "above");
         }
 
-        // PRZ — Potential Reversal Zone at D. Height ≈ 2% of XA (fib
-        // cluster tolerance Carney uses in the "Harmonic Trading" books).
-        // Anchored from D's bar to end of chart so the reader can see
+        // PRZ — Potential Reversal Zone at D. Height ≈ 2% of the
+        // pattern's primary leg (XA for XABCD, AB for AB=CD family)
+        // — fib cluster tolerance Carney uses in "Harmonic Trading".
+        // Anchored from D's bar to end of chart so the reader sees
         // whether price actually reverses off it.
         const xPrice = pat.anchors[0].price;
         const aPrice = pat.anchors[1].price;
+        const bPrice = pat.anchors[2].price;
         const dPrice = pat.anchors[4].price;
-        const xa = Math.abs(aPrice - xPrice);
-        const przHalf = xa * 0.02;
+        const refLeg = isAbCdFamily
+          ? Math.abs(aPrice - bPrice) // AB leg
+          : Math.abs(aPrice - xPrice); // XA leg
+        const przHalf = refLeg * 0.02;
         const dBar = pat.anchors[4].bar_index;
         const dTime = timeAt(dBar);
         // PRZ extends forward ~(endBar - dBar) or 10 bars minimum.
@@ -836,13 +871,16 @@ export function LuxAlgoChart() {
           rectPrimitivesRef.current.push(przRect);
         }
 
-        // Pattern name label — above X anchor for bullish, below for bearish.
-        const tX = timeAt(pat.anchors[0].bar_index);
+        // Pattern name label — on the structural start anchor. For
+        // AB=CD that's A (anchors[1]) since X is just scaffolding;
+        // for XABCD it's X (anchors[0]).
+        const nameAnchorIdx = isAbCdFamily ? 1 : 0;
+        const tX = timeAt(pat.anchors[nameAnchorIdx].bar_index);
         if (tX !== null) {
           const niceName = pat.subkind
             .replace(/_/g, " ")
             .replace(/\b\w/g, (c) => c.toUpperCase());
-          attachLabel(tX, pat.anchors[0].price, niceName, labelColor, bull ? "above" : "below");
+          attachLabel(tX, pat.anchors[nameAnchorIdx].price, niceName, labelColor, bull ? "above" : "below");
         }
       }
     }

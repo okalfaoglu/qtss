@@ -1,9 +1,12 @@
 //! Harmonic pattern catalog.
 //!
-//! Each entry encodes the four canonical ratio ranges for one harmonic.
-//! Ranges are deliberately a touch wider than the strictest textbook
-//! values so realistic noise on live data still matches; HarmonicConfig
-//! exposes a global slack on top for further loosening.
+//! Each entry encodes the four canonical ratio ranges for one harmonic,
+//! plus an optional cross-ratio constraint `cd_over_ab` used by the two
+//! AB=CD variants to enforce Carney's CD/AB price-equality rule (or the
+//! 1.27 / 1.618 multiplier rule for the Alternate variant). Ranges are
+//! deliberately a touch wider than the strictest textbook values so
+//! realistic noise on live data still matches; HarmonicConfig exposes a
+//! global slack on top for further loosening.
 //!
 //! Adding a new pattern (Shark, Cypher, 5-0, ...) is one entry in
 //! `PATTERNS` — no central match arm to edit.
@@ -17,6 +20,16 @@ pub struct HarmonicSpec {
     pub bc: RatioRange, // BC / AB
     pub cd: RatioRange, // CD / BC
     pub ad: RatioRange, // AD / XA (can be negative — see 5-0)
+    /// Optional cross-ratio `CD / AB` constraint. Encodes Carney's
+    /// "CD = AB" rule (classic ABCD → ~1.0) and "CD = AB × 1.27 or
+    /// 1.618" rule (Alternate ABCD → ~1.27 / ~1.618) which the
+    /// independent `bc` / `cd` ranges cannot enforce on their own
+    /// (`r_bc × r_cd ≠ 1` is allowed in the independent checks but
+    /// invalidates the AB=CD core invariant).
+    ///
+    /// `None` for patterns where the cross-ratio isn't part of the
+    /// spec (everything except `ab_cd` and `alt_ab_cd`).
+    pub cd_over_ab: Option<RatioRange>,
     /// True → pattern completes with D **beyond** X (classic extensions
     /// like Butterfly/Crab) **or** outside the XA envelope in a way that
     /// demands a D-anchored stop rather than an X-anchored one (5-0).
@@ -41,6 +54,7 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         bc: RatioRange::new(0.382, 0.886),
         cd: RatioRange::new(1.27, 1.618), // Carney: "1.27 or 1.618", NOT 1.13+
         ad: RatioRange::new(0.74, 0.82),  // ~0.786 (strict)
+        cd_over_ab: None,
         extension: false,
     },
     // ── Bat (Scott Carney) ─────────────────────────────────────────
@@ -54,6 +68,7 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         bc: RatioRange::new(0.382, 0.886),
         cd: RatioRange::new(1.618, 2.618),
         ad: RatioRange::new(0.84, 0.92),  // ~0.886
+        cd_over_ab: None,
         extension: false,
     },
     // ── Butterfly (Bryce Gilmore, formalized by Scott Carney) ────────
@@ -67,6 +82,7 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         bc: RatioRange::new(0.382, 0.886),
         cd: RatioRange::new(1.618, 2.618), // Carney: up to 2.618 extreme
         ad: RatioRange::new(1.20, 1.65),   // 1.27..1.618 XA extension
+        cd_over_ab: None,
         extension: true,
     },
     // ── Crab (Scott Carney) ────────────────────────────────────────
@@ -80,6 +96,7 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         bc: RatioRange::new(0.382, 0.886),
         cd: RatioRange::new(2.24, 3.618),
         ad: RatioRange::new(1.55, 1.70),  // ~1.618 extension
+        cd_over_ab: None,
         extension: true,
     },
     // ── Deep Crab (Scott Carney) ─────────────────────────────────────
@@ -92,6 +109,7 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         bc: RatioRange::new(0.382, 0.886),
         cd: RatioRange::new(2.24, 3.618),  // Carney: min 2.24 (was 2.0 — too loose)
         ad: RatioRange::new(1.55, 1.70),   // 1.618 (exact)
+        cd_over_ab: None,
         extension: true,
     },
     // ── Shark (Scott Carney, 2011) ───────────────────────────────────
@@ -105,6 +123,7 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         bc: RatioRange::new(1.13, 1.618),
         cd: RatioRange::new(1.618, 2.24),
         ad: RatioRange::new(0.84, 1.13),  // 0.886–1.13
+        cd_over_ab: None,
         extension: true,
     },
     // ── Cypher (Darren Oglesbee) ─────────────────────────────────────
@@ -115,6 +134,7 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         bc: RatioRange::new(1.13, 1.414),
         cd: RatioRange::new(1.272, 2.0),
         ad: RatioRange::new(0.74, 0.82),  // ~0.786 of XC
+        cd_over_ab: None,
         extension: false,
     },
     // ── Alt Bat (Scott Carney) ───────────────────────────────────────
@@ -128,6 +148,7 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         bc: RatioRange::new(0.382, 0.886),
         cd: RatioRange::new(2.0, 3.618),
         ad: RatioRange::new(1.08, 1.18),  // ~1.13
+        cd_over_ab: None,
         extension: true,
     },
     // ── 5-0 (Scott Carney, Harmonic Trading Vol. 2) ─────────────────
@@ -155,40 +176,64 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         bc: RatioRange::new(1.618, 2.24),
         cd: RatioRange::new(0.45, 0.55),  // ~0.50 of BC
         ad: RatioRange::new(-0.25, 0.35), // derived analytically (see above)
+        cd_over_ab: None,
         extension: true,
     },
     // ── AB=CD (Classic, Scott Carney / Larry Pesavento) ──────────────
     // Ref: https://harmonictrader.com/harmonic-patterns/abcd-pattern/
+    //
     // 4-point pattern (A→B→C→D). We embed it in the XABCD container
     // with intentionally loose XA/AD bounds so the earlier pivot (X)
     // acts only as a structural anchor rather than a ratio constraint.
-    // Carney: "C retracement 0.382–0.886 of AB", "BC projection
-    // 1.13–2.618 (reciprocals: 0.618 retrace ↔ 1.618 projection;
-    // 0.786 ↔ 1.27)", "CD = AB (price equality)".
+    //
+    // Carney's invariants for the classic AB=CD:
+    //   * C retracement 0.382–0.886 of AB   (→ r_bc ∈ [0.382, 0.886])
+    //   * BC projection 1.13–2.618          (→ r_cd ∈ [1.13, 2.618])
+    //   * CD = AB (price equality)          (→ r_cd_over_ab ≈ 1.0)
+    //
+    // Without the cd_over_ab cross-ratio, the independent r_bc / r_cd
+    // checks would accept `(0.382, 1.13)` which gives CD/AB ≈ 0.43 —
+    // a valid XABCD geometry but *not* an AB=CD pattern. The cross
+    // check [0.85, 1.15] enforces Carney's equality rule with 15%
+    // price noise tolerance either side.
     HarmonicSpec {
         name: "ab_cd",
         ab: RatioRange::new(0.20, 3.00),   // X unconstrained (4-point pattern)
-        bc: RatioRange::new(0.382, 0.886), // BC retracement of AB
-        cd: RatioRange::new(1.13, 2.618),  // Carney: "1.13–2.618"; reciprocal of r_bc
+        bc: RatioRange::new(0.382, 0.886), // C retracement of AB
+        cd: RatioRange::new(1.13, 2.618),  // BC projection; reciprocal of r_bc
         ad: RatioRange::new(0.20, 5.00),   // AD unconstrained
+        cd_over_ab: Some(RatioRange::new(0.85, 1.15)), // CD ≈ AB (±15%)
         extension: true,
     },
     // ── Alternate AB=CD (Scott Carney) ───────────────────────────────
     // Ref: https://harmonictrader.com/harmonic-patterns/alternate-abcd-pattern/
-    // Carney: "multiply AB by 1.27 or 1.618 and project from C" —
-    // used when classic AB=CD equality is "blown out".
-    // r_cd = CD/BC = (1.27 or 1.618) / r_bc, r_bc ∈ [0.382, 0.886]
-    //   1.27/0.886=1.434  …  1.27/0.382=3.325
-    //   1.618/0.886=1.827 …  1.618/0.382=4.236
-    // Practical range [1.27, 3.618] — overlaps classic near CD≈AB
-    // (~1.8) but distinctive in the high end (> 2.618) where classic
-    // is excluded. Matcher picks whichever score is higher.
+    //
+    // Carney: "multiply the AB leg by either 1.27 or 1.618 and project
+    // that distance from point C. This calculation should converge
+    // with a Fibonacci projection (usually a 1.618 or 2.24) of the BC
+    // leg." Used when classic AB=CD equality is "blown out".
+    //
+    // Cross-ratio invariant:
+    //   CD = AB × 1.27   → cd_over_ab ≈ 1.27
+    //   CD = AB × 1.618  → cd_over_ab ≈ 1.618
+    // Union range [1.15, 1.75] with 10–15% noise either side covers
+    // both legs without bleeding into classic AB=CD (cd_over_ab ≈ 1.0)
+    // or full-extension patterns (1.8+).
+    //
+    // r_cd = CD/BC derivation:
+    //   r_cd = cd_over_ab / r_bc
+    //   r_bc ∈ [0.382, 0.886], cd_over_ab ∈ [1.13, 1.75]
+    //     lo ≈ 1.13 / 0.886 = 1.275
+    //     hi ≈ 1.75 / 0.382 = 4.58
+    //   Practical band [1.27, 4.236] — upper bound from Carney's
+    //   1.618 / 0.382 = 4.236 edge case.
     HarmonicSpec {
         name: "alt_ab_cd",
         ab: RatioRange::new(0.20, 3.00),
         bc: RatioRange::new(0.382, 0.886),
-        cd: RatioRange::new(1.27, 3.618),  // Carney alt projection band
+        cd: RatioRange::new(1.27, 4.236), // widened from 3.618 to cover 1.618/0.382
         ad: RatioRange::new(0.20, 5.00),
+        cd_over_ab: Some(RatioRange::new(1.15, 1.75)), // 1.27 and 1.618 band
         extension: true,
     },
     // ── Three Drives ────────────────────────────────────────────────
@@ -201,6 +246,7 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         bc: RatioRange::new(1.13, 1.618), // drive 2 extension
         cd: RatioRange::new(0.55, 0.82),  // correction 2: 0.618–0.786
         ad: RatioRange::new(1.13, 1.80),  // drive 3 extension total
+        cd_over_ab: None,
         extension: true,
     },
 ];
