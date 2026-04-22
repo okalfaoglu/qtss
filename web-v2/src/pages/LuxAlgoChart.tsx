@@ -912,9 +912,15 @@ export function LuxAlgoChart() {
         // a bearish pattern D is a high so targets are below. The
         // signed multiplier c-d already bakes in the direction.
         //
-        // Each target = one horizontal LineSeries extending from D's
-        // time to the PRZ end + a dotted TextLabel with the fib level.
-        if (showHarmonicTargets && dTime !== null && przEnd !== null) {
+        // Target lines are short (6 bars forward from D) so they don't
+        // dominate the chart — matches the Fib band's default short
+        // extension. Deepens just enough for the operator to eyeball
+        // where T1/T2/T3 sit relative to the subsequent candles.
+        const TARGET_BARS_FORWARD = 6;
+        const targetEnd =
+          timeAt(dBar + TARGET_BARS_FORWARD)
+          ?? timeAt((data.data?.candles.length ?? 0) - 1);
+        if (showHarmonicTargets && dTime !== null && targetEnd !== null) {
           const cPrice = pat.anchors[3].price;
           const cdLeg = cPrice - dPrice; // signed (positive=bull)
           const targetColor = bull ? "#10b981" : "#ef4444"; // emerald / red
@@ -934,11 +940,11 @@ export function LuxAlgoChart() {
             });
             line.setData([
               { time: dTime, value: price },
-              { time: przEnd, value: price },
+              { time: targetEnd, value: price },
             ]);
             overlaySeriesRef.current.push(line);
             const lbl = new TextLabelPrimitive({
-              time: przEnd,
+              time: targetEnd,
               price,
               text: `${label}  ${price.toFixed(2)}`,
               color: targetColor,
