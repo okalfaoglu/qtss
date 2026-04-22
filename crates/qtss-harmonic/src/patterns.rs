@@ -157,8 +157,16 @@ pub const PATTERNS: &[HarmonicSpec] = &[
     // Structure: 0-X-A-B-C-D (B is an EXTENSION of XA — NOT a retrace).
     //   * r_ab = AB/XA ∈ [1.13, 1.618]  (XA projection that defines B,
     //     Carney: "must not exceed 1.618")
-    //   * r_bc = BC/AB ∈ [1.618, 2.24]  (strict — the defining band)
+    //   * r_bc = BC/AB ∈ [1.618, 2.24]  (Carney: "strict — the defining
+    //     band, exceeding 2.24 negates the pattern")
     //   * r_cd = CD/BC ≈ 0.50           (D at 50% retrace of BC)
+    //   * Reciprocal AB=CD rule (Carney's defining measurement):
+    //     "D = C − AB projected from C" → CD/AB ≈ 1.0. Enforced via
+    //     cd_over_ab below. The r_bc × r_cd cross product already
+    //     centers at 1.0 when r_bc = 2.0 and r_cd = 0.50 — the explicit
+    //     cross ratio picks off configurations at the range edges that
+    //     mathematically violate the AB=CD equality despite passing
+    //     the independent leg checks.
     //   * r_ad derivation (with α=r_ab, β=r_bc):
     //         D = A + α·(0.5β − 1),  r_ad = α·(1 − 0.5β)
     //     For α ∈ [1.13, 1.618], β ∈ [1.618, 2.24]:
@@ -176,7 +184,12 @@ pub const PATTERNS: &[HarmonicSpec] = &[
         bc: RatioRange::new(1.618, 2.24),
         cd: RatioRange::new(0.45, 0.55),  // ~0.50 of BC
         ad: RatioRange::new(-0.25, 0.35), // derived analytically (see above)
-        cd_over_ab: None,
+        // Reciprocal AB=CD — Carney's defining measurement. Range
+        // [0.90, 1.10] = ±10% of exact equality. Tight on purpose: a
+        // 20%-off CD (like a 0.80 cross ratio) fails Carney's
+        // "equivalent length" qualifier even though both `bc` and `cd`
+        // pass their independent bounds.
+        cd_over_ab: Some(RatioRange::new(0.90, 1.10)),
         extension: true,
     },
     // ── AB=CD (Classic, Scott Carney / Larry Pesavento) ──────────────
