@@ -738,6 +738,11 @@ export function LuxAlgoChart() {
     if (showHarmonic && harmonicOutput) {
       for (const pat of harmonicOutput.patterns) {
         if (pat.anchors.length !== 5) continue;
+        // Z-slot filter — only render patterns whose slot is enabled in
+        // the Z1-Z5 toolbar (same switches that gate Elliott output).
+        // slot 0 = Z1, slot 4 = Z5.
+        const slotCfg = slots[pat.slot];
+        if (slotCfg && !slotCfg.enabled) continue;
         const pts: Array<LineData | null> = pat.anchors.map((a) => {
           const t = timeAt(a.bar_index);
           return t === null ? null : { time: t, value: a.price };
