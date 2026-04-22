@@ -240,6 +240,31 @@ export function LuxAlgoChart() {
   // so the live/db toggle covers both families at once.
   const [showHarmonic, setShowHarmonic] = useState(true);
 
+  // Per-pattern filter for the Harmonic family. Each key matches the
+  // Rust spec name from qtss_harmonic::PATTERNS; the suffix _bull/_bear
+  // is stripped before lookup. Defaults: all on.
+  const HARMONIC_KINDS: Array<{ key: string; label: string }> = [
+    { key: "gartley",      label: "Gartley" },
+    { key: "bat",          label: "Bat" },
+    { key: "alt_bat",      label: "Alt Bat" },
+    { key: "butterfly",    label: "Butterfly" },
+    { key: "crab",         label: "Crab" },
+    { key: "deep_crab",    label: "Deep Crab" },
+    { key: "shark",        label: "Shark" },
+    { key: "cypher",       label: "Cypher" },
+    { key: "five_zero",    label: "5-0" },
+    { key: "ab_cd",        label: "AB=CD" },
+    { key: "alt_ab_cd",    label: "Alt AB=CD" },
+    { key: "three_drives", label: "Three Drives" },
+  ];
+  const [harmonicFilters, setHarmonicFilters] = useState<Record<string, boolean>>(
+    () => Object.fromEntries(HARMONIC_KINDS.map((k) => [k.key, true]))
+  );
+  // Pattern target projections (Scott Carney: T1=0.382×CD, T2=0.618×CD,
+  // T3=1.0×CD from D toward C). Drawn as horizontal lines extending
+  // from D to chart end so operators see the Fibonacci TP ladder.
+  const [showHarmonicTargets, setShowHarmonicTargets] = useState(true);
+
   // Map subkind → toggle for the ABC classifier branch below. Keeps the
   // draw loop a pure look-up (CLAUDE.md #1: no scattered if/else).
   const abcVisibleFor = (subkind: string | undefined): boolean => {
@@ -743,6 +768,11 @@ export function LuxAlgoChart() {
         // slot 0 = Z1, slot 4 = Z5.
         const slotCfg = slots[pat.slot];
         if (slotCfg && !slotCfg.enabled) continue;
+        // Per-pattern subkind filter (Gartley, Bat, ...). The DB stores
+        // subkind with a `_bull` / `_bear` suffix — strip it and look
+        // up the base name in the harmonicFilters map.
+        const baseKind = pat.subkind.replace(/_(bull|bear)$/, "");
+        if (harmonicFilters[baseKind] === false) continue;
         const pts: Array<LineData | null> = pat.anchors.map((a) => {
           const t = timeAt(a.bar_index);
           return t === null ? null : { time: t, value: a.price };
@@ -871,6 +901,58 @@ export function LuxAlgoChart() {
           rectPrimitivesRef.current.push(przRect);
         }
 
+        // ── Target projections (Scott Carney: T1 / T2 / T3) ──
+        //
+        // From D (pattern completion / entry), compute Fibonacci
+        // retracements of the CD leg back toward C:
+        //   T1 = D + 0.382 × (C − D)   minimum-move target
+        //   T2 = D + 0.618 × (C − D)   moderate target
+        //   T3 = D + 1.0   × (C − D)   full CD retrace (= C)
+        // For a bullish pattern D is a low so targets are above D; for
+        // a bearish pattern D is a high so targets are below. The
+        // signed multiplier c-d already bakes in the direction.
+        //
+        // Each target = one horizontal LineSeries extending from D's
+        // time to the PRZ end + a dotted TextLabel with the fib level.
+        if (showHarmonicTargets && dTime !== null && przEnd !== null) {
+          const cPrice = pat.anchors[3].price;
+          const cdLeg = cPrice - dPrice; // signed (positive=bull)
+          const targetColor = bull ? "#10b981" : "#ef4444"; // emerald / red
+          const TARGETS: Array<[number, string]> = [
+            [0.382, "T1 0.382"],
+            [0.618, "T2 0.618"],
+            [1.0,   "T3 1.0"],
+          ];
+          for (const [frac, label] of TARGETS) {
+            const price = dPrice + cdLeg * frac;
+            const line = chart.addSeries(LineSeries, {
+              color: targetColor,
+              lineWidth: 1,
+              lineStyle: LineStyle.Dashed,
+              priceLineVisible: false,
+              lastValueVisible: false,
+            });
+            line.setData([
+              { time: dTime, value: price },
+              { time: przEnd, value: price },
+            ]);
+            overlaySeriesRef.current.push(line);
+            const lbl = new TextLabelPrimitive({
+              time: przEnd,
+              price,
+              text: `${label}  ${price.toFixed(2)}`,
+              color: targetColor,
+              position: "above",
+              fontSize: 10,
+              offsetPx: 2,
+              paddingPx: 2,
+              background: "#09090bcc",
+            });
+            candleSeries.attachPrimitive(lbl);
+            labelPrimitivesRef.current.push(lbl);
+          }
+        }
+
         // Pattern name label — on the structural start anchor. For
         // AB=CD that's A (anchors[1]) since X is just scaffolding;
         // for XABCD it's X (anchors[0]).
@@ -891,6 +973,7 @@ export function LuxAlgoChart() {
     showFlatRegular, showFlatExpanded, showFlatRunning,
     showTriContracting, showTriExpanding, showTriBarrier,
     showHarmonic, harmonicOutput,
+    harmonicFilters, showHarmonicTargets,
   ]);
 
   const venueList: VenueOpt[] = venues.data ?? [];
@@ -1011,10 +1094,14 @@ export function LuxAlgoChart() {
             </button>
           </div>
         </div>
-        {/* Per-formation toggles — uncheck to prove the backend really
-            detected each pattern family rather than drawing defaults. */}
+        {/* ── Elliott formations group — motive + corrective subtypes ── */}
         <div className="flex w-full flex-wrap items-center gap-2 rounded border border-zinc-800 bg-zinc-950/40 p-2 text-xs">
-          <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">formations</span>
+          <span className="font-mono text-[10px] uppercase tracking-wider text-emerald-500">elliott</span>
+          <label className="flex cursor-pointer items-center gap-1">
+            <input type="checkbox" checked={showElliott} onChange={(e) => setShowElliott(e.target.checked)} />
+            <span className="font-mono text-[10px] uppercase text-zinc-400">master</span>
+          </label>
+          <span className="text-zinc-700">·</span>
           <label className="flex cursor-pointer items-center gap-1">
             <input type="checkbox" checked={showImpulse} onChange={(e) => setShowImpulse(e.target.checked)} />
             Impulse
@@ -1049,13 +1136,44 @@ export function LuxAlgoChart() {
             <input type="checkbox" checked={showTriBarrier} onChange={(e) => setShowTriBarrier(e.target.checked)} />
             Triangle barrier
           </label>
-          <span className="text-zinc-700">·</span>
+          {pineOutput && (
+            <span className="ml-auto font-mono text-[11px] text-zinc-400">
+              {totalMotives} motive
+            </span>
+          )}
+        </div>
+
+        {/* ── Harmonic formations group — per-pattern toggles + targets ── */}
+        <div className="flex w-full flex-wrap items-center gap-2 rounded border border-zinc-800 bg-zinc-950/40 p-2 text-xs">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-fuchsia-500">harmonic</span>
           <label className="flex cursor-pointer items-center gap-1">
             <input type="checkbox" checked={showHarmonic} onChange={(e) => setShowHarmonic(e.target.checked)} />
-            Harmonic (XABCD)
+            <span className="font-mono text-[10px] uppercase text-zinc-400">master</span>
+          </label>
+          <span className="text-zinc-700">·</span>
+          {HARMONIC_KINDS.map(({ key, label }) => (
+            <label key={key} className="flex cursor-pointer items-center gap-1">
+              <input
+                type="checkbox"
+                checked={harmonicFilters[key] ?? true}
+                onChange={(e) =>
+                  setHarmonicFilters((prev) => ({ ...prev, [key]: e.target.checked }))
+                }
+              />
+              {label}
+            </label>
+          ))}
+          <span className="text-zinc-700">·</span>
+          <label className="flex cursor-pointer items-center gap-1">
+            <input
+              type="checkbox"
+              checked={showHarmonicTargets}
+              onChange={(e) => setShowHarmonicTargets(e.target.checked)}
+            />
+            T1/T2/T3 targets
           </label>
           {showHarmonic && harmonicOutput && (
-            <span className="ml-1 font-mono text-[11px] text-zinc-400">
+            <span className="ml-auto font-mono text-[11px] text-zinc-400">
               {harmonicOutput.patterns.length} pattern(s)
             </span>
           )}
