@@ -33,7 +33,7 @@ use qtss_domain::v2::pivot::PivotKind;
 use qtss_pivots::zigzag::{compute_pivots, filter_prominence, Sample};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Which price field feeds the high / low streams. Mirrors the Pine
 /// `i_hi` / `i_lo` inputs.
@@ -110,7 +110,7 @@ impl Default for PinePortConfig {
 // Output DTOs — plain data the caller (API → UI) can draw directly.
 //-----------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PivotPoint {
     /// `+1` = high pivot, `-1` = low pivot. Mirrors Pine's `d` array.
     pub direction: i8,
@@ -119,11 +119,13 @@ pub struct PivotPoint {
     /// Pine `label.set_text(...)` override. Present when two label
     /// spots collide at the same bar and Pine fuses them, e.g.
     /// "(5) (1)" or "(b) (1)".
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_override: Option<String>,
     /// Pine `label.set_textcolor(color(na))` equivalent — skip
     /// rendering this anchor's text (the fused twin shows it).
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    /// `#[serde(default)]` so round-tripping through JSON (where the
+    /// field is dropped when false) deserializes back to false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_label: bool,
 }
 

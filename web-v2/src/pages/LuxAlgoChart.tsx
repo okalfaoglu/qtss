@@ -193,6 +193,14 @@ export function LuxAlgoChart() {
   const [showTriExpanding, setShowTriExpanding] = useState(true);
   const [showTriBarrier, setShowTriBarrier] = useState(true);
 
+  // Data source for Elliott detections. 'live' recomputes via
+  // luxalgo_pine_port::run on each request (canonical path, matches
+  // /v2/elliott). 'db' reads the persisted `detections` table via
+  // /v2/elliott-db. Flipping between the two should produce identical
+  // output when the writer tick has caught up — visual diff is the
+  // smoke test the user asked for.
+  const [detectionSource, setDetectionSource] = useState<"live" | "db">("live");
+
   // Map subkind → toggle for the ABC classifier branch below. Keeps the
   // draw loop a pure look-up (CLAUDE.md #1: no scattered if/else).
   const abcVisibleFor = (subkind: string | undefined): boolean => {
@@ -238,6 +246,7 @@ export function LuxAlgoChart() {
   const elliott = useQuery<ElliottResponse>({
     queryKey: [
       "elliott",
+      detectionSource,
       exchange,
       symbol,
       tf,
@@ -246,11 +255,20 @@ export function LuxAlgoChart() {
       enabledColors,
       barLimit,
     ],
-    queryFn: () =>
-      apiFetch(
+    queryFn: () => {
+      // DB source: reads persisted `detections` rows — no `lengths`
+      // param because slots are baked into each row (slot column).
+      // Live source: recomputes via the Pine port each request.
+      if (detectionSource === "db") {
+        return apiFetch(
+          `/v2/elliott-db/${exchange}/${symbol}/${tf}?segment=${segment}&limit=${barLimit}`
+        );
+      }
+      return apiFetch(
         `/v2/elliott/${exchange}/${symbol}/${tf}?segment=${segment}&limit=${barLimit}` +
           `&lengths=${enabledLengths}&colors=${encodeURIComponent(enabledColors)}`
-      ),
+      );
+    },
     enabled: enabledLengths.length > 0,
     refetchInterval: 15_000,
   });
@@ -745,6 +763,24 @@ export function LuxAlgoChart() {
             <input type="checkbox" checked={onlyLatestMotive} onChange={(e) => setOnlyLatestMotive(e.target.checked)} />
             Only latest motive
           </label>
+          {/* Elliott source: live-compute vs DB-read (persisted detections). */}
+          <div className="ml-2 flex items-center gap-1 text-xs">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">source</span>
+            <button
+              type="button"
+              className={`rounded px-2 py-0.5 ${detectionSource === "live" ? "bg-emerald-600 text-white" : "bg-zinc-800 text-zinc-300"}`}
+              onClick={() => setDetectionSource("live")}
+            >
+              live
+            </button>
+            <button
+              type="button"
+              className={`rounded px-2 py-0.5 ${detectionSource === "db" ? "bg-emerald-600 text-white" : "bg-zinc-800 text-zinc-300"}`}
+              onClick={() => setDetectionSource("db")}
+            >
+              db
+            </button>
+          </div>
         </div>
         {/* Per-formation toggles — uncheck to prove the backend really
             detected each pattern family rather than drawing defaults. */}

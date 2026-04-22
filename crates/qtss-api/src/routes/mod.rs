@@ -35,6 +35,7 @@ mod v2_backtest;
 mod v2_blotter;
 mod v2_chart;
 mod v2_elliott;
+mod v2_elliott_db;
 mod v2_zigzag;
 mod v2_config;
 mod v2_dashboard;
@@ -76,6 +77,7 @@ pub use v2_backtest::v2_backtest_router;
 pub use v2_blotter::v2_blotter_router;
 pub use v2_chart::v2_chart_router;
 pub use v2_elliott::v2_elliott_router;
+pub use v2_elliott_db::v2_elliott_db_router;
 pub use v2_zigzag::v2_zigzag_router;
 pub use v2_config::{v2_config_admin_router, v2_config_router};
 pub use v2_dashboard::{v2_dashboard_router, V2DashboardHandle};
@@ -153,6 +155,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_chart_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_zigzag_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_elliott_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_elliott_db_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_detections_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_tbm_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_onchain_router().layer(from_fn(require_dashboard_roles)))
