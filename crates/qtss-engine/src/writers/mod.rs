@@ -1,8 +1,11 @@
 pub mod candles;
 pub mod classical;
+pub mod derivatives;
 pub mod elliott;
 pub mod gap;
 pub mod harmonic;
 pub mod orb;
+pub mod orderflow;
 pub mod pivot;
 pub mod range;
+pub mod smc;

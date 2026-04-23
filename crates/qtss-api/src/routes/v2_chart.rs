@@ -242,6 +242,11 @@ async fn detections_for(
         return Vec::new();
     }
 
+    // Fair-share across families: we let the DB rank by `start_time`
+    // first so the freshest signals of every family (SMC, classical,
+    // range, etc.) make the cut. With `ORDER BY slot` first, slot-0
+    // families (classical, range, gap, candle, orb) could saturate
+    // the 2000-row budget and starve slot-1+ families like SMC.
     let rows = match sqlx::query(
         r#"SELECT slot, pattern_family, subkind, direction,
                   start_time, end_time,
@@ -252,7 +257,7 @@ async fn detections_for(
               AND slot = ANY($5)
               AND mode = ANY($6)
               AND invalidated = false
-            ORDER BY slot, start_time DESC
+            ORDER BY start_time DESC
             LIMIT 2000"#,
     )
     .bind(venue)

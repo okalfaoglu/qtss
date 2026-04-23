@@ -46,6 +46,9 @@ members = [
     "crates/qtss-candles",
     "crates/qtss-symbol-intel",
     "crates/qtss-engine",
+    "crates/qtss-smc",
+    "crates/qtss-derivatives-signals",
+    "crates/qtss-orderflow",
 ]
 
 [workspace.package]
@@ -117,6 +120,9 @@ qtss-gap = { path = "crates/qtss-gap" }
 qtss-candles = { path = "crates/qtss-candles" }
 qtss-symbol-intel = { path = "crates/qtss-symbol-intel" }
 qtss-engine = { path = "crates/qtss-engine" }
+qtss-smc = { path = "crates/qtss-smc" }
+qtss-derivatives-signals = { path = "crates/qtss-derivatives-signals" }
+qtss-orderflow = { path = "crates/qtss-orderflow" }
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 hmac = "0.12"

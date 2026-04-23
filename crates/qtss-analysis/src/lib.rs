@@ -5,10 +5,15 @@
 
 mod engine_loop;
 mod error;
+pub mod scorer;
 
 use async_trait::async_trait;
 
 pub use error::AnalysisError;
+pub use scorer::{
+    load_config as load_confluence_config, ConfluenceConfig, ConfluenceScorer,
+    ConfluenceSnapshot, ConfluenceVerdict,
+};
 use chrono::{DateTime, Utc};
 use qtss_storage::EngineSymbolRow;
 use serde_json::Value;

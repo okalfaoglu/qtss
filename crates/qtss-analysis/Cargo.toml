@@ -16,6 +16,7 @@ qtss-tbm.workspace = true
 qtss-notify.workspace = true
 qtss-storage.workspace = true
 rust_decimal = { version = "1.36", features = ["serde"] }
+serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true

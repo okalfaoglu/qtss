@@ -83,6 +83,9 @@ fn registered_writers() -> Vec<Box<dyn WriterTask>> {
         Box::new(writers::gap::GapWriter),
         Box::new(writers::candles::CandlesWriter),
         Box::new(writers::orb::OrbWriter),
+        Box::new(writers::smc::SmcWriter),
+        Box::new(writers::derivatives::DerivativesWriter),
+        Box::new(writers::orderflow::OrderFlowWriter),
     ]
 }
 

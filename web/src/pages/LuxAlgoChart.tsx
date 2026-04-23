@@ -424,6 +424,9 @@ export function LuxAlgoChart() {
   // the session's first-hour high/low as a horizontal band plus a
   // marker at the breakout close.
   const [showOrb, setShowOrb] = useState(false);
+  // Smart Money Concepts (BOS / CHoCH / MSS / LiquiditySweep / FVI).
+  // Single-anchor events rendered as short horizontal markers + labels.
+  const [showSmc, setShowSmc] = useState(false);
   // ── Technical indicator overlays (Faz 11 Aşama 5). Price-pane
   //    overlays only on this release — oscillators (RSI / Williams%R /
   //    CMF / Aroon / TTM Squeeze) land in PR-11H with a dedicated
@@ -471,7 +474,7 @@ export function LuxAlgoChart() {
     // the request the backend returns an empty slice anyway (the SQL
     // `slot = ANY($5)` clause would be vacuously false).
     enabled:
-      (showClassical || showRange || showGap || showCandles || showOrb) &&
+      (showClassical || showRange || showGap || showCandles || showOrb || showSmc) &&
       levelsParamAux.length > 0,
     refetchInterval: 30_000,
   });
@@ -1416,12 +1419,57 @@ export function LuxAlgoChart() {
       );
     };
 
+    // Smart Money Concepts events — single-anchor markers (BOS/CHoCH/
+    // MSS as short dashed horizontal lines at the structural price;
+    // LiquiditySweep / FVI as dotted markers). The subkind prefix picks
+    // the rendering kind so we don't dispatch on strings elsewhere.
+    const renderSmc = (d: ChartWorkspaceDetection) => {
+      if (d.anchors.length === 0) return;
+      const a = d.anchors[0];
+      const t = anchorTime(a);
+      const p = parsePrice(a.price);
+      if (t === null || Number.isNaN(p)) return;
+      const variant = variantFromSubkind(d.subkind);
+      const color = colorFor(variant);
+      const kindPrefix = d.subkind.split("_")[0]; // bos / choch / mss / liquidity / fvi
+      const isEvent = kindPrefix === "bos" || kindPrefix === "choch" || kindPrefix === "mss";
+      const style = isEvent ? LineStyle.Dashed : LineStyle.Dotted;
+      const s = chart.addSeries(LineSeries, {
+        color,
+        lineWidth: 1,
+        lineStyle: style,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      // Anchor a short horizontal segment (10 bars) so the event is
+      // visible but doesn't overwhelm the chart. Forward projection
+      // only — SMC levels signal future reversals, not past.
+      const barIdx =
+        typeof a.bar_index === "number" ? a.bar_index : candles.length - 1;
+      const endIdx = Math.min(barIdx + 10, candles.length - 1);
+      const tEnd = timeAt(endIdx);
+      if (tEnd === null) return;
+      s.setData([
+        { time: t, value: p },
+        { time: tEnd, value: p },
+      ]);
+      overlaySeriesRef.current.push(s);
+      attachLabel(
+        t,
+        p,
+        labelFor(d),
+        color,
+        variant === "bear" ? "below" : "above",
+      );
+    };
+
     const renderByFamily: Record<string, (d: ChartWorkspaceDetection) => void> = {
       classical: renderClassical,
       range: renderRange,
       gap: renderGap,
       candle: renderCandle,
       orb: renderOrb,
+      smc: renderSmc,
     };
     const familyEnabled = (f: string): boolean => {
       if (f === "classical") return showClassical;
@@ -1429,6 +1477,7 @@ export function LuxAlgoChart() {
       if (f === "gap") return showGap;
       if (f === "candle") return showCandles;
       if (f === "orb") return showOrb;
+      if (f === "smc") return showSmc;
       return false;
     };
 
@@ -1537,7 +1586,7 @@ export function LuxAlgoChart() {
     showTriContracting, showTriExpanding, showTriBarrier,
     showHarmonic, harmonicOutput,
     harmonicFilters, showHarmonicTargets,
-    auxDetections, showClassical, showRange, showGap, showCandles, showOrb,
+    auxDetections, showClassical, showRange, showGap, showCandles, showOrb, showSmc,
     indicators.data, showSuperTrend, showKeltner, showIchimoku, showDonchian, showPsar,
   ]);
 
@@ -1731,6 +1780,17 @@ export function LuxAlgoChart() {
                 onChange={(e) => setShowOrb(e.target.checked)}
               />
               ORB
+            </label>
+            <label
+              className="flex cursor-pointer items-center gap-1"
+              title="Smart Money Concepts: BOS / CHoCH / MSS / Sweep / FVI"
+            >
+              <input
+                type="checkbox"
+                checked={showSmc}
+                onChange={(e) => setShowSmc(e.target.checked)}
+              />
+              SMC
             </label>
           </div>
           {/* Technical indicator overlays. Price-pane overlays only —

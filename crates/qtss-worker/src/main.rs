@@ -37,6 +37,7 @@ mod strategy_runner;
 mod ai_tactical_executor;
 mod worker_probe_http;
 mod engine_ingest;
+mod confluence_loop;
 mod indicator_persistence_loop;
 mod intake_auto_promote;
 mod intake_playbook_engine;
@@ -358,6 +359,10 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(indicator_persistence_loop::indicator_persistence_loop(
             ind_persist_pool,
         ));
+        // Confluence aggregator — rolls detections across families
+        // into per-symbol-per-TF bull/bear/net scores.
+        let confluence_pool = pool.clone();
+        tokio::spawn(confluence_loop::confluence_loop(confluence_pool));
         let health_pool = pool.clone();
         tokio::spawn(data_health_report::data_health_report_loop(health_pool));
         binance_user_stream::spawn_binance_user_stream_tasks(&pool).await;
