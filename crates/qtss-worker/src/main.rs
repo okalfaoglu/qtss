@@ -1,35 +1,24 @@
 //! Arka plan işleri: rollup, mutabakat; isteğe bağlı kline WebSocket → `market_bars`;
 //! `engine_symbols` → analiz snapshot (Trading Range, …).
 
-mod ai_engine;
-mod ai_inference;
-mod llm_judge;
-mod detection_stats_refresh;
 mod binance_catalog_sync_loop;
 mod binance_futures_reconcile;
 mod binance_spot_reconcile;
 mod binance_public_ws;
 mod binance_user_stream;
 mod commission_sync_loop;
-mod confluence;
-mod confluence_hook;
 mod dry_exchange_order;
 mod copy_trade_follower;
 mod copy_trade_queue;
 mod data_sources;
 mod engines;
-mod feature_sources;
-mod feature_store;
 mod kill_switch;
-// Faz 9.7.8 — live_position_notify removed.
 mod nansen_credit_monitor;
 mod nansen_engine;
 mod nansen_extended;
 mod nansen_query;
 mod notify_outbox;
 mod onchain_signal_scorer;
-mod outcome_labeler_loop;
-// Faz 9.7.8 — paper_fill_notify removed.
 mod position_manager;
 mod price_tick_ws;
 mod setup_watcher;
@@ -39,9 +28,6 @@ mod digest_loop;
 mod report_scheduler_loop;
 mod selector_loop;
 mod execution_bridge;
-mod trainer_cron;
-mod psi_drift_loop;
-mod ml_backfill_orchestrator;
 mod tick_dispatcher_loop;
 mod setup_publisher;
 mod range_signal_execute_loop;
@@ -51,35 +37,13 @@ mod strategy_runner;
 mod ai_tactical_executor;
 mod worker_probe_http;
 mod engine_ingest;
+mod indicator_persistence_loop;
 mod intake_auto_promote;
 mod intake_playbook_engine;
 mod lifecycle_manager;
 #[allow(dead_code, unused_variables, unused_imports)]
 mod nansen_symbol_lifecycle;
-// Faz 9.7.8 — position_status_notify removed.
-mod v2_detection_orchestrator;
-mod v2_render_geometry;
-mod v2_detection_sweeper;
-mod v2_projection_loop;
-mod v2_detection_validator;
-mod v2_pattern_strategy_bridge;
-mod v2_risk_bridge;
-mod v2_drawdown_snapshot;
-mod v2_tbm_detector;
-mod v2_onchain_loop;
-mod v2_onchain_bridge;
-mod v2_confluence_loop;
-// Faz 9.7.8 — setup_chart removed (consumer v2_setup_telegram_loop gone).
-mod v2_setup_loop;
-mod v2_backtest_setup_loop;
-// Faz 9.7.8 — v2_setup_telegram_loop removed.
-mod wyckoff_setup_loop;
-mod wyckoff_setup_invalidation_loop;
 mod regime_deep_loop;
-mod pivot_writer_loop;
-mod detections_writer_loop;
-mod harmonic_writer_loop;
-mod historical_progressive_scan;
 mod data_health_report;
 
 use std::collections::HashSet;
@@ -214,12 +178,7 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(binance_futures_reconcile::binance_futures_reconcile_loop(
             reconcile_fut_pool,
         ));
-        let engine_pool = pool.clone();
-        let confluence_hook = Arc::new(confluence_hook::WorkerConfluenceHook);
-        tokio::spawn(qtss_analysis::engine_analysis_loop(
-            engine_pool,
-            confluence_hook,
-        ));
+        // engine_analysis_loop removed with qtss-confluence demolition.
         let ingest_pool = pool.clone();
         tokio::spawn(engine_ingest::engine_symbol_ingest_loop(ingest_pool));
         let intake_pool = pool.clone();
@@ -314,9 +273,7 @@ async fn main() -> anyhow::Result<()> {
         // Faz 9.7.8 — new-setup public broadcast (Telegram + x_outbox).
         let setup_pub_pool = pool.clone();
         tokio::spawn(setup_publisher::setup_publisher_loop(setup_pub_pool));
-        // Faz 9.0.1 — outcome labeler (AI training substrate).
-        let ol_pool = pool.clone();
-        tokio::spawn(outcome_labeler_loop::outcome_labeler_loop(ol_pool));
+        // outcome_labeler_loop removed with qtss_v2_detections demolition.
         // Faz 9.8.11 — selector + execution bridge (setup → selected_candidates → placed).
         let sel_pool = pool.clone();
         tokio::spawn(selector_loop::selector_loop(sel_pool));
@@ -330,15 +287,8 @@ async fn main() -> anyhow::Result<()> {
             exb_pool,
             lp_store.clone(),
         ));
-        // Faz 9.8.12 — weekly trainer cron + AI sidecar health probe.
-        let tr_pool = pool.clone();
-        tokio::spawn(trainer_cron::trainer_cron_loop(tr_pool));
-        // Faz 9B — PSI drift circuit breaker (runbook FAZ_9B_DRIFT_RUNBOOK).
-        let psi_pool = pool.clone();
-        tokio::spawn(psi_drift_loop::psi_drift_loop(psi_pool));
-        // Faz 9B — historical backfill orchestrator (spec FAZ_9B_HISTORICAL_BACKFILL).
-        let bf_pool = pool.clone();
-        tokio::spawn(ml_backfill_orchestrator::ml_backfill_loop(bf_pool));
+        // trainer_cron / psi_drift_loop / ml_backfill_orchestrator removed
+        // with the ML pipeline demolition (qtss_ml_* tables dropped).
         // Faz 9.8.14 — tick dispatcher: hydrates LivePositionStore from DB,
         // polls PriceTickStore, runs evaluate_tick, persists outcomes.
         let td_pool = pool.clone();
@@ -375,128 +325,39 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(copy_trade_follower::copy_trade_follower_loop(ct_pool));
         let ctq_pool = pool.clone();
         tokio::spawn(copy_trade_queue::copy_trade_queue_loop(ctq_pool));
-        let v2_det_pool = pool.clone();
-        tokio::spawn(v2_detection_orchestrator::v2_detection_orchestrator_loop(
-            v2_det_pool,
-        ));
-        let v2_sweep_pool = pool.clone();
-        tokio::spawn(v2_detection_sweeper::v2_detection_sweeper_loop(v2_sweep_pool));
-        let v2_tbm_pool = pool.clone();
-        // Faz 7.7: TBM consumes onchain via the StoredV2OnchainProvider
-        // bridge, which reads `qtss_v2_onchain_metrics` (populated by the
-        // v2_onchain_loop fetcher pipeline). Stale-after window is fixed
-        // to 30 minutes here; tunable via `onchain.stale_after_s` would
-        // be a follow-up if operators ask for it.
-        // P29c — caller-TF aware onchain bridge. ltf_cadence_s mirrors
-        // the worker-side split in `onchain.aggregator.ltf_cadence_s`;
-        // they stay in sync because both read from the same config key.
-        let onchain_ltf_cadence_s = qtss_storage::resolve_system_u64(
-            &v2_tbm_pool,
-            "onchain",
-            "aggregator.ltf_cadence_s",
-            "QTSS_ONCHAIN_LTF_CAD",
-            3600,
-            60,
-            86_400,
-        )
-        .await;
-        let onchain_provider: std::sync::Arc<dyn qtss_tbm::onchain::OnchainMetricsProvider> =
-            std::sync::Arc::new(v2_onchain_bridge::StoredV2OnchainProvider::with_ltf_cadence(
-                v2_tbm_pool.clone(),
-                1800,
-                onchain_ltf_cadence_s,
-            ));
-        tokio::spawn(v2_tbm_detector::v2_tbm_detector_loop(
-            v2_tbm_pool,
-            onchain_provider,
-        ));
-        let v2_onchain_pool = pool.clone();
-        tokio::spawn(v2_onchain_loop::v2_onchain_loop(v2_onchain_pool));
-        let v2_conf_pool = pool.clone();
-        tokio::spawn(v2_confluence_loop::v2_confluence_loop(v2_conf_pool));
-        let v2_setup_pool = pool.clone();
-        tokio::spawn(v2_setup_loop::v2_setup_loop(v2_setup_pool));
-        // Faz 9C — backtest setup dispatcher. Self-gated on
-        // `backtest.setup_loop.enabled` (migration 0178); spawned always
-        // so the operator can flip the flag without a restart.
-        let v2_backtest_setup_pool = pool.clone();
-        tokio::spawn(v2_backtest_setup_loop::v2_backtest_setup_loop(
-            v2_backtest_setup_pool,
-        ));
-        let wyckoff_setup_pool = pool.clone();
-        tokio::spawn(wyckoff_setup_loop::wyckoff_setup_loop(wyckoff_setup_pool));
-        let wyckoff_inv_pool = pool.clone();
-        tokio::spawn(wyckoff_setup_invalidation_loop::wyckoff_setup_invalidation_loop(
-            wyckoff_inv_pool,
-        ));
+        // v2_detection_orchestrator / sweeper / tbm / onchain / confluence /
+        // setup loops + wyckoff setup loops removed with the legacy v2
+        // detection stack demolition (qtss_v2_detections + satellites
+        // dropped in migration 0218).
         let commission_sync_pool = pool.clone();
         tokio::spawn(commission_sync_loop::commission_sync_loop(
             commission_sync_pool,
         ));
-        // Faz 9.7.8 — v2_setup_telegram_loop removed (replaced by
-        // TelegramLifecycleHandler + XOutboxHandler on the setup watcher).
-        let v2_val_pool = pool.clone();
-        // Shared in-process event bus: the validator publishes
-        // PATTERN_VALIDATED here, strategy providers subscribe.
-        let v2_bus = std::sync::Arc::new(qtss_eventbus::InProcessBus::new());
-        // Mirror the SSE-exported topics to Postgres NOTIFY so the
-        // qtss-api SSE bridge can fan them out to browsers across the
-        // process boundary. The handles are intentionally leaked: the
-        // tasks should run for the entire worker lifetime.
-        let _sse_export_handles = qtss_eventbus::PgNotifyExporter::start(
-            v2_bus.clone(),
-            pool.clone(),
-            qtss_eventbus::topics::SSE_EXPORTED_TOPICS,
-        );
-        let v2_val_bus = v2_bus.clone();
-        tokio::spawn(v2_detection_validator::v2_detection_validator_loop(
-            v2_val_pool,
-            v2_val_bus,
-        ));
-        // Keep the hit-rate outcome aggregate MV fresh (migration 0107).
-        tokio::spawn(detection_stats_refresh::detection_stats_refresh_loop(pool.clone()));
-        let v2_strat_pool = pool.clone();
-        let v2_strat_bus = v2_bus.clone();
-        tokio::spawn(v2_pattern_strategy_bridge::v2_pattern_strategy_bridge_loop(
-            v2_strat_pool,
-            v2_strat_bus,
-        ));
-        let v2_risk_pool = pool.clone();
-        let v2_risk_bus = v2_bus.clone();
-        tokio::spawn(v2_risk_bridge::v2_risk_bridge_loop(
-            v2_risk_pool,
-            v2_risk_bus,
-        ));
-        tokio::spawn(v2_drawdown_snapshot::v2_drawdown_snapshot_loop(pool.clone()));
+        // v2 event bus + validator/strategy/risk/drawdown bridges + AI
+        // background tasks removed with the legacy detection stack.
+        // detection_stats_refresh also gone (the MV it refreshed was
+        // dropped in migration 0218).
         strategy_runner::spawn_if_enabled(&pool).await;
-        ai_engine::spawn_ai_background_tasks(&pool).await;
         let ai_exec_pool = pool.clone();
         tokio::spawn(ai_tactical_executor::ai_tactical_executor_loop(ai_exec_pool));
         let regime_pool = pool.clone();
         tokio::spawn(regime_deep_loop::regime_deep_loop(regime_pool));
-        let pivot_writer_pool = pool.clone();
-        tokio::spawn(pivot_writer_loop::pivot_writer_loop(pivot_writer_pool));
-        // Detections writer — mirrors /v2/elliott output into the new
-        // `detections` table. Gated by system_config.detections.enabled
-        // (default true — user explicitly asked for it to run). One
-        // row per motive / ABC / triangle, slot = Z-slot = wave degree.
-        let detections_writer_pool = pool.clone();
-        tokio::spawn(detections_writer_loop::detections_writer_loop(
-            detections_writer_pool,
+        // qtss-engine — single dispatch loop that drives pivot writer
+        // + elliott detections writer + harmonic writer in one tick.
+        // Replaces the three legacy loops; each family keeps its own
+        // `system_config.<module>.enabled` flag so operators can kill
+        // a single writer without touching the others. Master kill
+        // switch: `system_config.engine.enabled`.
+        let engine_pool = pool.clone();
+        tokio::spawn(qtss_engine::engine_loop(engine_pool));
+        // Indicator persistence — materialises technical-indicator
+        // values into `indicator_snapshots` for backtest replay + GUI
+        // fast-path. Sits next to the engine loop because it reads the
+        // same `engine_symbols` / `market_bars` state.
+        let ind_persist_pool = pool.clone();
+        tokio::spawn(indicator_persistence_loop::indicator_persistence_loop(
+            ind_persist_pool,
         ));
-        // Harmonic patterns — consumes the same pivots table the
-        // Elliott writer does and emits XABCD matches (Gartley, Bat,
-        // Butterfly, Crab, Cypher, etc.) into the detections table
-        // under pattern_family='harmonic'. Gated by
-        // system_config.harmonic.enabled (default true).
-        let harmonic_writer_pool = pool.clone();
-        tokio::spawn(harmonic_writer_loop::harmonic_writer_loop(
-            harmonic_writer_pool,
-        ));
-        let hps_pool = pool.clone();
-        tokio::spawn(
-            historical_progressive_scan::historical_progressive_scan_loop(hps_pool),
-        );
         let health_pool = pool.clone();
         tokio::spawn(data_health_report::data_health_report_loop(health_pool));
         binance_user_stream::spawn_binance_user_stream_tasks(&pool).await;

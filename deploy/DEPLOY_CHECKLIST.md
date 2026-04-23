@@ -50,7 +50,7 @@ cd /app/qtss
 ./deploy/pull-build-restart.sh
 ```
 
-Varsayılan davranış: `git pull --ff-only main` → `cargo build --release -p qtss-api -p qtss-worker` → `npm build` (web) → `systemctl restart qtss-api qtss-worker qtss-web qtss-web-v2`.
+Varsayılan davranış: `git pull --ff-only main` → `cargo build --release -p qtss-api -p qtss-worker` → `npm build` (web) → `systemctl restart qtss-api qtss-worker qtss-web qtss-web`.
 
 Worker/API başlarken `run_migrations` otomatik çalışır; yeni `.sql` dosyaları sıraya göre uygulanır. İlk başlangıç log'unu izle:
 

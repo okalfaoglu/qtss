@@ -4,7 +4,7 @@
 //! plain-data snapshot the chart can render directly.
 //!
 //! This endpoint replaces what used to run client-side in
-//! `web-v2/src/lib/luxalgo-pine-port.ts`. The frontend now only draws;
+//! `web/src/lib/luxalgo-pine-port.ts`. The frontend now only draws;
 //! every pivot and formation comes from the same Rust code the worker
 //! uses to write detections to the database — one source of truth.
 //!
@@ -19,6 +19,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 
 use qtss_elliott::luxalgo_pine_port::{
     run as run_pine_port, Bar as PortBar, HiSource, LevelConfig, LoSource, PinePortConfig,
@@ -66,6 +67,24 @@ pub struct ElliottResponse {
 
 pub fn v2_elliott_router() -> Router<SharedState> {
     Router::new().route("/v2/elliott/{venue}/{symbol}/{tf}", get(get_elliott))
+}
+
+/// Mirror of the zigzag route's loader — same config key so the two
+/// endpoints agree on which swings survive the filter.
+async fn load_min_prominence_pct(pool: &sqlx::PgPool) -> f64 {
+    let row = sqlx::query(
+        "SELECT value FROM system_config WHERE module = 'zigzag' AND config_key = 'min_prominence_pct'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    let Some(row) = row else { return 0.0; };
+    let val: serde_json::Value = row.try_get("value").unwrap_or(serde_json::Value::Null);
+    val.get("pct")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0)
+        .max(0.0)
 }
 
 fn parse_lengths(csv: Option<&str>) -> Vec<usize> {
@@ -153,6 +172,7 @@ async fn get_elliott(
     let lengths = parse_lengths(q.lengths.as_deref());
     let colors = parse_colors(q.colors.as_deref());
     let defaults = ["#ef4444", "#3b82f6", "#e5e7eb", "#f59e0b", "#a78bfa"];
+    let min_prominence_pct = load_min_prominence_pct(&st.pool).await;
     let cfg = PinePortConfig {
         hi_source: HiSource::High,
         lo_source: LoSource::Low,
@@ -167,6 +187,7 @@ async fn get_elliott(
                     .unwrap_or_else(|| defaults[i % defaults.len()].to_string()),
             })
             .collect(),
+        min_prominence_pct,
             ..PinePortConfig::default()
     };
 

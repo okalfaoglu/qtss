@@ -4,15 +4,16 @@
     {
       "name": "web-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "port": 5173
-    },
-    {
-      "name": "web-v2-dev",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "web-v2"],
+      "runtimeArgs": ["run", "dev", "--prefix", "web"],
       "port": 5174,
       "autoPort": true
+    },
+    {
+      "name": "web-dev-wsl",
+      "runtimeExecutable": "wsl.exe",
+      "runtimeArgs": ["-d", "Ubuntu", "--cd", "/app/qtss/.claude/worktrees/recursing-lalande-a73313/web", "--", "bash", "-lc", "npm run dev -- --host 0.0.0.0 --port 5190 --strictPort"],
+      "port": 5190,
+      "autoPort": false
     },
     {
       "name": "api-server",

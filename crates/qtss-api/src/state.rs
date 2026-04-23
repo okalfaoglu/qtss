@@ -1,5 +1,5 @@
 use qtss_storage::{
-    AccountDrawdownRepository, AiApprovalRepository, AppConfigRepository, CopySubscriptionRepository,
+    AiApprovalRepository, AppConfigRepository, CopySubscriptionRepository,
     ExchangeAccountRepository, ExchangeFillRepository, ExchangeOrderRepository, NotifyOutboxRepository,
     PaperLedgerRepository, PnlRollupRepository, ReconcileReportRepository,
     SystemConfigAuditRepository, SystemConfigRepository, UserPermissionRepository, UserRepository,
@@ -25,7 +25,6 @@ pub struct AppState {
     pub notify_outbox: NotifyOutboxRepository,
     pub user_permissions: UserPermissionRepository,
     pub users: UserRepository,
-    pub account_drawdown: AccountDrawdownRepository,
     pub reconcile_reports: ReconcileReportRepository,
     pub system_config: SystemConfigRepository,
     pub system_config_audit: SystemConfigAuditRepository,
@@ -176,7 +175,6 @@ impl AppState {
         .map_err(|e| anyhow::anyhow!("pg notify bridge start: {e}"))?;
         let event_bridge = Arc::new(event_bridge);
 
-        let account_drawdown = AccountDrawdownRepository::new(pool.clone());
         let reconcile_reports = ReconcileReportRepository::new(pool.clone());
         let system_config_audit = SystemConfigAuditRepository::new(pool.clone());
 
@@ -200,7 +198,6 @@ impl AppState {
             notify_outbox,
             user_permissions,
             users,
-            account_drawdown,
             reconcile_reports,
             system_config_audit,
             system_config,

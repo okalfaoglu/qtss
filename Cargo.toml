@@ -13,9 +13,6 @@ members = [
     "crates/qtss-elliott",
     "crates/qtss-harmonic",
     "crates/qtss-classical",
-    "crates/qtss-wyckoff",
-    "crates/qtss-validator",
-    "crates/qtss-target-engine",
     "crates/qtss-risk",
     "crates/qtss-fees",
     "crates/qtss-execution-v2",
@@ -42,15 +39,13 @@ members = [
     "crates/qtss-indicators",
     "crates/qtss-tbm",
     "crates/qtss-onchain",
-    "crates/qtss-confluence",
     "crates/qtss-telegram-setup-analysis",
-    "crates/qtss-setup-engine",
     "crates/qtss-range",
     "crates/qtss-vprofile",
     "crates/qtss-gap",
     "crates/qtss-candles",
-    "crates/qtss-pivot-reversal",
     "crates/qtss-symbol-intel",
+    "crates/qtss-engine",
 ]
 
 [workspace.package]
@@ -91,9 +86,6 @@ qtss-regime = { path = "crates/qtss-regime" }
 qtss-elliott = { path = "crates/qtss-elliott" }
 qtss-harmonic = { path = "crates/qtss-harmonic" }
 qtss-classical = { path = "crates/qtss-classical" }
-qtss-wyckoff = { path = "crates/qtss-wyckoff" }
-qtss-validator = { path = "crates/qtss-validator" }
-qtss-target-engine = { path = "crates/qtss-target-engine" }
 qtss-risk = { path = "crates/qtss-risk" }
 qtss-fees = { path = "crates/qtss-fees" }
 qtss-exec-binance = { path = "crates/qtss-exec-binance" }
@@ -118,15 +110,13 @@ qtss-signal-card = { path = "crates/qtss-signal-card" }
 qtss-indicators = { path = "crates/qtss-indicators" }
 qtss-tbm = { path = "crates/qtss-tbm" }
 qtss-onchain = { path = "crates/qtss-onchain" }
-qtss-confluence = { path = "crates/qtss-confluence" }
 qtss-telegram-setup-analysis = { path = "crates/qtss-telegram-setup-analysis" }
-qtss-setup-engine = { path = "crates/qtss-setup-engine" }
 qtss-range = { path = "crates/qtss-range" }
 qtss-vprofile = { path = "crates/qtss-vprofile" }
 qtss-gap = { path = "crates/qtss-gap" }
 qtss-candles = { path = "crates/qtss-candles" }
-qtss-pivot-reversal = { path = "crates/qtss-pivot-reversal" }
 qtss-symbol-intel = { path = "crates/qtss-symbol-intel" }
+qtss-engine = { path = "crates/qtss-engine" }
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 hmac = "0.12"

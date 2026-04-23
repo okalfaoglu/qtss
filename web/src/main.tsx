@@ -1,11 +1,27 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
-import "./i18n";
-import "./styles/theme.css";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { RouterProvider } from "react-router-dom";
+
+import { router } from "./router";
+import "./styles.css";
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Panels poll on their own cadence; cache shorter than the
+      // shortest server-side window so the UI never lies about state.
+      staleTime: 10_000,
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} future={{ v7_startTransition: true }} />
+    </QueryClientProvider>
   </React.StrictMode>,
 );

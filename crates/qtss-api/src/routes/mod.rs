@@ -38,36 +38,24 @@ mod v2_elliott;
 mod v2_elliott_db;
 mod v2_harmonic;
 mod v2_harmonic_db;
+mod v2_indicators;
 mod v2_zigzag;
 mod v2_config;
 mod v2_dashboard;
-mod v2_detections;
 mod v2_montecarlo;
 mod v2_regime;
-mod v2_risk;
 mod v2_scenarios;
 mod v2_strategies;
-mod v2_tbm;
-mod v2_onchain;
 mod v2_pivots;
 mod v2_reconcile;
-mod v2_confluence;
 mod v2_engine_symbols;
 mod v2_events_stream;
 mod v2_q_radar;
 mod v2_models;
-mod v2_setup_rejections;
 mod v2_setups;
-mod v2_ml_predictions;
-mod v2_drift;
-mod v2_training_set;
 mod v2_users;
 mod v2_wave_projections;
 mod v2_wave_tree;
-mod v2_wyckoff;
-mod v2_reports;
-mod v2_reports_performance;
-mod v2_reversal_radar;
 mod v2_symbols;
 
 pub use v2_ai_decisions::v2_ai_decisions_router;
@@ -82,38 +70,26 @@ pub use v2_elliott::v2_elliott_router;
 pub use v2_elliott_db::v2_elliott_db_router;
 pub use v2_harmonic::v2_harmonic_router;
 pub use v2_harmonic_db::v2_harmonic_db_router;
+pub use v2_indicators::v2_indicators_router;
 pub use v2_zigzag::v2_zigzag_router;
 pub use v2_config::{v2_config_admin_router, v2_config_router};
 pub use v2_dashboard::{v2_dashboard_router, V2DashboardHandle};
-pub use v2_detections::v2_detections_router;
 pub use v2_montecarlo::v2_montecarlo_router;
 pub use v2_regime::v2_regime_router;
-pub use v2_risk::v2_risk_router;
 pub use v2_scenarios::v2_scenarios_router;
 pub use v2_strategies::{
     default_seed_card, v2_strategies_admin_router, v2_strategies_router, V2StrategyRegistry,
 };
-pub use v2_tbm::v2_tbm_router;
-pub use v2_onchain::v2_onchain_router;
 pub use v2_pivots::v2_pivots_router;
 pub use v2_reconcile::v2_reconcile_router;
-pub use v2_confluence::v2_confluence_router;
 pub use v2_engine_symbols::v2_engine_symbols_router;
 pub use v2_events_stream::v2_events_stream_router;
 pub use v2_q_radar::v2_q_radar_router;
 pub use v2_models::v2_models_router;
-pub use v2_setup_rejections::v2_setup_rejections_router;
 pub use v2_setups::v2_setups_router;
-pub use v2_ml_predictions::v2_ml_predictions_router;
-pub use v2_drift::v2_drift_router;
-pub use v2_training_set::v2_training_set_router;
 pub use v2_users::v2_users_router;
 pub use v2_wave_projections::v2_wave_projections_router;
 pub use v2_wave_tree::v2_wave_tree_router;
-pub use v2_wyckoff::v2_wyckoff_router;
-pub use v2_reports::v2_reports_router;
-pub use v2_reports_performance::v2_reports_performance_router;
-pub use v2_reversal_radar::v2_reversal_radar_router;
 pub use v2_symbols::v2_symbols_router;
 
 use axum::middleware::from_fn;
@@ -162,16 +138,9 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_elliott_db_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_harmonic_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_harmonic_db_router().layer(from_fn(require_dashboard_roles)))
-        .merge(v2_detections_router().layer(from_fn(require_dashboard_roles)))
-        .merge(v2_tbm_router().layer(from_fn(require_dashboard_roles)))
-        .merge(v2_onchain_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_indicators_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_pivots_router().layer(from_fn(require_dashboard_roles)))
-        .merge(v2_confluence_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_setups_router().layer(from_fn(require_dashboard_roles)))
-        .merge(v2_setup_rejections_router().layer(from_fn(require_dashboard_roles)))
-        .merge(v2_training_set_router().layer(from_fn(require_dashboard_roles)))
-        .merge(v2_ml_predictions_router().layer(from_fn(require_dashboard_roles)))
-        .merge(v2_drift_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_models_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_q_radar_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_engine_symbols_router().layer(from_fn(require_admin)))
@@ -179,13 +148,8 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_scenarios_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_regime_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_montecarlo_router().layer(from_fn(require_dashboard_roles)))
-        .merge(v2_risk_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_wave_tree_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_wave_projections_router().layer(from_fn(require_dashboard_roles)))
-        .merge(v2_wyckoff_router().layer(from_fn(require_dashboard_roles)))
-        .merge(v2_reports_router().layer(from_fn(require_dashboard_roles)))
-        .merge(v2_reports_performance_router().layer(from_fn(require_dashboard_roles)))
-        .merge(v2_reversal_radar_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_symbols_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_reconcile_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_backtest_router().layer(from_fn(require_dashboard_roles)))

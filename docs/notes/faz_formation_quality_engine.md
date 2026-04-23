@@ -121,7 +121,7 @@ tamamlandı denebilir mi, %kaç başarılı?
 - `crates/qtss-classical/src/shapes.rs` — her classical formation eval.
 - `crates/qtss-harmonic/src/` — XABCD formations.
 - `crates/qtss-elliott/src/` — impulse/corrective.
-- `web-v2/src/pages/Chart.tsx::computeFormationTargets` — TS mirror.
+- `web/src/pages/Chart.tsx::computeFormationTargets` — TS mirror.
 - `crates/qtss-ai/src/sources/classical.rs` — ClassicalSource feature emit.
 
 ## Tahmini efor (kaba)

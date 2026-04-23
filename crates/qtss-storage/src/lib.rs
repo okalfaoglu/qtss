@@ -1,4 +1,3 @@
-pub mod account_drawdown;
 pub mod ai_approval;
 pub mod audit_log;
 pub mod backfill_progress;
@@ -20,7 +19,6 @@ pub mod ingestion_state;
 pub mod intake_playbook;
 pub mod market_bars;
 pub mod market_bars_open;
-pub mod market_confluence_snapshots;
 pub mod nansen;
 pub mod nansen_enriched;
 pub mod nansen_setup_scan;
@@ -45,11 +43,6 @@ pub mod system_config;
 pub mod system_config_audit;
 pub mod user_permissions;
 pub mod users;
-pub mod v2_confluence;
-pub mod v2_correlation_groups;
-pub mod v2_detection_outcomes;
-pub mod v2_detections;
-pub mod v2_onchain_metrics;
 pub mod digest;
 pub mod reports;
 pub mod setup_lifecycle;
@@ -60,23 +53,10 @@ pub mod selected_candidates;
 pub mod setup_broadcast_outbox;
 pub mod x_outbox;
 pub mod v2_setup_events;
-pub mod ml_predictions;
-pub mod ml_prediction_stats;
 pub mod models_registry;
-pub mod training_set;
 pub mod v2_setup_rejections;
 pub mod v2_setups;
-pub mod wyckoff_signals;
-pub mod wyckoff_structures;
 
-pub use account_drawdown::{AccountDrawdownRepository, DrawdownSnapshotRow};
-pub use v2_detection_outcomes::{DetectionOutcomeRepository, DetectionOutcomeRow, OutcomeHitRate};
-pub use v2_detections::{
-    DetectionFilter, DetectionRow, FormingRow, HistoricalOutcomeRow, NewDetection, V2DetectionRepository,
-};
-pub use v2_correlation_groups::{
-    count_open_setups_in_group, list_groups_for_symbol, CorrelationGroupRow,
-};
 pub use setup_lifecycle::{
     apply_ratchet_update, apply_trail_advance, apply_trail_enable, close_setup,
     insert_health_snapshot, insert_lifecycle_event, list_lifecycle_events_for_setup,
@@ -123,22 +103,7 @@ pub use v2_setup_events::{
     insert_v2_setup_event, list_events_for_setup, list_pending_setup_events,
     mark_setup_event_delivered, mark_setup_event_failed, V2SetupEventInsert, V2SetupEventRow,
 };
-pub use ml_predictions::{
-    attach_setup_id as attach_ml_prediction_setup_id, insert_llm_verdict,
-    insert_ml_prediction, LlmVerdictInsert, MlPredictionInsert,
-};
-pub use ml_prediction_stats::{
-    fetch_prediction_feed, fetch_prediction_summary, fetch_score_distribution,
-    fetch_latest_drift, fetch_latest_drift_model_version, DriftEntry,
-    PredictionRow, PredictionSummary, ScoreBucket,
-    fetch_feature_coverage, fetch_recent_snapshots, fetch_feature_stats,
-    SourceCoverage, FeatureSnapshotRow, FeatureStat,
-};
 pub use models_registry::{activate_model, active_model, list_models, set_model_role, ModelRow};
-pub use training_set::{
-    fetch_latest_features_by_source, fetch_training_set_stats, CloseReasonBucket, DirectionBucket,
-    FeatureCoverage, LabelBucket, PnlSummary, SymbolBucket, TrainingSetStats,
-};
 pub use v2_setup_rejections::{
     insert_v2_setup_rejection, list_recent_setup_rejections, list_setup_rejections_filtered,
     summarize_setup_rejections, RejectionFilter, RejectionReasonCount, V2SetupRejectionInsert,
@@ -148,17 +113,6 @@ pub use v2_setups::{
     fetch_v2_setup, insert_v2_setup, list_open_v2_setups, list_recent_v2_setups,
     list_v2_setups_filtered, mark_v2_setup_tp1_hit, update_v2_setup_state, SetupFilter,
     V2SetupInsert, V2SetupRow,
-};
-
-pub use wyckoff_signals::{
-    list_open_wyckoff_setups, upsert_wyckoff_setup, WyckoffSetupUpsert,
-};
-
-pub use wyckoff_structures::{
-    complete_wyckoff_structure, fail_wyckoff_structure, find_active_wyckoff_structure,
-    get_wyckoff_structure, insert_wyckoff_structure, list_active_wyckoff_structures,
-    list_phase_groups_by_timeframe, list_recent_wyckoff_structures, list_wyckoff_history,
-    update_wyckoff_structure, PhaseGroupRow, WyckoffStructureInsert, WyckoffStructureRow,
 };
 
 pub use pivot_cache::{
@@ -248,10 +202,6 @@ pub use market_bars::{
     fetch_recent_bars_stats, list_bars_after_asc, list_bars_in_range, list_recent_bars,
     list_recent_bars_before, upsert_market_bar, MarketBarRow,
     MarketBarUpsert, RecentBarsStats,
-};
-pub use market_confluence_snapshots::{
-    insert_market_confluence_snapshot, list_market_confluence_snapshots_for_symbol,
-    MarketConfluenceSnapshotInsert, MarketConfluenceSnapshotRow,
 };
 pub use nansen::{fetch_nansen_snapshot, upsert_nansen_snapshot, NansenSnapshotRow};
 pub use nansen_setup_scan::{

@@ -30,13 +30,13 @@ use qtss_storage::{
     insert_engine_symbol, lifecycle_state_summary, list_analysis_snapshots_with_symbols,
     list_data_snapshots, list_engine_symbols_all, list_engine_symbols_with_ingestion,
     list_engine_symbols_matching, list_intake_playbook_candidates_for_run,
-    list_market_confluence_snapshots_for_symbol, list_market_context_summaries,
+    list_market_context_summaries,
     list_range_signal_events_joined, list_recent_intake_playbook_runs, merge_json_deep,
     update_engine_symbol_lifecycle_and_enabled,
     update_engine_symbol_lifecycle_state, update_engine_symbol_patch,
     update_intake_candidate_merged_engine_symbol, upsert_range_engine_json,
     AnalysisSnapshotJoinedRow, DataSnapshotRow, EngineSymbolInsert, EngineSymbolRow,
-    IntakePlaybookCandidateRow, IntakePlaybookRunRow, MarketConfluenceSnapshotRow,
+    IntakePlaybookCandidateRow, IntakePlaybookRunRow,
     MarketContextSummaryRow, NansenSetupRowDetail, NansenSetupRunRow, NansenSnapshotRow,
     EngineSymbolIngestionJoinedRow, RangeSignalEventJoinedRow,
 };
@@ -96,10 +96,6 @@ pub fn analysis_read_router() -> Router<SharedState> {
         .route(
             "/analysis/market-context/summary",
             get(list_market_context_summary_api),
-        )
-        .route(
-            "/analysis/market-confluence/history",
-            get(list_market_confluence_history_api),
         )
         .route(
             "/analysis/engine/range-signals",
@@ -763,72 +759,6 @@ fn map_summary_row(row: MarketContextSummaryRow) -> MarketContextSummaryItem {
         ta_piyasa_modu,
         confluence,
     }
-}
-
-#[derive(Deserialize)]
-struct MarketConfluenceHistoryQuery {
-    /// Doğrudan hedef satırı (tercih edilen).
-    #[serde(default)]
-    pub engine_symbol_id: Option<Uuid>,
-    /// `engine_symbol_id` yoksa: `market-context/latest` ile aynı eşleştirme kuralları.
-    #[serde(default)]
-    pub symbol: Option<String>,
-    #[serde(default)]
-    pub interval: Option<String>,
-    #[serde(default)]
-    pub exchange: Option<String>,
-    #[serde(default)]
-    pub segment: Option<String>,
-    #[serde(default = "default_confluence_history_limit")]
-    pub limit: i64,
-}
-
-fn default_confluence_history_limit() -> i64 {
-    50
-}
-
-/// PLAN Phase B — append-only `market_confluence_snapshots` (newest first).
-async fn list_market_confluence_history_api(
-    State(st): State<SharedState>,
-    Query(q): Query<MarketConfluenceHistoryQuery>,
-) -> Result<Json<Vec<MarketConfluenceSnapshotRow>>, ApiError> {
-    let lim = q.limit.clamp(1, 200);
-    let id = if let Some(id) = q.engine_symbol_id {
-        id
-    } else {
-        let sym_in = q
-            .symbol
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| ApiError::bad_request("query engine_symbol_id or symbol is required"))?;
-        let interval = q
-            .interval
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
-        let exchange = q
-            .exchange
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
-        let segment = q
-            .segment
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
-        let matches =
-            list_engine_symbols_matching(&st.pool, sym_in, interval, exchange, segment).await?;
-        let row = matches.into_iter().next().ok_or_else(|| {
-            ApiError::not_found(format!(
-                "no engine_symbols row for symbol={} (optional interval/exchange/segment)",
-                sym_in.to_uppercase()
-            ))
-        })?;
-        row.id
-    };
-    let rows = list_market_confluence_snapshots_for_symbol(&st.pool, id, lim).await?;
-    Ok(Json(rows))
 }
 
 /// F7 — filtreli motor hedefleri + TA / confluence özeti (`SPEC_EXECUTION_RANGE_SIGNALS_UI` §9).

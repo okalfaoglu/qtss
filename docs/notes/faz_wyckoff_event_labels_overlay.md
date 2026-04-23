@@ -99,5 +99,5 @@ sonra ne kadar event'in ekrana sığacağı netleşince başlanmalı (eğer
 - `crates/qtss-wyckoff/src/structure.rs` — `WyckoffEvent` enum + serde rename map
 - `crates/qtss-wyckoff/src/persistence.rs` — events_json yazımı
 - `crates/qtss-api/src/routes/v2_wyckoff.rs` — mevcut endpoint
-- `web-v2/src/pages/Chart.tsx` — setup/position overlay pattern'i
-- `web-v2/src/pages/Wyckoff.tsx` — tablo görünümü (referans)
+- `web/src/pages/Chart.tsx` — setup/position overlay pattern'i
+- `web/src/pages/Wyckoff.tsx` — tablo görünümü (referans)

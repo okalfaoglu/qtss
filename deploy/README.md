@@ -152,9 +152,9 @@ journalctl -u qtss-web -f
 
 İsterseniz `web/dist`’i nginx `root` yapıp `location /api/`, `/oauth/`, `/health` için `proxy_pass` ile backend’e yönlendirin; grafik için `/__binance` köprüsü gerekirse aynı mantıkla Binance hedefine proxy eklenir — ayrıntı için `web/vite.config.ts` ile hizalayın.
 
-### 6. Web v2 (`web-v2/`, Faz 8.0+) — v1 ile yan yana
+### 6. Web v2 (`web/`, Faz 8.0+) — v1 ile yan yana
 
-Faz 8.0 ile birlikte yeni bir frontend (`web-v2/`) prod'a v1'in **yanına** kurulur. v1 kesintisiz çalışmaya devam eder; v2 ayrı port + ayrı systemd unit + reverse proxy path ayrımı ile servis edilir.
+Faz 8.0 ile birlikte yeni bir frontend (`web/`) prod'a v1'in **yanına** kurulur. v1 kesintisiz çalışmaya devam eder; v2 ayrı port + ayrı systemd unit + reverse proxy path ayrımı ile servis edilir.
 
 **Servis düzeni**
 
@@ -163,21 +163,21 @@ Faz 8.0 ile birlikte yeni bir frontend (`web-v2/`) prod'a v1'in **yanına** kuru
 | qtss-api     | `target/release/qtss-api`   | 8080  | `qtss-api.service`      |
 | qtss-worker  | `target/release/qtss-worker`| —     | `qtss-worker.service`   |
 | web v1       | `npm run preview:bind` (web/)    | 4173  | `qtss-web.service`      |
-| **web v2**   | `npm run preview:bind` (web-v2/) | **4174** | **`qtss-web-v2.service`** |
+| **web v2**   | `npm run preview:bind` (web/) | **4174** | **`qtss-web.service`** |
 
 > **Önemli:** `qtss-api` tek binary'dir ve `/v1/*` ile `/v2/*` route'larının ikisini de servis eder. Ayrı bir `qtss-api-v2` binary'si yoktur — Faz 7.x–8.0 boyunca v2 endpoint'leri aynı router'a eklendi. Bu, API tarafında deployment riskini en aza indirir; sadece web tarafı yan yana iki servistir.
 
 **Kurulum**
 
 ```bash
-sudo cp /app/qtss/deploy/systemd/qtss-web-v2.service.example /etc/systemd/system/qtss-web-v2.service
-sudo nano /etc/systemd/system/qtss-web-v2.service   # WorkingDirectory=/app/qtss/web-v2, DATABASE_URL, npm yolu
+sudo cp /app/qtss/deploy/systemd/qtss-web.service.example /etc/systemd/system/qtss-web.service
+sudo nano /etc/systemd/system/qtss-web.service   # WorkingDirectory=/app/qtss/web, DATABASE_URL, npm yolu
 sudo systemctl daemon-reload
-sudo systemctl enable --now qtss-web-v2
-journalctl -u qtss-web-v2 -f
+sudo systemctl enable --now qtss-web
+journalctl -u qtss-web -f
 ```
 
-`pull-build-restart.sh` artık varsayılan olarak `web` ve `web-v2` dizinlerinin **ikisini de** build eder ve `qtss-web-v2` unit'ini de restart eder (`QTSS_SYSTEMD_UNITS` ile override edilebilir).
+`pull-build-restart.sh` artık varsayılan olarak `web` ve `web` dizinlerinin **ikisini de** build eder ve `qtss-web` unit'ini de restart eder (`QTSS_SYSTEMD_UNITS` ile override edilebilir).
 
 **Reverse proxy (nginx) — path-based v1+v2 ayrımı**
 
@@ -198,13 +198,13 @@ sudo nginx -t && sudo systemctl reload nginx
 
 **Rollback**
 
-- v2 frontend bozulursa: `sudo systemctl stop qtss-web-v2` + nginx config'inde `/v2/` location bloğunu yorumla → reload. v1 etkilenmez.
+- v2 frontend bozulursa: `sudo systemctl stop qtss-web` + nginx config'inde `/v2/` location bloğunu yorumla → reload. v1 etkilenmez.
 - API tarafı tek binary olduğu için API rollback = bir önceki release commit'ine `git reset --hard` + `cargo build --release -p qtss-api` + `systemctl restart qtss-api`. v2 endpoint'leri devre dışı bırakmak için `setup.enabled` (ve diğer v2 master switch config key'leri) `false` yapılır — kod kaldırılması gerekmez.
 - DB ortak: v1 ve v2 aynı PostgreSQL şemasını paylaşır. v2 tabloları (`qtss_v2_*`) v1 tablolarıyla çakışmaz; v1'i etkilemeden migration uygulanabilir.
 
 **Canary önerisi**
 
-İlk gün `qtss-web-v2` sadece dahili IP'den erişilebilir bırakılır (nginx `allow/deny` veya başka subdomain). Ekip içi smoke test sonrası `/v2/` location publik açılır. Sorun yoksa bir sonraki sürümde varsayılan path `/` → web v2 olarak çevrilir, v1 `/v1/` altına alınır.
+İlk gün `qtss-web` sadece dahili IP'den erişilebilir bırakılır (nginx `allow/deny` veya başka subdomain). Ekip içi smoke test sonrası `/v2/` location publik açılır. Sorun yoksa bir sonraki sürümde varsayılan path `/` → web v2 olarak çevrilir, v1 `/v1/` altına alınır.
 
 ### 7. `deploy/pull-build-restart.sh` ve sunucuda dallanma
 

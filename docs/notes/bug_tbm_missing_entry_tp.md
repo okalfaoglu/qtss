@@ -1,7 +1,7 @@
 # bug: TBM chart overlay is missing Entry / TP lines
 
 **Reported:** 2026-04-19
-**Area:** web-v2 Chart (TBM panel) + backend render_geometry
+**Area:** web Chart (TBM panel) + backend render_geometry
 **Severity:** medium — overlay is partially drawn so users see only SL and
 a plain `bottom_setup 44% · Weak` / `top_setup 38% · Weak` label. Entry
 and TP1/TP2/TP3 price levels are not rendered, so the operator cannot
@@ -34,7 +34,7 @@ and the two colored square labels at the anchor bar
    `bos_bar_index`, `followthrough_bar_index`, `wyckoff_events`. No
    TP ladder is computed for TBM — the SL visible on the chart is
    likely derived from `invalidation_price` alone.
-3. Chart renderer: `web-v2/src/pages/Chart.tsx` — locate the TBM
+3. Chart renderer: `web/src/pages/Chart.tsx` — locate the TBM
    overlay dispatch. Verify it reads the same Entry/TP fields the
    Wyckoff dispatcher reads, or that a TBM-specific dispatch exists.
 

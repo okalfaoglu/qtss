@@ -116,7 +116,7 @@ Wyckoff `TradePlan`'dan otomatik OCO grubu üretir:
 - Entry fill → SL+TP'ler aktive olur
 - Fill kısmi → diğer OCO emirlerin qty'si güncellenir
 
-### 2.9 Frontend `web-v2/src/pages/LiveExecution.tsx`
+### 2.9 Frontend `web/src/pages/LiveExecution.tsx`
 - Aktif live setup'lar paneli
 - Circuit breaker durumu (open/tripped — kırmızı banner)
 - Order state timeline her setup için

@@ -1,0 +1,25 @@
+[package]
+name = "qtss-engine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+qtss-storage.workspace = true
+qtss-pivots.workspace = true
+qtss-elliott.workspace = true
+qtss-harmonic.workspace = true
+qtss-classical.workspace = true
+qtss-domain.workspace = true
+qtss-range.workspace = true
+qtss-gap.workspace = true
+qtss-candles.workspace = true
+qtss-regime.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+rust_decimal = { version = "1.36", features = ["serde"] }

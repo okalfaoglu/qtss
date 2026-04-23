@@ -435,7 +435,16 @@
       "Bash(wsl -- bash -c \"ps aux | grep -iE 'qtss-worker|qtss_worker' | grep -v grep | head -5\")",
       "Bash(wsl -- bash -c \"ls -la /app/qtss/target/release/qtss-worker 2>&1; echo '---'; stat -c '%y' /app/qtss/target/release/qtss-worker 2>&1\")",
       "Bash(wsl -- bash -c \"strings /app/qtss/target/release/qtss-worker 2>/dev/null | grep -E 'luxalgo_\\(impulse|correction\\)' | head -10\")",
-      "Bash(wsl -- bash -c \"ls ~/.cargo/bin/cargo 2>/dev/null; ls /usr/local/cargo/bin/cargo 2>/dev/null; which cargo 2>/dev/null; find /root -name cargo -type f 2>/dev/null | head -3; find /home -name cargo -type f 2>/dev/null | head -3\")"
+      "Bash(wsl -- bash -c \"ls ~/.cargo/bin/cargo 2>/dev/null; ls /usr/local/cargo/bin/cargo 2>/dev/null; which cargo 2>/dev/null; find /root -name cargo -type f 2>/dev/null | head -3; find /home -name cargo -type f 2>/dev/null | head -3\")",
+      "Read(//tmp/**)",
+      "Bash(cd \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\.claude\\\\worktrees\\\\recursing-lalande-a73313\")",
+      "Bash(rm -v crates/qtss-worker/src/v2_detection_orchestrator.rs crates/qtss-worker/src/v2_detection_sweeper.rs crates/qtss-worker/src/v2_detection_validator.rs crates/qtss-worker/src/v2_tbm_detector.rs crates/qtss-worker/src/v2_confluence_loop.rs crates/qtss-worker/src/v2_drawdown_snapshot.rs crates/qtss-worker/src/v2_onchain_loop.rs crates/qtss-worker/src/v2_onchain_bridge.rs crates/qtss-worker/src/v2_setup_loop.rs crates/qtss-worker/src/v2_backtest_setup_loop.rs crates/qtss-worker/src/v2_pattern_strategy_bridge.rs crates/qtss-worker/src/v2_risk_bridge.rs crates/qtss-worker/src/v2_render_geometry.rs crates/qtss-worker/src/v2_projection_loop.rs crates/qtss-worker/src/confluence.rs crates/qtss-worker/src/confluence_hook.rs crates/qtss-worker/src/ml_backfill_orchestrator.rs crates/qtss-worker/src/feature_store.rs crates/qtss-worker/src/llm_judge.rs crates/qtss-worker/src/ai_engine.rs crates/qtss-worker/src/ai_inference.rs crates/qtss-worker/src/outcome_labeler_loop.rs crates/qtss-worker/src/detection_stats_refresh.rs crates/qtss-worker/src/psi_drift_loop.rs crates/qtss-worker/src/trainer_cron.rs crates/qtss-worker/src/wyckoff_setup_loop.rs crates/qtss-worker/src/wyckoff_setup_invalidation_loop.rs)",
+      "Bash(cargo --version)",
+      "Bash(ls \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\app\\\\qtss\\\\.claude\\\\worktrees\\\\recursing-lalande-a73313\\\\migrations\")",
+      "Bash(wsl which *)",
+      "Bash('/c/Program Files/Python313/python' -c ' *)",
+      "Bash(\"/c/Program Files/Python313/python\" _orphan_scan.py)",
+      "Bash(tee _orphan_scan_output.txt)"
     ]
   }
 }

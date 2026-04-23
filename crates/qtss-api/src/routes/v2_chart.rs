@@ -33,7 +33,7 @@ use qtss_gui_api::{
     build_renko, CandleBar, ChartWorkspace, DetectionAnchor, DetectionOverlay, OpenOrderOverlay,
     OpenPositionView,
 };
-use qtss_storage::{market_bars, DetectionRow, V2DetectionRepository};
+use qtss_storage::market_bars;
 use qtss_storage::wave_chain;
 
 use crate::error::ApiError;
@@ -187,7 +187,7 @@ async fn get_chart(
     let positions = positions_for(&st, &symbol).await;
     let modes = parse_csv_lower(q.modes.as_deref(), &["live", "dry"]);
     let levels = parse_csv_upper(q.levels.as_deref(), &["L0", "L1", "L2", "L3"]);
-    let detections = detections_for(&st, &venue, &symbol, &tf, &modes, &levels).await;
+    let detections = detections_for(&st, &venue, &segment, &symbol, &tf, &modes, &levels).await;
     let open_orders: Vec<OpenOrderOverlay> = Vec::new();
 
     Ok(Json(ChartWorkspace {
@@ -219,151 +219,136 @@ async fn resolve_brick_pct(st: &SharedState) -> Decimal {
     raw.parse::<Decimal>().unwrap_or_else(|_| Decimal::new(5, 3))
 }
 
-/// Read the latest N detections for this `(venue, symbol, timeframe)`
-/// from `qtss_v2_detections` and project them into the wire-shape the
-/// chart panel renders. Limit comes from `system_config` so the GUI
-/// can shrink it under load (CLAUDE.md #2).
+/// Read pattern overlays from the new `detections` table (populated by
+/// `qtss-engine`'s elliott / harmonic writers). Honours the frontend's
+/// `modes` (live/dry/backtest) and `levels` (L0–L3 → slot 0–3) toggles.
+/// Invalidated rows are filtered out so the chart shows only active
+/// geometry; backtest evaluation results would fan in as a separate
+/// join once the outcome table is wired up.
 async fn detections_for(
     st: &SharedState,
     venue: &str,
+    segment: &str,
     symbol: &str,
     tf: &str,
     modes: &[String],
     levels: &[String],
 ) -> Vec<DetectionOverlay> {
-    let limit = qtss_storage::resolve_system_u64(
-        &st.pool,
-        "detection",
-        "chart_overlay.limit",
-        "QTSS_DETECTION_CHART_OVERLAY_LIMIT",
-        50,
-        1,
-        1000,
+    let slot_ints: Vec<i16> = levels
+        .iter()
+        .filter_map(|l| l.strip_prefix('L').and_then(|n| n.parse::<i16>().ok()))
+        .collect();
+    if slot_ints.is_empty() || modes.is_empty() {
+        return Vec::new();
+    }
+
+    let rows = match sqlx::query(
+        r#"SELECT slot, pattern_family, subkind, direction,
+                  start_time, end_time,
+                  anchors, live, invalidated, raw_meta, mode
+             FROM detections
+            WHERE exchange = $1 AND segment = $2 AND symbol = $3
+              AND timeframe = $4
+              AND slot = ANY($5)
+              AND mode = ANY($6)
+              AND invalidated = false
+            ORDER BY slot, start_time DESC
+            LIMIT 2000"#,
     )
-    .await as i64;
-    let repo = V2DetectionRepository::new(st.pool.clone());
-    let mut rows: Vec<DetectionRow> = Vec::new();
-
-    let want_live = modes.iter().any(|m| m == "live" || m == "dry");
-    if want_live {
-        match repo.list_for_chart(venue, symbol, tf, limit).await {
-            Ok(r) => rows.extend(r),
-            Err(e) => tracing::warn!(%e, "v2 chart: list_for_chart failed"),
+    .bind(venue)
+    .bind(segment)
+    .bind(symbol)
+    .bind(tf)
+    .bind(&slot_ints)
+    .bind(modes)
+    .fetch_all(&st.pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(%e, venue, segment, symbol, tf, "detections_for: query failed");
+            return Vec::new();
         }
-    }
+    };
 
-    let want_backtest = modes.iter().any(|m| m == "backtest");
-    if want_backtest {
-        // Backtest overlays are bulkier: allow a wider cap so the
-        // chart actually shows multi-level sweep output. Driven
-        // from system_config so operators can shrink under load.
-        let bt_limit = qtss_storage::resolve_system_u64(
-            &st.pool,
-            "detection",
-            "chart_overlay.backtest_limit",
-            "QTSS_DETECTION_CHART_BACKTEST_LIMIT",
-            500,
-            1,
-            5000,
-        )
-        .await as i64;
-        match repo
-            .list_backtest_for_chart(venue, symbol, tf, levels, bt_limit)
-            .await
-        {
-            Ok(r) => rows.extend(r),
-            Err(e) => tracing::warn!(%e, "v2 chart: list_backtest_for_chart failed"),
-        }
-    }
-
-    let mut overlays: Vec<DetectionOverlay> = rows.into_iter().map(detection_row_to_overlay).collect();
-
-    // Enrich elliott detections with wave_chain ancestor breadcrumb + has_children
-    for overlay in &mut overlays {
-        if overlay.family == "elliott" {
-            if let Ok(det_id) = uuid::Uuid::parse_str(&overlay.id) {
-                if let Ok(Some(wave)) = wave_chain::find_by_detection(&st.pool, det_id).await {
-                    // Check if this wave has children (sub-waves on lower TF)
-                    if let Ok(count) = wave_chain::count_children(&st.pool, wave.id).await {
-                        overlay.has_children = count > 0;
-                    }
-                    if let Ok(chain) = wave_chain::get_ancestor_chain(&st.pool, wave.id).await {
-                        let breadcrumb = chain
-                            .iter()
-                            .rev() // root first
-                            .filter_map(|w| {
-                                let num = w.wave_number.as_deref().unwrap_or("?");
-                                Some(format!("{} {}", w.degree, num))
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" › ");
-                        if !breadcrumb.is_empty() {
-                            overlay.wave_context = Some(breadcrumb);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    overlays
+    rows.into_iter()
+        .filter_map(|row| row_to_overlay(row))
+        .collect()
 }
 
-fn detection_row_to_overlay(row: DetectionRow) -> DetectionOverlay {
-    let anchors = parse_anchors(&row.anchors);
-    // Faz 7.6 / A2 + A3: pull projection and sub-wave decomposition
-    // out of raw_meta. Both keys are optional and the parser tolerates
-    // missing fields so older rows still render their realized anchors.
-    let projected_anchors = row
-        .raw_meta
-        .get("projected_anchors")
-        .map(parse_anchors)
-        .unwrap_or_default();
-    let sub_wave_anchors = row
-        .raw_meta
-        .get("sub_wave_anchors")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().map(parse_anchors).collect::<Vec<_>>())
-        .unwrap_or_default();
-    let primary_price = anchors
-        .first()
-        .map(|a| a.price)
-        .unwrap_or(row.invalidation_price);
-    let confidence = row
-        .confidence
-        .and_then(Decimal::from_f32)
-        .unwrap_or_else(|| Decimal::from_f32(row.structural_score).unwrap_or(Decimal::ZERO));
+fn row_to_overlay(row: sqlx::postgres::PgRow) -> Option<DetectionOverlay> {
+    use sqlx::Row;
 
-    DetectionOverlay {
-        id: row.id.to_string(),
-        kind: format!("{}/{}", row.family, row.subkind),
-        label: row.subkind.clone(),
-        family: row.family,
-        subkind: row.subkind,
-        state: row.state,
-        anchor_time: row.detected_at,
-        anchor_price: primary_price,
+    let slot: i16 = row.get("slot");
+    let family: String = row.get("pattern_family");
+    let subkind: String = row.get("subkind");
+    let direction: i16 = row.get("direction");
+    let start_time: chrono::DateTime<chrono::Utc> = row.get("start_time");
+    let end_time: chrono::DateTime<chrono::Utc> = row.get("end_time");
+    let anchors_json: serde_json::Value =
+        row.try_get("anchors").unwrap_or(serde_json::Value::Null);
+    let live: Option<bool> = row.try_get("live").ok().flatten();
+    let invalidated: bool = row.get("invalidated");
+    let raw_meta: serde_json::Value =
+        row.try_get("raw_meta").unwrap_or(serde_json::Value::Null);
+    let mode: String = row.get("mode");
+
+    let anchors = parse_anchors(&anchors_json);
+    let first = anchors.first()?.clone();
+
+    let state = match (invalidated, live) {
+        (true, _) => "invalidated",
+        (false, Some(true)) => "forming",
+        (false, _) => "confirmed",
+    };
+
+    let confidence = raw_meta
+        .get("score")
+        .and_then(|v| v.as_f64())
+        .and_then(Decimal::from_f64)
+        .unwrap_or(Decimal::ZERO);
+
+    let arrow = match direction.signum() {
+        1 => " ↑",
+        -1 => " ↓",
+        _ => "",
+    };
+
+    Some(DetectionOverlay {
+        id: format!(
+            "{}:{}:{}:{}:{}",
+            family,
+            subkind,
+            slot,
+            start_time.timestamp_millis(),
+            end_time.timestamp_millis(),
+        ),
+        kind: family.clone(),
+        label: format!("{}{}", subkind, arrow),
+        family,
+        subkind,
+        state: state.to_string(),
+        anchor_time: first.time,
+        anchor_price: first.price,
         confidence,
-        invalidation_price: row.invalidation_price,
+        invalidation_price: Decimal::ZERO,
         anchors,
-        projected_anchors,
-        sub_wave_anchors,
+        projected_anchors: Vec::new(),
+        sub_wave_anchors: Vec::new(),
         wave_context: None,
         has_children: false,
-        render_geometry: row.render_geometry,
-        render_style: row.render_style,
-        render_labels: row.render_labels,
-        pivot_level: row.pivot_level,
-        mode: Some(row.mode),
-        outcome: row.outcome,
-        outcome_pnl_pct: row.outcome_pnl_pct,
-        outcome_entry_price: row.outcome_entry_price,
-        outcome_exit_price: row.outcome_exit_price,
-        outcome_close_reason: row.outcome_close_reason,
-        // Faz 13 — passthrough raw_meta.targets for families that
-        // emit explicit A+B target packs (currently `pivot_reversal`).
-        targets: row.raw_meta.get("targets").cloned(),
-    }
+        render_geometry: None,
+        render_style: None,
+        render_labels: None,
+        pivot_level: Some(format!("L{}", slot)),
+        mode: Some(mode),
+        outcome: None,
+        outcome_pnl_pct: None,
+        outcome_entry_price: None,
+        outcome_exit_price: None,
+        outcome_close_reason: None,
+        targets: None,
+    })
 }
 
 /// Parse a comma-separated query param, lower-cased, falling back to
@@ -419,6 +404,7 @@ fn parse_anchors(value: &serde_json::Value) -> Vec<DetectionAnchor> {
                 .get("label")
                 .and_then(|k| k.as_str())
                 .map(|s| s.to_string())
+                .or_else(|| v.get("label_override").and_then(|k| k.as_str()).map(|s| s.to_string()))
                 .or_else(|| v.get("kind").and_then(|k| k.as_str()).map(|s| s.to_string()));
             Some(DetectionAnchor { time, price, label })
         })
