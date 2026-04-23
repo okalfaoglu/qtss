@@ -34,6 +34,8 @@ qtss-candles.workspace = true
 qtss-tbm.workspace = true
 qtss-onchain.workspace = true
 qtss-indicators.workspace = true
+qtss-validator.workspace = true
+qtss-targets.workspace = true
 qtss-eventbus = { path = "../qtss-eventbus" }
 qtss-risk = { path = "../qtss-risk" }
 qtss-config = { path = "../qtss-config" }

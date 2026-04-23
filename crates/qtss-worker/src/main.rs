@@ -39,6 +39,7 @@ mod worker_probe_http;
 mod engine_ingest;
 mod confluence_loop;
 mod indicator_persistence_loop;
+mod validator_loop;
 mod intake_auto_promote;
 mod intake_playbook_engine;
 mod lifecycle_manager;
@@ -363,6 +364,12 @@ async fn main() -> anyhow::Result<()> {
         // into per-symbol-per-TF bull/bear/net scores.
         let confluence_pool = pool.clone();
         tokio::spawn(confluence_loop::confluence_loop(confluence_pool));
+        // Validator — invalidates stale detections when price action
+        // breaks their geometry. Runs on the same cadence as engine
+        // writes so the chart never shows a pattern after its
+        // structural reference level has been blown through.
+        let validator_pool = pool.clone();
+        tokio::spawn(validator_loop::validator_loop(validator_pool));
         let health_pool = pool.clone();
         tokio::spawn(data_health_report::data_health_report_loop(health_pool));
         binance_user_stream::spawn_binance_user_stream_tasks(&pool).await;

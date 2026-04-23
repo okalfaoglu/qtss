@@ -4,6 +4,7 @@
 //! `docs/QTSS_MASTER_DEV_GUIDE.md` (FAZ 2–3).
 
 pub mod approval;
+pub mod multi_gate;
 pub mod strategy_provider;
 
 pub use strategy_provider::{

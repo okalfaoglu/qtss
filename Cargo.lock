@@ -2858,6 +2858,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "qtss-targets"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "qtss-tbm"
 version = "0.1.0"
 dependencies = [
@@ -2884,6 +2893,16 @@ dependencies = [
  "tokio",
  "tracing",
  "urlencoding",
+]
+
+[[package]]
+name = "qtss-validator"
+version = "0.1.0"
+dependencies = [
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -2938,7 +2957,9 @@ dependencies = [
  "qtss-storage",
  "qtss-strategy",
  "qtss-symbol-intel",
+ "qtss-targets",
  "qtss-tbm",
+ "qtss-validator",
  "rand 0.8.5",
  "reqwest",
  "rust_decimal",
