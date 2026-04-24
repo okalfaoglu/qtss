@@ -99,18 +99,38 @@ impl LifecycleHandler for DbPersistHandler {
 // Telegram lifecycle handler (Faz 9.7.5)
 // ---------------------------------------------------------------------------
 
-/// Renders each lifecycle event with [] and ships it
-/// to Telegram through the shared []. A missing
-/// Telegram configuration is treated as a no-op (the dispatcher returns
-/// ); we log at warn and move on so the rest of
-/// the router keeps working.
+/// Renders each lifecycle event via `render_lifecycle` and enqueues
+/// the rendered card into `notify_outbox` with a stable dedup_key so a
+/// worker restart never replays an already-sent event. Falls back to
+/// direct dispatcher send when no pool is configured (keeps the
+/// legacy code path alive for callers that haven't been updated).
+///
+/// Dedup scheme — `lifecycle:{setup_id}:{event_kind}` — matches one
+/// row per terminal-event-kind per setup. Non-terminal events (TpHit
+/// intermediate, SlRatcheted, HealthWarn) can legitimately fire many
+/// times and are NOT dedup-gated at this layer (they get dedup_key =
+/// NULL so the partial unique index skips them).
 pub struct TelegramLifecycleHandler {
     dispatcher: NotificationDispatcher,
+    pool: Option<PgPool>,
 }
 
 impl TelegramLifecycleHandler {
     pub fn new(dispatcher: NotificationDispatcher) -> Self {
-        Self { dispatcher }
+        Self {
+            dispatcher,
+            pool: None,
+        }
+    }
+
+    /// PgPool-backed constructor. Preferred in production — routes the
+    /// card through notify_outbox so the dedup index blocks restart
+    /// replays. Legacy `new()` keeps working for tests and fallback.
+    pub fn with_pool(dispatcher: NotificationDispatcher, pool: PgPool) -> Self {
+        Self {
+            dispatcher,
+            pool: Some(pool),
+        }
     }
 }
 
@@ -125,6 +145,63 @@ impl LifecycleHandler for TelegramLifecycleHandler {
             return;
         }
         let n = render_lifecycle(ctx);
+        // Telegram HTML body lives in `telegram_text` (set by
+        // with_telegram_html_message). Non-Telegram subscribers get
+        // the plain `body` field.
+        let body_html = n
+            .telegram_text
+            .clone()
+            .unwrap_or_else(|| n.body.clone());
+        let title = n.title.clone();
+
+        // Pool path: enqueue to notify_outbox with dedup. The
+        // notify_outbox_loop drains to Telegram on its own cadence.
+        if let Some(pool) = &self.pool {
+            // Only terminal (close) events get dedup'd here — repeat
+            // sub-events on the same setup are legitimate.
+            let dedup_key = if ctx.kind.is_terminal() {
+                Some(format!(
+                    "lifecycle:{}:{}",
+                    ctx.setup_id,
+                    ctx.kind.as_db_str()
+                ))
+            } else {
+                None
+            };
+            let res = sqlx::query(
+                r#"INSERT INTO notify_outbox
+                      (title, body, channels, severity, event_key,
+                       exchange, segment, symbol, status, dedup_key)
+                   VALUES ($1, $2, '["telegram"]'::jsonb, 'info', $3,
+                           $4, 'futures', $5, 'pending', $6)
+                   ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING"#,
+            )
+            .bind(&title)
+            .bind(&body_html)
+            .bind(format!("lifecycle.{}", ctx.kind.as_db_str()))
+            .bind(&ctx.exchange)
+            .bind(&ctx.symbol)
+            .bind(dedup_key.as_deref())
+            .execute(pool)
+            .await;
+            match res {
+                Ok(r) if r.rows_affected() > 0 => debug!(
+                    setup_id=%ctx.setup_id, kind=%ctx.kind.as_db_str(),
+                    "TelegramLifecycleHandler: enqueued"
+                ),
+                Ok(_) => debug!(
+                    setup_id=%ctx.setup_id, kind=%ctx.kind.as_db_str(),
+                    "TelegramLifecycleHandler: dedup hit (already enqueued)"
+                ),
+                Err(e) => warn!(
+                    %e, setup_id=%ctx.setup_id, kind=%ctx.kind.as_db_str(),
+                    "TelegramLifecycleHandler: enqueue failed"
+                ),
+            }
+            return;
+        }
+
+        // Fallback: direct send (test + legacy).
         if let Err(e) = self
             .dispatcher
             .send(NotificationChannel::Telegram, &n)

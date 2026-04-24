@@ -583,6 +583,18 @@ async fn insert_notify_outbox(
     event_key: &str,
     payload: &Value,
 ) -> anyhow::Result<()> {
+    // dedup_key is event_key + setup_id — after a worker restart,
+    // re-inserting the same card for an already-processed setup is a
+    // no-op (ON CONFLICT DO NOTHING via the partial unique index on
+    // notify_outbox.dedup_key). Prevents the "same Telegram card fires
+    // every restart" regression.
+    let setup_id_str = payload
+        .get("setup_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let dedup_key = setup_id_str
+        .as_ref()
+        .map(|sid| format!("{event_key}:{sid}"));
     // Schema match: notify_outbox(title, body, channels, severity,
     // event_key, org_id, exchange, segment, symbol, status).
     // Errors swallowed — a broken outbox should never crash the
@@ -619,16 +631,17 @@ async fn insert_notify_outbox(
     let _ = sqlx::query(
         r#"INSERT INTO notify_outbox
               (title, body, channels, severity, event_key,
-               exchange, segment, symbol, status)
+               exchange, segment, symbol, status, dedup_key)
            VALUES ($1, $2, '["telegram","x","webhook"]'::jsonb, $3, $4,
-                   'binance', 'futures', $5, 'pending')
-           ON CONFLICT DO NOTHING"#,
+                   'binance', 'futures', $5, 'pending', $6)
+           ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING"#,
     )
     .bind(&title)
     .bind(&body)
     .bind(severity)
     .bind(event_key)
     .bind(symbol)
+    .bind(dedup_key.as_deref())
     .execute(pool)
     .await;
     Ok(())

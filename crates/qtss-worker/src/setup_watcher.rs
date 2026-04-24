@@ -575,7 +575,12 @@ pub async fn setup_watcher_loop(pool: PgPool, store: Arc<PriceTickStore>) {
         vec![Arc::new(DbPersistHandler::new(pool.clone()))];
     if tg_enabled {
         let dispatcher = NotificationDispatcher::from_env();
-        handlers.push(Arc::new(TelegramLifecycleHandler::new(dispatcher)));
+        // Setup v1.1.2 — route through notify_outbox with dedup_key so
+        // a worker restart never replays the same close card.
+        handlers.push(Arc::new(TelegramLifecycleHandler::with_pool(
+            dispatcher,
+            pool.clone(),
+        )));
     }
     let x_enabled = resolve_worker_enabled_flag(
         &pool,

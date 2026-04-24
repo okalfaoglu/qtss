@@ -118,9 +118,15 @@ pub fn render_public_card(card: &PublicCard) -> Notification {
 // ---------------------------------------------------------------------------
 
 /// Render a lifecycle event (entry touch, TP hit, SL hit, ratchet, …)
-/// for Telegram. Falls back to a short plain body for non-Telegram
-/// channels (email/webhook).
+/// for Telegram. Terminal events (TpFinal / SlHit / TrailStop /
+/// Invalidated / Cancelled) get the "İŞLEM SONUCU" layout the user
+/// requested — big pnl line, entry→close arrow, clear win/loss colour.
+/// Non-terminal events use the original compact lifecycle card.
 pub fn render_lifecycle(ctx: &LifecycleContext) -> Notification {
+    if ctx.kind.is_terminal() {
+        return render_close_card(ctx);
+    }
+
     let (emoji, headline) = header_for_kind(ctx.kind, ctx.tp_index);
     let title = format!(
         "{} {} {} — {}",
@@ -176,6 +182,82 @@ pub fn render_lifecycle(ctx: &LifecycleContext) -> Notification {
     if let Some(ms) = ctx.duration_ms {
         if ms > 0 {
             html.push_str(&format!("Süre: <i>{}</i>\n", fmt_duration_ms(ms)));
+        }
+    }
+
+    let body_plain = html_to_plain(&html);
+    Notification::new(title, body_plain).with_telegram_html_message(html)
+}
+
+/// "İŞLEM SONUCU" card — terminal close events. Big pnl line, clear
+/// win/loss framing, entry→close arrow.
+///
+/// Layout:
+///   ✅ İŞLEM SONUCU  |  ❌ İŞLEM SONUCU  |  🧲 İŞLEM SONUCU
+///   📊 SYMBOL · LONG/SHORT (TF)
+///   entry → close
+///   💰 +X.XX%          (winner)
+///   📉 -X.XX%          (loser)
+///   Sebep · Süre
+fn render_close_card(ctx: &LifecycleContext) -> Notification {
+    use crate::lifecycle::LifecycleEventKind;
+    let pnl = ctx.pnl_pct.unwrap_or(0.0);
+    let (header_emoji, header_text, pnl_emoji) = match ctx.kind {
+        LifecycleEventKind::TpFinal => ("✅", "İŞLEM SONUCU", "💰"),
+        LifecycleEventKind::TrailStop => {
+            if pnl >= 0.0 { ("🧲", "İŞLEM SONUCU", "💰") }
+            else { ("🧲", "İŞLEM SONUCU", "📉") }
+        }
+        LifecycleEventKind::SlHit => ("❌", "İŞLEM SONUCU", "📉"),
+        LifecycleEventKind::Invalidated => ("⚠️", "İŞLEM SONUCU", "📉"),
+        LifecycleEventKind::Cancelled => ("↩️", "İŞLEM İPTAL", "—"),
+        _ => ("🏁", "İŞLEM SONUCU", "—"),
+    };
+    let title = format!(
+        "{header_emoji} {} — {} {}",
+        ctx.symbol,
+        ctx.direction.label_tr(),
+        fmt_pct_signed(pnl),
+    );
+
+    let mut html = String::with_capacity(384);
+    html.push_str(&format!(
+        "<b>{} {}</b>\n",
+        escape_telegram_html(header_emoji),
+        escape_telegram_html(header_text),
+    ));
+    html.push_str(&format!(
+        "📊 <b>{}</b> · {}\n",
+        escape_telegram_html(&ctx.symbol),
+        escape_telegram_html(ctx.direction.label_tr()),
+    ));
+    html.push_str(&format!(
+        "<code>{}</code> → <code>{}</code>\n",
+        fmt_decimal(ctx.entry_price),
+        fmt_decimal(ctx.price),
+    ));
+    html.push_str(&format!(
+        "{pnl_emoji} <b>{}</b>\n",
+        fmt_pct_signed(pnl),
+    ));
+    if let Some(r) = ctx.pnl_r {
+        html.push_str(&format!("R: <b>{:.2}</b>\n", r));
+    }
+    // Reason — maps directly from event kind; explains why the close
+    // happened so the user doesn't have to remember which emoji means
+    // what.
+    let reason = match ctx.kind {
+        LifecycleEventKind::TpFinal => "Son hedef",
+        LifecycleEventKind::TrailStop => "Trailing stop (kâr korundu)",
+        LifecycleEventKind::SlHit => "Stop-loss",
+        LifecycleEventKind::Invalidated => "Setup geçersiz",
+        LifecycleEventKind::Cancelled => "İptal",
+        _ => "Kapanış",
+    };
+    html.push_str(&format!("<i>Sebep:</i> {}\n", escape_telegram_html(reason)));
+    if let Some(ms) = ctx.duration_ms {
+        if ms > 0 {
+            html.push_str(&format!("<i>Süre:</i> {}\n", fmt_duration_ms(ms)));
         }
     }
 

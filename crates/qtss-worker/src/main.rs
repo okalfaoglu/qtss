@@ -20,6 +20,7 @@ mod nansen_query;
 mod notify_outbox;
 mod onchain_signal_scorer;
 mod position_manager;
+mod position_hourly_snapshot_loop;
 mod price_tick_ws;
 mod setup_watcher;
 mod symbol_intel_loops;
@@ -394,6 +395,16 @@ async fn main() -> anyhow::Result<()> {
             alloc_pool,
             price_store.clone(),
         ));
+        // CANLI POZİSYON — hourly Telegram digest for every open
+        // setup, dedup'ed on (setup_id, yyyymmddHH) so a worker
+        // restart mid-hour never re-sends.
+        let hourly_pool = pool.clone();
+        tokio::spawn(
+            position_hourly_snapshot_loop::position_hourly_snapshot_loop(
+                hourly_pool,
+                price_store.clone(),
+            ),
+        );
         // RADAR periodic aggregator — daily / weekly / monthly /
         // yearly performance snapshots per market × mode.
         let radar_pool = pool.clone();
