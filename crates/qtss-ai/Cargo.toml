@@ -30,6 +30,7 @@ hex.workspace = true
 rust_decimal = { version = "1.36", features = ["serde"] }
 qtss-domain.workspace = true
 qtss-strategy.workspace = true
+qtss-secrets.workspace = true
 
 [dev-dependencies]
 rust_decimal_macros.workspace = true
