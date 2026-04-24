@@ -347,6 +347,7 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<usize> {
                     "verdict": verdict,
                     "regime": regime,
                     "mode": mode,
+                    "commission_check": commission_check,
                 }),
             )
             .await;
@@ -417,21 +418,28 @@ async fn insert_notify_outbox(
     let entry = payload.get("entry").and_then(|v| v.as_f64()).unwrap_or(0.0);
     let sl = payload.get("sl").and_then(|v| v.as_f64()).unwrap_or(0.0);
     let confidence = payload.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let dir_arrow = if direction == "long" { "⬆" } else { "⬇" };
-    let (title, severity) = if event_key == "allocator_v2_armed" {
+    let dir_arrow = if direction == "long" { "🟢" } else { "🔴" };
+    let (title, severity, body) = if event_key == "allocator_v2_armed" {
         (
             format!(
                 "{dir_arrow} {mode} {symbol} {timeframe}  @ {entry:.4}  SL {sl:.4}  conf {confidence:.2}"
             ),
             "info",
+            render_armed_html(payload),
+        )
+    } else if event_key == "allocator_v2_commission_skip" {
+        (
+            format!("🟡 {symbol} {timeframe} — komisyon filtresi"),
+            "warn",
+            render_commission_skip_html(payload),
         )
     } else {
         (
             format!("⛔ {symbol} {timeframe} — setup rejected"),
             "warn",
+            serde_json::to_string_pretty(payload).unwrap_or_default(),
         )
     };
-    let body = serde_json::to_string_pretty(payload).unwrap_or_default();
     let _ = sqlx::query(
         r#"INSERT INTO notify_outbox
               (title, body, channels, severity, event_key,
@@ -448,6 +456,147 @@ async fn insert_notify_outbox(
     .execute(pool)
     .await;
     Ok(())
+}
+
+// ── Telegram HTML renderers ────────────────────────────────────────────
+//
+// notify_outbox_loop treats a body as Telegram HTML when it starts with
+// `<b>`/`<i>`/`<pre>` — that's what `parse_mode=HTML` needs in the
+// Telegram API. Non-Telegram channels (email, webhook) still get a
+// plaintext version because the loop strips the tags for them.
+
+/// Format a signed percentage with leading sign.
+fn fmt_pct_signed(p: f64) -> String {
+    if p.abs() < 1e-9 {
+        "0.00%".to_string()
+    } else if p >= 0.0 {
+        format!("+{p:.2}%")
+    } else {
+        format!("{p:.2}%")
+    }
+}
+
+/// Distance from entry to `other` as a signed percentage (raw, no
+/// direction awareness). Positive = `other` > entry.
+fn pct_raw(entry: f64, other: f64) -> f64 {
+    if entry.abs() < 1e-9 {
+        return 0.0;
+    }
+    (other - entry) / entry * 100.0
+}
+
+fn render_armed_html(p: &Value) -> String {
+    let symbol = p.get("symbol").and_then(|v| v.as_str()).unwrap_or("?");
+    let tf = p.get("timeframe").and_then(|v| v.as_str()).unwrap_or("?");
+    let direction = p.get("direction").and_then(|v| v.as_str()).unwrap_or("?");
+    let mode = p.get("mode").and_then(|v| v.as_str()).unwrap_or("?");
+    let verdict = p.get("verdict").and_then(|v| v.as_str()).unwrap_or("?");
+    let entry = p.get("entry").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let sl = p.get("sl").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let confidence = p
+        .get("confidence")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let tp_ladder: Vec<f64> = p
+        .get("tp_ladder")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_f64()).collect())
+        .unwrap_or_default();
+    let is_long = direction == "long";
+    let dir_icon = if is_long { "🟢 LONG" } else { "🔴 SHORT" };
+
+    // SL/TP moves relative to entry — signs flip for shorts so "+%" is
+    // always the favourable direction.
+    let sl_pct_raw = pct_raw(entry, sl);
+    let sl_pct_display = if is_long { sl_pct_raw } else { -sl_pct_raw };
+
+    // Commission — reconstruct round-trip from the embedded check block
+    // if the allocator already computed it; else skip the commission
+    // section entirely. Body stays honest rather than hard-coding bps.
+    let commission = p.get("commission_check");
+    let (round_trip_pct, gross_tp1_pct) = commission
+        .map(|c| {
+            (
+                c.get("round_trip_pct").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                c.get("gross_tp1_pct").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            )
+        })
+        .unwrap_or((0.0, 0.0));
+
+    let mut html = String::with_capacity(1024);
+    html.push_str(&format!(
+        "<b>{dir_icon}</b>  <b>{symbol}</b> · <code>{tf}</code>  <i>({mode})</i>\n\n"
+    ));
+    html.push_str(&format!(
+        "<b>Durum:</b> {verdict} · AI <b>{confidence:.2}</b>/1.00\n"
+    ));
+    html.push_str(&format!("<b>Giriş:</b>    <code>{entry:.6}</code>\n"));
+    html.push_str(&format!(
+        "<b>Stop (SL):</b> <code>{sl:.6}</code>  ({})\n",
+        fmt_pct_signed(sl_pct_display)
+    ));
+
+    if !tp_ladder.is_empty() {
+        html.push_str("\n<b>Kâr Al (TP):</b>\n");
+        for (i, tp) in tp_ladder.iter().enumerate() {
+            let raw = pct_raw(entry, *tp);
+            let tp_pct = if is_long { raw } else { -raw };
+            html.push_str(&format!(
+                "  <b>TP{}:</b> <code>{:.6}</code>  ({})\n",
+                i + 1,
+                tp,
+                fmt_pct_signed(tp_pct)
+            ));
+        }
+        // Gross R:R from TP1 / SL.
+        if !tp_ladder.is_empty() && sl_pct_display.abs() > 1e-9 {
+            let tp1 = tp_ladder[0];
+            let tp1_raw = pct_raw(entry, tp1);
+            let tp1_pct = if is_long { tp1_raw } else { -tp1_raw };
+            let rr = (tp1_pct / sl_pct_display).abs();
+            html.push_str(&format!("\n<b>Risk : Ödül</b>  1 : {rr:.2}\n"));
+        }
+    }
+
+    if round_trip_pct > 0.0 && gross_tp1_pct > 0.0 {
+        let net_tp1 = gross_tp1_pct - round_trip_pct;
+        html.push_str(&format!(
+            "\n<b>Komisyon (round trip):</b> {round_trip_pct:.3}%\n"
+        ));
+        html.push_str(&format!(
+            "<b>Net TP1 (fees sonrası):</b> {net_tp1:+.3}%\n"
+        ));
+    }
+
+    html
+}
+
+fn render_commission_skip_html(p: &Value) -> String {
+    let symbol = p.get("symbol").and_then(|v| v.as_str()).unwrap_or("?");
+    let tf = p.get("timeframe").and_then(|v| v.as_str()).unwrap_or("?");
+    let mode = p.get("mode").and_then(|v| v.as_str()).unwrap_or("?");
+    let c = p.get("commission_check").cloned().unwrap_or(Value::Null);
+    let gross = c.get("gross_tp1_pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let rt = c.get("round_trip_pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let thr = c
+        .get("threshold_pct")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let bps = c.get("taker_bps").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let mult = c
+        .get("safety_multiple")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    format!(
+        "<b>🟡 {symbol}</b> · <code>{tf}</code>  <i>({mode})</i>\n\
+         <b>Durum:</b> setup üretildi fakat <b>komisyon filtresine takıldı</b>\n\n\
+         <b>Gross TP1:</b>    {gross:.3}%\n\
+         <b>Round trip:</b>    {rt:.3}%  ({bps:.1} bps × 2)\n\
+         <b>Threshold:</b>     {thr:.3}%  (round trip × {mult:.1})\n\n\
+         <i>TP hedefi komisyonu karşılayamadığı için işlem açılmadı. \
+         Setup durumu <b>rejected</b> olarak kaydedildi, \
+         raw_meta.rejected_reason = <code>gross_tp_below_commission_floor</code>.</i>"
+    )
 }
 
 // ── Config ─────────────────────────────────────────────────────────────
