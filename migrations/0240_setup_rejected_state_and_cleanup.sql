@@ -37,17 +37,14 @@ ALTER TABLE qtss_setups
         'rejected'
     ]));
 
--- 2) Delete orphan live_positions (setup_id is set but the setup row is
---    gone — leftovers from migration-era cleanups).
-DELETE FROM live_positions
- WHERE setup_id IS NOT NULL
-   AND NOT EXISTS (SELECT 1 FROM qtss_setups s WHERE s.id = live_positions.setup_id);
-
--- 3) Delete zombie LIVE setups — those flagged mode='live' but which
---    never produced a live_positions row. These are the stuck entries
---    setup_watcher was closing with fake SL/TP outcomes.
---    Keep the corresponding setup_events lifecycle audit trail (cascade
---    rules, if any, will fire) so the audit log does not silently vanish.
+-- 2) Delete zombie LIVE setups FIRST — those flagged mode='live' but
+--    which never produced a live_positions row. These are the stuck
+--    entries setup_watcher was closing with fake SL/TP outcomes.
+--    Ordering matters: if we orphan-sweep live_positions before this
+--    DELETE runs, we leave cross-mode links (dry position pointing at
+--    a live zombie setup) in place, and the orphan sweep below misses
+--    them. Dropping the zombie setups first makes every dependent row
+--    orphan-eligible in a single later pass.
 DELETE FROM qtss_setups s
  WHERE s.mode = 'live'
    AND NOT EXISTS (
@@ -56,6 +53,14 @@ DELETE FROM qtss_setups s
         WHERE lp.setup_id = s.id
           AND lp.mode = 'live'
    );
+
+-- 3) Delete orphan live_positions — any row whose setup_id no longer
+--    resolves. Runs AFTER the zombie sweep so the cross-mode leftovers
+--    (dry positions with setup_id pointing at a now-deleted live
+--    zombie) are included.
+DELETE FROM live_positions
+ WHERE setup_id IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM qtss_setups s WHERE s.id = live_positions.setup_id);
 
 -- 4) selected_candidates that pointed at now-deleted setups can go too;
 --    they're FK-less pending rows. Best-effort — table might not have
