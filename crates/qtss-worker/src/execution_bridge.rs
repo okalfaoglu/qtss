@@ -114,12 +114,19 @@ async fn mark_setup_rejected(
     setup_id: Uuid,
     reason: &str,
 ) -> Result<(), sqlx::Error> {
+    // `close_reason` is constrained to the lifecycle vocabulary
+    // (tp_final / sl_hit / trail_stop / invalidated / cancelled / ...) —
+    // use 'cancelled' (the canonical "never opened" terminator) and
+    // stash the raw dispatch error under `raw_meta.rejected_reason`
+    // so operators can still see *why* the setup was cancelled.
     sqlx::query(
         r#"UPDATE qtss_setups
               SET state        = 'rejected',
-                  close_reason = $2,
+                  close_reason = 'cancelled',
                   closed_at    = now(),
-                  updated_at   = now()
+                  updated_at   = now(),
+                  raw_meta     = raw_meta ||
+                                 jsonb_build_object('rejected_reason', $2::text)
             WHERE id = $1
               AND closed_at IS NULL"#,
     )
