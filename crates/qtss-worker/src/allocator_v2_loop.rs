@@ -180,6 +180,34 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
         let tp2 = entry + dir_sign * atr * cfg.atr_tp_mult[1];
         let tp3 = entry + dir_sign * atr * cfg.atr_tp_mult[2];
 
+        // MTF opposing-direction gate — refuse to arm a setup when the
+        // same symbol already has an armed/active setup pointing the
+        // other way. Stops the allocator from self-hedging on multi-TF
+        // conflicts (observed live: BTCUSDT 1d long + 15m short ran in
+        // parallel, eating fees + funding for zero net direction).
+        if cfg.mtf_opposing_gate_enabled {
+            let opp: i64 = sqlx::query_scalar(
+                r#"SELECT count(*)
+                     FROM qtss_setups
+                    WHERE exchange = $1 AND symbol = $2
+                      AND state IN ('armed','active')
+                      AND direction <> $3"#,
+            )
+            .bind(&exchange)
+            .bind(&symbol)
+            .bind(direction)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+            if opp > 0 {
+                info!(
+                    %symbol, direction,
+                    "allocator_v2: skip — opposing-direction setup already armed on same symbol"
+                );
+                continue;
+            }
+        }
+
         // Cooldown guard — if the same (symbol, direction) took an SL
         // hit inside the last N minutes, skip. This kills the whipsaw
         // loop we saw live on XRPUSDT where an identical entry/SL pair
@@ -736,6 +764,11 @@ struct Cfg {
     /// 15 kills the XRPUSDT-style whipsaw loop without blocking a
     /// legitimate regime flip from rearming at the reverse direction.
     sl_hit_cooldown_minutes: i64,
+    /// Setup v1.1.1 — when true, the allocator refuses to arm a new
+    /// setup on a symbol that already has an armed setup in the
+    /// opposite direction. Stops the pipeline from self-hedging when
+    /// 15m says strong_bear and 1d says strong_bull simultaneously.
+    mtf_opposing_gate_enabled: bool,
 }
 
 // Floor/ceiling sanity-check bounds. For a long, the live price must
@@ -751,6 +784,22 @@ fn sl_guard_floor(entry: f64, sl: f64) -> f64 {
 fn sl_guard_ceiling(entry: f64, sl: f64) -> f64 {
     let d = (entry - sl).abs();
     entry - d * 2.0 // for shorts, never open below this floor either
+}
+
+async fn load_f64(pool: &PgPool, module: &str, key: &str) -> Option<f64> {
+    let row = sqlx::query("SELECT value FROM system_config WHERE module = $1 AND config_key = $2")
+        .bind(module)
+        .bind(key)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()?;
+    let val: Value = row.try_get("value").ok()?;
+    // Accept both `5.0` (bare number) and `{"value": 5}` shapes.
+    match &val {
+        Value::Number(n) => n.as_f64(),
+        other => other.get("value").and_then(|v| v.as_f64()),
+    }
 }
 
 async fn load_enabled(pool: &PgPool) -> bool {
@@ -786,8 +835,10 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
     let mut cfg = Cfg {
         lookback_minutes: 10,
         min_abs_net_score: 1.5,
-        atr_sl_mult: 1.5,
-        atr_tp_mult: [1.5, 3.0, 5.0],
+        // Defaults tuned for RR ≈ 2.0 on TP1 (see migration 0243).
+        // Overridable per-row in system_config.allocator_v2.atr_*_mult.
+        atr_sl_mult: 1.0,
+        atr_tp_mult: [2.0, 3.5, 5.5],
         risk_pct_per_trade: 0.01,
         default_org_id: sqlx::types::Uuid::nil(),
         default_user_id: sqlx::types::Uuid::nil(),
@@ -795,6 +846,7 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
         commission_taker_bps: 5.0, // futures default; overridable
         commission_safety_multiple: 2.0,
         sl_hit_cooldown_minutes: 15,
+        mtf_opposing_gate_enabled: true,
     };
     // Pull the current taker bps so the check matches what the Setup
     // drawer displays. Prefer binance_futures (live trading venue).
@@ -873,6 +925,33 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
         let val: Value = row.try_get("value").unwrap_or(Value::Null);
         if let Some(v) = val.get("value").and_then(|v| v.as_f64()) {
             cfg.risk_pct_per_trade = v.max(0.0001).min(0.2);
+        }
+    }
+    // Setup v1.1.1 — ATR multiples now live in system_config so
+    // operators can retune RR without a redeploy.
+    if let Some(v) = load_f64(pool, "allocator_v2", "atr_sl_mult").await {
+        cfg.atr_sl_mult = v.max(0.1);
+    }
+    if let Some(v) = load_f64(pool, "allocator_v2", "atr_tp_mult_0").await {
+        cfg.atr_tp_mult[0] = v.max(0.1);
+    }
+    if let Some(v) = load_f64(pool, "allocator_v2", "atr_tp_mult_1").await {
+        cfg.atr_tp_mult[1] = v.max(0.1);
+    }
+    if let Some(v) = load_f64(pool, "allocator_v2", "atr_tp_mult_2").await {
+        cfg.atr_tp_mult[2] = v.max(0.1);
+    }
+    if let Ok(Some(row)) = sqlx::query(
+        "SELECT value FROM system_config
+           WHERE module = 'allocator_v2'
+             AND config_key = 'mtf_opposing_gate_enabled'",
+    )
+    .fetch_optional(pool)
+    .await
+    {
+        let val: Value = row.try_get("value").unwrap_or(Value::Null);
+        if let Some(b) = val.get("enabled").and_then(|v| v.as_bool()) {
+            cfg.mtf_opposing_gate_enabled = b;
         }
     }
     // Default org_id from dry-execution config.
