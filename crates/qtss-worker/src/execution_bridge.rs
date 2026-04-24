@@ -87,10 +87,47 @@ async fn run_tick(
                 let msg = e.to_string();
                 warn!(id = row.id, setup = %row.setup_id, error = %msg, "candidate dispatch failed");
                 mark_selected_errored(pool, row.id, &msg).await?;
+                // When a LIVE dispatch fails (broker rejected order, key
+                // has no trading permission, live_enabled=false, …) the
+                // setup must not remain `armed` — otherwise setup_watcher
+                // will later mark it `closed_loss` on an SL touch without
+                // any real broker position ever having been opened. Flip
+                // the setup row to `rejected` so the lifecycle accounting
+                // reflects that zero capital was ever at risk.
+                if row.mode == "live" {
+                    if let Err(upd) = mark_setup_rejected(pool, row.setup_id, &msg).await {
+                        warn!(setup = %row.setup_id, error = %upd, "mark_setup_rejected failed");
+                    }
+                }
             }
         }
     }
     Ok(())
+}
+
+/// Terminal stamp for a setup whose live dispatch never placed a real
+/// broker order. Writes `state='rejected'`, `closed_at=now()`, and
+/// records the reason so the Setups page / RADAR reports can tell the
+/// difference between "closed on SL" and "never opened".
+async fn mark_setup_rejected(
+    pool: &PgPool,
+    setup_id: Uuid,
+    reason: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"UPDATE qtss_setups
+              SET state        = 'rejected',
+                  close_reason = $2,
+                  closed_at    = now(),
+                  updated_at   = now()
+            WHERE id = $1
+              AND closed_at IS NULL"#,
+    )
+    .bind(setup_id)
+    .bind(reason)
+    .execute(pool)
+    .await
+    .map(|_| ())
 }
 
 async fn dispatch(

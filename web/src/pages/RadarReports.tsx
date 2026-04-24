@@ -46,6 +46,7 @@ interface RadarReport {
   starting_capital_usd: number | null;
   ending_capital_usd: number | null;
   cash_position_pct: number | null;
+  open_exposure_usd: number | null;
   risk_mode: string | null;
   volatility_level: string | null;
   max_position_risk_pct: number | null;
@@ -309,8 +310,17 @@ export default function RadarReports() {
               />
               <div className="my-2 border-t border-zinc-800" />
               <RowKV
-                k="Toplam Yatırım"
+                k="Toplam Yatırım (Kapanan)"
                 v={`${fmtUsd(latest.total_notional_usd)} $`}
+              />
+              <RowKV
+                k="Açık Pozisyon"
+                v={`${fmtUsd(latest.open_exposure_usd)} $`}
+                cls={
+                  (latest.open_exposure_usd ?? 0) > 0
+                    ? "text-amber-300"
+                    : undefined
+                }
               />
               <RowKV
                 k="Ort. Allocation"
@@ -435,7 +445,15 @@ export default function RadarReports() {
               <div className="mt-3 text-xs uppercase tracking-widest text-zinc-500">
                 Nakit Pozisyon
               </div>
-              <div className="text-2xl font-bold text-emerald-300">
+              <div
+                className={`text-2xl font-bold ${
+                  (latest.cash_position_pct ?? 100) >= 90
+                    ? "text-emerald-300"
+                    : (latest.cash_position_pct ?? 100) >= 40
+                      ? "text-amber-300"
+                      : "text-rose-300"
+                }`}
+              >
                 {fmtPct(latest.cash_position_pct, 2)}
               </div>
             </div>

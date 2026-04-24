@@ -51,6 +51,10 @@ pub struct SetupEntry {
     pub alt_type: Option<String>,
     pub state: String,
     pub direction: String,
+    /// execution mode at the moment this setup was recorded: 'dry' /
+    /// 'live' / 'backtest'. Needed so the GUI can tell the three apart
+    /// without joining on live_positions.
+    pub mode: String,
     pub entry_price: Option<f32>,
     pub entry_sl: Option<f32>,
     pub koruma: Option<f32>,
@@ -157,6 +161,7 @@ fn row_to_entry(row: V2SetupRow) -> SetupEntry {
         alt_type: row.alt_type,
         state: row.state,
         direction: row.direction,
+        mode: row.mode,
         entry_price: row.entry_price,
         entry_sl: row.entry_sl,
         koruma: row.koruma,

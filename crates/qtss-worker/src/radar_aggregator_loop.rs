@@ -82,6 +82,9 @@ struct ReportMetrics {
     trades: Vec<Value>,
     starting_capital: f64,
     ending_capital: f64,
+    /// USD exposure of still-open positions for this mode at period_end.
+    /// Feeds `cash_position_pct = (capital - open_exposure) / capital`.
+    open_exposure: f64,
 }
 
 async fn aggregate(
@@ -104,7 +107,10 @@ async fn aggregate(
     };
     let rows = sqlx::query(
         r#"SELECT s.id, s.symbol, s.direction, s.entry_price, s.close_price,
-                  s.pnl_pct, s.closed_at, s.bars_to_first_tp,
+                  -- pnl_pct is legacy/unpopulated; realized_pnl_pct is the
+                  -- authoritative field written by the setup closer.
+                  COALESCE(s.pnl_pct::numeric, s.realized_pnl_pct) AS pnl_pct_any,
+                  s.closed_at, s.bars_to_first_tp,
                   lp.qty_filled, lp.entry_avg
              FROM qtss_setups s
              LEFT JOIN live_positions lp ON lp.setup_id = s.id
@@ -125,12 +131,33 @@ async fn aggregate(
 
     let mut m = ReportMetrics::default();
     m.starting_capital = cfg.default_starting_capital;
+    // Open USD exposure at period_end — rolling sum of entry_avg * qty_remaining
+    // across live_positions still open for this mode. This feeds
+    // cash_position_pct so the report distinguishes "I have 100% cash"
+    // from "I have capital tied up in open trades right now".
+    let open_row = sqlx::query(
+        r#"SELECT COALESCE(SUM(entry_avg * qty_remaining), 0)::float8 AS open_usd
+             FROM live_positions
+            WHERE mode = $1
+              AND closed_at IS NULL
+              AND opened_at <= $2"#,
+    )
+    .bind(mode)
+    .bind(end)
+    .fetch_optional(pool)
+    .await?;
+    if let Some(row) = open_row {
+        m.open_exposure = row.try_get::<f64, _>("open_usd").unwrap_or(0.0);
+    }
     for r in &rows {
         let symbol: String = r.try_get("symbol").unwrap_or_default();
         let direction: String = r.try_get("direction").unwrap_or_default();
         let entry: Option<f32> = r.try_get("entry_price").ok();
         let close: Option<f32> = r.try_get("close_price").ok();
-        let pnl_pct: Option<f32> = r.try_get("pnl_pct").ok();
+        // realized_pnl_pct is NUMERIC in the qtss_setups schema, hence the
+        // COALESCE in the SQL above returns NUMERIC — decode it as Decimal
+        // and lift to f64 so the rest of the pipeline stays in float space.
+        let pnl_pct: Option<rust_decimal::Decimal> = r.try_get("pnl_pct_any").ok();
         let closed_at: Option<DateTime<Utc>> = r.try_get("closed_at").ok();
         let bars_to_tp: Option<i32> = r.try_get("bars_to_first_tp").ok();
         // Position size — rough notional = entry × qty_filled if live
@@ -144,7 +171,13 @@ async fn aggregate(
             .zip(entry.map(|e| e as f64))
             .map(|(q, e)| q * e)
             .unwrap_or(m.starting_capital * 0.1);
-        let ret = pnl_pct.map(|p| p as f64 / 100.0).unwrap_or(0.0);
+        let ret = pnl_pct
+            .and_then(|d| {
+                use rust_decimal::prelude::ToPrimitive;
+                d.to_f64()
+            })
+            .map(|p| p / 100.0)
+            .unwrap_or(0.0);
         let pnl_usd = notional * ret;
         m.closed_count += 1;
         if ret > 0.0 {
@@ -212,13 +245,6 @@ async fn upsert_report(
                 .sqrt()
         }
     };
-    let risk_mode = if win_rate >= 0.65 {
-        "risk_on"
-    } else if win_rate >= 0.40 {
-        "neutral"
-    } else {
-        "risk_off"
-    };
     let volatility = if std_dev > 0.05 {
         "high"
     } else if std_dev > 0.02 {
@@ -226,10 +252,26 @@ async fn upsert_report(
     } else {
         "low"
     };
+    // cash_pct = (capital − open_exposure) / capital. The old formula
+    // multiplied open_exposure by 0.0 so it always rounded to 100%; now
+    // the open-live-positions sum (loaded in `aggregate`) feeds the
+    // deduction. Capped to [0, 100] to guard against oversized exposure
+    // during very short periods.
     let cash_pct = if m.ending_capital > 0.0 {
-        ((m.ending_capital - m.total_notional * 0.0).max(0.0) / m.ending_capital * 100.0).min(100.0)
+        ((m.ending_capital - m.open_exposure).max(0.0) / m.ending_capital * 100.0)
+            .clamp(0.0, 100.0)
     } else {
         100.0
+    };
+    // risk_mode is cash-first (how much of the book is deployed) and
+    // falls back to win-rate when there is no capital context — so a
+    // loop with zero trades but heavy open exposure still flags Risk-On.
+    let risk_mode = if cash_pct >= 90.0 {
+        "risk_off"
+    } else if cash_pct >= 40.0 {
+        "neutral"
+    } else {
+        "risk_on"
     };
 
     sqlx::query(
@@ -239,13 +281,15 @@ async fn upsert_report(
                total_notional_usd, total_pnl_usd, avg_return_pct,
                compound_return_pct, avg_allocation_usd, avg_holding_bars,
                starting_capital_usd, ending_capital_usd, cash_position_pct,
-               risk_mode, volatility_level, max_position_risk_pct)
+               risk_mode, volatility_level, max_position_risk_pct,
+               open_exposure_usd)
            VALUES ($1,$2,$3,$4,$5,false,
                    $6,$7,$8,$9,$10,
                    $11,$12,$13,
                    $14,$15,$16,
                    $17,$18,$19,
-                   $20,$21,$22)
+                   $20,$21,$22,
+                   $23)
            ON CONFLICT (market, period, mode, period_start)
            DO UPDATE SET
                trades              = EXCLUDED.trades,
@@ -264,6 +308,7 @@ async fn upsert_report(
                risk_mode           = EXCLUDED.risk_mode,
                volatility_level    = EXCLUDED.volatility_level,
                max_position_risk_pct = EXCLUDED.max_position_risk_pct,
+               open_exposure_usd   = EXCLUDED.open_exposure_usd,
                computed_at         = now()"#,
     )
     .bind(market)
@@ -288,6 +333,7 @@ async fn upsert_report(
     .bind(risk_mode)
     .bind(volatility)
     .bind(0.02f64) // placeholder — real calc needs live leverage + qty
+    .bind(m.open_exposure)
     .execute(pool)
     .await?;
     Ok(())
