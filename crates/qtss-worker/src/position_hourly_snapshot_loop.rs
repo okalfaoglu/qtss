@@ -108,7 +108,18 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
         });
         let title = build_title(&direction, &symbol, &timeframe, entry, live_px);
         let body = render_position_html(&payload);
-        let dedup_key = format!("hourly:{setup_id}:{hour_bucket}");
+        // Dedup key intentionally drops setup_id so a retire/re-arm
+        // cycle on the same (symbol, direction, profile) in the same
+        // hour doesn't blast out a fresh snapshot card every minute.
+        // One card per (symbol, direction, profile) per UTC hour is
+        // the contract with the user.
+        let profile_bucket = match timeframe.as_str() {
+            "5m" | "15m" | "30m" => "t",
+            _ => "d",
+        };
+        let dedup_key = format!(
+            "hourly:{symbol}:{direction}:{profile_bucket}:{mode}:{hour_bucket}"
+        );
         let ins = sqlx::query(
             r#"INSERT INTO notify_outbox
                   (title, body, channels, severity, event_key,

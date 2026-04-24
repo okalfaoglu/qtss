@@ -199,54 +199,23 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
                 modes_to_arm.push(mode.clone());
             }
         }
-        if !superseded.is_empty() {
-            for id in &superseded {
-                // Flip the setup row — state=rejected + reason.
-                let _ = sqlx::query(
-                    r#"UPDATE qtss_setups
-                          SET state = 'rejected',
-                              close_reason = 'cancelled',
-                              closed_at = now(),
-                              updated_at = now(),
-                              raw_meta = raw_meta ||
-                                         jsonb_build_object('rejected_reason',
-                                                            'upgraded_to_higher_tf_within_profile')
-                        WHERE id = $1 AND state IN ('armed','active')"#,
-                )
-                .bind(id)
-                .execute(pool)
-                .await;
-                // Close the bound live_position (if any). Without this
-                // the execution_bridge-opened paper position lived on
-                // after the setup was retired, and the allocator's
-                // next tick would open ANOTHER live_position against a
-                // fresh setup, leaving the old ones orphaned. Observed
-                // live: 4 ETHUSDT 4h short live_positions for a single
-                // symbol. We mark-to-market close at the last tick the
-                // dispatcher recorded so PnL is honest.
-                let _ = sqlx::query(
-                    r#"UPDATE live_positions
-                          SET closed_at    = now(),
-                              updated_at   = now(),
-                              close_reason = 'setup_superseded',
-                              realized_pnl_quote = COALESCE(
-                                  (last_mark - entry_avg) * qty_remaining *
-                                  CASE WHEN side = 'BUY' THEN 1 ELSE -1 END,
-                                  0
-                              )
-                        WHERE setup_id = $1 AND closed_at IS NULL"#,
-                )
-                .bind(id)
-                .execute(pool)
-                .await;
-            }
-            info!(
-                %symbol, %timeframe, %direction, %profile,
-                superseded_count = superseded.len(),
-                "allocator_v2: retired lower-TF setups in same profile + closed bound live_positions"
-            );
-        }
+        // Setup v1.1.5 — the previous revision retired the lower-TF
+        // setups up-front, before the HTF candidate actually cleared
+        // the price/ATR/commission/sanity checks. If the HTF couldn't
+        // be armed (e.g. market_bars for 1w was empty), the lower TF
+        // was destroyed *and* no replacement went in — on the next
+        // allocator tick the LTF re-armed, and the HTF candidate
+        // retired it again. Stuck loop, observed live as
+        // BTCUSDT/ETHUSDT 1d setups cycling every 60 seconds.
+        //
+        // Hold the retirement until the HTF candidate has actually
+        // opened its replacement: "supersede-on-success". If any of
+        // the later gates fail we just continue — the LTF stays
+        // armed until a healthy HTF candidate comes along.
         if modes_to_arm.is_empty() {
+            // Nothing to arm here (the LTF candidate slot belongs to
+            // an equal-or-higher TF that's already armed). Leave the
+            // current holder alone and move on.
             info!(%symbol, %timeframe, %profile, "allocator_v2: skipping — higher/equal TF already armed");
             continue;
         }
@@ -590,6 +559,51 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
             .bind(profile)
             .fetch_one(pool)
             .await?;
+
+            // Supersede-on-success. Only retire the lower-TF holders
+            // once the HTF candidate actually went in as armed. A
+            // rejected candidate (commission / sanity / sl_too_tight)
+            // does NOT dethrone its predecessor — otherwise the churn
+            // loop we fixed in Setup v1.1.5 re-opens (LTF retired,
+            // HTF couldn't take the slot, next tick LTF re-arms).
+            if viable && !superseded.is_empty() {
+                for id in &superseded {
+                    let _ = sqlx::query(
+                        r#"UPDATE qtss_setups
+                              SET state = 'rejected',
+                                  close_reason = 'cancelled',
+                                  closed_at = now(),
+                                  updated_at = now(),
+                                  raw_meta = raw_meta ||
+                                             jsonb_build_object('rejected_reason',
+                                                                'upgraded_to_higher_tf_within_profile')
+                            WHERE id = $1 AND state IN ('armed','active')"#,
+                    )
+                    .bind(id)
+                    .execute(pool)
+                    .await;
+                    let _ = sqlx::query(
+                        r#"UPDATE live_positions
+                              SET closed_at    = now(),
+                                  updated_at   = now(),
+                                  close_reason = 'setup_superseded',
+                                  realized_pnl_quote = COALESCE(
+                                      (last_mark - entry_avg) * qty_remaining *
+                                      CASE WHEN side = 'BUY' THEN 1 ELSE -1 END,
+                                      0
+                                  )
+                            WHERE setup_id = $1 AND closed_at IS NULL"#,
+                    )
+                    .bind(id)
+                    .execute(pool)
+                    .await;
+                }
+                info!(
+                    %symbol, %timeframe, %direction, %profile,
+                    superseded_count = superseded.len(),
+                    "allocator_v2: retired lower-TF setups after HTF armed"
+                );
+            }
 
             if !viable {
                 // Surface the skip to ops so we don't need to poll the
