@@ -21,6 +21,7 @@ mod notify_outbox;
 mod onchain_signal_scorer;
 mod position_manager;
 mod position_hourly_snapshot_loop;
+mod time_stop_loop;
 mod price_tick_ws;
 mod setup_watcher;
 mod symbol_intel_loops;
@@ -405,6 +406,10 @@ async fn main() -> anyhow::Result<()> {
                 price_store.clone(),
             ),
         );
+        // v1.1.8 — time-stop: force-close setups that have been armed
+        // for N bars without hitting TP1 (edge decay).
+        let ts_pool = pool.clone();
+        tokio::spawn(time_stop_loop::time_stop_loop(ts_pool));
         // RADAR periodic aggregator — daily / weekly / monthly /
         // yearly performance snapshots per market × mode.
         let radar_pool = pool.clone();
