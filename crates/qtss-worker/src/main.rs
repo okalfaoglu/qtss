@@ -39,6 +39,7 @@ mod worker_probe_http;
 mod engine_ingest;
 mod confluence_loop;
 mod indicator_persistence_loop;
+mod outcome_tracker_loop;
 mod validator_loop;
 mod intake_auto_promote;
 mod intake_playbook_engine;
@@ -370,6 +371,12 @@ async fn main() -> anyhow::Result<()> {
         // structural reference level has been blown through.
         let validator_pool = pool.clone();
         tokio::spawn(validator_loop::validator_loop(validator_pool));
+        // Outcome tracker — historical bar-by-bar replay to label
+        // every detection with what actually happened (tp1/2/3_hit,
+        // sl_hit, expired, active). Feeds ML meta-label training and
+        // RADAR hit-rate stats.
+        let outcome_pool = pool.clone();
+        tokio::spawn(outcome_tracker_loop::outcome_tracker_loop(outcome_pool));
         let health_pool = pool.clone();
         tokio::spawn(data_health_report::data_health_report_loop(health_pool));
         binance_user_stream::spawn_binance_user_stream_tasks(&pool).await;
