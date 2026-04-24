@@ -585,6 +585,41 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
             }
         }
 
+        // v1.2.1 — calibration gate. Translate raw confidence into
+        // historical realized winrate for its bucket, reject when the
+        // calibrated winrate is below threshold. Sample-size floor
+        // keeps the gate silent until enough closed trades exist in
+        // that bucket (cold-start protection).
+        if cfg.calibration_enabled {
+            let bucket = calibration_bucket(confidence);
+            let stats: Option<(i64, f64)> = sqlx::query_as(
+                r#"SELECT total::bigint, COALESCE(winrate, 0.0)::float8
+                     FROM v_confidence_calibration
+                    WHERE bucket = $1"#,
+            )
+            .bind(bucket)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+            if let Some((total, wr)) = stats {
+                if total >= cfg.calibration_min_sample
+                    && wr < cfg.calibration_min_winrate
+                {
+                    info!(
+                        %symbol, %timeframe,
+                        conf = confidence,
+                        bucket,
+                        total,
+                        winrate = wr,
+                        min = cfg.calibration_min_winrate,
+                        "allocator_v2: skip — calibrated winrate below threshold"
+                    );
+                    continue;
+                }
+            }
+        }
+
         // Count today's rejections for this symbol (for gate 5).
         let rejected_today: i64 = sqlx::query_scalar(
             r#"SELECT count(*) FROM ai_approval_requests
@@ -1315,6 +1350,16 @@ struct Cfg {
     /// SL just inside the structure to avoid exact-pivot sniping).
     structure_sl_enabled: bool,
     structure_sl_factor: f64,
+
+    /// v1.2.1 — confidence calibration gate. Raw confidence is a
+    /// scorer output; calibrated winrate is the realized probability
+    /// of a trade in that confidence bucket, estimated from history
+    /// via `v_confidence_calibration`. Gate rejects when calibrated
+    /// winrate < `calibration_min_winrate`, skipped when the bucket
+    /// has fewer than `calibration_min_sample` closed trades.
+    calibration_enabled: bool,
+    calibration_min_winrate: f64,
+    calibration_min_sample: i64,
 }
 
 // Floor/ceiling sanity-check bounds. For a long, the live price must
@@ -1356,6 +1401,26 @@ fn symbol_cluster(symbol: &str) -> Option<&'static str> {
 
 /// Return every symbol (with USDT suffix) that sits in the given
 /// cluster. Used by the cluster-cap gate's count query via ANY($2).
+// v1.2.1 — map a raw confidence to the label used by the
+// v_confidence_calibration view. Keep this function in exact lock-step
+// with the view's CASE expression — a drift here silently voids the
+// calibration gate.
+fn calibration_bucket(confidence: f64) -> &'static str {
+    if confidence < 0.5 {
+        "0.0-0.5"
+    } else if confidence < 0.6 {
+        "0.5-0.6"
+    } else if confidence < 0.7 {
+        "0.6-0.7"
+    } else if confidence < 0.8 {
+        "0.7-0.8"
+    } else if confidence < 0.9 {
+        "0.8-0.9"
+    } else {
+        "0.9+"
+    }
+}
+
 // v1.2.0 — family-specific RR profile. Hard-coded fallbacks reflect
 // community wisdom on what each family deserves:
 //   harmonic    — mean-reversion from PRZ, works best at 1.5R
@@ -1629,6 +1694,9 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
         htf_context_gate_enabled: true,
         structure_sl_enabled: true,
         structure_sl_factor: 0.8,
+        calibration_enabled: true,
+        calibration_min_winrate: 0.45,
+        calibration_min_sample: 20,
     };
     // Pull the current taker bps so the check matches what the Setup
     // drawer displays. Prefer binance_futures (live trading venue).
@@ -1806,6 +1874,23 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
     }
     if let Some(v) = load_f64(pool, "allocator_v2", "structure_sl_factor").await {
         cfg.structure_sl_factor = v.clamp(0.1, 1.5);
+    }
+    if let Ok(Some(row)) = sqlx::query(
+        "SELECT value FROM system_config WHERE module='allocator_v2' AND config_key='calibration.enabled'",
+    )
+    .fetch_optional(pool)
+    .await
+    {
+        let val: Value = row.try_get("value").unwrap_or(Value::Null);
+        if let Some(b) = val.get("enabled").and_then(|v| v.as_bool()) {
+            cfg.calibration_enabled = b;
+        }
+    }
+    if let Some(v) = load_f64(pool, "allocator_v2", "calibration.min_winrate").await {
+        cfg.calibration_min_winrate = v.clamp(0.0, 1.0);
+    }
+    if let Some(v) = load_f64(pool, "allocator_v2", "calibration.min_sample").await {
+        cfg.calibration_min_sample = v.max(1.0) as i64;
     }
     // Default org_id from dry-execution config.
     if let Ok(Some(row)) = sqlx::query(
