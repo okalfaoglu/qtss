@@ -2768,6 +2768,7 @@ name = "qtss-secrets"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "anyhow",
  "async-trait",
  "chrono",
  "rand 0.8.5",

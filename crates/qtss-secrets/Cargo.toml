@@ -14,7 +14,12 @@ async-trait.workspace = true
 sqlx.workspace = true
 rand.workspace = true
 aes-gcm = "0.10"
-tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+anyhow.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "rt-multi-thread", "macros", "io-std"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "rt-multi-thread", "macros"] }
+
+[[bin]]
+name = "qtss-secret-cli"
+path = "src/bin/qtss-secret-cli.rs"

@@ -10,15 +10,19 @@
 //! Postgres only ever sees the wrapped DEK + ciphertext + nonce. A DB
 //! dump on its own is useless without the KEK.
 
+mod bootstrap;
 mod cipher;
 mod error;
 mod kek;
+mod reader;
 mod store;
 
 #[cfg(test)]
 mod tests;
 
+pub use bootstrap::{load_static_kek_from_env, KekBootstrapError};
 pub use cipher::{seal, open, SealedSecret};
 pub use error::{SecretError, SecretResult};
 pub use kek::{KekProvider, StaticKek};
+pub use reader::{SecretSource, VaultReader};
 pub use store::{MemorySecretStore, PgSecretStore, SecretStore, StoredSecret};
