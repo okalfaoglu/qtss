@@ -23,9 +23,11 @@
 //!                                        bucket_ts_ms}...]}`
 
 mod config;
+mod deep;
 mod event;
 mod events;
 
 pub use config::OrderFlowConfig;
+pub use deep::{detect_absorption, detect_footprint_imbalance, detect_sweep};
 pub use event::{OrderFlowEvent, OrderFlowEventKind};
 pub use events::{detect_block_trades, detect_cvd_divergence, detect_liquidation_cluster};

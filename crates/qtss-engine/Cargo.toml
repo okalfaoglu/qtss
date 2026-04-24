@@ -18,6 +18,7 @@ qtss-regime.workspace = true
 qtss-smc.workspace = true
 qtss-derivatives-signals.workspace = true
 qtss-orderflow.workspace = true
+qtss-wyckoff.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true

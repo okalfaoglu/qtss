@@ -86,6 +86,7 @@ fn registered_writers() -> Vec<Box<dyn WriterTask>> {
         Box::new(writers::smc::SmcWriter),
         Box::new(writers::derivatives::DerivativesWriter),
         Box::new(writers::orderflow::OrderFlowWriter),
+        Box::new(writers::wyckoff::WyckoffWriter),
     ]
 }
 

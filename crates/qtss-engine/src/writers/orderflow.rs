@@ -13,8 +13,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use qtss_orderflow::{
-    detect_block_trades, detect_cvd_divergence, detect_liquidation_cluster, OrderFlowConfig,
-    OrderFlowEvent, OrderFlowEventKind,
+    detect_absorption, detect_block_trades, detect_cvd_divergence, detect_footprint_imbalance,
+    detect_liquidation_cluster, detect_sweep, OrderFlowConfig, OrderFlowEvent, OrderFlowEventKind,
 };
 use rust_decimal::prelude::ToPrimitive;
 use serde_json::{json, Value};
@@ -87,10 +87,31 @@ async fn process_symbol(
         }
     }
 
-    // ── CVD divergence (needs recent bar closes) ─────────────────────
+    // ── CVD divergence + deep order-flow (Faz 15) ────────────────────
     if let Some(payload) = load_snapshot(pool, &format!("{exchange_lc}_cvd_{sym_lc}")).await {
         let closes = load_recent_closes(pool, sym, 50).await;
         for ev in detect_cvd_divergence(&payload, &closes, cfg) {
+            if (ev.score as f32) < cfg.min_score {
+                continue;
+            }
+            written += write_event(pool, sym, &ev, now).await?;
+        }
+        // Footprint imbalance — per-bucket taker ratio extremes.
+        for ev in detect_footprint_imbalance(&payload, cfg) {
+            if (ev.score as f32) < cfg.min_score {
+                continue;
+            }
+            written += write_event(pool, sym, &ev, now).await?;
+        }
+        // Absorption — large delta, flat price.
+        for ev in detect_absorption(&payload, &closes, cfg) {
+            if (ev.score as f32) < cfg.min_score {
+                continue;
+            }
+            written += write_event(pool, sym, &ev, now).await?;
+        }
+        // Sweep — 3+ consecutive same-side dominated buckets.
+        for ev in detect_sweep(&payload, cfg) {
             if (ev.score as f32) < cfg.min_score {
                 continue;
             }

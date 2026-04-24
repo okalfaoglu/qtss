@@ -2433,6 +2433,7 @@ dependencies = [
  "qtss-regime",
  "qtss-smc",
  "qtss-storage",
+ "qtss-wyckoff",
  "rust_decimal",
  "serde_json",
  "sqlx",
@@ -2973,6 +2974,18 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "qtss-wyckoff"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "qtss-domain",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

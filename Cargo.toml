@@ -51,6 +51,7 @@ members = [
     "crates/qtss-orderflow",
     "crates/qtss-targets",
     "crates/qtss-validator",
+    "crates/qtss-wyckoff",
 ]
 
 [workspace.package]
@@ -127,6 +128,7 @@ qtss-derivatives-signals = { path = "crates/qtss-derivatives-signals" }
 qtss-orderflow = { path = "crates/qtss-orderflow" }
 qtss-targets = { path = "crates/qtss-targets" }
 qtss-validator = { path = "crates/qtss-validator" }
+qtss-wyckoff = { path = "crates/qtss-wyckoff" }
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 hmac = "0.12"

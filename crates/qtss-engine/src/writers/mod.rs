@@ -9,3 +9,4 @@ pub mod orderflow;
 pub mod pivot;
 pub mod range;
 pub mod smc;
+pub mod wyckoff;
