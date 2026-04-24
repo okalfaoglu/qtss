@@ -138,6 +138,13 @@ impl ConfluenceScorer {
         timeframe: &str,
         regime: Option<&str>,
     ) -> Result<ConfluenceSnapshot, sqlx::Error> {
+        // TF-aware lookback — 60 min is plenty for 15m (4 bars of history)
+        // but starves higher TFs. A 4h bar only closes every 240 min, so
+        // with a 60-min window an instrument-TF can sit outside the
+        // capture window and produce verdict=mixed forever. Scale the
+        // base window by the bar length so every TF sees ≥4 bars of
+        // upstream detection coverage.
+        let window_minutes = tf_aware_window_minutes(timeframe, self.cfg.window_minutes);
         let rows = sqlx::query(
             r#"SELECT pattern_family,
                       direction,
@@ -155,7 +162,7 @@ impl ConfluenceScorer {
         .bind(segment)
         .bind(symbol)
         .bind(timeframe)
-        .bind(self.cfg.window_minutes.to_string())
+        .bind(window_minutes.to_string())
         .fetch_all(pool)
         .await?;
 
@@ -277,4 +284,70 @@ pub async fn load_config(pool: &PgPool) -> ConfluenceConfig {
         cfg.regime_adjusters.insert(inner, v);
     }
     cfg
+}
+
+/// Translate a symbolic timeframe into minutes per bar. Unknown strings
+/// fall back to 60 so the default-60-minute lookback continues to work
+/// as before rather than silently amplifying to zero.
+fn tf_bar_minutes(tf: &str) -> i64 {
+    match tf {
+        "1m" => 1,
+        "3m" => 3,
+        "5m" => 5,
+        "15m" => 15,
+        "30m" => 30,
+        "1h" => 60,
+        "2h" => 120,
+        "4h" => 240,
+        "6h" => 360,
+        "8h" => 480,
+        "12h" => 720,
+        "1d" => 1440,
+        "3d" => 4320,
+        "1w" => 10080,
+        _ => 60,
+    }
+}
+
+/// Stretch the configured confluence window so that higher timeframes
+/// still see ≥4 bars of history. `base` (the system_config
+/// `confluence.window_minutes`) acts as the floor for the default 15m
+/// path; anything larger wins. Capped at two weeks so a misconfigured
+/// TF doesn't accidentally scan the whole detection table.
+fn tf_aware_window_minutes(timeframe: &str, base: i64) -> i64 {
+    let bar = tf_bar_minutes(timeframe);
+    let scaled = bar * 4;
+    base.max(scaled).min(14 * 24 * 60) // cap at 2 weeks
+}
+
+#[cfg(test)]
+mod tf_window_tests {
+    use super::*;
+
+    #[test]
+    fn low_tf_uses_base() {
+        // 15m × 4 = 60min — ties go to base, so 60 wins.
+        assert_eq!(tf_aware_window_minutes("15m", 60), 60);
+        // base 120 still wins over low-TF scale.
+        assert_eq!(tf_aware_window_minutes("15m", 120), 120);
+    }
+
+    #[test]
+    fn high_tf_scales_past_base() {
+        assert_eq!(tf_aware_window_minutes("4h", 60), 240 * 4); // 16h window
+        assert_eq!(tf_aware_window_minutes("1d", 60), 1440 * 4); // 4 day window
+    }
+
+    #[test]
+    fn cap_holds() {
+        // Absurd TF still clamps to 2-week ceiling.
+        let v = tf_aware_window_minutes("1w", 60);
+        assert!(v <= 14 * 24 * 60);
+    }
+
+    #[test]
+    fn unknown_tf_defaults() {
+        // Unknown → 60 min per bar, × 4 bars = 240, wins over base 60.
+        assert_eq!(tf_aware_window_minutes("bogus", 60), 240);
+    }
 }
