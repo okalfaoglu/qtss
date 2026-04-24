@@ -81,9 +81,19 @@ pub struct LiveTrade {
     pub notional_usd: f64,
     pub sl: Option<f64>,
     pub tp: Option<f64>,
+    /// Full TP ladder [tp1_price, tp2_price, tp3_price] with optional
+    /// qty weights. Shape matches what the allocator writes to the
+    /// setup row so the drawer can render the same structure as the
+    /// Setups page.
+    pub tp_ladder: serde_json::Value,
     pub u_pnl_pct: Option<f64>,
     pub u_pnl_usd: Option<f64>,
     pub opened_at: DateTime<Utc>,
+    /// Leverage recorded at position open (live_positions.leverage).
+    /// Dry mode paper fills default to 1 (no leverage); live Binance
+    /// futures rows carry the actual isolated/cross value.
+    pub leverage: i16,
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -136,7 +146,10 @@ async fn get_radar_live(
              lp.qty_remaining,
              s.entry_sl,
              s.target_ref,
+             s.tp_ladder,
+             s.profile,
              lp.side,
+             lp.leverage,
              lp.opened_at
            FROM live_positions lp
            LEFT JOIN qtss_setups s ON s.id = lp.setup_id
@@ -218,9 +231,19 @@ async fn get_radar_live(
                 .ok()
                 .flatten()
                 .map(|v| v as f64),
+            tp_ladder: r
+                .try_get::<Option<serde_json::Value>, _>("tp_ladder")
+                .ok()
+                .flatten()
+                .unwrap_or(serde_json::Value::Array(Vec::new())),
             u_pnl_pct: u_pct,
             u_pnl_usd: u_usd,
             opened_at: r.try_get("opened_at").unwrap_or_else(|_| Utc::now()),
+            leverage: r.try_get("leverage").unwrap_or(1),
+            profile: r
+                .try_get::<Option<String>, _>("profile")
+                .ok()
+                .flatten(),
         });
     }
     let avg_u_pnl_pct = if pnl_pct_n > 0 {

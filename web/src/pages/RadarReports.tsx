@@ -32,9 +32,17 @@ interface LiveTrade {
   notional_usd: number;
   sl: number | null;
   tp: number | null;
+  tp_ladder: Array<{
+    idx?: number;
+    price?: number;
+    size_pct?: number;
+    qty?: number;
+  }>;
   u_pnl_pct: number | null;
   u_pnl_usd: number | null;
   opened_at: string;
+  leverage: number;
+  profile: string | null;
 }
 
 interface LiveResponse {
@@ -666,6 +674,7 @@ function StatCell({
 
 function LivePanel({ data }: { data: LiveResponse }) {
   const rows = data.trades;
+  const [selected, setSelected] = useState<LiveTrade | null>(null);
   const symSet = new Set(rows.map((r) => r.symbol));
   const spread =
     symSet.size === 0
@@ -733,13 +742,20 @@ function LivePanel({ data }: { data: LiveResponse }) {
                 return (
                   <tr
                     key={t.setup_id ?? `${t.symbol}-${i}`}
-                    className="border-b border-zinc-900 hover:bg-zinc-900/60"
+                    onClick={() => setSelected(t)}
+                    className="cursor-pointer border-b border-zinc-900 hover:bg-zinc-900/60"
+                    title="detay için tıkla"
                   >
                     <td className="px-3 py-2 font-semibold">
                       {isLong ? "●" : "◆"} {t.symbol}
                       <span className="ml-2 text-[10px] text-zinc-500">
                         {isLong ? "LONG" : "SHORT"}
                       </span>
+                      {t.leverage > 1 && (
+                        <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] text-amber-300">
+                          {t.leverage}x
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-zinc-400">{t.timeframe}</td>
                     <td className="px-3 py-2 text-zinc-500">
@@ -978,7 +994,232 @@ function LivePanel({ data }: { data: LiveResponse }) {
           </div>
         </div>
       </div>
+      {selected && (
+        <LiveTradeDrawer trade={selected} onClose={() => setSelected(null)} />
+      )}
     </div>
+  );
+}
+
+// Drawer for an open position — shows entry / SL / TP ladder with
+// signed deltas against live mark. Mirrors the Setups page drawer so
+// the user's eye reads the same layout across views.
+function LiveTradeDrawer({
+  trade,
+  onClose,
+}: {
+  trade: LiveTrade;
+  onClose: () => void;
+}) {
+  const isLong = trade.direction === "long" || trade.direction === "buy";
+  const entry = trade.entry_price;
+  const mark = trade.mark_price ?? entry;
+  const ladder = Array.isArray(trade.tp_ladder) ? trade.tp_ladder : [];
+
+  const pctFromEntry = (other: number | null | undefined, favourable: boolean) => {
+    if (other == null || entry <= 0) return null;
+    const raw = ((other - entry) / entry) * 100;
+    const signed = isLong ? raw : -raw;
+    return favourable ? signed : signed;
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex justify-end bg-black/60 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="h-full w-[520px] overflow-y-auto border-l border-zinc-800 bg-zinc-950 p-4 text-sm"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+          <div>
+            <div className="text-lg font-bold text-amber-300">
+              {trade.symbol}{" "}
+              <span className="text-xs text-zinc-500">· {trade.timeframe}</span>
+              {trade.profile && (
+                <span className="ml-2 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] uppercase text-zinc-300">
+                  {trade.profile}
+                </span>
+              )}
+            </div>
+            <div className="text-[10px] uppercase tracking-widest text-zinc-500">
+              {trade.setup_id ?? "—"}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded bg-zinc-800 px-3 py-1 text-xs text-zinc-300 hover:bg-zinc-700"
+          >
+            ×
+          </button>
+        </div>
+
+        {/* Price panel — Giriş / Mark / SL / Target */}
+        <section className="mt-4 rounded border border-zinc-800 bg-gradient-to-br from-zinc-900 to-zinc-950 p-3">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-xs uppercase tracking-widest text-zinc-500">
+              Fiyat Seviyeleri
+            </h3>
+            <div className="flex gap-2">
+              <span
+                className={`rounded px-2 py-0.5 text-[10px] uppercase ${
+                  isLong
+                    ? "bg-emerald-500/20 text-emerald-200"
+                    : "bg-rose-500/20 text-rose-200"
+                }`}
+              >
+                {isLong ? "LONG" : "SHORT"}
+              </span>
+              <span className="rounded bg-sky-500/20 px-2 py-0.5 text-[10px] uppercase text-sky-200">
+                {trade.mode}
+              </span>
+              {trade.leverage > 1 && (
+                <span className="rounded bg-amber-500/20 px-2 py-0.5 text-[10px] uppercase text-amber-300">
+                  {trade.leverage}x
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="grid grid-cols-4 gap-2 text-center">
+            <DrawerCell
+              label="Giriş"
+              value={entry.toFixed(6)}
+              accent="text-zinc-100"
+            />
+            <DrawerCell
+              label="Anlık"
+              value={mark.toFixed(6)}
+              sub={fmtPct(trade.u_pnl_pct)}
+              accent="text-amber-300"
+              subCls={signClass(trade.u_pnl_pct)}
+            />
+            <DrawerCell
+              label="Stop (SL)"
+              value={trade.sl != null ? trade.sl.toFixed(6) : "—"}
+              sub={fmtPct(pctFromEntry(trade.sl, false))}
+              accent="text-rose-300"
+              subCls="text-rose-400"
+            />
+            <DrawerCell
+              label="Kâr Al (TP)"
+              value={trade.tp != null ? trade.tp.toFixed(6) : "—"}
+              sub={fmtPct(pctFromEntry(trade.tp, true))}
+              accent="text-emerald-300"
+              subCls="text-emerald-400"
+            />
+          </div>
+        </section>
+
+        {/* TP Ladder */}
+        {ladder.length > 0 && (
+          <section className="mt-4">
+            <h3 className="mb-2 text-xs uppercase tracking-widest text-zinc-500">
+              TP Merdiveni
+            </h3>
+            <table className="w-full border-collapse text-xs">
+              <thead className="text-left text-zinc-500">
+                <tr>
+                  <th className="px-2 py-1">#</th>
+                  <th className="px-2 py-1 text-right">Fiyat</th>
+                  <th className="px-2 py-1 text-right">Δ %</th>
+                  <th className="px-2 py-1 text-right">Qty%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ladder.map((t, i) => {
+                  const p = pctFromEntry(t.price ?? null, true);
+                  const q = t.size_pct ?? t.qty;
+                  return (
+                    <tr key={i} className="border-t border-zinc-900">
+                      <td className="px-2 py-1">TP{i + 1}</td>
+                      <td className="px-2 py-1 text-right font-mono text-emerald-300">
+                        {t.price != null ? t.price.toFixed(6) : "—"}
+                      </td>
+                      <td className="px-2 py-1 text-right font-mono text-emerald-300">
+                        {fmtPct(p)}
+                      </td>
+                      <td className="px-2 py-1 text-right font-mono">
+                        {q != null ? `${(Number(q) * 100).toFixed(0)}%` : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </section>
+        )}
+
+        {/* Pozisyon bilgileri */}
+        <section className="mt-4 rounded border border-zinc-800 bg-zinc-900/40 p-3">
+          <h3 className="mb-2 text-xs uppercase tracking-widest text-zinc-500">
+            Pozisyon
+          </h3>
+          <dl className="grid grid-cols-2 gap-y-1 text-xs">
+            <KV k="Miktar (qty)" v={trade.qty.toFixed(4)} />
+            <KV k="Notional" v={`${fmtUsd(trade.notional_usd)} $`} />
+            <KV k="Kaldıraç" v={`${trade.leverage}x`} />
+            <KV
+              k="Açık u-PnL"
+              v={
+                <span className={signClass(trade.u_pnl_usd)}>
+                  {trade.u_pnl_usd != null
+                    ? `${trade.u_pnl_usd >= 0 ? "+" : ""}${fmtUsd(trade.u_pnl_usd)} $`
+                    : "—"}
+                </span>
+              }
+            />
+            <KV k="Açık Süre" v={formatAge(trade.opened_at)} />
+            <KV
+              k="Açılış"
+              v={new Date(trade.opened_at).toLocaleString("tr-TR")}
+            />
+          </dl>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function DrawerCell({
+  label,
+  value,
+  sub,
+  accent,
+  subCls,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  accent?: string;
+  subCls?: string;
+}) {
+  return (
+    <div className="rounded border border-zinc-800 bg-zinc-950 p-2">
+      <div className="text-[10px] uppercase tracking-widest text-zinc-500">
+        {label}
+      </div>
+      <div
+        className={`mt-1 font-mono text-base font-semibold ${accent ?? "text-zinc-100"}`}
+      >
+        {value}
+      </div>
+      {sub && (
+        <div className={`mt-0.5 font-mono text-[11px] ${subCls ?? "text-zinc-400"}`}>
+          {sub}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KV({ k, v }: { k: string; v: React.ReactNode }) {
+  return (
+    <>
+      <dt className="uppercase tracking-widest text-zinc-500">{k}</dt>
+      <dd className="font-mono text-zinc-200">{v}</dd>
+    </>
   );
 }
 
