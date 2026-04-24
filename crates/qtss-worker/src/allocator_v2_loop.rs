@@ -628,11 +628,25 @@ async fn insert_notify_outbox(
             serde_json::to_string_pretty(payload).unwrap_or_default(),
         )
     };
+    // Channel routing:
+    //   * armed setup → Telegram (operators want the live alert).
+    //   * reject / skip events → audit only via webhook; they're
+    //     transparency rows, Telegram feed should not be spammed with
+    //     every filter-trip.
+    //   * Everything else (future event kinds) → Telegram by default
+    //     so a new event shows up without a code change here.
+    let channels = match event_key {
+        "allocator_v2_armed" => r#"["telegram"]"#,
+        "allocator_v2_commission_skip"
+        | "allocator_v2_sanity_skip"
+        | "allocator_v2_sl_too_tight" => r#"["webhook"]"#,
+        _ => r#"["telegram"]"#,
+    };
     let _ = sqlx::query(
         r#"INSERT INTO notify_outbox
               (title, body, channels, severity, event_key,
                exchange, segment, symbol, status, dedup_key)
-           VALUES ($1, $2, '["telegram","x","webhook"]'::jsonb, $3, $4,
+           VALUES ($1, $2, $7::jsonb, $3, $4,
                    'binance', 'futures', $5, 'pending', $6)
            ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING"#,
     )
@@ -642,6 +656,7 @@ async fn insert_notify_outbox(
     .bind(event_key)
     .bind(symbol)
     .bind(dedup_key.as_deref())
+    .bind(channels)
     .execute(pool)
     .await;
     Ok(())
