@@ -90,7 +90,7 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
     let rows = sqlx::query(
         r#"WITH strong AS (
              SELECT exchange, segment, symbol, timeframe,
-                    net_score, confidence, verdict, regime, computed_at
+                    net_score, confidence, verdict, regime, contributors, computed_at
                FROM confluence_snapshots
               WHERE computed_at >= now() - make_interval(mins => $1::int)
                 AND verdict IN ('strong_bull', 'strong_bear')
@@ -99,12 +99,12 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
            distinct_strong AS (
              SELECT DISTINCT ON (exchange, segment, symbol, timeframe)
                     exchange, segment, symbol, timeframe,
-                    net_score, confidence, verdict, regime, computed_at
+                    net_score, confidence, verdict, regime, contributors, computed_at
                FROM strong
               ORDER BY exchange, segment, symbol, timeframe, computed_at DESC
            )
            SELECT exchange, segment, symbol, timeframe,
-                  net_score, confidence, verdict, regime, computed_at
+                  net_score, confidence, verdict, regime, contributors, computed_at
              FROM distinct_strong
             ORDER BY
               symbol,
@@ -147,6 +147,16 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
         let confidence: f64 = r.try_get("confidence").unwrap_or(0.0);
         let verdict: String = r.try_get("verdict").unwrap_or_default();
         let regime: Option<String> = r.try_get("regime").ok();
+        // v1.2.0 — primary family of the confluence. `contributors` is
+        // a `{family: {score, count}}` map written by the scorer. We
+        // pick the family with the highest score; that family's RR
+        // profile overrides the default atr_* multipliers on this
+        // candidate. Fallback: no primary → defaults.
+        let contributors: serde_json::Value = r
+            .try_get("contributors")
+            .unwrap_or(serde_json::Value::Null);
+        let primary_family: Option<String> =
+            pick_primary_family(&contributors);
 
         info!(%symbol, %timeframe, %verdict, %net_score, "allocator_v2: processing candidate");
 
@@ -265,6 +275,12 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
             %symbol, %timeframe, entry, bar_close, atr, entry_source,
             "allocator_v2: price+atr loaded"
         );
+        // v1.2.0 — pick RR profile for this candidate. When the
+        // primary family has a dedicated (sl_mult, tp_mult) profile
+        // in config we use it; otherwise fall back to the allocator
+        // defaults. Different families have different best RR:
+        // harmonic PRZ trades scalp tighter, motive runs farther.
+        let rr = family_rr_profile(primary_family.as_deref(), &cfg);
         // v1.1.9 — structure-aware SL.
         // `atr_sl` is the volatility-based stop. If a recent opposing
         // swing pivot sits further from entry than atr_sl, respect
@@ -272,7 +288,7 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
         // the exact swing — a hair inside to avoid exact-pivot
         // sniping). If the swing is closer than atr_sl we still use
         // atr_sl so the SL doesn't go BELOW/ABOVE atr-expected noise.
-        let atr_sl_dist = atr * cfg.atr_sl_mult;
+        let atr_sl_dist = atr * rr.sl_mult;
         let struct_dist: Option<f64> = if cfg.structure_sl_enabled {
             nearest_opposing_swing_distance(
                 pool, &exchange, &segment, &symbol, &timeframe, direction, entry,
@@ -293,9 +309,9 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
             );
         }
         let sl = entry - dir_sign * effective_sl_dist;
-        let tp1 = entry + dir_sign * atr * cfg.atr_tp_mult[0];
-        let tp2 = entry + dir_sign * atr * cfg.atr_tp_mult[1];
-        let tp3 = entry + dir_sign * atr * cfg.atr_tp_mult[2];
+        let tp1 = entry + dir_sign * atr * rr.tp_mult[0];
+        let tp2 = entry + dir_sign * atr * rr.tp_mult[1];
+        let tp3 = entry + dir_sign * atr * rr.tp_mult[2];
 
         // MTF opposing-direction gate — scoped to the same profile.
         // Setup v1.1.3: D-long (1d macro uptrend) + T-short (15m
@@ -785,6 +801,11 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
                 "mode": mode,
                 "entry_source": entry_source,
                 "bar_close": bar_close,
+                "primary_family": primary_family,
+                "rr_profile": {
+                    "sl_mult": rr.sl_mult,
+                    "tp_mult": rr.tp_mult,
+                },
                 "commission_check": commission_check,
                 "sanity_check": sanity_check,
                 "sl_distance_check": sl_distance_check,
@@ -1335,6 +1356,77 @@ fn symbol_cluster(symbol: &str) -> Option<&'static str> {
 
 /// Return every symbol (with USDT suffix) that sits in the given
 /// cluster. Used by the cluster-cap gate's count query via ANY($2).
+// v1.2.0 — family-specific RR profile. Hard-coded fallbacks reflect
+// community wisdom on what each family deserves:
+//   harmonic    — mean-reversion from PRZ, works best at 1.5R
+//   motive      — Elliott impulse, let runners fly at 4R+
+//   wyckoff     — accumulation/distribution turn, solid 3R
+//   smc         — BOS breakouts, 2.5R
+//   classical   — pattern targets, 2R default
+//   orderflow/derivatives — short-term, 1.5-2R
+//   default     — cfg defaults
+#[derive(Debug, Clone, Copy)]
+struct RrProfile {
+    sl_mult: f64,
+    tp_mult: [f64; 3],
+}
+
+fn family_rr_profile(family: Option<&str>, cfg: &Cfg) -> RrProfile {
+    match family {
+        Some("harmonic") => RrProfile {
+            sl_mult: 0.8,
+            tp_mult: [1.5, 2.5, 3.5],
+        },
+        Some("motive") => RrProfile {
+            sl_mult: 1.0,
+            tp_mult: [2.0, 4.0, 6.0],
+        },
+        Some("abc") | Some("wyckoff") => RrProfile {
+            sl_mult: 1.2,
+            tp_mult: [2.5, 4.0, 5.5],
+        },
+        Some("smc") => RrProfile {
+            sl_mult: 1.2,
+            tp_mult: [2.5, 3.5, 5.0],
+        },
+        Some("classical") => RrProfile {
+            sl_mult: 1.0,
+            tp_mult: [2.0, 3.0, 4.5],
+        },
+        Some("orderflow") | Some("derivatives") => RrProfile {
+            sl_mult: 1.0,
+            tp_mult: [1.5, 2.5, 3.5],
+        },
+        Some("gap") | Some("orb") => RrProfile {
+            sl_mult: 1.0,
+            tp_mult: [2.0, 3.0, 4.0],
+        },
+        _ => RrProfile {
+            sl_mult: cfg.atr_sl_mult,
+            tp_mult: cfg.atr_tp_mult,
+        },
+    }
+}
+
+/// Pick the family with the highest `score` from a `contributors`
+/// JSON object of shape `{ "<family>": { "score": f, "count": n } }`.
+/// Returns None on empty / missing input.
+fn pick_primary_family(contrib: &serde_json::Value) -> Option<String> {
+    let obj = contrib.as_object()?;
+    let mut best: Option<(String, f64)> = None;
+    for (family, inner) in obj {
+        let s = inner
+            .get("score")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        match &best {
+            Some((_, cur)) if s <= *cur => {}
+            _ => best = Some((family.clone(), s)),
+        }
+    }
+    best.map(|(f, _)| f)
+}
+
 // v1.1.9 — Distance from `entry` to the nearest opposing-direction
 // swing pivot on (symbol, tf). "Opposing" means: for a long candidate
 // we look for a SWING LOW below entry (so SL below swing is the
