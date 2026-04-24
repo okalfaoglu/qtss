@@ -169,6 +169,7 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
         }
         if !superseded.is_empty() {
             for id in &superseded {
+                // Flip the setup row — state=rejected + reason.
                 let _ = sqlx::query(
                     r#"UPDATE qtss_setups
                           SET state = 'rejected',
@@ -183,11 +184,34 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
                 .bind(id)
                 .execute(pool)
                 .await;
+                // Close the bound live_position (if any). Without this
+                // the execution_bridge-opened paper position lived on
+                // after the setup was retired, and the allocator's
+                // next tick would open ANOTHER live_position against a
+                // fresh setup, leaving the old ones orphaned. Observed
+                // live: 4 ETHUSDT 4h short live_positions for a single
+                // symbol. We mark-to-market close at the last tick the
+                // dispatcher recorded so PnL is honest.
+                let _ = sqlx::query(
+                    r#"UPDATE live_positions
+                          SET closed_at    = now(),
+                              updated_at   = now(),
+                              close_reason = 'setup_superseded',
+                              realized_pnl_quote = COALESCE(
+                                  (last_mark - entry_avg) * qty_remaining *
+                                  CASE WHEN side = 'BUY' THEN 1 ELSE -1 END,
+                                  0
+                              )
+                        WHERE setup_id = $1 AND closed_at IS NULL"#,
+                )
+                .bind(id)
+                .execute(pool)
+                .await;
             }
             info!(
                 %symbol, %timeframe, %direction, %profile,
                 superseded_count = superseded.len(),
-                "allocator_v2: retired lower-TF setups in same profile"
+                "allocator_v2: retired lower-TF setups in same profile + closed bound live_positions"
             );
         }
         if modes_to_arm.is_empty() {
