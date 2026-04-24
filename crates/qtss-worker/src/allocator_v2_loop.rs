@@ -265,7 +265,34 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
             %symbol, %timeframe, entry, bar_close, atr, entry_source,
             "allocator_v2: price+atr loaded"
         );
-        let sl = entry - dir_sign * atr * cfg.atr_sl_mult;
+        // v1.1.9 — structure-aware SL.
+        // `atr_sl` is the volatility-based stop. If a recent opposing
+        // swing pivot sits further from entry than atr_sl, respect
+        // the structure (with a factor < 1.0 so we don't put SL at
+        // the exact swing — a hair inside to avoid exact-pivot
+        // sniping). If the swing is closer than atr_sl we still use
+        // atr_sl so the SL doesn't go BELOW/ABOVE atr-expected noise.
+        let atr_sl_dist = atr * cfg.atr_sl_mult;
+        let struct_dist: Option<f64> = if cfg.structure_sl_enabled {
+            nearest_opposing_swing_distance(
+                pool, &exchange, &segment, &symbol, &timeframe, direction, entry,
+            )
+            .await
+        } else {
+            None
+        };
+        let effective_sl_dist = match struct_dist {
+            Some(d) if d > atr_sl_dist => d * cfg.structure_sl_factor,
+            _ => atr_sl_dist,
+        };
+        if let Some(d) = struct_dist {
+            debug!(
+                %symbol, %timeframe, atr_sl_dist, struct_dist = d,
+                effective_sl_dist,
+                "allocator_v2: structure-aware SL computed"
+            );
+        }
+        let sl = entry - dir_sign * effective_sl_dist;
         let tp1 = entry + dir_sign * atr * cfg.atr_tp_mult[0];
         let tp2 = entry + dir_sign * atr * cfg.atr_tp_mult[1];
         let tp3 = entry + dir_sign * atr * cfg.atr_tp_mult[2];
@@ -1256,6 +1283,17 @@ struct Cfg {
     /// snapshot on the HTF lookup set for the candidate's TF and
     /// rejects the candidate when an HTF disagrees.
     htf_context_gate_enabled: bool,
+
+    /// v1.1.9 — structure-aware SL. Instead of `sl = entry - atr`,
+    /// allow the SL to honour the nearest opposing pivot (swing) if
+    /// that point is further from entry than the ATR estimate —
+    /// `sl = entry - max(atr * atr_sl_mult, struct_dist * factor)`.
+    /// This stops the stop from sitting INSIDE the last swing low/
+    /// high, where noise regularly trades through. `factor` is the
+    /// proportion of the swing distance honoured (0.8 default keeps
+    /// SL just inside the structure to avoid exact-pivot sniping).
+    structure_sl_enabled: bool,
+    structure_sl_factor: f64,
 }
 
 // Floor/ceiling sanity-check bounds. For a long, the live price must
@@ -1297,6 +1335,63 @@ fn symbol_cluster(symbol: &str) -> Option<&'static str> {
 
 /// Return every symbol (with USDT suffix) that sits in the given
 /// cluster. Used by the cluster-cap gate's count query via ANY($2).
+// v1.1.9 — Distance from `entry` to the nearest opposing-direction
+// swing pivot on (symbol, tf). "Opposing" means: for a long candidate
+// we look for a SWING LOW below entry (so SL below swing is the
+// natural stop); for a short candidate we look for a SWING HIGH
+// above entry. Joins `pivots` via engine_symbols to resolve
+// (exchange, segment, symbol, interval). Pivot.direction convention:
+// +1 = swing high, -1 = swing low (also accepts ±2 for strong swings).
+//
+// Returns None when there's no recent pivot on the correct side.
+async fn nearest_opposing_swing_distance(
+    pool: &PgPool,
+    exchange: &str,
+    segment: &str,
+    symbol: &str,
+    timeframe: &str,
+    direction: &str,
+    entry: f64,
+) -> Option<f64> {
+    // For a long: want the nearest SWING LOW below entry (direction = -1).
+    // For a short: want the nearest SWING HIGH above entry (direction = +1).
+    let target_dir: i16 = if direction == "long" { -1 } else { 1 };
+    let row = sqlx::query(
+        r#"SELECT p.price::float8 AS price
+             FROM pivots p
+             JOIN engine_symbols e ON e.id = p.engine_symbol_id
+            WHERE e.exchange = $1
+              AND e.segment = $2
+              AND e.symbol = $3
+              AND e.interval = $4
+              AND sign(p.direction::int) = $5::int
+              AND CASE WHEN $5::int = -1
+                       THEN p.price::float8 < $6
+                       ELSE p.price::float8 > $6
+                  END
+              AND p.open_time >= now() - interval '30 days'
+            ORDER BY p.open_time DESC
+            LIMIT 1"#,
+    )
+    .bind(exchange)
+    .bind(segment)
+    .bind(symbol)
+    .bind(timeframe)
+    .bind(target_dir as i32)
+    .bind(entry)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()?;
+    let px: f64 = row.try_get("price").ok()?;
+    let d = (entry - px).abs();
+    if d.is_finite() && d > 0.0 {
+        Some(d)
+    } else {
+        None
+    }
+}
+
 // v1.1.7 — HTFs to consult for the context gate when the candidate
 // arrives on the given TF. Three or more HTFs return the candidate
 // is usually fine on intraday; higher TFs have progressively fewer
@@ -1440,6 +1535,8 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
         ev_min_sample: 10,
         ev_min_value_r: 0.0,
         htf_context_gate_enabled: true,
+        structure_sl_enabled: true,
+        structure_sl_factor: 0.8,
     };
     // Pull the current taker bps so the check matches what the Setup
     // drawer displays. Prefer binance_futures (live trading venue).
@@ -1603,6 +1700,20 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
         if let Some(b) = val.get("enabled").and_then(|v| v.as_bool()) {
             cfg.htf_context_gate_enabled = b;
         }
+    }
+    if let Ok(Some(row)) = sqlx::query(
+        "SELECT value FROM system_config WHERE module='allocator_v2' AND config_key='structure_sl_enabled'",
+    )
+    .fetch_optional(pool)
+    .await
+    {
+        let val: Value = row.try_get("value").unwrap_or(Value::Null);
+        if let Some(b) = val.get("enabled").and_then(|v| v.as_bool()) {
+            cfg.structure_sl_enabled = b;
+        }
+    }
+    if let Some(v) = load_f64(pool, "allocator_v2", "structure_sl_factor").await {
+        cfg.structure_sl_factor = v.clamp(0.1, 1.5);
     }
     // Default org_id from dry-execution config.
     if let Ok(Some(row)) = sqlx::query(
