@@ -444,7 +444,8 @@
       "Bash(wsl which *)",
       "Bash('/c/Program Files/Python313/python' -c ' *)",
       "Bash(\"/c/Program Files/Python313/python\" _orphan_scan.py)",
-      "Bash(tee _orphan_scan_output.txt)"
+      "Bash(tee _orphan_scan_output.txt)",
+      "Bash(find . -name \"*.rs\" -type f -exec grep -l \"list_watcher_rows\" {} \\\\;)"
     ]
   }
 }

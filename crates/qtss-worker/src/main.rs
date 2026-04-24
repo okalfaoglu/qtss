@@ -37,6 +37,7 @@ mod strategy_runner;
 mod ai_tactical_executor;
 mod worker_probe_http;
 mod engine_ingest;
+mod allocator_v2_loop;
 mod confluence_loop;
 mod indicator_persistence_loop;
 mod outcome_tracker_loop;
@@ -377,6 +378,15 @@ async fn main() -> anyhow::Result<()> {
         // RADAR hit-rate stats.
         let outcome_pool = pool.clone();
         tokio::spawn(outcome_tracker_loop::outcome_tracker_loop(outcome_pool));
+        // Allocator v2 — autonomous dry-mode setup creator. Reads
+        // confluence_snapshots + latest bar/ATR, runs the AI multi-
+        // gate, arms approved setups in qtss_setups (mode='dry'). The
+        // existing selector + execution_bridge then open the dry
+        // position; setup_watcher tracks outcome. Telegram gets a
+        // notify_outbox row per event. DISABLED by default — operator
+        // opts in via `system_config.allocator_v2.enabled = true`.
+        let alloc_pool = pool.clone();
+        tokio::spawn(allocator_v2_loop::allocator_v2_loop(alloc_pool));
         let health_pool = pool.clone();
         tokio::spawn(data_health_report::data_health_report_loop(health_pool));
         binance_user_stream::spawn_binance_user_stream_tasks(&pool).await;
