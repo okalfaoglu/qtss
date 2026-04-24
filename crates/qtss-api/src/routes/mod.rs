@@ -44,6 +44,7 @@ mod v2_indicators;
 mod v2_zigzag;
 mod v2_config;
 mod v2_dashboard;
+mod v2_fees;
 mod v2_montecarlo;
 mod v2_regime;
 mod v2_scenarios;
@@ -78,6 +79,7 @@ pub use v2_indicators::v2_indicators_router;
 pub use v2_zigzag::v2_zigzag_router;
 pub use v2_config::{v2_config_admin_router, v2_config_router};
 pub use v2_dashboard::{v2_dashboard_router, V2DashboardHandle};
+pub use v2_fees::v2_fees_router;
 pub use v2_montecarlo::v2_montecarlo_router;
 pub use v2_regime::v2_regime_router;
 pub use v2_scenarios::v2_scenarios_router;
@@ -147,6 +149,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_radar_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_pivots_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_setups_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_fees_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_models_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_q_radar_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_engine_symbols_router().layer(from_fn(require_admin)))
