@@ -525,9 +525,24 @@ async fn tick_once(
                 _ => {
                     // Non-TP transitions fall back to 9.7.3 promotion.
                     let mut promoted = promote_tp_hit(&state, decision);
-                    // Distinguish trail_stop from plain sl_hit (telemetry).
-                    if promoted.kind == LifecycleEventKind::SlHit && row.trail_mode {
-                        promoted.kind = LifecycleEventKind::TrailStop;
+                    // Setup v1.1.2 — distinguish trail_stop from plain
+                    // sl_hit. Two signals either of which should flip
+                    // the close_reason to "trail_stop":
+                    //   1. row.trail_mode (AI-enabled trailing)
+                    //   2. current_sl has been ratcheted away from the
+                    //      original entry_sl via poz_koruma, so the
+                    //      stop that just fired is a protected-profit
+                    //      stop, not a capital-loss stop.
+                    // Without this, the DB and RADAR report flag a
+                    // winning trade (pnl% > 0) with close_reason=sl_hit,
+                    // which was exactly the ETHUSDT 1d short anomaly
+                    // spotted in the post-mortem.
+                    if promoted.kind == LifecycleEventKind::SlHit {
+                        let original = to_decimal_f32(row.entry_sl).unwrap_or(state.current_sl);
+                        let ratchet_moved = state.current_sl != original;
+                        if row.trail_mode || ratchet_moved {
+                            promoted.kind = LifecycleEventKind::TrailStop;
+                        }
                     }
                     let ctx = make_context(&state, &promoted, Some(health), prev_band, Utc::now());
                     router.dispatch(&ctx).await;
