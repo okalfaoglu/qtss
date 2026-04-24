@@ -332,6 +332,167 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
             }
         }
 
+        // v1.1.6 — loss-streak cooldown (extended). After N consecutive
+        // sl_hit closes on the same (symbol, direction), ban for M
+        // minutes. Catches the "3 losses in a row, the system is wrong
+        // about this symbol right now" anti-pattern.
+        if cfg.loss_streak_threshold > 0 && cfg.loss_streak_ban_minutes > 0 {
+            let streak: i64 = sqlx::query_scalar(
+                r#"WITH recent AS (
+                      SELECT close_reason, closed_at
+                        FROM qtss_setups
+                       WHERE exchange = $1 AND symbol = $2 AND direction = $3
+                         AND closed_at IS NOT NULL
+                         AND close_reason IN ('sl_hit','tp_final','trail_stop',
+                                              'invalidated','cancelled')
+                         AND close_reason NOT IN ('cancelled')
+                         AND closed_at >= now() - make_interval(mins => $4::int)
+                       ORDER BY closed_at DESC
+                       LIMIT 20
+                   )
+                   SELECT count(*)::bigint FROM recent
+                    WHERE close_reason = 'sl_hit'"#,
+            )
+            .bind(&exchange)
+            .bind(&symbol)
+            .bind(direction)
+            .bind(cfg.loss_streak_ban_minutes as i32)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+            if streak >= cfg.loss_streak_threshold {
+                info!(
+                    %symbol, direction, streak,
+                    threshold = cfg.loss_streak_threshold,
+                    ban = cfg.loss_streak_ban_minutes,
+                    "allocator_v2: skip — loss-streak ban active"
+                );
+                continue;
+            }
+        }
+
+        // v1.1.6 — correlation-cluster gate. "BTC long + ETH long +
+        // SOL long" = one macro idea fired three times. Group crypto
+        // into coarse clusters and cap concurrent armed per
+        // (cluster, direction). Clusters intentionally broad — the
+        // goal is to stop naive multi-symbol duplication, not to model
+        // precise correlation.
+        if cfg.corr_cluster_enabled && cfg.corr_cluster_max_armed > 0 {
+            let my_cluster = symbol_cluster(&symbol);
+            if let Some(my_cluster) = my_cluster {
+                // Fetch sibling symbols in the cluster and count armed
+                // setups in the SAME direction.
+                let siblings = cluster_symbols(my_cluster);
+                let armed_in_cluster: i64 = sqlx::query_scalar(
+                    r#"SELECT count(*) FROM qtss_setups
+                        WHERE exchange = $1
+                          AND symbol = ANY($2)
+                          AND direction = $3
+                          AND state IN ('armed','active')"#,
+                )
+                .bind(&exchange)
+                .bind(&siblings)
+                .bind(direction)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0);
+                if armed_in_cluster >= cfg.corr_cluster_max_armed {
+                    info!(
+                        %symbol, direction,
+                        cluster = my_cluster,
+                        armed_in_cluster,
+                        max = cfg.corr_cluster_max_armed,
+                        "allocator_v2: skip — correlation cluster cap reached"
+                    );
+                    continue;
+                }
+            }
+        }
+
+        // v1.1.6 — daily armed cap across ALL symbols. Hard brake on
+        // over-trading regardless of symbol distribution. Skip gate
+        // when max_daily_armed = 0 (operator off).
+        if cfg.max_daily_armed > 0 {
+            let armed_today: i64 = sqlx::query_scalar(
+                r#"SELECT count(*) FROM qtss_setups
+                    WHERE created_at >= now() - interval '24 hours'
+                      AND state IN ('armed','active')"#,
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+            if armed_today >= cfg.max_daily_armed {
+                info!(
+                    %symbol, armed_today,
+                    cap = cfg.max_daily_armed,
+                    "allocator_v2: skip — daily armed cap reached"
+                );
+                continue;
+            }
+        }
+
+        // v1.1.6 — EV gate. Historical (symbol, direction, profile)
+        // expected-value-in-R: if negative (and we have >= ev_min_sample
+        // closed trades to be confident), refuse the candidate.
+        // Sample-size guard keeps the system alive during cold start.
+        if cfg.ev_gate_enabled {
+            let profile_peek = tf_profile(&timeframe);
+            let stats: Option<(i64, f64, f64)> = sqlx::query_as(
+                r#"SELECT
+                      count(*) FILTER (WHERE realized_pnl_pct IS NOT NULL)::bigint
+                        AS closed_n,
+                      COALESCE(AVG(CASE WHEN realized_pnl_pct > 0 THEN realized_pnl_pct END), 0)::float8
+                        AS avg_win_pct,
+                      COALESCE(AVG(CASE WHEN realized_pnl_pct < 0 THEN abs(realized_pnl_pct) END), 0)::float8
+                        AS avg_loss_pct
+                     FROM qtss_setups
+                    WHERE symbol = $1
+                      AND direction = $2
+                      AND profile = $3
+                      AND closed_at IS NOT NULL
+                      AND close_reason IN ('tp_final','sl_hit','trail_stop','invalidated')
+                      AND realized_pnl_pct IS NOT NULL"#,
+            )
+            .bind(&symbol)
+            .bind(direction)
+            .bind(profile_peek)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+            if let Some((closed_n, avg_win_pct, avg_loss_pct)) = stats {
+                if closed_n >= cfg.ev_min_sample {
+                    let winrate: f64 = sqlx::query_scalar(
+                        r#"SELECT (count(*) FILTER (WHERE realized_pnl_pct > 0)::float8 /
+                                   NULLIF(count(*)::float8, 0))
+                             FROM qtss_setups
+                            WHERE symbol = $1
+                              AND direction = $2
+                              AND profile = $3
+                              AND closed_at IS NOT NULL
+                              AND realized_pnl_pct IS NOT NULL"#,
+                    )
+                    .bind(&symbol)
+                    .bind(direction)
+                    .bind(profile_peek)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap_or(0.5);
+                    let ev_pct =
+                        winrate * avg_win_pct - (1.0 - winrate) * avg_loss_pct;
+                    if ev_pct < cfg.ev_min_value_r {
+                        info!(
+                            %symbol, direction, profile = profile_peek,
+                            closed_n, winrate, avg_win_pct, avg_loss_pct, ev_pct,
+                            min_ev = cfg.ev_min_value_r,
+                            "allocator_v2: skip — negative expected value"
+                        );
+                        continue;
+                    }
+                }
+            }
+        }
+
         // Count today's rejections for this symbol (for gate 5).
         let rejected_today: i64 = sqlx::query_scalar(
             r#"SELECT count(*) FROM ai_approval_requests
@@ -1012,6 +1173,33 @@ struct Cfg {
     /// open trades inside typical intra-bar noise. 0.4% ≈ 4 × round-
     /// trip taker commission is the default.
     sl_min_distance_pct: f64,
+
+    // v1.1.6 — quality-over-quantity pack.
+    //
+    /// Max setups armed in the last 24h across ALL symbols. Hard brake
+    /// on over-trading. 0 disables.
+    max_daily_armed: i64,
+    /// Loss-streak cooldown. After N consecutive sl_hit closes on the
+    /// same (symbol, direction), ban for M minutes. Separate from the
+    /// v1.1 single-SL 15min cooldown — this catches the "system going
+    /// blind" anti-pattern ChatGPT flagged.
+    loss_streak_threshold: i64,
+    loss_streak_ban_minutes: i64,
+    /// Correlation cluster gate — groups BTC/ETH or the L1s or the
+    /// memes together so "all longs" doesn't fire N parallel trades
+    /// on one macro idea. When more than `corr_cluster_max_armed`
+    /// setups in the same cluster-direction are already armed, the
+    /// new candidate is skipped.
+    corr_cluster_enabled: bool,
+    corr_cluster_max_armed: i64,
+    /// EV gate — refuse a setup whose historical (symbol, direction,
+    /// profile) expected-value-in-R is < 0. `ev_min_sample` closes
+    /// required before the gate can take action; below the threshold
+    /// the system stays in "learning" mode and skips the gate to
+    /// avoid cold-start paralysis.
+    ev_gate_enabled: bool,
+    ev_min_sample: i64,
+    ev_min_value_r: f64,
 }
 
 // Floor/ceiling sanity-check bounds. For a long, the live price must
@@ -1027,6 +1215,42 @@ fn sl_guard_floor(entry: f64, sl: f64) -> f64 {
 fn sl_guard_ceiling(entry: f64, sl: f64) -> f64 {
     let d = (entry - sl).abs();
     entry - d * 2.0 // for shorts, never open below this floor either
+}
+
+// v1.1.6 — coarse correlation buckets for the cluster-cap gate.
+// Matches on the base symbol prefix so future USDT/USDC variants fall
+// into the same bucket. Expand as new venues/symbols come online.
+fn symbol_cluster(symbol: &str) -> Option<&'static str> {
+    let s = symbol.to_ascii_uppercase();
+    // Strip the quote for matching — BTC / BTCUSDT / BTCUSDC all map
+    // to the same cluster.
+    let base = s
+        .strip_suffix("USDT")
+        .or_else(|| s.strip_suffix("USDC"))
+        .or_else(|| s.strip_suffix("USD"))
+        .unwrap_or(&s);
+    match base {
+        "BTC" | "ETH" => Some("majors"),
+        "SOL" | "AVAX" | "ADA" | "DOT" | "NEAR" | "APT" | "SUI" | "BNB" => Some("l1s"),
+        "DOGE" | "SHIB" | "PEPE" | "FLOKI" | "WIF" | "BONK" => Some("memes"),
+        "LINK" | "UNI" | "AAVE" | "MKR" | "COMP" | "ARB" | "OP" => Some("defi"),
+        "XRP" | "LTC" | "TRX" | "XLM" => Some("payments"),
+        _ => None,
+    }
+}
+
+/// Return every symbol (with USDT suffix) that sits in the given
+/// cluster. Used by the cluster-cap gate's count query via ANY($2).
+fn cluster_symbols(cluster: &str) -> Vec<String> {
+    let bases: &[&str] = match cluster {
+        "majors" => &["BTC", "ETH"],
+        "l1s" => &["SOL", "AVAX", "ADA", "DOT", "NEAR", "APT", "SUI", "BNB"],
+        "memes" => &["DOGE", "SHIB", "PEPE", "FLOKI", "WIF", "BONK"],
+        "defi" => &["LINK", "UNI", "AAVE", "MKR", "COMP", "ARB", "OP"],
+        "payments" => &["XRP", "LTC", "TRX", "XLM"],
+        _ => &[],
+    };
+    bases.iter().map(|b| format!("{b}USDT")).collect()
 }
 
 // Setup v1.1.3 — TF → profile mapping.
@@ -1134,6 +1358,15 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
         mtf_opposing_gate_enabled: true,
         warmup_min_subscribers: 3,
         sl_min_distance_pct: 0.4,
+        // v1.1.6 defaults — tuneable via system_config.
+        max_daily_armed: 10,
+        loss_streak_threshold: 3,
+        loss_streak_ban_minutes: 60,
+        corr_cluster_enabled: true,
+        corr_cluster_max_armed: 2,
+        ev_gate_enabled: true,
+        ev_min_sample: 10,
+        ev_min_value_r: 0.0,
     };
     // Pull the current taker bps so the check matches what the Setup
     // drawer displays. Prefer binance_futures (live trading venue).
@@ -1246,6 +1479,46 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
     }
     if let Some(v) = load_f64(pool, "allocator_v2", "sl_min_distance_pct").await {
         cfg.sl_min_distance_pct = v.max(0.0);
+    }
+    if let Some(v) = load_f64(pool, "allocator_v2", "max_daily_armed").await {
+        cfg.max_daily_armed = v.max(0.0) as i64;
+    }
+    if let Some(v) = load_f64(pool, "allocator_v2", "loss_streak_threshold").await {
+        cfg.loss_streak_threshold = v.max(0.0) as i64;
+    }
+    if let Some(v) = load_f64(pool, "allocator_v2", "loss_streak_ban_minutes").await {
+        cfg.loss_streak_ban_minutes = v.max(0.0) as i64;
+    }
+    if let Some(v) = load_f64(pool, "allocator_v2", "corr_cluster_max_armed").await {
+        cfg.corr_cluster_max_armed = v.max(0.0) as i64;
+    }
+    if let Ok(Some(row)) = sqlx::query(
+        "SELECT value FROM system_config WHERE module='allocator_v2' AND config_key='corr_cluster_enabled'",
+    )
+    .fetch_optional(pool)
+    .await
+    {
+        let val: Value = row.try_get("value").unwrap_or(Value::Null);
+        if let Some(b) = val.get("enabled").and_then(|v| v.as_bool()) {
+            cfg.corr_cluster_enabled = b;
+        }
+    }
+    if let Ok(Some(row)) = sqlx::query(
+        "SELECT value FROM system_config WHERE module='allocator_v2' AND config_key='ev_gate_enabled'",
+    )
+    .fetch_optional(pool)
+    .await
+    {
+        let val: Value = row.try_get("value").unwrap_or(Value::Null);
+        if let Some(b) = val.get("enabled").and_then(|v| v.as_bool()) {
+            cfg.ev_gate_enabled = b;
+        }
+    }
+    if let Some(v) = load_f64(pool, "allocator_v2", "ev_min_sample").await {
+        cfg.ev_min_sample = v.max(1.0) as i64;
+    }
+    if let Some(v) = load_f64(pool, "allocator_v2", "ev_min_value_r").await {
+        cfg.ev_min_value_r = v;
     }
     // Default org_id from dry-execution config.
     if let Ok(Some(row)) = sqlx::query(
