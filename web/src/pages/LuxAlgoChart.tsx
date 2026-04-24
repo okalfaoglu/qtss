@@ -437,12 +437,25 @@ export function LuxAlgoChart() {
   const [showIchimoku, setShowIchimoku] = useState(false);
   const [showDonchian, setShowDonchian] = useState(false);
   const [showPsar, setShowPsar] = useState(false);
+  // Oscillators render in a dedicated sub-pane (paneIndex=1) below the
+  // price pane. Each flag corresponds to an indicator name the /v2/
+  // indicators endpoint knows. PR-11H.
+  const [showRsi, setShowRsi] = useState(false);
+  const [showWilliamsR, setShowWilliamsR] = useState(false);
+  const [showCmf, setShowCmf] = useState(false);
+  const [showAroon, setShowAroon] = useState(false);
+  const [showTtmSqueeze, setShowTtmSqueeze] = useState(false);
   const indicatorsCsv = [
     showSuperTrend && "supertrend",
     showKeltner && "keltner",
     showIchimoku && "ichimoku",
     showDonchian && "donchian",
     showPsar && "psar",
+    showRsi && "rsi",
+    showWilliamsR && "williams_r",
+    showCmf && "cmf",
+    showAroon && "aroon",
+    showTtmSqueeze && "ttm_squeeze",
   ]
     .filter((x): x is string => typeof x === "string")
     .join(",");
@@ -1578,6 +1591,101 @@ export function LuxAlgoChart() {
         overlaySeriesRef.current.push(s);
       }
     }
+
+    // ── Oscillator pane (PR-11H) ───────────────────────────────────
+    //
+    // RSI / Williams %R / CMF / Aroon-oscillator / TTM Squeeze render
+    // in a dedicated sub-pane (paneIndex=1) below the main price pane.
+    // lightweight-charts v5 creates the pane on demand from the first
+    // series; threshold lines (overbought/oversold) are attached via
+    // `createPriceLine` on each oscillator's series so they scale with
+    // zoom.
+    const addOscLine = (values: number[] | undefined, color: string, width = 1) => {
+      if (!values) return null;
+      const pts = toLineData(values);
+      if (pts.length < 2) return null;
+      const s = chart.addSeries(
+        LineSeries,
+        {
+          color,
+          lineWidth: width as 1 | 2,
+          priceLineVisible: false,
+          lastValueVisible: true,
+        },
+        1, // paneIndex — oscillator pane
+      );
+      s.setData(pts);
+      overlaySeriesRef.current.push(s);
+      return s;
+    };
+    if (indSeries.rsi) {
+      const s = addOscLine(indSeries.rsi.rsi, "#a855f7", 2);
+      if (s) {
+        s.createPriceLine({
+          price: 70,
+          color: "#ef4444",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: "70",
+        });
+        s.createPriceLine({
+          price: 30,
+          color: "#22c55e",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: "30",
+        });
+      }
+    }
+    if (indSeries.williams_r) {
+      const s = addOscLine(indSeries.williams_r.williams_r, "#06b6d4", 2);
+      if (s) {
+        s.createPriceLine({
+          price: -20,
+          color: "#ef4444",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: "-20",
+        });
+        s.createPriceLine({
+          price: -80,
+          color: "#22c55e",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: "-80",
+        });
+      }
+    }
+    if (indSeries.cmf) {
+      const s = addOscLine(indSeries.cmf.cmf, "#f59e0b", 2);
+      if (s) {
+        s.createPriceLine({
+          price: 0,
+          color: "#71717a",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          axisLabelVisible: false,
+          title: "",
+        });
+      }
+    }
+    if (indSeries.aroon) {
+      // Aroon oscillator = up - down, scaled [-100, 100].
+      addOscLine(indSeries.aroon.osc, "#ec4899", 2);
+    }
+    if (indSeries.ttm_squeeze) {
+      // TTM Squeeze is boolean (0/1) — rendered as a thin flag at the
+      // bottom of the oscillator pane. Scale different from RSI so
+      // it lands on its own right-side axis.
+      const vals = (indSeries.ttm_squeeze.squeeze ?? []).map((x) =>
+        x > 0.5 ? 0.95 : 0.05,
+      );
+      addOscLine(vals, "#f472b6", 1);
+    }
   }, [
     data.data, pineOutput, slots,
     showFibBand, showHhLl, onlyLatestMotive, showZigzag, showElliott, fibExtend,
@@ -1588,6 +1696,7 @@ export function LuxAlgoChart() {
     harmonicFilters, showHarmonicTargets,
     auxDetections, showClassical, showRange, showGap, showCandles, showOrb, showSmc,
     indicators.data, showSuperTrend, showKeltner, showIchimoku, showDonchian, showPsar,
+    showRsi, showWilliamsR, showCmf, showAroon, showTtmSqueeze,
   ]);
 
   const venueList: VenueOpt[] = venues.data ?? [];
@@ -1812,6 +1921,32 @@ export function LuxAlgoChart() {
                 key={key}
                 type="button"
                 className={`rounded px-2 py-0.5 ${val ? "bg-emerald-600 text-white" : "bg-zinc-800 text-zinc-300"}`}
+                onClick={() => (set as (v: boolean) => void)(!val)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {/* Oscillator pane (PR-11H) — separate strip below the price
+              pane. Buttons are sky-coloured to distinguish from the
+              price-pane overlays above. */}
+          <div className="ml-2 flex items-center gap-1 text-xs">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+              osc
+            </span>
+            {(
+              [
+                ["rsi", "RSI", showRsi, setShowRsi],
+                ["williams_r", "Williams %R", showWilliamsR, setShowWilliamsR],
+                ["cmf", "CMF", showCmf, setShowCmf],
+                ["aroon", "Aroon", showAroon, setShowAroon],
+                ["ttm_squeeze", "TTM Sq", showTtmSqueeze, setShowTtmSqueeze],
+              ] as const
+            ).map(([key, label, val, set]) => (
+              <button
+                key={key}
+                type="button"
+                className={`rounded px-2 py-0.5 ${val ? "bg-sky-600 text-white" : "bg-zinc-800 text-zinc-300"}`}
                 onClick={() => (set as (v: boolean) => void)(!val)}
               >
                 {label}
