@@ -23,7 +23,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{Datelike, Timelike, Utc};
 use qtss_ai::multi_gate::{self, GateContext, GateThresholds, VerdictStatus};
 use qtss_notify::PriceTickStore;
 use rust_decimal::prelude::ToPrimitive;
@@ -79,6 +79,14 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
     // AND the current reading hasn't flipped direction, we act on the
     // last strong reading. Implementation: filter first, THEN
     // distinct-on.
+    // Setup v1.1.4 — feed the candidates in HTF-first order. The
+    // per-profile dedup relies on a higher-TF candidate winning the
+    // slot over a lower-TF one; if candidates arrived in arbitrary
+    // order an LTF setup could arm first, and as soon as the HTF
+    // candidate processed it would retire the LTF — causing a
+    // thrash that re-opens the LTF every time the HTF flickers.
+    // Processing HTF first means: the first candidate to land is
+    // always the "right" one; everything below just skips.
     let rows = sqlx::query(
         r#"WITH strong AS (
              SELECT exchange, segment, symbol, timeframe,
@@ -87,12 +95,36 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
               WHERE computed_at >= now() - make_interval(mins => $1::int)
                 AND verdict IN ('strong_bull', 'strong_bear')
                 AND abs(net_score) >= $2
+           ),
+           distinct_strong AS (
+             SELECT DISTINCT ON (exchange, segment, symbol, timeframe)
+                    exchange, segment, symbol, timeframe,
+                    net_score, confidence, verdict, regime, computed_at
+               FROM strong
+              ORDER BY exchange, segment, symbol, timeframe, computed_at DESC
            )
-           SELECT DISTINCT ON (exchange, segment, symbol, timeframe)
-                  exchange, segment, symbol, timeframe,
+           SELECT exchange, segment, symbol, timeframe,
                   net_score, confidence, verdict, regime, computed_at
-             FROM strong
-            ORDER BY exchange, segment, symbol, timeframe, computed_at DESC"#,
+             FROM distinct_strong
+            ORDER BY
+              symbol,
+              CASE timeframe
+                WHEN '1M' THEN 43200
+                WHEN '1w' THEN 10080
+                WHEN '1d' THEN 1440
+                WHEN '12h' THEN 720
+                WHEN '8h'  THEN 480
+                WHEN '6h'  THEN 360
+                WHEN '4h'  THEN 240
+                WHEN '2h'  THEN 120
+                WHEN '1h'  THEN 60
+                WHEN '30m' THEN 30
+                WHEN '15m' THEN 15
+                WHEN '5m'  THEN 5
+                WHEN '3m'  THEN 3
+                WHEN '1m'  THEN 1
+                ELSE 60
+              END DESC"#,
     )
     .bind(cfg.lookback_minutes as i32)
     .bind(cfg.min_abs_net_score)
@@ -671,9 +703,43 @@ async fn insert_notify_outbox(
         .get("setup_id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let dedup_key = setup_id_str
-        .as_ref()
-        .map(|sid| format!("{event_key}:{sid}"));
+    // For `allocator_v2_armed` only, widen the dedup to
+    // (symbol, direction, profile_bucket, 15-minute bucket) so a
+    // dedup-churn cycle (HTF pops in, pops out, LTF re-arms) does
+    // NOT spam Telegram with a fresh "armed" card every 60 seconds.
+    // Setup-id-only dedup is fine for the other event kinds because
+    // they're by-setup audit trails, not ops-facing signals.
+    let dedup_key: Option<String> = if event_key == "allocator_v2_armed" {
+        let sym = payload.get("symbol").and_then(|v| v.as_str()).unwrap_or("?");
+        let dir = payload.get("direction").and_then(|v| v.as_str()).unwrap_or("?");
+        let tf = payload.get("timeframe").and_then(|v| v.as_str()).unwrap_or("?");
+        let profile_bucket = match tf {
+            "5m" | "15m" | "30m" => "t",
+            _ => "d",
+        };
+        let mode = payload.get("mode").and_then(|v| v.as_str()).unwrap_or("?");
+        // 15-minute bucket — four Telegram buckets per hour max. If
+        // the underlying setup stays armed longer the hourly snapshot
+        // already keeps the user informed; we don't need another
+        // "armed" card.
+        let now = Utc::now();
+        let min_bucket = (now.minute() / 15) * 15;
+        let bucket = format!(
+            "{:04}{:02}{:02}{:02}{:02}",
+            now.year(),
+            now.month(),
+            now.day(),
+            now.hour(),
+            min_bucket
+        );
+        Some(format!(
+            "armed:{sym}:{dir}:{profile_bucket}:{mode}:{bucket}"
+        ))
+    } else {
+        setup_id_str
+            .as_ref()
+            .map(|sid| format!("{event_key}:{sid}"))
+    };
     // Schema match: notify_outbox(title, body, channels, severity,
     // event_key, org_id, exchange, segment, symbol, status).
     // Errors swallowed — a broken outbox should never crash the
