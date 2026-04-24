@@ -20,16 +20,18 @@
 //! Rejected setups land in `ai_approval_requests` with the gate scores
 //! so the operator / chart can see WHY a signal didn't fire.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
 use qtss_ai::multi_gate::{self, GateContext, GateThresholds, VerdictStatus};
+use qtss_notify::PriceTickStore;
 use rust_decimal::prelude::ToPrimitive;
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use tracing::{debug, info, warn};
 
-pub async fn allocator_v2_loop(pool: PgPool) {
+pub async fn allocator_v2_loop(pool: PgPool, price_store: Arc<PriceTickStore>) {
     info!("allocator_v2_loop: started");
     loop {
         if !load_enabled(&pool).await {
@@ -37,7 +39,7 @@ pub async fn allocator_v2_loop(pool: PgPool) {
             continue;
         }
         let secs = load_tick_secs(&pool).await;
-        match run_tick(&pool).await {
+        match run_tick(&pool, &price_store).await {
             Ok(n) if n > 0 => info!(armed = n, "allocator_v2 tick ok"),
             Ok(_) => debug!("allocator_v2 tick: no new setups"),
             Err(e) => warn!(%e, "allocator_v2 tick failed"),
@@ -46,7 +48,7 @@ pub async fn allocator_v2_loop(pool: PgPool) {
     }
 }
 
-async fn run_tick(pool: &PgPool) -> anyhow::Result<usize> {
+async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result<usize> {
     let cfg = load_cfg(pool).await;
     // Latest confluence row per (symbol, timeframe) in the lookback
     // window with a strong verdict. DISTINCT ON picks the most recent
@@ -128,22 +130,85 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<usize> {
         let direction = if verdict == "strong_bull" { "long" } else { "short" };
         let dir_sign: f64 = if direction == "long" { 1.0 } else { -1.0 };
 
-        // Entry = latest close + ATR fallback for SL/TP.
-        let Some((entry, atr)) = load_price_atr(pool, &exchange, &segment, &symbol, &timeframe)
-            .await
+        // Entry sourcing — Setup v1.1: prefer the live bookTicker price
+        // (side-aware: short executes against best_bid, long against
+        // best_ask) over the last bar close, because the bar is up to
+        // one TF-length stale. ATR is still derived from the bar series
+        // — it's a volatility estimate, not an executable price.
+        let Some((bar_close, atr)) = load_price_atr(
+            pool, &exchange, &segment, &symbol, &timeframe,
+        )
+        .await
         else {
             info!(%symbol, %timeframe, "allocator_v2: skipping — no price/ATR available");
             continue;
         };
-        info!(%symbol, %timeframe, entry, atr, "allocator_v2: price+atr loaded");
-        if atr <= 0.0 || entry <= 0.0 {
-            info!(%symbol, atr, entry, "allocator_v2: skipping — zero atr/entry");
+        if atr <= 0.0 || bar_close <= 0.0 {
+            info!(%symbol, atr, bar_close, "allocator_v2: skipping — zero atr/bar_close");
             continue;
         }
+        // Pull the fresh tick; fall back to bar close if the bookTicker
+        // stream hasn't seen this symbol yet (e.g. fresh install or
+        // WS disconnected). Record the entry_source in raw_meta so the
+        // Setups GUI can tell a tick-backed entry from a bar-fallback.
+        let (entry, entry_source) = match price_store.get("binance", &symbol) {
+            Some(tick) => {
+                // Side-aware: buying crosses the ask, selling crosses
+                // the bid. That matches what the broker will actually
+                // fill at, so entry reflects real executable price.
+                let side_px = if direction == "long" {
+                    tick.ask
+                } else {
+                    tick.bid
+                };
+                let px = side_px
+                    .to_f64()
+                    .or_else(|| tick.mid().to_f64());
+                match px.filter(|p| *p > 0.0) {
+                    Some(p) => (p, "live_tick"),
+                    None => (bar_close, "bar_close_fallback"),
+                }
+            }
+            None => (bar_close, "bar_close_no_stream"),
+        };
+        info!(
+            %symbol, %timeframe, entry, bar_close, atr, entry_source,
+            "allocator_v2: price+atr loaded"
+        );
         let sl = entry - dir_sign * atr * cfg.atr_sl_mult;
         let tp1 = entry + dir_sign * atr * cfg.atr_tp_mult[0];
         let tp2 = entry + dir_sign * atr * cfg.atr_tp_mult[1];
         let tp3 = entry + dir_sign * atr * cfg.atr_tp_mult[2];
+
+        // Cooldown guard — if the same (symbol, direction) took an SL
+        // hit inside the last N minutes, skip. This kills the whipsaw
+        // loop we saw live on XRPUSDT where an identical entry/SL pair
+        // was re-armed every 60 seconds only to get stopped out a few
+        // seconds later.
+        let cooldown_min = cfg.sl_hit_cooldown_minutes;
+        if cooldown_min > 0 {
+            let recent_loss: i64 = sqlx::query_scalar(
+                r#"SELECT count(*)
+                     FROM qtss_setups
+                    WHERE exchange = $1 AND symbol = $2 AND direction = $3
+                      AND close_reason = 'sl_hit'
+                      AND closed_at >= now() - make_interval(mins => $4::int)"#,
+            )
+            .bind(&exchange)
+            .bind(&symbol)
+            .bind(direction)
+            .bind(cooldown_min as i32)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+            if recent_loss > 0 {
+                info!(
+                    %symbol, direction, cooldown_min, recent_loss,
+                    "allocator_v2: skip — same-direction sl_hit within cooldown"
+                );
+                continue;
+            }
+        }
 
         // Count today's rejections for this symbol (for gate 5).
         let rejected_today: i64 = sqlx::query_scalar(
@@ -252,12 +317,47 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<usize> {
             "viable": commission_viable,
         });
 
-        // If TP won't survive fees, we still want the row for audit but
-        // it never gets armed. Selector / execution_bridge skip
-        // non-armed states, so this is safe.
-        let setup_state = if commission_viable { "armed" } else { "rejected" };
-        let setup_close_reason: Option<&str> =
-            if commission_viable { None } else { Some("cancelled") };
+        // Pre-trade sanity — even with a live-tick entry, the spot price
+        // at insert time may already be past the SL (fast market, gap).
+        // For long: live must be <= SL is a nonsense state (we'd open
+        // short-of-SL). Same mirror for short. When the tick stream is
+        // unavailable we still check against bar_close; fail-open for
+        // fresh installs is preferable to silent staleness.
+        let reference_px = match price_store
+            .get("binance", &symbol)
+            .and_then(|t| t.mid().to_f64())
+        {
+            Some(p) if p > 0.0 => p,
+            _ => bar_close,
+        };
+        let sanity_viable = if direction == "long" {
+            reference_px < sl_guard_floor(entry, sl)
+                && reference_px > sl
+        } else {
+            reference_px > sl_guard_ceiling(entry, sl)
+                && reference_px < sl
+        };
+        let sanity_check = json!({
+            "reference_price": reference_px,
+            "entry": entry,
+            "sl": sl,
+            "direction": direction,
+            "viable": sanity_viable,
+            "source": entry_source,
+        });
+
+        let viable = commission_viable && sanity_viable;
+
+        // If any gate failed, write the row for audit but never arm it.
+        let setup_state = if viable { "armed" } else { "rejected" };
+        let setup_close_reason: Option<&str> = if viable { None } else { Some("cancelled") };
+        let setup_rejected_reason: Option<&str> = if viable {
+            None
+        } else if !commission_viable {
+            Some("gross_tp_below_commission_floor")
+        } else {
+            Some("live_price_crossed_sl_at_open")
+        };
 
         // Approved — arm one setup per *missing* mode. Each mode is
         // a separate qtss_setups row; selector_loop picks both up,
@@ -300,31 +400,37 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<usize> {
                 "atr": atr,
                 "gate_scores": gate_scores,
                 "mode": mode,
+                "entry_source": entry_source,
+                "bar_close": bar_close,
                 "commission_check": commission_check,
-                "rejected_reason": if commission_viable {
-                    serde_json::Value::Null
-                } else {
-                    serde_json::Value::String("gross_tp_below_commission_floor".to_string())
-                },
+                "sanity_check": sanity_check,
+                "rejected_reason": setup_rejected_reason
+                    .map(|s| serde_json::Value::String(s.to_string()))
+                    .unwrap_or(serde_json::Value::Null),
             }))
             .bind(setup_state)
             .bind(setup_close_reason)
             .fetch_one(pool)
             .await?;
 
-            if !commission_viable {
+            if !viable {
                 // Surface the skip to ops so we don't need to poll the
-                // DB — the outbox handler will fan out to Telegram if
-                // configured.
+                // DB — the outbox handler fans out to Telegram.
+                let event_key = if !commission_viable {
+                    "allocator_v2_commission_skip"
+                } else {
+                    "allocator_v2_sanity_skip"
+                };
                 let _ = insert_notify_outbox(
                     pool,
-                    "allocator_v2_commission_skip",
+                    event_key,
                     &json!({
                         "setup_id": setup_id,
                         "symbol": symbol,
                         "timeframe": timeframe,
                         "mode": mode,
                         "commission_check": commission_check,
+                        "sanity_check": sanity_check,
                     }),
                 )
                 .await;
@@ -625,6 +731,26 @@ struct Cfg {
     /// system_config row is shared with the Setup drawer (/v2/fees).
     commission_taker_bps: f64,
     commission_safety_multiple: f64,
+    /// Setup v1.1 — after an SL hit on (symbol, direction), suppress
+    /// new arms for this many minutes. 0 disables the guard; default
+    /// 15 kills the XRPUSDT-style whipsaw loop without blocking a
+    /// legitimate regime flip from rearming at the reverse direction.
+    sl_hit_cooldown_minutes: i64,
+}
+
+// Floor/ceiling sanity-check bounds. For a long, the live price must
+// sit between SL (below) and something sane above entry (here: entry +
+// 2× the entry-SL distance, generous enough to allow mid-bar drift
+// without letting the allocator open wildly above its planned entry).
+// These are fn's, not constants, because they depend on entry+sl.
+fn sl_guard_floor(entry: f64, sl: f64) -> f64 {
+    let d = (entry - sl).abs();
+    entry + d * 2.0 // for longs, never open above this ceiling either
+}
+
+fn sl_guard_ceiling(entry: f64, sl: f64) -> f64 {
+    let d = (entry - sl).abs();
+    entry - d * 2.0 // for shorts, never open below this floor either
 }
 
 async fn load_enabled(pool: &PgPool) -> bool {
@@ -668,6 +794,7 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
         modes: vec!["dry".to_string()],
         commission_taker_bps: 5.0, // futures default; overridable
         commission_safety_multiple: 2.0,
+        sl_hit_cooldown_minutes: 15,
     };
     // Pull the current taker bps so the check matches what the Setup
     // drawer displays. Prefer binance_futures (live trading venue).
@@ -700,6 +827,19 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
         let val: Value = row.try_get("value").unwrap_or(Value::Null);
         if let Some(x) = val.get("value").and_then(|v| v.as_f64()) {
             cfg.commission_safety_multiple = x.max(1.0);
+        }
+    }
+    if let Ok(Some(row)) = sqlx::query(
+        "SELECT value FROM system_config
+           WHERE module = 'allocator_v2'
+             AND config_key = 'sl_hit_cooldown_minutes'",
+    )
+    .fetch_optional(pool)
+    .await
+    {
+        let val: Value = row.try_get("value").unwrap_or(Value::Null);
+        if let Some(v) = val.get("value").and_then(|v| v.as_i64()) {
+            cfg.sl_hit_cooldown_minutes = v.max(0);
         }
     }
     if let Ok(Some(row)) = sqlx::query(

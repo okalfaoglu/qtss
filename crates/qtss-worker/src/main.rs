@@ -387,7 +387,13 @@ async fn main() -> anyhow::Result<()> {
         // notify_outbox row per event. DISABLED by default — operator
         // opts in via `system_config.allocator_v2.enabled = true`.
         let alloc_pool = pool.clone();
-        tokio::spawn(allocator_v2_loop::allocator_v2_loop(alloc_pool));
+        // Setup v1.1 — allocator now reads side-aware live ticks from
+        // the PriceTickStore so entries reflect the real spread, not the
+        // 15-min-stale bar close that caused the XRPUSDT whipsaw loop.
+        tokio::spawn(allocator_v2_loop::allocator_v2_loop(
+            alloc_pool,
+            price_store.clone(),
+        ));
         // RADAR periodic aggregator — daily / weekly / monthly /
         // yearly performance snapshots per market × mode.
         let radar_pool = pool.clone();
