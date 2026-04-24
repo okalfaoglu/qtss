@@ -37,6 +37,7 @@ mod v2_chart;
 mod v2_elliott;
 mod v2_elliott_db;
 mod v2_confluence;
+mod v2_radar;
 mod v2_harmonic;
 mod v2_harmonic_db;
 mod v2_indicators;
@@ -70,6 +71,7 @@ pub use v2_chart::v2_chart_router;
 pub use v2_elliott::v2_elliott_router;
 pub use v2_elliott_db::v2_elliott_db_router;
 pub use v2_confluence::v2_confluence_router;
+pub use v2_radar::v2_radar_router;
 pub use v2_harmonic::v2_harmonic_router;
 pub use v2_harmonic_db::v2_harmonic_db_router;
 pub use v2_indicators::v2_indicators_router;
@@ -142,6 +144,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_harmonic_db_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_indicators_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_confluence_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_radar_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_pivots_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_setups_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_models_router().layer(from_fn(require_dashboard_roles)))

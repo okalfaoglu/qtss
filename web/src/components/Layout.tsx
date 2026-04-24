@@ -16,6 +16,7 @@ interface NavEntry {
 const NAV_ENTRIES: NavEntry[] = [
   { label: "Dashboard", to: "/v2/dashboard", enabled: true },
   { label: "Chart", to: "/v2/chart", enabled: true },
+  { label: "RADAR Reports", to: "/v2/reports", enabled: true },
   { label: "Detections", to: "/v2/detections", enabled: true },
   { label: "Regime", to: "/v2/regime", enabled: true },
   { label: "Config", to: "/v2/config", enabled: true },

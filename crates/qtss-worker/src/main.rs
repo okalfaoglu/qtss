@@ -38,6 +38,7 @@ mod ai_tactical_executor;
 mod worker_probe_http;
 mod engine_ingest;
 mod allocator_v2_loop;
+mod radar_aggregator_loop;
 mod confluence_loop;
 mod indicator_persistence_loop;
 mod outcome_tracker_loop;
@@ -387,6 +388,10 @@ async fn main() -> anyhow::Result<()> {
         // opts in via `system_config.allocator_v2.enabled = true`.
         let alloc_pool = pool.clone();
         tokio::spawn(allocator_v2_loop::allocator_v2_loop(alloc_pool));
+        // RADAR periodic aggregator — daily / weekly / monthly /
+        // yearly performance snapshots per market × mode.
+        let radar_pool = pool.clone();
+        tokio::spawn(radar_aggregator_loop::radar_aggregator_loop(radar_pool));
         let health_pool = pool.clone();
         tokio::spawn(data_health_report::data_health_report_loop(health_pool));
         binance_user_stream::spawn_binance_user_stream_tasks(&pool).await;
