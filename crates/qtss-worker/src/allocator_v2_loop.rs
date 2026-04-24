@@ -117,37 +117,83 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
         let regime: Option<String> = r.try_get("regime").ok();
 
         info!(%symbol, %timeframe, %verdict, %net_score, "allocator_v2: processing candidate");
-        // Per-mode dedup — an existing dry setup doesn't block a
-        // fresh live setup (operator flipped to dual-mode). A mode is
-        // skipped only when *that specific mode* already has an open
-        // setup for the series. Computed now so the loop can arm
-        // only the missing modes.
-        let mut modes_to_arm: Vec<String> = Vec::with_capacity(cfg.modes.len());
-        for mode in &cfg.modes {
-            let existing: i64 = sqlx::query_scalar(
-                r#"SELECT count(*) FROM qtss_setups
-                    WHERE exchange=$1 AND symbol=$2 AND timeframe=$3
-                      AND state IN ('armed','active')
-                      AND mode = $4"#,
-            )
-            .bind(&exchange)
-            .bind(&symbol)
-            .bind(&timeframe)
-            .bind(mode)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
-            if existing == 0 {
-                modes_to_arm.push(mode.clone());
-            }
-        }
-        if modes_to_arm.is_empty() {
-            info!(%symbol, "allocator_v2: skipping — all modes already armed");
-            continue;
-        }
 
         let direction = if verdict == "strong_bull" { "long" } else { "short" };
         let dir_sign: f64 = if direction == "long" { 1.0 } else { -1.0 };
+        let profile = tf_profile(&timeframe);
+        let new_bar_mins = tf_bar_minutes(&timeframe);
+
+        // Setup v1.1.3 — per-profile HTF dedup.
+        // For each mode: is there already an armed/active setup on the
+        // same (symbol, direction, profile)? If YES and its TF is >=
+        // the new TF, skip (HTF wins). If its TF is < new TF, retire
+        // the lower-TF setup (rejected_reason=upgraded_to_higher_tf_
+        // within_profile) so the higher-TF one can arm in its place.
+        // Different profiles (T vs D) never block each other — they
+        // track different time horizons.
+        let mut modes_to_arm: Vec<String> = Vec::with_capacity(cfg.modes.len());
+        let mut superseded: Vec<sqlx::types::Uuid> = Vec::new();
+        for mode in &cfg.modes {
+            let existing: Vec<(sqlx::types::Uuid, String)> = sqlx::query_as(
+                r#"SELECT id, timeframe FROM qtss_setups
+                    WHERE exchange = $1
+                      AND symbol = $2
+                      AND profile = $3
+                      AND direction = $4
+                      AND state IN ('armed','active')
+                      AND mode = $5"#,
+            )
+            .bind(&exchange)
+            .bind(&symbol)
+            .bind(profile)
+            .bind(direction)
+            .bind(mode)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+            let mut keep_existing = false;
+            for (eid, etf) in &existing {
+                let existing_mins = tf_bar_minutes(etf);
+                if existing_mins >= new_bar_mins {
+                    // An equal-or-higher TF setup already holds the
+                    // (symbol, direction, profile, mode) slot.
+                    keep_existing = true;
+                } else {
+                    // New TF is the HTF here — retire the lower one.
+                    superseded.push(*eid);
+                }
+            }
+            if !keep_existing {
+                modes_to_arm.push(mode.clone());
+            }
+        }
+        if !superseded.is_empty() {
+            for id in &superseded {
+                let _ = sqlx::query(
+                    r#"UPDATE qtss_setups
+                          SET state = 'rejected',
+                              close_reason = 'cancelled',
+                              closed_at = now(),
+                              updated_at = now(),
+                              raw_meta = raw_meta ||
+                                         jsonb_build_object('rejected_reason',
+                                                            'upgraded_to_higher_tf_within_profile')
+                        WHERE id = $1 AND state IN ('armed','active')"#,
+                )
+                .bind(id)
+                .execute(pool)
+                .await;
+            }
+            info!(
+                %symbol, %timeframe, %direction, %profile,
+                superseded_count = superseded.len(),
+                "allocator_v2: retired lower-TF setups in same profile"
+            );
+        }
+        if modes_to_arm.is_empty() {
+            info!(%symbol, %timeframe, %profile, "allocator_v2: skipping — higher/equal TF already armed");
+            continue;
+        }
 
         // Entry sourcing — Setup v1.1: prefer the live bookTicker price
         // (side-aware: short executes against best_bid, long against
@@ -199,29 +245,33 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
         let tp2 = entry + dir_sign * atr * cfg.atr_tp_mult[1];
         let tp3 = entry + dir_sign * atr * cfg.atr_tp_mult[2];
 
-        // MTF opposing-direction gate — refuse to arm a setup when the
-        // same symbol already has an armed/active setup pointing the
-        // other way. Stops the allocator from self-hedging on multi-TF
-        // conflicts (observed live: BTCUSDT 1d long + 15m short ran in
-        // parallel, eating fees + funding for zero net direction).
+        // MTF opposing-direction gate — scoped to the same profile.
+        // Setup v1.1.3: D-long (1d macro uptrend) + T-short (15m
+        // pullback short) is a legitimate cross-horizon pair — should
+        // not block each other. But T-long + T-short (or D-long +
+        // D-short) inside the same profile is self-hedging and gets
+        // gated.
         if cfg.mtf_opposing_gate_enabled {
             let opp: i64 = sqlx::query_scalar(
                 r#"SELECT count(*)
                      FROM qtss_setups
-                    WHERE exchange = $1 AND symbol = $2
+                    WHERE exchange = $1
+                      AND symbol = $2
+                      AND profile = $3
                       AND state IN ('armed','active')
-                      AND direction <> $3"#,
+                      AND direction <> $4"#,
             )
             .bind(&exchange)
             .bind(&symbol)
+            .bind(profile)
             .bind(direction)
             .fetch_one(pool)
             .await
             .unwrap_or(0);
             if opp > 0 {
                 info!(
-                    %symbol, direction,
-                    "allocator_v2: skip — opposing-direction setup already armed on same symbol"
+                    %symbol, direction, %profile,
+                    "allocator_v2: skip — opposing-direction setup already armed in same profile"
                 );
                 continue;
             }
@@ -428,6 +478,10 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
         // Approved — arm one setup per *missing* mode. Each mode is
         // a separate qtss_setups row; selector_loop picks both up,
         // execution_bridge dispatches based on mode.
+        // Setup v1.1.3 — profile is derived from the TF, not hard-coded.
+        // T (5m/15m/30m) = intraday trades; D (1h/4h/1d/1w) = swing.
+        let profile = tf_profile(&timeframe);
+
         for mode in &modes_to_arm {
             let setup_id = sqlx::query_scalar::<_, sqlx::types::Uuid>(
                 r#"INSERT INTO qtss_setups
@@ -435,7 +489,7 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
                        direction, entry_price, entry_sl, current_sl, target_ref,
                        risk_pct, mode, tp_ladder, raw_meta,
                        close_reason, closed_at)
-                   VALUES ('crypto', $1, $2, $3, 't', $12,
+                   VALUES ('crypto', $1, $2, $3, $14, $12,
                            $4, $5::real, $6::real, $6::real, $7::real,
                            $8, $9, $10, $11,
                            $13,
@@ -477,6 +531,7 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
             }))
             .bind(setup_state)
             .bind(setup_close_reason)
+            .bind(profile)
             .fetch_one(pool)
             .await?;
 
@@ -866,6 +921,48 @@ fn sl_guard_floor(entry: f64, sl: f64) -> f64 {
 fn sl_guard_ceiling(entry: f64, sl: f64) -> f64 {
     let d = (entry - sl).abs();
     entry - d * 2.0 // for shorts, never open below this floor either
+}
+
+// Setup v1.1.3 — TF → profile mapping.
+//
+// T (Trade, short-horizon): intraday entries tracking a few hours to
+//   maybe a day. Fast TP/SL cycle.
+// D (Daily, long-horizon): swing / macro setups tracking days to
+//   weeks. Wider SL, longer hold.
+//
+// One (symbol × direction × profile × mode) can have a single armed
+// setup at a time — within the same profile the highest TF wins. T and
+// D can both be armed at once because they represent different time
+// perspectives and can legitimately coexist (D: "weekly uptrend",
+// T: "hourly pullback short against the trend").
+fn tf_profile(tf: &str) -> &'static str {
+    match tf {
+        "5m" | "15m" | "30m" => "t",
+        "1h" | "4h" | "1d" | "3d" | "1w" => "d",
+        _ => "d",
+    }
+}
+
+/// Bar length in minutes — used to rank TFs within a profile so HTF
+/// wins the dedup race. Unknown TFs fall back to 60 (neutral).
+fn tf_bar_minutes(tf: &str) -> i64 {
+    match tf {
+        "1m" => 1,
+        "3m" => 3,
+        "5m" => 5,
+        "15m" => 15,
+        "30m" => 30,
+        "1h" => 60,
+        "2h" => 120,
+        "4h" => 240,
+        "6h" => 360,
+        "8h" => 480,
+        "12h" => 720,
+        "1d" => 1440,
+        "3d" => 4320,
+        "1w" => 10080,
+        _ => 60,
+    }
 }
 
 async fn load_f64(pool: &PgPool, module: &str, key: &str) -> Option<f64> {
