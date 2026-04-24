@@ -232,6 +232,33 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<usize> {
             continue;
         }
 
+        // Commission-viability pre-check — before we commit capital to
+        // an arm, verify the gross TP move comfortably outruns round-trip
+        // taker commission. If the first take-profit can't even cover
+        // `safety_multiple × round_trip_pct`, the setup is a negative-
+        // expectancy trade net of fees. Write it with state='rejected'
+        // anyway so operators see exactly why the pipeline refused —
+        // otherwise the decision is invisible.
+        let round_trip_pct = (cfg.commission_taker_bps * 2.0) / 100.0; // bps → pct, ×2 legs
+        let gross_tp1_pct = ((tp1 - entry).abs() / entry.max(1e-9)) * 100.0;
+        let commission_viable = gross_tp1_pct
+            >= cfg.commission_safety_multiple * round_trip_pct;
+        let commission_check = json!({
+            "gross_tp1_pct": gross_tp1_pct,
+            "round_trip_pct": round_trip_pct,
+            "taker_bps": cfg.commission_taker_bps,
+            "safety_multiple": cfg.commission_safety_multiple,
+            "threshold_pct": cfg.commission_safety_multiple * round_trip_pct,
+            "viable": commission_viable,
+        });
+
+        // If TP won't survive fees, we still want the row for audit but
+        // it never gets armed. Selector / execution_bridge skip
+        // non-armed states, so this is safe.
+        let setup_state = if commission_viable { "armed" } else { "rejected" };
+        let setup_close_reason: Option<&str> =
+            if commission_viable { None } else { Some("cancelled") };
+
         // Approved — arm one setup per *missing* mode. Each mode is
         // a separate qtss_setups row; selector_loop picks both up,
         // execution_bridge dispatches based on mode.
@@ -240,10 +267,13 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<usize> {
                 r#"INSERT INTO qtss_setups
                       (venue_class, exchange, symbol, timeframe, profile, state,
                        direction, entry_price, entry_sl, current_sl, target_ref,
-                       risk_pct, mode, tp_ladder, raw_meta)
-                   VALUES ('crypto', $1, $2, $3, 't', 'armed',
+                       risk_pct, mode, tp_ladder, raw_meta,
+                       close_reason, closed_at)
+                   VALUES ('crypto', $1, $2, $3, 't', $12,
                            $4, $5::real, $6::real, $6::real, $7::real,
-                           $8, $9, $10, $11)
+                           $8, $9, $10, $11,
+                           $13,
+                           CASE WHEN $12 = 'rejected' THEN now() ELSE NULL END)
                    RETURNING id"#,
             )
             .bind(&exchange)
@@ -270,9 +300,36 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<usize> {
                 "atr": atr,
                 "gate_scores": gate_scores,
                 "mode": mode,
+                "commission_check": commission_check,
+                "rejected_reason": if commission_viable {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::Value::String("gross_tp_below_commission_floor".to_string())
+                },
             }))
+            .bind(setup_state)
+            .bind(setup_close_reason)
             .fetch_one(pool)
             .await?;
+
+            if !commission_viable {
+                // Surface the skip to ops so we don't need to poll the
+                // DB — the outbox handler will fan out to Telegram if
+                // configured.
+                let _ = insert_notify_outbox(
+                    pool,
+                    "allocator_v2_commission_skip",
+                    &json!({
+                        "setup_id": setup_id,
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "mode": mode,
+                        "commission_check": commission_check,
+                    }),
+                )
+                .await;
+                continue; // skip the "armed" outbox below for this mode
+            }
 
             let _ = insert_notify_outbox(
                 pool,
@@ -411,6 +468,14 @@ struct Cfg {
     ///                     = true` (execution_bridge gate) AND valid
     ///                     `exchange_accounts` rows.
     modes: Vec<String>,
+    /// Round-trip commission viability gate — a setup is rejected when
+    /// its first take-profit does not reach `safety_multiple × round-
+    /// trip taker commission` above entry. Default 2.0 (TP must be at
+    /// least 2× round-trip fees). Reading the bps directly here rather
+    /// than via qtss-fees keeps the allocator self-contained; the
+    /// system_config row is shared with the Setup drawer (/v2/fees).
+    commission_taker_bps: f64,
+    commission_safety_multiple: f64,
 }
 
 async fn load_enabled(pool: &PgPool) -> bool {
@@ -452,7 +517,42 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
         default_org_id: sqlx::types::Uuid::nil(),
         default_user_id: sqlx::types::Uuid::nil(),
         modes: vec!["dry".to_string()],
+        commission_taker_bps: 5.0, // futures default; overridable
+        commission_safety_multiple: 2.0,
     };
+    // Pull the current taker bps so the check matches what the Setup
+    // drawer displays. Prefer binance_futures (live trading venue).
+    if let Ok(Some(row)) = sqlx::query(
+        "SELECT value FROM system_config
+           WHERE module = 'setup'
+             AND config_key = 'commission.binance_futures.taker_bps'",
+    )
+    .fetch_optional(pool)
+    .await
+    {
+        let val: Value = row.try_get("value").unwrap_or(Value::Null);
+        // Seeds store bare numbers (5.0) and {"value": 5} — accept both.
+        let v = match &val {
+            Value::Number(n) => n.as_f64(),
+            other => other.get("value").and_then(|x| x.as_f64()),
+        };
+        if let Some(bps) = v {
+            cfg.commission_taker_bps = bps.max(0.0);
+        }
+    }
+    if let Ok(Some(row)) = sqlx::query(
+        "SELECT value FROM system_config
+           WHERE module = 'allocator_v2'
+             AND config_key = 'commission.safety_multiple'",
+    )
+    .fetch_optional(pool)
+    .await
+    {
+        let val: Value = row.try_get("value").unwrap_or(Value::Null);
+        if let Some(x) = val.get("value").and_then(|v| v.as_f64()) {
+            cfg.commission_safety_multiple = x.max(1.0);
+        }
+    }
     if let Ok(Some(row)) = sqlx::query(
         "SELECT value FROM system_config WHERE module = 'allocator_v2' AND config_key = 'lookback_minutes'",
     )
