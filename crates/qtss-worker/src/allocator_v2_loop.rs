@@ -493,6 +493,55 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
             }
         }
 
+        // v1.1.7 — HTF context gate. ChatGPT flagged this as the single
+        // highest-ROI addition: a 15m long against a 1d strong_bear is
+        // fighting the trend. If any HTF in the lookup set is strong_*
+        // in the OPPOSITE direction, skip. Absence of an HTF strong_*
+        // snapshot is treated as "no disagreement" (neutral HTF is not
+        // a veto).
+        if cfg.htf_context_gate_enabled {
+            let htfs = htf_lookup_set(&timeframe);
+            if !htfs.is_empty() {
+                let opposite_verdict = if direction == "long" {
+                    "strong_bear"
+                } else {
+                    "strong_bull"
+                };
+                let lookback_mins =
+                    tf_bar_minutes(&timeframe).max(60) * 4; // at least 4 bars of the candidate TF
+                let conflicting_htf: Option<String> = sqlx::query_scalar(
+                    r#"SELECT timeframe FROM confluence_snapshots
+                        WHERE exchange = $1
+                          AND segment = $2
+                          AND symbol = $3
+                          AND timeframe = ANY($4)
+                          AND verdict = $5
+                          AND computed_at >= now() - make_interval(mins => $6::int)
+                        ORDER BY computed_at DESC
+                        LIMIT 1"#,
+                )
+                .bind(&exchange)
+                .bind(&segment)
+                .bind(&symbol)
+                .bind(&htfs)
+                .bind(opposite_verdict)
+                .bind(lookback_mins as i32)
+                .fetch_optional(pool)
+                .await
+                .ok()
+                .flatten();
+                if let Some(htf) = conflicting_htf {
+                    info!(
+                        %symbol, direction, candidate_tf = %timeframe,
+                        conflicting_htf = %htf,
+                        opposite_verdict,
+                        "allocator_v2: skip — HTF contradicts candidate direction"
+                    );
+                    continue;
+                }
+            }
+        }
+
         // Count today's rejections for this symbol (for gate 5).
         let rejected_today: i64 = sqlx::query_scalar(
             r#"SELECT count(*) FROM ai_approval_requests
@@ -1200,6 +1249,13 @@ struct Cfg {
     ev_gate_enabled: bool,
     ev_min_sample: i64,
     ev_min_value_r: f64,
+
+    /// v1.1.7 — HTF context gate. A lower-TF setup (e.g. 15m long)
+    /// must not contradict its higher-TF confluence verdict (e.g. 1d
+    /// strong_bear). The gate queries the opposite-direction strong_*
+    /// snapshot on the HTF lookup set for the candidate's TF and
+    /// rejects the candidate when an HTF disagrees.
+    htf_context_gate_enabled: bool,
 }
 
 // Floor/ceiling sanity-check bounds. For a long, the live price must
@@ -1241,6 +1297,22 @@ fn symbol_cluster(symbol: &str) -> Option<&'static str> {
 
 /// Return every symbol (with USDT suffix) that sits in the given
 /// cluster. Used by the cluster-cap gate's count query via ANY($2).
+// v1.1.7 — HTFs to consult for the context gate when the candidate
+// arrives on the given TF. Three or more HTFs return the candidate
+// is usually fine on intraday; higher TFs have progressively fewer
+// confirming sources (macro is lonely at the top).
+fn htf_lookup_set(tf: &str) -> Vec<&'static str> {
+    match tf {
+        "1m" | "3m" | "5m" => vec!["15m", "30m", "1h"],
+        "15m" => vec!["1h", "4h"],
+        "30m" => vec!["1h", "4h"],
+        "1h" => vec!["4h", "1d"],
+        "4h" => vec!["1d", "1w"],
+        "1d" => vec!["1w"],
+        _ => vec![],
+    }
+}
+
 fn cluster_symbols(cluster: &str) -> Vec<String> {
     let bases: &[&str] = match cluster {
         "majors" => &["BTC", "ETH"],
@@ -1367,6 +1439,7 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
         ev_gate_enabled: true,
         ev_min_sample: 10,
         ev_min_value_r: 0.0,
+        htf_context_gate_enabled: true,
     };
     // Pull the current taker bps so the check matches what the Setup
     // drawer displays. Prefer binance_futures (live trading venue).
@@ -1519,6 +1592,17 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
     }
     if let Some(v) = load_f64(pool, "allocator_v2", "ev_min_value_r").await {
         cfg.ev_min_value_r = v;
+    }
+    if let Ok(Some(row)) = sqlx::query(
+        "SELECT value FROM system_config WHERE module='allocator_v2' AND config_key='htf_context_gate_enabled'",
+    )
+    .fetch_optional(pool)
+    .await
+    {
+        let val: Value = row.try_get("value").unwrap_or(Value::Null);
+        if let Some(b) = val.get("enabled").and_then(|v| v.as_bool()) {
+            cfg.htf_context_gate_enabled = b;
+        }
     }
     // Default org_id from dry-execution config.
     if let Ok(Some(row)) = sqlx::query(

@@ -398,6 +398,33 @@ async fn build_live_position_for_mode(
     let liq_price = liquidation_price(&segment, side, row.entry_price, leverage, mmr);
 
     let qty = size_from_risk(pool, mode, row).await;
+    // v1.1.7 — slippage + spread simulation on dry paper fills so the
+    // paper-vs-live gap ChatGPT and Gemini both flagged stops being a
+    // free-lunch fantasy. The adjustment nudges entry away from the
+    // operator's advantage by a configurable number of basis points
+    // (default 2 bps ≈ 0.02%, similar to a realistic taker + half-
+    // spread on Binance USDT perps). Live mode skips the nudge — the
+    // real exchange already provides its own slippage.
+    let slip_bps = if mode == "dry" {
+        dry_slip_bps_from_config(pool).await
+    } else {
+        0.0
+    };
+    let mut entry_adj = row.entry_price;
+    if slip_bps > 0.0 {
+        use rust_decimal::Decimal;
+        // Long buys at a worse (higher) price; short sells at a worse
+        // (lower) price. Scale = bps / 10_000.
+        let factor = slip_bps / 10_000.0;
+        let factor_dec =
+            Decimal::try_from(factor).unwrap_or_else(|_| Decimal::new(0, 0));
+        match side {
+            "BUY" => entry_adj = row.entry_price + (row.entry_price * factor_dec),
+            "SELL" => entry_adj = row.entry_price - (row.entry_price * factor_dec),
+            _ => {}
+        }
+    }
+
     Some(InsertLivePosition {
         org_id,
         user_id,
@@ -408,22 +435,46 @@ async fn build_live_position_for_mode(
         symbol: row.symbol.clone(),
         side,
         leverage,
-        entry_avg: row.entry_price,
+        entry_avg: entry_adj,
         qty_filled: qty,
         qty_remaining: qty,
         current_sl: Some(row.sl_price),
         tp_ladder: row.tp_ladder.clone(),
         liquidation_price: liq_price,
         maint_margin_ratio: Some(mmr),
-        last_mark: Some(row.entry_price),
+        last_mark: Some(entry_adj),
         metadata: serde_json::json!({
             "selected_candidate_id": row.id,
             "setup_id": row.setup_id.to_string(),
             "timeframe": row.timeframe,
             "risk_pct": row.risk_pct.to_string(),
             "leverage": leverage,
+            "slip_bps_applied": slip_bps,
+            "entry_setup": row.entry_price.to_string(),
         }),
     })
+}
+
+async fn dry_slip_bps_from_config(pool: &PgPool) -> f64 {
+    use sqlx::Row;
+    let row = sqlx::query(
+        "SELECT value FROM system_config
+           WHERE module = 'execution'
+             AND config_key = 'dry.slippage_bps'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    let Some(row) = row else { return 2.0; };
+    let val: serde_json::Value = row.try_get("value").unwrap_or(serde_json::Value::Null);
+    match &val {
+        serde_json::Value::Number(n) => n.as_f64().unwrap_or(2.0),
+        other => other
+            .get("value")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(2.0),
+    }
 }
 
 /// Faz 9.8.18 — risk-per-trade sizing.
