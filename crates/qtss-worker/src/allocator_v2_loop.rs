@@ -513,12 +513,13 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
                       (venue_class, exchange, symbol, timeframe, profile, state,
                        direction, entry_price, entry_sl, current_sl, target_ref,
                        risk_pct, mode, tp_ladder, raw_meta,
-                       close_reason, closed_at)
+                       close_reason, closed_at, ai_score)
                    VALUES ('crypto', $1, $2, $3, $14, $12,
                            $4, $5::real, $6::real, $6::real, $7::real,
                            $8, $9, $10, $11,
                            $13,
-                           CASE WHEN $12 = 'rejected' THEN now() ELSE NULL END)
+                           CASE WHEN $12 = 'rejected' THEN now() ELSE NULL END,
+                           $15::real)
                    RETURNING id"#,
             )
             .bind(&exchange)
@@ -557,6 +558,7 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
             .bind(setup_state)
             .bind(setup_close_reason)
             .bind(profile)
+            .bind(confidence as f32)
             .fetch_one(pool)
             .await?;
 
