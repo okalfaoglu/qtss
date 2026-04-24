@@ -12,9 +12,47 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../lib/api";
 
-type Period = "daily" | "weekly" | "monthly" | "yearly";
+type Period = "live" | "daily" | "weekly" | "monthly" | "yearly";
 type Market = "coin";
 type Mode = "live" | "dry" | "backtest";
+
+// /v2/radar/live/{market} response — open-trade snapshot for the
+// "Anlık" tab. Distinct from closed-trade aggregation (RadarReport)
+// because the semantics are different: one is "right now", the other
+// "over a period". Rendering chooses the shape from `period`.
+interface LiveTrade {
+  setup_id: string | null;
+  symbol: string;
+  timeframe: string;
+  direction: string;
+  mode: string;
+  entry_price: number;
+  mark_price: number | null;
+  qty: number;
+  notional_usd: number;
+  sl: number | null;
+  tp: number | null;
+  u_pnl_pct: number | null;
+  u_pnl_usd: number | null;
+  opened_at: string;
+}
+
+interface LiveResponse {
+  market: string;
+  mode: string;
+  computed_at: string;
+  open_count: number;
+  long_count: number;
+  short_count: number;
+  open_exposure_usd: number;
+  avg_u_pnl_pct: number | null;
+  sum_u_pnl_usd: number;
+  starting_capital_usd: number;
+  current_equity_usd: number;
+  cash_position_pct: number;
+  distinct_symbols: number;
+  trades: LiveTrade[];
+}
 
 interface RadarTrade {
   symbol: string;
@@ -62,6 +100,9 @@ interface RadarResponse {
 }
 
 const PERIODS: Array<{ key: Period; label: string }> = [
+  // "Anlık" — open-trade snapshot (live_positions). Different data
+  // shape than the aggregated periods, so its own fetch + render path.
+  { key: "live", label: "Anlık" },
   { key: "daily", label: "Günlük" },
   { key: "weekly", label: "Haftalık" },
   { key: "monthly", label: "Aylık" },
@@ -172,11 +213,25 @@ export default function RadarReports() {
   const [market, setMarket] = useState<Market>("coin");
   const [mode, setMode] = useState<Mode>("dry");
 
+  const isLive = period === "live";
+
+  // Closed-trade aggregate (period = daily/weekly/monthly/yearly).
+  // Skipped when the Anlık tab is active to avoid an extra round trip.
   const q = useQuery<RadarResponse>({
     queryKey: ["radar", market, period, mode],
     queryFn: () =>
       apiFetch(`/v2/radar/${market}/${period}?mode=${mode}&history=true`),
     refetchInterval: 60_000,
+    enabled: !isLive,
+  });
+
+  // Open-trade snapshot (period = live). 10-second refetch so u-PnL
+  // tracks the bookTicker mark without hammering the backend.
+  const qLive = useQuery<LiveResponse>({
+    queryKey: ["radar-live", market, mode],
+    queryFn: () => apiFetch(`/v2/radar/live/${market}?mode=${mode}`),
+    refetchInterval: 10_000,
+    enabled: isLive,
   });
 
   const latest = q.data?.latest ?? null;
@@ -260,14 +315,26 @@ export default function RadarReports() {
         ))}
       </div>
 
-      {q.isLoading && <div className="text-zinc-500">yükleniyor…</div>}
-      {q.isError && (
+      {!isLive && q.isLoading && <div className="text-zinc-500">yükleniyor…</div>}
+      {!isLive && q.isError && (
         <div className="text-rose-400">
           hata: {(q.error as Error)?.message ?? "rapor çekilemedi"}
         </div>
       )}
+      {isLive && qLive.isLoading && (
+        <div className="text-zinc-500">yükleniyor…</div>
+      )}
+      {isLive && qLive.isError && (
+        <div className="text-rose-400">
+          hata: {(qLive.error as Error)?.message ?? "anlık veri çekilemedi"}
+        </div>
+      )}
 
-      {latest && (
+      {isLive && qLive.data && (
+        <LivePanel data={qLive.data} />
+      )}
+
+      {!isLive && latest && (
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
           {/* KAPANIŞLAR */}
           <div className="col-span-2 rounded border border-zinc-800 bg-zinc-950/40">
@@ -589,4 +656,341 @@ function StatCell({
       </div>
     </div>
   );
+}
+
+// ── Anlık (Live) tab ────────────────────────────────────────────────
+//
+// Renders /v2/radar/live/{market} — the open-trade snapshot. Different
+// shape from the aggregated periods so the component is intentionally
+// separate rather than trying to shoehorn RadarReport into it.
+
+function LivePanel({ data }: { data: LiveResponse }) {
+  const rows = data.trades;
+  const symSet = new Set(rows.map((r) => r.symbol));
+  const spread =
+    symSet.size === 0
+      ? "—"
+      : symSet.size === 1
+        ? "YOĞUN"
+        : symSet.size <= 3
+          ? "ORTA"
+          : "DENGELİ";
+  const corrRisk =
+    symSet.size === 0
+      ? "—"
+      : symSet.size <= 1
+        ? "YÜKSEK"
+        : symSet.size <= 3
+          ? "ORTA"
+          : "DÜŞÜK";
+  const avgAllocation =
+    data.open_count > 0 ? data.open_exposure_usd / data.open_count : 0;
+  const capitalUse =
+    data.starting_capital_usd > 0
+      ? (data.open_exposure_usd / data.starting_capital_usd) * 100
+      : 0;
+  const sumUpnlPctRough =
+    data.starting_capital_usd > 0
+      ? (data.sum_u_pnl_usd / data.starting_capital_usd) * 100
+      : 0;
+  // Risk modu cash-aware: >=90 risk_off, 40-90 neutral, <40 risk_on.
+  const riskMode =
+    data.cash_position_pct >= 90
+      ? "risk_off"
+      : data.cash_position_pct >= 40
+        ? "neutral"
+        : "risk_on";
+
+  return (
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+      {/* AÇIK İŞLEMLER — replaces KAPANAN ANALİZLER */}
+      <div className="col-span-2 rounded border border-zinc-800 bg-zinc-950/40">
+        <div className="border-b border-zinc-800 px-3 py-2 text-[10px] uppercase tracking-wider text-amber-300">
+          ■ Açık İşlemler
+        </div>
+        {rows.length === 0 ? (
+          <div className="p-4 text-xs text-zinc-500">
+            Şu an açık pozisyon yok.
+          </div>
+        ) : (
+          <table className="w-full text-xs">
+            <thead className="border-b border-zinc-800 text-zinc-500">
+              <tr>
+                <th className="px-3 py-2 text-left">Sembol</th>
+                <th className="px-3 py-2 text-left">TF</th>
+                <th className="px-3 py-2 text-left">Yön</th>
+                <th className="px-3 py-2 text-right">Bağlanan ($)</th>
+                <th className="px-3 py-2 text-right">u-PnL ($)</th>
+                <th className="px-3 py-2 text-right">Getiri (%)</th>
+                <th className="px-3 py-2 text-center">Durum</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((t, i) => {
+                const isLong = t.direction === "long" || t.direction === "buy";
+                const up = (t.u_pnl_pct ?? 0) > 0;
+                const down = (t.u_pnl_pct ?? 0) < 0;
+                return (
+                  <tr
+                    key={t.setup_id ?? `${t.symbol}-${i}`}
+                    className="border-b border-zinc-900 hover:bg-zinc-900/60"
+                  >
+                    <td className="px-3 py-2 font-semibold">
+                      {isLong ? "●" : "◆"} {t.symbol}
+                      <span className="ml-2 text-[10px] text-zinc-500">
+                        {isLong ? "LONG" : "SHORT"}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-zinc-400">{t.timeframe}</td>
+                    <td className="px-3 py-2 text-zinc-500">
+                      {formatAge(t.opened_at)}
+                    </td>
+                    <td className="px-3 py-2 text-right text-zinc-300">
+                      {fmtUsd(t.notional_usd)}
+                    </td>
+                    <td
+                      className={`px-3 py-2 text-right ${signClass(t.u_pnl_usd)}`}
+                    >
+                      {t.u_pnl_usd != null
+                        ? `${t.u_pnl_usd >= 0 ? "+" : ""}${fmtUsd(t.u_pnl_usd)}`
+                        : "—"}
+                    </td>
+                    <td
+                      className={`px-3 py-2 text-right ${signClass(t.u_pnl_pct)}`}
+                    >
+                      {fmtPct(t.u_pnl_pct)}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <span
+                        className={`inline-block h-2 w-2 rounded-full ${
+                          up
+                            ? "bg-emerald-500"
+                            : down
+                              ? "bg-rose-500"
+                              : "bg-zinc-500"
+                        }`}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* SERMAYE TAKİBİ (anlık odaklı) */}
+      <div className="rounded border border-zinc-800 bg-zinc-950/40">
+        <div className="border-b border-zinc-800 px-3 py-2 text-[10px] uppercase tracking-wider text-amber-300">
+          ■ Sermaye Takibi
+        </div>
+        <div className="space-y-2 p-3 text-xs">
+          <RowKV
+            k="Sermaye Başlangıcı"
+            v={`${fmtUsd(data.starting_capital_usd)} $`}
+          />
+          <RowKV
+            k="Toplam u-PnL"
+            v={`${data.sum_u_pnl_usd >= 0 ? "+" : ""}${fmtUsd(data.sum_u_pnl_usd)} $`}
+            cls={signClass(data.sum_u_pnl_usd)}
+          />
+          <RowKV
+            k="Güncel Sermaye"
+            v={`${fmtUsd(data.current_equity_usd)} $`}
+            cls="text-emerald-300"
+          />
+          <RowKV
+            k="Bileşik Getiri (u)"
+            v={fmtPct(sumUpnlPctRough)}
+            cls={signClass(sumUpnlPctRough)}
+          />
+          <div className="my-2 border-t border-zinc-800" />
+          <RowKV
+            k="Açık Pozisyon (exposure)"
+            v={`${fmtUsd(data.open_exposure_usd)} $`}
+            cls={data.open_exposure_usd > 0 ? "text-amber-300" : undefined}
+          />
+          <RowKV
+            k="Ort. Allocation"
+            v={`${fmtUsd(avgAllocation)} $`}
+          />
+          <RowKV
+            k="Toplam Açık"
+            v={`${data.open_count} işlem (${data.long_count} long / ${data.short_count} short)`}
+          />
+          <RowKV k="Nakit Pozisyon" v={fmtPct(data.cash_position_pct)} />
+        </div>
+      </div>
+
+      {/* Summary strip — mirrors KAPANIŞ/KARLI/BAŞARI/… with open-trade semantics */}
+      <div className="col-span-3 grid grid-cols-7 gap-2">
+        <StatCell label="Açık" value={`${data.open_count}`} />
+        <StatCell
+          label="Long / Short"
+          value={`${data.long_count}/${data.short_count}`}
+        />
+        <StatCell
+          label="Kazananda"
+          value={`${rows.filter((r) => (r.u_pnl_pct ?? 0) > 0).length}/${data.open_count}`}
+          cls="text-amber-400"
+        />
+        <StatCell
+          label="Toplam Bağlanan"
+          value={`${fmtUsd(data.open_exposure_usd)} $`}
+        />
+        <StatCell
+          label="Toplam u-PnL"
+          value={`${fmtUsd(data.sum_u_pnl_usd)} $`}
+          cls={signClass(data.sum_u_pnl_usd)}
+        />
+        <StatCell
+          label="Ort. u-PnL %"
+          value={fmtPct(data.avg_u_pnl_pct)}
+          cls={signClass(data.avg_u_pnl_pct)}
+        />
+        <StatCell
+          label="İşlem Başına Ort. Bağlanan"
+          value={`${fmtUsd(avgAllocation)} $`}
+        />
+      </div>
+
+      {/* PERFORMANS + RİSK + RİSK MODU — same 3-col layout */}
+      <div className="rounded border border-zinc-800 bg-zinc-950/40">
+        <div className="border-b border-zinc-800 px-3 py-2 text-[10px] uppercase tracking-wider text-amber-300">
+          ■ Performans Göstergeleri (Anlık)
+        </div>
+        <div className="space-y-2 p-3 text-xs">
+          <RowKV
+            k="Kazanan Oran"
+            v={fmtPct(
+              data.open_count > 0
+                ? (rows.filter((r) => (r.u_pnl_pct ?? 0) > 0).length /
+                    data.open_count) *
+                    100
+                : null,
+              1,
+            )}
+          />
+          <RowKV k="Avg Allocation" v={`${fmtUsd(avgAllocation)} $`} />
+          <RowKV k="Sermaye Kullanımı" v={fmtPct(capitalUse, 2)} />
+          <RowKV
+            k="Ort. u-PnL"
+            v={fmtPct(data.avg_u_pnl_pct)}
+            cls={signClass(data.avg_u_pnl_pct)}
+          />
+          <RowKV
+            k="Bileşik Getiri (u)"
+            v={fmtPct(sumUpnlPctRough)}
+            cls={signClass(sumUpnlPctRough)}
+          />
+          <RowKV
+            k="Ort. Açık Süre"
+            v={
+              rows.length > 0
+                ? formatAge(
+                    new Date(
+                      rows.reduce(
+                        (acc, r) => acc + new Date(r.opened_at).getTime(),
+                        0,
+                      ) / rows.length,
+                    ).toISOString(),
+                  )
+                : "—"
+            }
+          />
+        </div>
+      </div>
+
+      <div className="rounded border border-zinc-800 bg-zinc-950/40">
+        <div className="border-b border-zinc-800 px-3 py-2 text-[10px] uppercase tracking-wider text-amber-300">
+          ■ Risk Metrikleri (Anlık)
+        </div>
+        <div className="space-y-2 p-3 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-zinc-500">Risk Modu</span>
+            <RiskModeBadge mode={riskMode} />
+          </div>
+          <RowKV
+            k="Volatilite Seviyesi"
+            v={
+              Math.abs(data.avg_u_pnl_pct ?? 0) > 2
+                ? "YÜKSEK"
+                : Math.abs(data.avg_u_pnl_pct ?? 0) > 0.5
+                  ? "ORTA"
+                  : "DÜŞÜK"
+            }
+          />
+          <RowKV k="Portföy Dağılımı" v={spread} />
+          <RowKV k="Sembol Sayısı" v={`${data.distinct_symbols}`} />
+          <RowKV k="Korelasyon Risk" v={corrRisk} />
+          <RowKV k="Nakit Pozisyon" v={fmtPct(data.cash_position_pct)} />
+        </div>
+      </div>
+
+      <div className="rounded border border-zinc-800 bg-zinc-950/40 p-3">
+        <div className="mb-2 text-[10px] uppercase tracking-wider text-amber-300">
+          ■ Risk Modu
+        </div>
+        <div className="flex flex-col items-center gap-3 py-4">
+          <RiskModeBadge mode={riskMode} />
+          <div className="flex gap-2">
+            <span
+              className={`rounded px-2 py-0.5 text-[10px] ${
+                riskMode === "risk_off"
+                  ? "bg-rose-500/30 text-rose-200"
+                  : "bg-zinc-800 text-zinc-500"
+              }`}
+            >
+              RISK-OFF
+            </span>
+            <span
+              className={`rounded px-2 py-0.5 text-[10px] ${
+                riskMode === "neutral"
+                  ? "bg-amber-500/30 text-amber-200"
+                  : "bg-zinc-800 text-zinc-500"
+              }`}
+            >
+              NÖTR
+            </span>
+            <span
+              className={`rounded px-2 py-0.5 text-[10px] ${
+                riskMode === "risk_on"
+                  ? "bg-emerald-500/30 text-emerald-200"
+                  : "bg-zinc-800 text-zinc-500"
+              }`}
+            >
+              RISK-ON
+            </span>
+          </div>
+          <div className="mt-3 text-xs uppercase tracking-widest text-zinc-500">
+            Nakit Pozisyon
+          </div>
+          <div
+            className={`text-2xl font-bold ${
+              data.cash_position_pct >= 90
+                ? "text-emerald-300"
+                : data.cash_position_pct >= 40
+                  ? "text-amber-300"
+                  : "text-rose-300"
+            }`}
+          >
+            {fmtPct(data.cash_position_pct, 2)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function formatAge(opened: string): string {
+  const ms = Date.now() - new Date(opened).getTime();
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs} sn`;
+  if (secs < 3600) return `${Math.floor(secs / 60)} dk`;
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  if (h < 24) return `${h} sa ${m} dk`;
+  const d = Math.floor(h / 24);
+  const hh = h % 24;
+  return `${d} g ${hh} sa`;
 }
