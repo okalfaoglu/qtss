@@ -81,9 +81,14 @@ fn combined_url(pairs: &[String]) -> String {
 }
 
 async fn active_futures_pairs(pool: &PgPool) -> Vec<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    // Setup v1.1.2 — pair list is the UNION of (a) open v2 setups and
+    // (b) the enabled engine_symbols catalogue. Subscribing off the
+    // catalogue keeps the bookTicker stream warm even when no setup is
+    // armed yet, which was the cold-start deadlock: allocator waited
+    // for ticks, ticks waited for setups, nothing opened.
     match list_open_v2_setups(pool, None, None).await {
         Ok(rows) => {
-            let mut seen: HashSet<String> = HashSet::new();
             for r in rows {
                 // Accept both "futures" and the legacy/generic "crypto"
                 // venue_class — v2 pipeline currently writes "crypto"
@@ -95,15 +100,30 @@ async fn active_futures_pairs(pool: &PgPool) -> Vec<String> {
                     seen.insert(r.symbol.to_ascii_lowercase());
                 }
             }
-            let mut out: Vec<String> = seen.into_iter().collect();
-            out.sort();
-            out
         }
-        Err(e) => {
-            warn!(%e, "price_tick_ws: list_open_v2_setups");
-            Vec::new()
+        Err(e) => warn!(%e, "price_tick_ws: list_open_v2_setups"),
+    }
+    if let Ok(rows) = sqlx::query(
+        r#"SELECT DISTINCT symbol
+             FROM engine_symbols
+            WHERE enabled = true
+              AND lower(exchange) = 'binance'
+              AND lower(segment) IN ('futures','crypto_futures')"#,
+    )
+    .fetch_all(pool)
+    .await
+    {
+        use sqlx::Row;
+        for r in rows {
+            let s: String = r.try_get("symbol").unwrap_or_default();
+            if !s.is_empty() {
+                seen.insert(s.to_ascii_lowercase());
+            }
         }
     }
+    let mut out: Vec<String> = seen.into_iter().collect();
+    out.sort();
+    out
 }
 
 /// Main loop — reconnects on close / symbol-set change / config

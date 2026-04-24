@@ -39,6 +39,25 @@ pub async fn allocator_v2_loop(pool: PgPool, price_store: Arc<PriceTickStore>) {
             continue;
         }
         let secs = load_tick_secs(&pool).await;
+        // Setup v1.1.2 — warm-up gate. On a fresh start (or after a DB
+        // nuke) the bookTicker stream hasn't finished its first connect,
+        // so `price_store.len()` reads 0 and the allocator would fall
+        // through to `bar_close_no_stream` for every candidate. Those
+        // bar-based entries are the very bug we just fixed, so skip
+        // the tick entirely until at least `warmup_min_subscribers`
+        // symbols have live ticks. Throttled log so operators can tell
+        // warm-up from a long outage.
+        let cfg_peek = load_cfg(&pool).await;
+        let have = price_store.len();
+        if have < cfg_peek.warmup_min_subscribers {
+            info!(
+                tick_store_size = have,
+                need = cfg_peek.warmup_min_subscribers,
+                "allocator_v2: waiting for bookTicker warm-up"
+            );
+            tokio::time::sleep(Duration::from_secs(secs.min(15))).await;
+            continue;
+        }
         match run_tick(&pool, &price_store).await {
             Ok(n) if n > 0 => info!(armed = n, "allocator_v2 tick ok"),
             Ok(_) => debug!("allocator_v2 tick: no new setups"),
@@ -374,7 +393,24 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
             "source": entry_source,
         });
 
-        let viable = commission_viable && sanity_viable;
+        // Setup v1.1.2 — minimum SL distance. 15m bars can produce SL
+        // distances as tight as 0.3% of entry; a single 1-candle wick
+        // blows through them before the bar even closes. We require
+        // `sl_distance_pct >= sl_min_distance_pct` (default 0.4% — about
+        // 4× round-trip commission) so the allocator refuses to open
+        // "noise-level" trades. Not a bar/TF-specific guard because
+        // the same logic applies everywhere: if your SL is inside
+        // typical intra-bar noise, you're going to get stopped every
+        // bar by variance alone.
+        let sl_distance_pct = ((entry - sl).abs() / entry.max(1e-9)) * 100.0;
+        let sl_distance_viable = sl_distance_pct >= cfg.sl_min_distance_pct;
+        let sl_distance_check = json!({
+            "sl_distance_pct": sl_distance_pct,
+            "min_required_pct": cfg.sl_min_distance_pct,
+            "viable": sl_distance_viable,
+        });
+
+        let viable = commission_viable && sanity_viable && sl_distance_viable;
 
         // If any gate failed, write the row for audit but never arm it.
         let setup_state = if viable { "armed" } else { "rejected" };
@@ -383,8 +419,10 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
             None
         } else if !commission_viable {
             Some("gross_tp_below_commission_floor")
-        } else {
+        } else if !sanity_viable {
             Some("live_price_crossed_sl_at_open")
+        } else {
+            Some("sl_too_tight")
         };
 
         // Approved — arm one setup per *missing* mode. Each mode is
@@ -432,6 +470,7 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
                 "bar_close": bar_close,
                 "commission_check": commission_check,
                 "sanity_check": sanity_check,
+                "sl_distance_check": sl_distance_check,
                 "rejected_reason": setup_rejected_reason
                     .map(|s| serde_json::Value::String(s.to_string()))
                     .unwrap_or(serde_json::Value::Null),
@@ -446,8 +485,10 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
                 // DB — the outbox handler fans out to Telegram.
                 let event_key = if !commission_viable {
                     "allocator_v2_commission_skip"
-                } else {
+                } else if !sanity_viable {
                     "allocator_v2_sanity_skip"
+                } else {
+                    "allocator_v2_sl_too_tight"
                 };
                 let _ = insert_notify_outbox(
                     pool,
@@ -459,6 +500,7 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
                         "mode": mode,
                         "commission_check": commission_check,
                         "sanity_check": sanity_check,
+                        "sl_distance_check": sl_distance_check,
                     }),
                 )
                 .await;
@@ -769,6 +811,18 @@ struct Cfg {
     /// opposite direction. Stops the pipeline from self-hedging when
     /// 15m says strong_bear and 1d says strong_bull simultaneously.
     mtf_opposing_gate_enabled: bool,
+    /// Setup v1.1.2 — skip allocator ticks until the bookTicker
+    /// stream has at least this many live symbols. Zero disables the
+    /// warm-up gate (legacy behaviour); default 3 blocks the cold-
+    /// start fiasco where the first tick opens every setup at stale
+    /// bar_close fallback and then the live tick immediately stops
+    /// them out.
+    warmup_min_subscribers: usize,
+    /// Setup v1.1.2 — minimum SL distance in percent of entry. Setups
+    /// with SL tighter than this are rejected so the allocator doesn't
+    /// open trades inside typical intra-bar noise. 0.4% ≈ 4 × round-
+    /// trip taker commission is the default.
+    sl_min_distance_pct: f64,
 }
 
 // Floor/ceiling sanity-check bounds. For a long, the live price must
@@ -847,6 +901,8 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
         commission_safety_multiple: 2.0,
         sl_hit_cooldown_minutes: 15,
         mtf_opposing_gate_enabled: true,
+        warmup_min_subscribers: 3,
+        sl_min_distance_pct: 0.4,
     };
     // Pull the current taker bps so the check matches what the Setup
     // drawer displays. Prefer binance_futures (live trading venue).
@@ -953,6 +1009,12 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
         if let Some(b) = val.get("enabled").and_then(|v| v.as_bool()) {
             cfg.mtf_opposing_gate_enabled = b;
         }
+    }
+    if let Some(v) = load_f64(pool, "allocator_v2", "warmup_min_subscribers").await {
+        cfg.warmup_min_subscribers = v.max(0.0) as usize;
+    }
+    if let Some(v) = load_f64(pool, "allocator_v2", "sl_min_distance_pct").await {
+        cfg.sl_min_distance_pct = v.max(0.0);
     }
     // Default org_id from dry-execution config.
     if let Ok(Some(row)) = sqlx::query(
