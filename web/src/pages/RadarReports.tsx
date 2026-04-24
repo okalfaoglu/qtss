@@ -97,6 +97,53 @@ function signClass(n: number | null | undefined): string {
   return "text-zinc-400";
 }
 
+// Convert holding-in-bars to a human-readable duration band. Without the
+// per-trade timeframe we infer a 15-minute bar (the dominant TF in the
+// live allocator) and bucket into days. Good enough for operator glance;
+// the exact figure is still retrievable from `avg_holding_bars`.
+function formatHolding(bars: number | null, period: string | null): string {
+  if (bars == null) return "—";
+  // 15-min bars → 96/day; for weekly/monthly reports upscale assumption
+  // so multi-day holds read cleanly ("1-2 GÜN" instead of "96 bar").
+  const perDay = 96;
+  const days = bars / perDay;
+  if (days < 0.04) return "< 1 SAAT";
+  if (days < 0.25) return "SAATLİK";
+  if (days < 1) return "GÜN İÇİ";
+  if (days < 2) return "1-2 GÜN";
+  if (days < 7) return `${days.toFixed(0)} GÜN`;
+  if (days < 30) return `${(days / 7).toFixed(1)} HAFTA`;
+  // fall back to raw if the bucket is atypical
+  void period;
+  return `${bars.toFixed(1)} bar`;
+}
+
+// Tally distinct symbols in the closed trade list and map to a band.
+// Keeps the rendering logic in the UI since the aggregator already
+// ships `trades` and this is display-only.
+function distinctSymbols(trades: RadarTrade[] | null | undefined): number {
+  if (!trades || trades.length === 0) return 0;
+  const s = new Set<string>();
+  for (const t of trades) if (t.symbol) s.add(t.symbol);
+  return s.size;
+}
+
+function portfolioSpread(trades: RadarTrade[] | null | undefined): string {
+  const n = distinctSymbols(trades);
+  if (n === 0) return "—";
+  if (n === 1) return "YOĞUN";
+  if (n <= 3) return "ORTA";
+  return "DENGELİ";
+}
+
+function correlationRisk(trades: RadarTrade[] | null | undefined): string {
+  const n = distinctSymbols(trades);
+  if (n === 0) return "—";
+  if (n <= 1) return "YÜKSEK";
+  if (n <= 3) return "ORTA";
+  return "DÜŞÜK";
+}
+
 function RiskModeBadge({ mode }: { mode: string | null }) {
   if (!mode) return <span className="text-zinc-500">—</span>;
   const palette: Record<string, string> = {
@@ -326,12 +373,18 @@ export default function RadarReports() {
                 k="Ort. Allocation"
                 v={`${fmtUsd(latest.avg_allocation_usd)} $`}
               />
+              <RowKV
+                k="Toplam Kapanış"
+                v={`${latest.closed_count} işlem (${latest.win_count} kârlı / ${latest.loss_count} zararlı)`}
+              />
               <RowKV k="Nakit Pozisyon" v={fmtPct(latest.cash_position_pct)} />
             </div>
           </div>
 
-          {/* Summary strip */}
-          <div className="col-span-3 grid grid-cols-6 gap-2">
+          {/* Summary strip — matches QTSK RADAR template:
+              KAPANIŞ / KÂRLI / BAŞARI / TOPLAM BAĞLANAN / TOPLAM KAZANÇ /
+              ORT. POZ. GETİRİSİ / İŞLEM BAŞINA ORT. BAĞLANAN */}
+          <div className="col-span-3 grid grid-cols-7 gap-2">
             <StatCell label="Kapanış" value={`${latest.closed_count}`} />
             <StatCell
               label="Kârlı"
@@ -356,6 +409,10 @@ export default function RadarReports() {
               value={fmtPct(latest.avg_return_pct)}
               cls={signClass(latest.avg_return_pct)}
             />
+            <StatCell
+              label="İşlem Başına Ort. Bağlanan"
+              value={`${fmtUsd(latest.avg_allocation_usd)} $`}
+            />
           </div>
 
           {/* PERFORMANS + RİSK */}
@@ -369,15 +426,23 @@ export default function RadarReports() {
                 k="Avg Allocation"
                 v={`${fmtUsd(latest.avg_allocation_usd)} $`}
               />
+              {/* Sermaye kullanımı — kapanan işlem sermayesinin anaparaya oranı. */}
+              <RowKV
+                k="Sermaye Kullanımı"
+                v={fmtPct(
+                  latest.starting_capital_usd
+                    ? ((latest.total_notional_usd ?? 0) /
+                        latest.starting_capital_usd) *
+                        100
+                    : null,
+                  2,
+                )}
+              />
               <RowKV k="Bileşik Getiri" v={fmtPct(latest.compound_return_pct)} />
               <RowKV k="Ort. Poz. Getirisi" v={fmtPct(latest.avg_return_pct)} />
               <RowKV
-                k="Avg. Holding"
-                v={
-                  latest.avg_holding_bars != null
-                    ? `${latest.avg_holding_bars.toFixed(1)} bar`
-                    : "—"
-                }
+                k="Avg. Holding Period"
+                v={formatHolding(latest.avg_holding_bars, latest.period)}
               />
             </div>
           </div>
@@ -392,16 +457,29 @@ export default function RadarReports() {
                 <RiskModeBadge mode={latest.risk_mode} />
               </div>
               <RowKV
-                k="Volatilite"
+                k="Volatilite Seviyesi"
                 v={
                   latest.volatility_level
                     ? latest.volatility_level.toUpperCase()
                     : "—"
                 }
               />
+              {/* Portföy dağılımı — kapanmış işlemlerdeki farklı sembol
+                  sayısından türetilir: 1 sembol = YOĞUN, 2-3 = ORTA,
+                  4+ = DENGELİ. */}
+              <RowKV
+                k="Portföy Dağılımı"
+                v={portfolioSpread(latest.trades)}
+              />
               <RowKV
                 k="Maks. Pozisyon Risk"
                 v={fmtPct((latest.max_position_risk_pct ?? 0) * 100, 2)}
+              />
+              {/* Korelasyon riski — aynı mantık farklı ifade: az sembol →
+                  yüksek korelasyon riski. */}
+              <RowKV
+                k="Korelasyon Risk"
+                v={correlationRisk(latest.trades)}
               />
               <RowKV k="Nakit Pozisyon" v={fmtPct(latest.cash_position_pct)} />
             </div>
