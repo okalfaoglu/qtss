@@ -246,6 +246,10 @@ export interface LuxAlgoChartDefaults {
   showGap?: boolean;
   /** Override Z1..Z5 enabled flags. 5-element bool array. */
   slotsEnabled?: [boolean, boolean, boolean, boolean, boolean];
+  /** When true, drop the page-level `-m-6` and `h-[calc(100vh-57px)]`
+   * wrapper so the chart fits its parent container instead of the
+   * viewport. Used by IQChart split-view. Default false (standalone). */
+  embedded?: boolean;
 }
 
 export function LuxAlgoChart({
@@ -1811,7 +1815,13 @@ export function LuxAlgoChart({
     : 0;
 
   return (
-    <div className="-m-6 flex h-[calc(100vh-57px)] flex-col gap-1 p-1">
+    <div
+      className={
+        defaults?.embedded
+          ? "flex h-full min-h-0 flex-col gap-1 p-1"
+          : "-m-6 flex h-[calc(100vh-57px)] flex-col gap-1 p-1"
+      }
+    >
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <select
           className="rounded bg-zinc-900 px-2 py-1"

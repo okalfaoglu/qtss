@@ -144,6 +144,9 @@ export function IQChart() {
                 showRange: false,
                 showGap: false,
                 slotsEnabled: [true, true, true, true, true],
+                embedded: true,   // critical — drop the standalone
+                                  // -m-6 + 100vh-57px wrapper so the
+                                  // chart fits IQChart's split layout
               }}
             />
           </div>
