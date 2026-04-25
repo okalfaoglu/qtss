@@ -575,6 +575,10 @@ export function LuxAlgoChart({
   // Smart Money Concepts (BOS / CHoCH / MSS / LiquiditySweep / FVI).
   // Single-anchor events rendered as short horizontal markers + labels.
   const [showSmc, setShowSmc] = useState(false);
+  // FAZ 25.x — overlay toggle for the elliott_full writer (diagonals,
+  // flats, extended impulses, truncated fifth, W-X-Y combinations).
+  // Default off because it's noisy on intraday tapes; operator opts in.
+  const [showElliottFull, setShowElliottFull] = useState(false);
   // ── Technical indicator overlays (Faz 11 Aşama 5). Price-pane
   //    overlays only on this release — oscillators (RSI / Williams%R /
   //    CMF / Aroon / TTM Squeeze) land in PR-11H with a dedicated
@@ -635,7 +639,8 @@ export function LuxAlgoChart({
     // the request the backend returns an empty slice anyway (the SQL
     // `slot = ANY($5)` clause would be vacuously false).
     enabled:
-      (showClassical || showRange || showGap || showCandles || showOrb || showSmc) &&
+      (showClassical || showRange || showGap || showCandles || showOrb || showSmc ||
+       showElliottFull) &&
       levelsParamAux.length > 0,
     refetchInterval: 30_000,
   });
@@ -1843,6 +1848,76 @@ export function LuxAlgoChart({
       );
     };
 
+    // FAZ 25.x — elliott_full overlay. Surfaces the previously-dormant
+    // detector outputs (leading/ending diagonals, regular/expanded/
+    // running flats, W1/W3/W5 extended impulses, truncated fifth,
+    // W-X-Y combinations). Each subkind paints with a family-specific
+    // color so the eye can separate diagonals (purple) from flats
+    // (cyan) from combinations (rose) at a glance — same row layout
+    // as classical so the reader doesn't have to learn a new affordance.
+    const elliottFullColorFor = (subkind: string): string => {
+      if (subkind.startsWith("leading_diagonal")) return "#a855f7"; // purple
+      if (subkind.startsWith("ending_diagonal")) return "#7c3aed"; // violet
+      if (subkind.startsWith("flat_regular")) return "#06b6d4"; // cyan
+      if (subkind.startsWith("flat_expanded")) return "#0891b2"; // darker cyan
+      if (subkind.startsWith("flat_running")) return "#0e7490"; // dark cyan
+      if (subkind.startsWith("impulse_truncated")) return "#f97316"; // orange
+      if (subkind.startsWith("impulse_w1_extended")) return "#84cc16"; // lime
+      if (subkind.startsWith("impulse_w3_extended")) return "#65a30d"; // dark lime
+      if (subkind.startsWith("impulse_w5_extended")) return "#4d7c0f"; // darkest lime
+      if (subkind.startsWith("combination_wxy")) return "#ec4899"; // rose
+      return "#9ca3af"; // grey fallback
+    };
+    const renderElliottFull = (d: ChartWorkspaceDetection) => {
+      if (d.anchors.length < 2) return;
+      const pts: LineData[] = d.anchors
+        .map((a) => {
+          const t = anchorTime(a);
+          const p = parsePrice(a.price);
+          return t !== null && !Number.isNaN(p) ? { time: t, value: p } : null;
+        })
+        .filter((x): x is LineData => x !== null);
+      if (pts.length < 2) return;
+      const clean = dedupeByTime(pts);
+      if (clean.length < 2) return;
+      const variant = variantFromSubkind(d.subkind);
+      const color = elliottFullColorFor(d.subkind);
+      const style = d.state === "invalidated" ? LineStyle.Dashed : LineStyle.Solid;
+      const s = chart.addSeries(LineSeries, {
+        color,
+        lineWidth: 2,
+        lineStyle: style,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      s.setData(clean);
+      overlaySeriesRef.current.push(s);
+      // Anchor labels — every detector ships its own (W0..W5, A/B/C,
+      // X, etc.) and we already mirror them as `label_override` on the
+      // backend. Render them inline so the reader can read off
+      // structure without having to inspect the row. Position is
+      // derived from each anchor's price relative to the polyline
+      // average so highs go above and lows go below regardless of
+      // overall pattern direction.
+      const avgPrice =
+        clean.reduce((sum, c) => sum + c.value, 0) / clean.length;
+      for (const a of d.anchors) {
+        const t = anchorTime(a);
+        const p = parsePrice(a.price);
+        const label = a.label_override ?? a.label;
+        if (t === null || Number.isNaN(p) || !label) continue;
+        attachLabel(t, p, label, color, p >= avgPrice ? "above" : "below");
+      }
+      const tip = clean[clean.length - 1];
+      attachLabel(
+        tip.time,
+        tip.value,
+        labelFor(d),
+        color,
+        variant === "bull" ? "above" : "below",
+      );
+    };
+
     const renderByFamily: Record<string, (d: ChartWorkspaceDetection) => void> = {
       classical: renderClassical,
       range: renderRange,
@@ -1850,6 +1925,7 @@ export function LuxAlgoChart({
       candle: renderCandle,
       orb: renderOrb,
       smc: renderSmc,
+      elliott_full: renderElliottFull,
     };
     const familyEnabled = (f: string): boolean => {
       if (f === "classical") return showClassical;
@@ -1858,6 +1934,7 @@ export function LuxAlgoChart({
       if (f === "candle") return showCandles;
       if (f === "orb") return showOrb;
       if (f === "smc") return showSmc;
+      if (f === "elliott_full") return showElliottFull;
       return false;
     };
 
@@ -2093,6 +2170,7 @@ export function LuxAlgoChart({
     showHarmonic, harmonicOutput,
     harmonicFilters, showHarmonicTargets,
     auxDetections, showClassical, showRange, showGap, showCandles, showOrb, showSmc,
+    showElliottFull,
     indicators.data, showSuperTrend, showKeltner, showIchimoku, showDonchian, showPsar,
     showRsi, showWilliamsR, showCmf, showAroon, showTtmSqueeze,
     defaults?.priceLineOverlays,
@@ -2316,6 +2394,17 @@ export function LuxAlgoChart({
                 onChange={(e) => setShowSmc(e.target.checked)}
               />
               SMC
+            </label>
+            <label
+              className="flex cursor-pointer items-center gap-1"
+              title="Elliott full set: leading/ending diagonal, regular/expanded/running flat, W1/W3/W5 extended impulse, truncated fifth, W-X-Y combination"
+            >
+              <input
+                type="checkbox"
+                checked={showElliottFull}
+                onChange={(e) => setShowElliottFull(e.target.checked)}
+              />
+              Elliott+
             </label>
           </div>
           {/* Technical indicator overlays. Price-pane overlays only —

@@ -3,6 +3,7 @@ pub mod classical;
 pub mod derivatives;
 pub mod elliott;
 pub mod elliott_early;
+pub mod elliott_full;
 pub mod gap;
 pub mod harmonic;
 pub mod orb;

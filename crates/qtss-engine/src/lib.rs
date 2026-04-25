@@ -77,6 +77,11 @@ fn registered_writers() -> Vec<Box<dyn WriterTask>> {
     vec![
         Box::new(writers::pivot::PivotWriter),
         Box::new(writers::elliott::ElliottWriter),
+        // FAZ 25.x — surfaces the dormant ElliottDetectorSet (diagonal,
+        // flat, extended impulse, truncated fifth, W-X-Y combination).
+        // Runs after the LuxAlgo motive/abc/triangle pass so the new
+        // family doesn't fight the established one over the same slot.
+        Box::new(writers::elliott_full::ElliottFullWriter),
         Box::new(writers::harmonic::HarmonicWriter),
         Box::new(writers::classical::ClassicalWriter),
         Box::new(writers::range::RangeWriter),
