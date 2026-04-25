@@ -36,6 +36,8 @@ function StageBadge({ stage }: { stage: string }) {
     nascent: { letter: "N", bg: "bg-emerald-500/20", fg: "text-emerald-300" },
     forming: { letter: "F", bg: "bg-cyan-500/20", fg: "text-cyan-300" },
     extended: { letter: "X", bg: "bg-violet-500/20", fg: "text-violet-300" },
+    abc_nascent: { letter: "a?", bg: "bg-amber-500/20", fg: "text-amber-300" },
+    abc_forming: { letter: "ab", bg: "bg-orange-500/20", fg: "text-orange-300" },
   };
   const s = map[stage] ?? { letter: "?", bg: "bg-zinc-500/20", fg: "text-zinc-300" };
   return (
@@ -158,6 +160,9 @@ export function IQChart() {
                 slotsEnabled: [true, true, true, true, true],
                 embedded: true,
                 onContextChange: setCtx,
+                onlyLatestMotive: false, // show all motives, not just the latest
+                                         // — important for spotting newly-formed
+                                         // patterns and in-progress ABCs
               }}
             />
           </div>

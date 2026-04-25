@@ -250,6 +250,10 @@ export interface LuxAlgoChartDefaults {
    * wrapper so the chart fits its parent container instead of the
    * viewport. Used by IQChart split-view. Default false (standalone). */
   embedded?: boolean;
+  /** Default for the "Only latest motive" toggle. /v2/chart keeps it
+   * on (true); IQChart turns it off so the user sees ALL completed
+   * motives at once — important for spotting in-progress patterns. */
+  onlyLatestMotive?: boolean;
   /** Notify parent every time the chart's symbol / exchange / segment /
    * tf changes. Used by IQChart so the WaveBarsPanel below the chart
    * stays in sync with the user's TF / symbol selection. */
@@ -283,7 +287,9 @@ export function LuxAlgoChart({
   });
   const [showFibBand, setShowFibBand] = useState(true);
   const [showHhLl, setShowHhLl] = useState(false);
-  const [onlyLatestMotive, setOnlyLatestMotive] = useState(true);
+  const [onlyLatestMotive, setOnlyLatestMotive] = useState(
+    defaults?.onlyLatestMotive ?? true
+  );
   const [showZigzag, setShowZigzag] = useState(defaults?.showZigzag ?? true);
   const [showElliott, setShowElliott] = useState(true);
   // FAZ 25 PR-25A — early-wave Elliott markers (nascent / forming /
@@ -1063,7 +1069,27 @@ export function LuxAlgoChart({
         nascent: "N",
         forming: "F",
         extended: "X",
+        // FAZ 25 — ABC nascent/forming once a motive completes and
+        // the next 2-3 pivots line up like a corrective.
+        abc_nascent: "a?",
+        abc_forming: "ab?",
       };
+      // Pre-compute motive bar ranges per slot so we can suppress
+      // nascent / forming markers that have since been promoted to a
+      // full motive — otherwise the chart shows a stale N inside an
+      // already-labeled (1)..(5). Extended markers (X) are kept since
+      // they tag a property of the SAME motive (W3 / W5 extension).
+      const motiveRangesBySlot: Map<number, Array<{ start: number; end: number }>> =
+        new Map();
+      if (pineOutput) {
+        pineOutput.levels.forEach((lvl, slotIdx) => {
+          const ranges = lvl.motives.map((m) => {
+            const bars = m.anchors.map((a) => a.bar_index);
+            return { start: Math.min(...bars), end: Math.max(...bars) };
+          });
+          motiveRangesBySlot.set(slotIdx, ranges);
+        });
+      }
       for (const em of earlyMarkers) {
         // Slot filter follows the existing Z1..Z5 toolbar — early
         // markers respect the same slot enable as motives.
@@ -1071,13 +1097,26 @@ export function LuxAlgoChart({
         if (slotCfg && !slotCfg.enabled) continue;
         const last = em.anchors[em.anchors.length - 1];
         if (!last) continue;
-        // Anchor positioning — use the writer-stored ISO `time` (which
-        // is the canonical reference: pivot's actual open_time)
-        // converted to UTCTimestamp. Fall back to bar_index lookup
-        // only for legacy rows that lack the time field. Using
-        // bar_index alone produced stale positions because the
-        // writer's bar_index is relative to its full data window
-        // while the chart only loaded the last `barLimit` candles.
+        // Suppression: if this nascent / forming sits inside a complete
+        // motive's bar range on the same slot, skip it. The motive's
+        // (1)..(5) labels already convey what the N / F was hinting at.
+        // For impulse N/F we suppress when a complete motive already
+        // covers the same range. For ABC nascent/forming we do NOT
+        // suppress — those fire AFTER a motive ends and are exactly
+        // the in-progress correction the user wanted to see.
+        if (em.stage === "nascent" || em.stage === "forming") {
+          const ranges = motiveRangesBySlot.get(em.slot) ?? [];
+          const inside = ranges.some(
+            (r) => last.bar_index >= r.start && last.bar_index <= r.end
+          );
+          if (inside) continue;
+        }
+        // Anchor positioning — use the writer-stored ISO `time` (the
+        // canonical pivot open_time) converted to UTCTimestamp. Falls
+        // back to bar_index lookup only for legacy rows that lack the
+        // time field. bar_index alone produced stale positions because
+        // the writer's index is relative to its full data window while
+        // the chart only loaded the last `barLimit` candles.
         let t: Time | null = null;
         if (last.time) {
           const epoch = Math.floor(new Date(last.time).getTime() / 1000);

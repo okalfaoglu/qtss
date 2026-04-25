@@ -98,6 +98,86 @@ pub fn scan_level(level: &LevelOutput) -> Vec<EarlyMatch> {
         }
     }
 
+    // ABC nascent / forming — fires after a completed motive when the
+    // post-W5 pivot tape starts to look like a corrective ABC. Two
+    // stages:
+    //   abc_nascent  : 2 post-W5 pivots = potential A + B forming
+    //   abc_forming  : 3 post-W5 pivots = A + B done, C forming
+    // Full ABC (`pattern_family='abc'`) is still emitted by the base
+    // ElliottWriter; this just catches the in-progress states.
+    for motive in &level.motives {
+        if motive.abc.is_some() {
+            // Pine port already detected the full ABC for this motive
+            // — we don't double-mark it.
+            continue;
+        }
+        let p5_bar = motive.anchors[5].bar_index;
+        // Pivots strictly after p5, in order.
+        let post_w5: Vec<&PivotPoint> = pivots
+            .iter()
+            .filter(|p| p.bar_index > p5_bar)
+            .collect();
+        // ABC of a bull motive corrects DOWN: A=low, B=high, C=low.
+        // ABC of a bear motive: A=high, B=low, C=high. Direction flag
+        // on the EarlyMatch follows the same convention as motive.abc:
+        // +1 bullish ABC (after a bearish motive), -1 bearish ABC.
+        let abc_dir: i8 = -motive.direction;
+        let suffix = if abc_dir == 1 { "bull" } else { "bear" };
+        let p5 = &motive.anchors[5];
+        // Nascent ABC: p5 + A pivot + B pivot in correct alternation.
+        if post_w5.len() >= 2 {
+            let a_anchor = post_w5[0];
+            let b_anchor = post_w5[1];
+            // Direction sanity: A opposite to motive end pivot, B opposite to A.
+            if a_anchor.direction != p5.direction && b_anchor.direction != a_anchor.direction {
+                let a_len = (a_anchor.price - p5.price).abs();
+                let b_ret = (b_anchor.price - a_anchor.price).abs();
+                if a_len > 0.0 && (0.10..=0.95).contains(&(b_ret / a_len)) {
+                    out.push(EarlyMatch {
+                        subkind: format!("abc_nascent_{suffix}"),
+                        direction: abc_dir,
+                        anchors: vec![p5.clone(), a_anchor.clone(), b_anchor.clone()],
+                        score: 0.55,
+                        invalidation_price: p5.price,
+                        stage: "abc_nascent",
+                        w3_extension: 0.0,
+                    });
+                }
+            }
+        }
+        // Forming ABC: p5 + A + B + C-so-far. Full ABC fires from the
+        // base writer once C completes; this catches the in-progress
+        // C leg.
+        if post_w5.len() >= 3 {
+            let a_anchor = post_w5[0];
+            let b_anchor = post_w5[1];
+            let c_anchor = post_w5[2];
+            if a_anchor.direction != p5.direction
+                && b_anchor.direction != a_anchor.direction
+                && c_anchor.direction != b_anchor.direction
+            {
+                let a_len = (a_anchor.price - p5.price).abs();
+                let c_len = (c_anchor.price - b_anchor.price).abs();
+                if a_len > 0.0 && c_len >= 0.5 * a_len {
+                    out.push(EarlyMatch {
+                        subkind: format!("abc_forming_{suffix}"),
+                        direction: abc_dir,
+                        anchors: vec![
+                            p5.clone(),
+                            a_anchor.clone(),
+                            b_anchor.clone(),
+                            c_anchor.clone(),
+                        ],
+                        score: 0.65,
+                        invalidation_price: p5.price,
+                        stage: "abc_forming",
+                        w3_extension: 0.0,
+                    });
+                }
+            }
+        }
+    }
+
     out
 }
 
