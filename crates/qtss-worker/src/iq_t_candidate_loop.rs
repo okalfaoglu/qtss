@@ -120,6 +120,13 @@ struct ParentStructure {
     current_wave: String,
     current_stage: String,
     structure_anchors: Value,
+    // FAZ 25.2.D — primary corrective hypothesis the state machine
+    // currently rates highest. Read live from
+    // `iq_structures.raw_meta.projection.primary_branch`. IQ-T uses
+    // it to scale TP — a flat_running parent has a truncated C, so
+    // the child motive's TP gets pulled in; flat_expanded gets
+    // pushed out.
+    primary_branch: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -138,9 +145,11 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
     // Pull every actively-tracked IQ structure whose current wave is
     // a CORRECTION (W2, W4, A, B, C). Only those allow IQ-T entries —
     // see the matrix in docs/FAZ_25_IQ_PREDICTIVE.md §5.
+    // FAZ 25.2.D — also pull raw_meta so we can read the parallel-
+    // hypothesis branches the state machine wrote in tick prior.
     let parents = sqlx::query(
         r#"SELECT id, exchange, segment, symbol, timeframe, slot, direction,
-                  current_wave, current_stage, structure_anchors
+                  current_wave, current_stage, structure_anchors, raw_meta
              FROM iq_structures
             WHERE state = 'tracking'
               AND current_wave IN ('W2','W4','A','B','C')
@@ -153,6 +162,12 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
     let mut scanned = 0usize;
     let mut created = 0usize;
     for r in parents {
+        let raw_meta_val: Value = r.try_get("raw_meta").unwrap_or(Value::Null);
+        let primary_branch = raw_meta_val
+            .get("projection")
+            .and_then(|p| p.get("primary_branch"))
+            .and_then(|b| b.as_str())
+            .map(|s| s.to_string());
         let parent = ParentStructure {
             id: r.try_get("id")?,
             exchange: r.try_get("exchange").unwrap_or_default(),
@@ -164,6 +179,7 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
             current_wave: r.try_get("current_wave").unwrap_or_default(),
             current_stage: r.try_get("current_stage").unwrap_or_default(),
             structure_anchors: r.try_get("structure_anchors").unwrap_or(Value::Null),
+            primary_branch,
         };
         scanned += 1;
 
@@ -405,16 +421,39 @@ async fn write_iq_t_setup(
         .and_then(|a| a.get("price"))
         .and_then(|p| p.as_f64())
         .unwrap_or_default();
-    let tp_price = child
+    let raw_tp_price = child
         .anchors
         .as_array()
         .and_then(|a| a.last())                    // W5 (or last available)
         .and_then(|a| a.get("price"))
         .and_then(|p| p.as_f64())
         .unwrap_or_default();
-    if entry_price <= 0.0 || sl_price <= 0.0 || tp_price <= 0.0 {
+    if entry_price <= 0.0 || sl_price <= 0.0 || raw_tp_price <= 0.0 {
         return Ok(());
     }
+    // FAZ 25.2.D — branch-aware TP scaling.
+    //
+    // The naive TP = child motive's W5 ignores what kind of corrective
+    // the parent is running. A flat_running parent has a TRUNCATED C,
+    // so the reaction trade has less room than a textbook zigzag.
+    // flat_expanded extends past A's start, so the reaction has MORE
+    // room. Apply a multiplier on the (TP − entry) distance so the
+    // child setup'\''s TP aligns with the parent'\''s structural shape.
+    //
+    //   zigzag        — 1.000 (canonical, W5 reach)
+    //   flat_regular  — 1.000 (B ≈ A, C stops at W5 level)
+    //   flat_expanded — 1.272 (deeper C target)
+    //   flat_running  — 0.618 (truncated C target)
+    //   <unknown>     — 1.000 (graceful no-op)
+    let branch_tp_multiplier: f64 = match parent.primary_branch.as_deref() {
+        Some("flat_running") => 0.618,
+        Some("flat_expanded") => 1.272,
+        Some("flat_regular") => 1.000,
+        Some("zigzag") => 1.000,
+        _ => 1.000,
+    };
+    let tp_distance = raw_tp_price - entry_price;
+    let tp_price = entry_price + (tp_distance * branch_tp_multiplier);
     // Try to find the parent IQ-D setup so we can wire parent_setup_id.
     // If no parent setup exists yet (PR-25C not yet wiring iq_d setups),
     // leave it NULL — the IQ-T setup is still useful as a standalone
@@ -440,6 +479,12 @@ async fn write_iq_t_setup(
         "child_tf": child_tf,
         "child_motive_end_time": child.end_time.to_rfc3339(),
         "child_motive_score": child.score,
+        // FAZ 25.2.D audit trail — which corrective hypothesis the
+        // parent state machine was betting on at setup creation,
+        // and the multiplier we applied to TP because of it.
+        "parent_primary_branch": parent.primary_branch,
+        "branch_tp_multiplier": branch_tp_multiplier,
+        "child_raw_tp": raw_tp_price,
     });
     let key = format!(
         "iq_t:{}:{}:{}:{}:{}:{}",
