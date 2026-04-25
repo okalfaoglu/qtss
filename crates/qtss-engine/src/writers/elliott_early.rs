@@ -105,25 +105,46 @@ pub fn scan_level(level: &LevelOutput) -> Vec<EarlyMatch> {
     //   abc_forming  : 3 post-W5 pivots = A + B done, C forming
     // Full ABC (`pattern_family='abc'`) is still emitted by the base
     // ElliottWriter; this just catches the in-progress states.
+    //
+    // CRITICAL invalidation rule (Elliott): a bull motive's W5 high
+    // is the upper boundary of any subsequent ABC. If a post-W5
+    // pivot crosses that boundary, the ABC is INVALIDATED — the (5)
+    // label was wrong (the move was actually a sub-wave of a larger
+    // impulse). Same in mirror for bear motives. We must NOT keep
+    // marking `ab?` on motives whose price action has already
+    // overruled the count.
     for motive in &level.motives {
         if motive.abc.is_some() {
             // Pine port already detected the full ABC for this motive
             // — we don't double-mark it.
             continue;
         }
-        let p5_bar = motive.anchors[5].bar_index;
+        let p5 = &motive.anchors[5];
+        let p5_bar = p5.bar_index;
         // Pivots strictly after p5, in order.
         let post_w5: Vec<&PivotPoint> = pivots
             .iter()
             .filter(|p| p.bar_index > p5_bar)
             .collect();
+        // Price-invalidation check. For a bull motive (direction=+1),
+        // p5 is a HIGH pivot at the top. Any post-W5 HIGH pivot that
+        // exceeds p5.price means the count was wrong (motive was a
+        // sub-wave). For bear motive (direction=-1), p5 is a LOW;
+        // a post-W5 LOW below p5 invalidates symmetrically.
+        let invalidated = if motive.direction == 1 {
+            post_w5.iter().any(|p| p.direction == 1 && p.price > p5.price)
+        } else {
+            post_w5.iter().any(|p| p.direction == -1 && p.price < p5.price)
+        };
+        if invalidated {
+            continue;
+        }
         // ABC of a bull motive corrects DOWN: A=low, B=high, C=low.
         // ABC of a bear motive: A=high, B=low, C=high. Direction flag
         // on the EarlyMatch follows the same convention as motive.abc:
         // +1 bullish ABC (after a bearish motive), -1 bearish ABC.
         let abc_dir: i8 = -motive.direction;
         let suffix = if abc_dir == 1 { "bull" } else { "bear" };
-        let p5 = &motive.anchors[5];
         // Nascent ABC: p5 + A pivot + B pivot in correct alternation.
         if post_w5.len() >= 2 {
             let a_anchor = post_w5[0];

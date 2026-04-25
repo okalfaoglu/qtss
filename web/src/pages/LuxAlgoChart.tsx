@@ -1111,18 +1111,87 @@ export function LuxAlgoChart({
           );
           if (inside) continue;
         }
-        // Anchor positioning — use the writer-stored ISO `time` (the
-        // canonical pivot open_time) converted to UTCTimestamp. Falls
-        // back to bar_index lookup only for legacy rows that lack the
-        // time field. bar_index alone produced stale positions because
-        // the writer's index is relative to its full data window while
-        // the chart only loaded the last `barLimit` candles.
-        let t: Time | null = null;
-        if (last.time) {
-          const epoch = Math.floor(new Date(last.time).getTime() / 1000);
-          if (!isNaN(epoch) && epoch > 0) t = epoch as UTCTimestamp;
+
+        // Helper: anchor → chart Time. Writer-stored ISO time is the
+        // canonical reference; fall back to bar_index lookup only for
+        // legacy rows that lack the time field.
+        const anchorTime = (a: { bar_index: number; time?: string }): Time | null => {
+          if (a.time) {
+            const epoch = Math.floor(new Date(a.time).getTime() / 1000);
+            if (!isNaN(epoch) && epoch > 0) return epoch as UTCTimestamp;
+          }
+          return timeAt(a.bar_index);
+        };
+
+        // ── ABC nascent / forming: real per-pivot labels + line
+        //    segments instead of a single "a?" / "ab" letter.
+        //    anchors[0] = parent motive's W5 (line origin, no label —
+        //    the motive already shows "(5)" there).
+        //    anchors[1] = A (label "(a)", solid line W5→A).
+        //    anchors[2] = B (label "(b)", dotted line A→B).
+        //    anchors[3] = C (label "(c)", dotted line B→C — forming).
+        //    Each tick re-renders, so labels and lines reposition as
+        //    the underlying pivot tape evolves until ABC locks in.
+        if (em.stage === "abc_nascent" || em.stage === "abc_forming") {
+          const isForming = em.stage === "abc_forming";
+          const segLabels = ["", "(a)", "(b)", "(c)"];
+          const color = "#a855f7"; // violet — distinct from blue/red
+
+          const points: Array<{ time: Time; price: number; idx: number }> = [];
+          for (let i = 0; i < em.anchors.length; i++) {
+            const a = em.anchors[i];
+            const t = anchorTime(a);
+            if (t === null) continue;
+            points.push({ time: t, price: a.price, idx: i });
+          }
+          if (points.length < 2) continue;
+
+          // Line segments: index 0→1 SOLID (locked W5→A leg),
+          // 1→2 and 2→3 DOTTED (still in motion).
+          for (let i = 0; i < points.length - 1; i++) {
+            const isFirst = i === 0;
+            const series = chart.addSeries(LineSeries, {
+              color,
+              lineWidth: 2,
+              lineStyle: isFirst ? LineStyle.Solid : LineStyle.Dotted,
+              priceLineVisible: false,
+              lastValueVisible: false,
+            });
+            series.setData([
+              { time: points[i].time, value: points[i].price },
+              { time: points[i + 1].time, value: points[i + 1].price },
+            ]);
+            overlaySeriesRef.current.push(series);
+          }
+
+          for (const p of points) {
+            if (p.idx === 0) continue;
+            const text = segLabels[p.idx] ?? "?";
+            attachLabel(
+              p.time,
+              p.price,
+              text,
+              color,
+              em.direction === 1 ? "above" : "below"
+            );
+          }
+          // For forming, append a small "?" right next to the (c)
+          // label so the user knows C is in motion (not locked).
+          if (isForming && points.length === 4) {
+            const tip = points[points.length - 1];
+            attachLabel(
+              tip.time,
+              tip.price,
+              "?",
+              "#a1a1aa",
+              em.direction === 1 ? "above" : "below"
+            );
+          }
+          continue;
         }
-        if (t === null) t = timeAt(last.bar_index);
+
+        // ── Single-letter marker (N / F / X) at the last anchor.
+        const t = anchorTime(last);
         if (t === null) continue;
         const letter = stageLetter[em.stage] ?? "?";
         const color = em.direction === 1 ? "#22c55e" : "#ef4444";
