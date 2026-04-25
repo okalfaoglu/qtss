@@ -24,6 +24,7 @@ mod position_hourly_snapshot_loop;
 mod time_stop_loop;
 mod weight_tuner_loop;
 mod calibration_refresh_loop;
+mod market_bars_gap_loop;
 mod price_tick_ws;
 mod setup_watcher;
 mod symbol_intel_loops;
@@ -421,6 +422,12 @@ async fn main() -> anyhow::Result<()> {
         // allocator's calibration gate sees fresh winrate stats.
         let calib_pool = pool.clone();
         tokio::spawn(calibration_refresh_loop::calibration_refresh_loop(calib_pool));
+        // FAZ 25.1.1 — market_bars completeness watchdog. Walks every
+        // live engine_symbol on a tick and backfills when actual rows
+        // drop below min_completeness_pct. Fires pg_notify on
+        // qtss_market_bars_gap_filled so dependent analyses re-run.
+        let gap_pool = pool.clone();
+        tokio::spawn(market_bars_gap_loop::market_bars_gap_loop(gap_pool));
         // RADAR periodic aggregator — daily / weekly / monthly /
         // yearly performance snapshots per market × mode.
         let radar_pool = pool.clone();
