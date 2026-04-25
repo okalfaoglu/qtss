@@ -22,6 +22,8 @@ mod onchain_signal_scorer;
 mod position_manager;
 mod position_hourly_snapshot_loop;
 mod time_stop_loop;
+mod weight_tuner_loop;
+mod calibration_refresh_loop;
 mod price_tick_ws;
 mod setup_watcher;
 mod symbol_intel_loops;
@@ -410,6 +412,15 @@ async fn main() -> anyhow::Result<()> {
         // for N bars without hitting TP1 (edge decay).
         let ts_pool = pool.clone();
         tokio::spawn(time_stop_loop::time_stop_loop(ts_pool));
+        // v1.2.3 — post-trade learning: aggregate closed setups by
+        // family, push winrate-driven weight nudges back into
+        // confluence.weights.{family}. Hourly tick.
+        let wt_pool = pool.clone();
+        tokio::spawn(weight_tuner_loop::weight_tuner_loop(wt_pool));
+        // v1.2.4 — refresh the calibration matview on a cadence so the
+        // allocator's calibration gate sees fresh winrate stats.
+        let calib_pool = pool.clone();
+        tokio::spawn(calibration_refresh_loop::calibration_refresh_loop(calib_pool));
         // RADAR periodic aggregator — daily / weekly / monthly /
         // yearly performance snapshots per market × mode.
         let radar_pool = pool.clone();

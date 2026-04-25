@@ -2137,6 +2137,7 @@ dependencies = [
  "qtss-common",
  "qtss-domain",
  "qtss-notify",
+ "qtss-secrets",
  "qtss-signal-card",
  "qtss-storage",
  "qtss-strategy",

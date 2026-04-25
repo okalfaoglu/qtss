@@ -113,14 +113,11 @@ async fn process_symbol(
     }
 
     // ── TakerFlowImbalance ────────────────────────────────────────────
-    // Not currently polled as its own snapshot — the taker ratio comes
-    // embedded in the CVD/liquidations WS streams rather than REST.
-    // Kept as a no-op with the same source_key convention for when
-    // qtss-onchain adds the REST poll
-    // (`/futures/data/takerlongshortRatio`).
-    if let Some(payload) =
-        load_snapshot(pool, &format!("{exchange_lc}_taker_ratio_{sym_lc}")).await
-    {
+    // qtss-onchain registers this as `binance_taker_<sym>` (poll of
+    // `/futures/data/takerlongshortRatio`, period=5m, every 60s). Earlier
+    // versions of this writer used `..._taker_ratio_...` which silently
+    // mismatched the live key — fixed v1.2.3.
+    if let Some(payload) = load_snapshot(pool, &format!("{exchange_lc}_taker_{sym_lc}")).await {
         for ev in detect_taker_flow_imbalance(&payload, cfg) {
             if (ev.score as f32) < cfg.min_score {
                 continue;
