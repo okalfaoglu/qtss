@@ -456,8 +456,16 @@ pub fn scan_level(
                     // tape rather than guessing a "perfect" B.
                     let c_proj = project_c(a_anchor.price, b_anchor.price);
                     let c_dir = a_anchor.direction;
-                    let leg_ab =
-                        (b_anchor.bar_index - a_anchor.bar_index).max(5);
+                    // Elliott zigzag time rule — C duration ≈ A
+                    // duration (the canonical "equality" guideline,
+                    // Frost & Prechter §2.6). Earlier we used the
+                    // B-leg duration here, which placed C too close
+                    // to B and pulled the projected (c?) marker into
+                    // the wrong chart zone. A-leg time is the right
+                    // baseline. Floor 5 bars so very short A-legs
+                    // still surface a visible marker.
+                    let c_offset_bars =
+                        (a_anchor.bar_index - p5.bar_index).max(5);
                     out.push(EarlyMatch {
                         subkind: format!("abc_nascent_{suffix}"),
                         direction: abc_dir,
@@ -467,7 +475,7 @@ pub fn scan_level(
                             b_clone,
                             PivotPoint {
                                 direction: c_dir,
-                                bar_index: b_anchor.bar_index + leg_ab,
+                                bar_index: b_anchor.bar_index + c_offset_bars,
                                 price: c_proj,
                                 label_override: Some("c?".into()),
                                 hide_label: false,
