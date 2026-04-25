@@ -180,7 +180,8 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
         // spawn a counter-direction iq_d setup on the same symbol+tf
         // when another setup is already armed in the opposite
         // direction.
-        let opposite = if direction_str == "long" { "short" } else { "long" };
+        let direction_str_check = if p.direction == 1 { "long" } else { "short" };
+        let opposite = if direction_str_check == "long" { "short" } else { "long" };
         let conflict = sqlx::query(
             r#"SELECT 1 FROM qtss_setups
                 WHERE exchange = $1 AND symbol = $2 AND timeframe = $3
