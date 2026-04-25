@@ -211,6 +211,41 @@ struct StructureUpdate {
 // promotion to "real" happens automatically when a real pivot lands
 // near the projected anchor.
 
+/// 0..1 score: 1.0 if `value` sits inside `[lo, hi]`, then linearly
+/// decays to 0 over a 30% buffer outside the band. Used by FAZ 25.2.C
+/// branch scoring so a B retracement that's slightly outside the
+/// canonical zigzag 0.382-0.786 still gets partial credit instead of
+/// a hard binary cutoff.
+fn score_in_band(value: f64, lo: f64, hi: f64) -> f64 {
+    if value.is_nan() || lo.is_nan() || hi.is_nan() {
+        return 0.0;
+    }
+    if value >= lo && value <= hi {
+        return 1.0;
+    }
+    let band_width = (hi - lo).abs().max(1e-9);
+    let buffer = band_width * 0.30;
+    let distance = if value < lo { lo - value } else { value - hi };
+    let score = 1.0 - distance / buffer;
+    score.clamp(0.0, 1.0)
+}
+
+/// Pick the highest-scoring branch with a deterministic tiebreaker
+/// (left-to-right in the input). Used by the parallel-hypothesis
+/// projector so when two shapes score equally we keep the more
+/// "vanilla" interpretation as primary.
+fn pick_primary_branch(scores: &[(&'static str, f64)]) -> &'static str {
+    let mut best_kind = scores.first().map(|(k, _)| *k).unwrap_or("");
+    let mut best_score = -1.0_f64;
+    for (kind, score) in scores {
+        if *score > best_score + 1e-9 {
+            best_score = *score;
+            best_kind = kind;
+        }
+    }
+    best_kind
+}
+
 /// Project the next expected anchor for a given Elliott state.
 ///
 /// Inputs:
@@ -252,7 +287,17 @@ fn compute_projection(
             .find(|a| a.get("wave_label").and_then(|v| v.as_str()) == Some(label))
             .and_then(|a| a.get("price").and_then(|p| p.as_f64()))
     };
-    let bull = direction == 1;
+    // Trust the price tape over the `direction` column. Pine port
+    // sometimes seeds iq_structures with the W0 anchor's PIVOT direction
+    // (low = -1, high = +1) rather than the motive's structural
+    // direction. A bull motive starts at a LOW (W0 dir=-1) but the
+    // motive itself runs upward — so reading `direction` literal would
+    // flip every comparison below. Derive bull from W5>W0 instead;
+    // fall back to the column only when prices are unavailable.
+    let bull = match (price_at("W5"), price_at("W0")) {
+        (Some(w5), Some(w0)) => w5 > w0,
+        _ => direction == 1,
+    };
     let dir_sign = if bull { 1.0 } else { -1.0 };
 
     match current_wave {
@@ -364,8 +409,15 @@ fn compute_projection(
                 _ => Value::Null,
             }
         }
-        // B complete — project C. Zigzag: C ≈ A length (equality) or
-        // 1.272×A / 1.618×A. Flat: C ≈ A length.
+        // B complete — project C. FAZ 25.2.C: this state has enough
+        // observed pivots (W5+A+B) to PARALLEL-RANK the corrective
+        // shape hypotheses. Each branch scores 0..1 against the
+        // canonical Fib bands; the highest-scoring becomes
+        // `primary_branch` and the chart renders it prominently with
+        // alternates faint underneath. User feedback: "Z5'in 5'i =
+        // Z4'ün b'si ama 5'in üstünde, ABC olmuyor mu?" — answered
+        // mechanically here: zigzag scores low when B exceeds W5
+        // (= A's start), flat_expanded scores high.
         "B" => {
             let w5 = price_at("W5");
             let a = price_at("A");
@@ -373,11 +425,88 @@ fn compute_projection(
             match (w5, a, b) {
                 (Some(w5p), Some(ap), Some(bp)) => {
                     let a_len = (ap - w5p).abs();
+                    let b_ret = (bp - ap).abs();
+                    let b_to_a = if a_len > 0.0 { b_ret / a_len } else { 0.0 };
+                    // Did B exceed A's START (= W5)? For bull motive
+                    // (W5 high), B exceeds means bp > w5p. For bear,
+                    // bp < w5p.
+                    let b_exceeds_w5 = if dir_sign > 0.0 {
+                        bp > w5p
+                    } else {
+                        bp < w5p
+                    };
+                    // Pure ratio-based scoring per Frost-Prechter §2.5.
+                    // Each branch returns a 0..1 confidence given the
+                    // observed b_to_a ratio + b_exceeds_w5 flag.
+                    let score_zigzag = if b_exceeds_w5 {
+                        0.0
+                    } else {
+                        score_in_band(b_to_a, 0.382, 0.786)
+                    };
+                    let score_flat_regular = if b_exceeds_w5 {
+                        // tiny overshoot OK (slop), but not far above
+                        score_in_band(b_to_a, 0.95, 1.05)
+                    } else {
+                        score_in_band(b_to_a, 0.90, 1.05)
+                    };
+                    let score_flat_expanded = if b_exceeds_w5 {
+                        score_in_band(b_to_a, 1.05, 1.382)
+                    } else {
+                        0.0
+                    };
+                    let score_flat_running = if b_exceeds_w5 {
+                        score_in_band(b_to_a, 1.382, 2.5)
+                    } else {
+                        0.0
+                    };
                     // C direction = same as A (opposite to B).
                     let c_sign = if ap < w5p { -1.0 } else { 1.0 };
                     let c_equality = bp + c_sign * a_len;
                     let c_1272 = bp + c_sign * a_len * 1.272;
                     let c_1618 = bp + c_sign * a_len * 1.618;
+                    let branches = serde_json::json!([
+                        {
+                            "kind": "zigzag",
+                            "score": score_zigzag,
+                            "c_target": c_equality,
+                            "c_alt_1272": c_1272,
+                            "c_alt_1618": c_1618,
+                            "rule": "B retraces 38.2-78.6% of A, never exceeds W5"
+                        },
+                        {
+                            "kind": "flat_regular",
+                            "score": score_flat_regular,
+                            "c_target": w5p + c_sign * a_len * 0.0, // C ≈ A's start
+                            "c_alt_min": w5p + c_sign * a_len * 0.0,
+                            "c_alt_extended": bp + c_sign * a_len,
+                            "rule": "B ≈ A length; C lands near W5 level"
+                        },
+                        {
+                            "kind": "flat_expanded",
+                            "score": score_flat_expanded,
+                            "c_target": bp + c_sign * a_len * 1.272,
+                            "c_alt_min": bp + c_sign * a_len,
+                            "c_alt_max": bp + c_sign * a_len * 1.618,
+                            "rule": "B exceeds W5 by 5-38%; C extends past A by 1.272-1.618"
+                        },
+                        {
+                            "kind": "flat_running",
+                            "score": score_flat_running,
+                            "c_target": bp + c_sign * a_len * 0.618,
+                            "c_alt_min": bp + c_sign * a_len * 0.382,
+                            "c_alt_max": bp + c_sign * a_len,
+                            "rule": "B exceeds W5 by 38%+; C truncated, fails to reach A"
+                        }
+                    ]);
+                    // Primary = max-score branch. Tie-breaker: prefer
+                    // the more "common" shape (zigzag > flat_regular
+                    // > flat_expanded > flat_running).
+                    let primary_branch = pick_primary_branch(&[
+                        ("zigzag", score_zigzag),
+                        ("flat_regular", score_flat_regular),
+                        ("flat_expanded", score_flat_expanded),
+                        ("flat_running", score_flat_running),
+                    ]);
                     serde_json::json!({
                         "expected_next_wave": "C",
                         "expected_direction": (c_sign as i32),
@@ -387,7 +516,11 @@ fn compute_projection(
                             { "label": "C? (1.618×A)", "price": c_1618 }
                         ],
                         "invalidation_price": bp,
-                        "invalidation_rule": "C must clear A end for valid zigzag/flat completion"
+                        "invalidation_rule": "C must clear A end for valid zigzag/flat completion",
+                        "branches": branches,
+                        "primary_branch": primary_branch,
+                        "observed_b_to_a_ratio": b_to_a,
+                        "b_exceeds_w5": b_exceeds_w5
                     })
                 }
                 _ => Value::Null,
