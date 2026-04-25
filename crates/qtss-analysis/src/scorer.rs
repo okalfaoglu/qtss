@@ -166,19 +166,19 @@ impl ConfluenceScorer {
         .fetch_all(pool)
         .await?;
 
-        // v1.1.6 — family clustering to kill fake confluence.
-        // Before: 3 SMC detections (bos_bull + fvg_bull + liquidity_sweep_bull)
-        // all landed as 3 separate votes. They're really one structural
-        // observation under different names.
-        // After: per (family, direction) bucket, only the strongest
-        // detection contributes. A family still votes multiple times
-        // iff they disagree (family has both bull+bear hits) — rare
-        // but legitimate.
+        // v1.1.6 — per-family max (revert from v1.2.3 cluster
+        // grouping). Cluster grouping over-collapsed the signal:
+        // even on clean trend days the bull/bear imbalance shrank
+        // below the strong threshold and the allocator went silent.
+        //
+        // Per-family max preserves the original intent (kill the
+        // "3 SMC events = 3 votes" inflation) while letting
+        // independent families (motive, harmonic, smc, wyckoff …)
+        // each contribute one vote in their direction.
         let mut bull = 0.0f64;
         let mut bear = 0.0f64;
         let mut per_family: HashMap<String, (f64, usize)> = HashMap::new();
         // (family, direction_sign_key) -> best contribution seen so far.
-        // direction_sign_key: "b" = bull, "s" = bear, "n" = neutral.
         let mut family_best: HashMap<(String, &'static str), f64> = HashMap::new();
 
         for r in rows {
@@ -201,19 +201,12 @@ impl ConfluenceScorer {
                 -1 => "s",
                 _ => "n",
             };
-            // Keep only the MAX contribution per (family, direction)
-            // rather than summing them — this breaks the
-            // "3 detections of the same trend = 3× vote" fake confluence
-            // that ChatGPT/Gemini both flagged.
             let slot = family_best
                 .entry((family.clone(), dir_key))
                 .or_insert(0.0);
             if contribution > *slot {
                 *slot = contribution;
             }
-            // `contributors` output still tracks raw sum + count for
-            // audit so the GUI can distinguish "1 strong" from
-            // "5 weak" even when they produce the same bucket score.
             let entry = per_family.entry(family).or_insert((0.0, 0));
             entry.0 += contribution;
             entry.1 += 1;
@@ -223,8 +216,6 @@ impl ConfluenceScorer {
                 "b" => bull += best,
                 "s" => bear += best,
                 _ => {
-                    // Neutral: split half each. Preserves rectangles /
-                    // doji visibility without forcing a direction.
                     bull += best * 0.5;
                     bear += best * 0.5;
                 }
@@ -314,6 +305,30 @@ pub async fn load_config(pool: &PgPool) -> ConfluenceConfig {
         cfg.regime_adjusters.insert(inner, v);
     }
     cfg
+}
+
+/// v1.2.3 — Map a pattern family into one of a handful of correlation
+/// clusters. Within a cluster only the strongest contribution counts;
+/// across clusters they sum. Tuned by hand from the families currently
+/// produced by the engine writers — extend as new families come online.
+fn family_to_cluster(family: &str) -> &'static str {
+    match family {
+        // Same underlying observation in different vocabularies — one
+        // structural break tends to fire all three at once.
+        "smc" | "classical" | "range" => "structure",
+        // Wave-structure family.
+        "motive" | "abc" => "elliott",
+        // Composite-operator phase.
+        "wyckoff" => "wyckoff",
+        // Session-open context — gap + ORB usually share regime info.
+        "gap" | "orb" => "context",
+        // Tape / derivatives flow — both read order book + funding.
+        "orderflow" | "derivatives" => "flow",
+        // 1-3 bar reversal — kept solo because it is intentionally
+        // weak and shouldn't piggy-back on structure clusters.
+        "candle" => "candle",
+        _ => "solo",
+    }
 }
 
 /// Translate a symbolic timeframe into minutes per bar. Unknown strings
