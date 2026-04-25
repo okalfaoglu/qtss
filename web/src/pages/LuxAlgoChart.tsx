@@ -867,7 +867,15 @@ export function LuxAlgoChart({
 
     // ── MOTIVE / ABC / FIB BAND / BREAK BOX (TS port) ──
     if (!pineOutput) return;
-    for (const level of pineOutput.levels) {
+    for (let slotIdx = 0; slotIdx < pineOutput.levels.length; slotIdx++) {
+      const level = pineOutput.levels[slotIdx];
+      // Slot enable filter — db source returns ALL slots; respect the
+      // user's Z1..Z5 toolbar checks here so a single-Z view actually
+      // shows a single Z. (Live source already filters server-side via
+      // the `lengths` query param, but db source pulls every row and
+      // we must filter client-side.)
+      const slotCfgGate = slots[slotIdx];
+      if (slotCfgGate && !slotCfgGate.enabled) continue;
       const color = level.color;
       // Elliott formations (motive + ABC + break box + markers) — a
       // single toggle covers the whole family. Fib band has its own.
@@ -878,12 +886,19 @@ export function LuxAlgoChart({
         // Impulse toggle gates the 1-2-3-4-5 body. The motive's ABC is
         // still evaluated below and respects its own per-subkind toggle.
         if (showImpulse) {
-          const pts: LineData[] = mw.anchors
-            .map((a) => {
-              const t = timeAt(a.bar_index);
-              return t === null ? null : { time: t, value: a.price };
-            })
-            .filter((x): x is LineData => x !== null);
+          // STRICT: every anchor must map to a candle in the current
+          // window. If ANY anchor times out (= candle for that bar
+          // index isn't loaded), drop the whole motive — otherwise
+          // the chart paints a half-motive that floats above the
+          // empty pre-window void (user reported this on ETH 1d Z4
+          // where an old motive's W1/W2 sat in the dead zone before
+          // the chart's leftmost candle).
+          const ptsRaw: Array<LineData | null> = mw.anchors.map((a) => {
+            const t = timeAt(a.bar_index);
+            return t === null ? null : { time: t, value: a.price };
+          });
+          if (ptsRaw.some((p) => p === null)) continue;
+          const pts = ptsRaw as LineData[];
           const ptsClean = dedupeByTime(pts);
           if (ptsClean.length >= 2) {
             const style = mw.live ? LineStyle.Solid : LineStyle.Dotted;

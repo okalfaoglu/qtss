@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
 use qtss_elliott::luxalgo_pine_port::{
-    AbcPattern, LevelOutput, MotivePattern, PinePortOutput, PivotPoint, TrianglePattern,
+    AbcPattern, BreakBox, FibBand, LevelOutput, MotivePattern, NextMarker, PinePortOutput,
+    PivotPoint, TrianglePattern,
 };
 use qtss_storage::market_bars;
 
@@ -60,6 +61,11 @@ struct DetectionRow {
     live: Option<bool>,
     next_hint: Option<bool>,
     invalidated: bool,
+    /// raw_meta carries the writer-stored `fib_band` (the LuxAlgo
+    /// retracement band tied to the freshest motive of each level).
+    /// Without this the db source rendered without fib bands while
+    /// the live source did — user reported the inconsistency.
+    raw_meta: serde_json::Value,
 }
 
 async fn load_detections(
@@ -73,7 +79,8 @@ async fn load_detections(
 ) -> Result<Vec<DetectionRow>, ApiError> {
     let rows = sqlx::query(
         r#"SELECT slot, pattern_family, subkind, direction,
-                  start_bar, end_bar, anchors, live, next_hint, invalidated
+                  start_bar, end_bar, anchors, live, next_hint, invalidated,
+                  raw_meta
              FROM detections
             WHERE exchange = $1 AND segment = $2 AND symbol = $3
               AND timeframe = $4 AND mode = 'live'
@@ -103,6 +110,7 @@ async fn load_detections(
             live: r.try_get("live").ok(),
             next_hint: r.try_get("next_hint").ok(),
             invalidated: r.get("invalidated"),
+            raw_meta: r.try_get("raw_meta").unwrap_or(serde_json::Value::Null),
         })
         .collect())
 }
@@ -222,6 +230,17 @@ fn build_pine_output(
         let color = palette.get(idx).copied().unwrap_or("#888888").to_string();
         let length = lengths.get(idx).copied().unwrap_or(3);
 
+        // Pull the latest motive's raw_meta NOW, before the move-out
+        // loop below. raw_meta carries fib_band / break_box /
+        // next_marker — without it the db source rendered without the
+        // mor break-box rectangle and fib retracement band that the
+        // live source painted (user reported the inconsistency).
+        let latest_meta: Option<serde_json::Value> = bucket
+            .motives
+            .iter()
+            .max_by_key(|(r, _)| r.end_bar)
+            .map(|(r, _)| r.raw_meta.clone());
+
         let mut motives: Vec<MotivePattern> = Vec::with_capacity(bucket.motives.len());
         for (m_row, m_anchors) in bucket.motives {
             if m_anchors.len() != 6 {
@@ -242,14 +261,39 @@ fn build_pine_output(
                     invalidated: a.invalidated,
                     subkind: Some(a.subkind.clone()),
                 });
+            // Hydrate break_box / next_marker from THIS motive's
+            // raw_meta (writer stamps them under those keys).
+            let break_box = m_row
+                .raw_meta
+                .get("break_box")
+                .filter(|v| !v.is_null())
+                .and_then(|v| {
+                    Some(BreakBox {
+                        left_bar: v.get("left_bar")?.as_i64()?,
+                        right_bar: v.get("right_bar")?.as_i64()?,
+                        top: v.get("top")?.as_f64()?,
+                        bottom: v.get("bottom")?.as_f64()?,
+                    })
+                });
+            let next_marker = m_row
+                .raw_meta
+                .get("next_marker")
+                .filter(|v| !v.is_null())
+                .and_then(|v| {
+                    Some(NextMarker {
+                        direction: v.get("direction")?.as_i64()? as i8,
+                        bar_index: v.get("bar_index")?.as_i64()?,
+                        price: v.get("price")?.as_f64()?,
+                    })
+                });
             motives.push(MotivePattern {
                 direction: m_row.direction as i8,
                 anchors: anchors_to_array_6(&m_anchors),
                 live: m_row.live.unwrap_or(false),
                 next_hint: m_row.next_hint.unwrap_or(false),
                 abc: matched_abc,
-                break_box: None,   // not persisted
-                next_marker: None, // not persisted
+                break_box,
+                next_marker,
             });
         }
 
@@ -266,13 +310,41 @@ fn build_pine_output(
             });
         }
 
+        // Latest motive's writer-stored fib_band — pulled from
+        // `latest_meta` we captured above the consume loop.
+        let latest_fib_band: Option<FibBand> = latest_meta
+            .as_ref()
+            .and_then(|m| m.get("fib_band"))
+            .filter(|v| !v.is_null())
+            .and_then(|v| {
+                let x_anchor = v.get("x_anchor")?.as_i64()?;
+                let x_far = v.get("x_far")?.as_i64()?;
+                let pole_top = v.get("pole_top")?.as_f64()?;
+                let pole_bottom = v.get("pole_bottom")?.as_f64()?;
+                let y_500 = v.get("y_500")?.as_f64()?;
+                let y_618 = v.get("y_618")?.as_f64()?;
+                let y_764 = v.get("y_764")?.as_f64()?;
+                let y_854 = v.get("y_854")?.as_f64()?;
+                let broken = v.get("broken").and_then(|x| x.as_bool()).unwrap_or(false);
+                Some(FibBand {
+                    x_anchor,
+                    x_far,
+                    pole_top,
+                    pole_bottom,
+                    y_500,
+                    y_618,
+                    y_764,
+                    y_854,
+                    broken,
+                })
+            });
         levels.push(LevelOutput {
             length,
             color,
             pivots: Vec::new(),         // not persisted; chart falls back to /v2/zigzag for dots
             motives,
             break_markers: Vec::new(),  // not persisted
-            fib_band: None,             // computed live only
+            fib_band: latest_fib_band,  // ← rebuilt from raw_meta of the latest motive
             triangles,
         });
     }
