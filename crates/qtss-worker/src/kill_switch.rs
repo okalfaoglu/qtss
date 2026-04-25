@@ -23,14 +23,49 @@ use tracing::{info, warn};
 pub const KILL_SWITCH_APP_CONFIG_KEY: &str = "kill_switch_trading_halted";
 
 fn decimal_from_json_value(v: &serde_json::Value) -> Option<Decimal> {
-    v.get("value")
-        .and_then(|x| x.as_str())
-        .or_else(|| v.as_str())
-        .and_then(|s| Decimal::from_str(s.trim()).ok())
+    // Accepts `{"value": "1.23"}`, `{"value": 1.23}`, bare strings, and bare
+    // numbers — earlier version only handled the string variants which made
+    // the `account.equity_usd = {"value": 1000}` master key invisible to the
+    // kill switch (FAZ 25.x single-source migration).
+    if let Some(field) = v.get("value") {
+        if let Some(s) = field.as_str() {
+            if let Ok(d) = Decimal::from_str(s.trim()) {
+                return Some(d);
+            }
+        }
+        if let Some(f) = field.as_f64() {
+            if let Some(d) = Decimal::from_f64_retain(f) {
+                return Some(d);
+            }
+        }
+        if let Some(i) = field.as_i64() {
+            return Some(Decimal::from(i));
+        }
+        if let Some(u) = field.as_u64() {
+            return Some(Decimal::from(u));
+        }
+    }
+    if let Some(s) = v.as_str() {
+        if let Ok(d) = Decimal::from_str(s.trim()) {
+            return Some(d);
+        }
+    }
+    if let Some(f) = v.as_f64() {
+        return Decimal::from_f64_retain(f);
+    }
+    None
 }
 
 async fn reference_equity_usdt(pool: &PgPool) -> Decimal {
+    // FAZ 25.x — single source of truth: master `account.equity_usd`,
+    // legacy `worker.kill_switch_reference_equity_usdt` only as fallback.
+    // Env override still respected for ops convenience.
     let repo = SystemConfigRepository::new(pool.clone());
+    if let Ok(Some(row)) = repo.get("account", "equity_usd").await {
+        if let Some(d) = decimal_from_json_value(&row.value) {
+            return d;
+        }
+    }
     if let Ok(Some(row)) = repo.get("worker", "kill_switch_reference_equity_usdt").await {
         if let Some(d) = decimal_from_json_value(&row.value) {
             return d;
@@ -39,7 +74,7 @@ async fn reference_equity_usdt(pool: &PgPool) -> Decimal {
     std::env::var("QTSS_KILL_SWITCH_REFERENCE_EQUITY_USDT")
         .ok()
         .and_then(|s| Decimal::from_str(s.trim()).ok())
-        .unwrap_or_else(|| Decimal::new(100_000, 0))
+        .unwrap_or_else(|| Decimal::new(1_000, 0))
 }
 
 /// `QTSS_MAX_DRAWDOWN_PCT` (örn. 5.0 = %5) ile günlük kayıp limiti (USDT, negatif eşik).

@@ -11,6 +11,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
+use qtss_storage::resolve_account_equity_usd;
+
 use crate::error::ApiError;
 use crate::state::SharedState;
 
@@ -252,23 +254,16 @@ async fn get_radar_live(
         None
     };
 
-    // Starting capital — reuse the aggregator's config key so both
-    // pages show the same anchor. Fallback to a safe 1.5M if the row
-    // is missing.
-    let starting_capital = sqlx::query(
-        "SELECT value FROM system_config
-           WHERE module = 'radar'
-             AND config_key = 'default_starting_capital_usd'",
+    // FAZ 25.x — single source of truth: prefer `account.equity_usd`
+    // (master), fall back to the legacy radar key during migration.
+    // 1000 USD baseline ensures /reports never paints the stale 1.5 M
+    // ghost again. Resolver: `qtss_storage::resolve_account_equity_usd`.
+    let starting_capital = resolve_account_equity_usd(
+        &st.pool,
+        "radar",
+        "default_starting_capital_usd",
     )
-    .fetch_optional(&st.pool)
-    .await
-    .ok()
-    .flatten()
-    .and_then(|r| {
-        let v: serde_json::Value = r.try_get("value").ok()?;
-        v.get("value").and_then(|x| x.as_f64())
-    })
-    .unwrap_or(1_500_000.0);
+    .await;
     let current_equity = starting_capital + pnl_usd_sum;
     let cash_position_pct = if starting_capital > 0.0 {
         ((starting_capital - open_exposure).max(0.0) / starting_capital * 100.0)

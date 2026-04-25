@@ -378,6 +378,44 @@ pub async fn resolve_system_csv(
         .collect()
 }
 
+/// FAZ 25.x — single source of truth for account equity / starting capital.
+///
+/// User: "sermaye tek kaynak olsun." Reads `system_config.account.equity_usd` first;
+/// only falls back to the named legacy key if the master is missing (so a half-deployed
+/// state still works). Final fallback: built-in `1_000.0` USD baseline (NOT the old
+/// 1.5 M ghost default — that produced misleading radar reports for weeks).
+///
+/// Pass `legacy_module` / `legacy_key` of the migration-era flag the caller used to
+/// read directly. Once every consumer migrates, the legacy lookup can be deleted.
+pub async fn resolve_account_equity_usd(
+    pool: &PgPool,
+    legacy_module: &str,
+    legacy_key: &str,
+) -> f64 {
+    let repo = SystemConfigRepository::new(pool.clone());
+
+    // 1) Master key.
+    if let Ok(Some(row)) = repo.get("account", "equity_usd").await {
+        if let Some(v) = f64_from_config_value(&row.value) {
+            if v.is_finite() && v > 0.0 {
+                return v;
+            }
+        }
+    }
+
+    // 2) Legacy module-specific key (soft fallback during migration).
+    if let Ok(Some(row)) = repo.get(legacy_module, legacy_key).await {
+        if let Some(v) = f64_from_config_value(&row.value) {
+            if v.is_finite() && v > 0.0 {
+                return v;
+            }
+        }
+    }
+
+    // 3) Built-in default — 1000 USD baseline.
+    1_000.0
+}
+
 /// Normalizes user-facing locale hints to `en` or `tr` (worker notify default).
 pub fn normalize_notify_locale_code(raw: &str) -> Option<&'static str> {
     let t = raw.trim().to_lowercase();

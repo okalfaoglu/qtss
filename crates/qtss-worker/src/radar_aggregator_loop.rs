@@ -19,6 +19,7 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, TimeZone, Utc};
+use qtss_storage::resolve_account_equity_usd;
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use tracing::{debug, info, warn};
@@ -418,17 +419,12 @@ async fn load_tick_secs(pool: &PgPool) -> u64 {
 }
 
 async fn load_cfg(pool: &PgPool) -> Cfg {
-    let row = sqlx::query(
-        "SELECT value FROM system_config WHERE module = 'radar' AND config_key = 'default_starting_capital_usd'",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    let default_cap = row
-        .and_then(|r| r.try_get::<Value, _>("value").ok())
-        .and_then(|v| v.get("value").and_then(|x| x.as_f64()))
-        .unwrap_or(1_500_000.0);
+    // FAZ 25.x — single source of truth (`account.equity_usd`); legacy
+    // radar key only used as a soft fallback during migration. 1000 USD
+    // built-in default replaces the old 1.5 M ghost number that kept
+    // leaking back into /reports.
+    let default_cap =
+        resolve_account_equity_usd(pool, "radar", "default_starting_capital_usd").await;
     Cfg {
         default_starting_capital: default_cap,
     }
