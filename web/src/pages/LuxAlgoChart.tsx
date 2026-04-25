@@ -250,6 +250,15 @@ export interface LuxAlgoChartDefaults {
    * wrapper so the chart fits its parent container instead of the
    * viewport. Used by IQChart split-view. Default false (standalone). */
   embedded?: boolean;
+  /** Notify parent every time the chart's symbol / exchange / segment /
+   * tf changes. Used by IQChart so the WaveBarsPanel below the chart
+   * stays in sync with the user's TF / symbol selection. */
+  onContextChange?: (next: {
+    exchange: string;
+    segment: string;
+    symbol: string;
+    tf: string;
+  }) => void;
 }
 
 export function LuxAlgoChart({
@@ -259,6 +268,12 @@ export function LuxAlgoChart({
   const [segment, setSegment] = useState("futures");
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [tf, setTf] = useState("4h");
+  // FAZ 25.1 — keep IQChart's WaveBarsPanel in sync. Fires on any
+  // venue / symbol / TF change. No-op when the host doesn't pass a
+  // callback (standalone /v2/chart).
+  useEffect(() => {
+    defaults?.onContextChange?.({ exchange, segment, symbol, tf });
+  }, [exchange, segment, symbol, tf, defaults?.onContextChange]);
   const [slots, setSlots] = useState<LevelSlot[]>(() => {
     if (!defaults?.slotsEnabled) return DEFAULT_SLOTS;
     return DEFAULT_SLOTS.map((s, i) => ({

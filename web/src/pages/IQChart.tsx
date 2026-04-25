@@ -6,6 +6,7 @@
 // independently. Future PR-25B will extend this page with the IQ-D
 // structure tracker overlay.
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { LuxAlgoChart } from "./LuxAlgoChart";
@@ -47,16 +48,20 @@ function StageBadge({ stage }: { stage: string }) {
 }
 
 // Lightweight stats panel that reads /v2/elliott-early for the
-// currently-viewed symbol+tf. We can't share state with the underlying
-// LuxAlgoChart (no URL params right now), so we hard-code the demo
-// pair (BTCUSDT 4h) here — operators can still click through any
-// symbol on the chart toolbar; the sidebar just shows BTC stats as
-// a quick cross-check that the writer is producing data.
-function EarlyStatsPanel() {
+// currently-viewed symbol+tf. Symbol/tf are now controlled from
+// IQChart so the panel re-fetches whenever the user flips TF in the
+// chart toolbar.
+function EarlyStatsPanel({
+  symbol = "BTCUSDT",
+  tf = "4h",
+}: {
+  symbol?: string;
+  tf?: string;
+}) {
   const { data, isLoading, isError } = useQuery<EarlyResponse>({
-    queryKey: ["iq-chart", "early-stats", "BTCUSDT", "4h"],
+    queryKey: ["iq-chart", "early-stats", symbol, tf],
     queryFn: () =>
-      apiFetch(`/v2/elliott-early/binance/BTCUSDT/4h?segment=futures&limit=20`),
+      apiFetch(`/v2/elliott-early/binance/${symbol}/${tf}?segment=futures&limit=20`),
     refetchInterval: 15_000,
   });
   const markers = data?.markers ?? [];
@@ -73,7 +78,7 @@ function EarlyStatsPanel() {
   return (
     <aside className="hidden w-[300px] shrink-0 overflow-y-auto border-l border-zinc-800 bg-zinc-950/40 p-3 text-xs xl:block">
       <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-        BTCUSDT 4h — Early-Wave Activity
+        {symbol} {tf} — Early-Wave Activity
       </h3>
       <div className="mb-3 flex items-center gap-2 text-[11px]">
         <StageBadge stage="nascent" />
@@ -124,10 +129,17 @@ function EarlyStatsPanel() {
 }
 
 export function IQChart() {
-  // Viewport-bazlı yükseklik — Layout.tsx main flex-1 overflow-auto
-  // olduğu için h-full viewport'a değil content'e çözünüyordu; bu
-  // sebepten wave-bars paneli ekrandan aşağı kayıp gözükmez oluyordu.
-  // 100dvh - header - padding = ~ ekran yüksekliği.
+  // Shared chart context so the WaveBarsPanel below stays in sync
+  // with the user's venue / symbol / TF picks in the LuxAlgoChart
+  // toolbar above. LuxAlgoChart manages its own local state but pings
+  // us via onContextChange whenever any of these flip.
+  const [ctx, setCtx] = useState({
+    exchange: "binance",
+    segment: "futures",
+    symbol: "BTCUSDT",
+    tf: "4h",
+  });
+
   return (
     <div
       className="flex flex-col"
@@ -144,22 +156,22 @@ export function IQChart() {
                 showRange: false,
                 showGap: false,
                 slotsEnabled: [true, true, true, true, true],
-                embedded: true,   // critical — drop the standalone
-                                  // -m-6 + 100vh-57px wrapper so the
-                                  // chart fits IQChart's split layout
+                embedded: true,
+                onContextChange: setCtx,
               }}
             />
           </div>
-          {/* Bottom half: pivot-based wave bars. WaveBarsPanel keeps
-              its own collapse state — collapsed = header only (~30px),
-              expanded = ~230px (header + chart + footer). flex-none so
-              the panel takes only its natural height; the rest goes
-              to the LuxAlgoChart above. */}
+          {/* Bottom half: pivot-based wave bars. */}
           <div className="flex-none border-t-2 border-zinc-800">
-            <WaveBarsPanel />
+            <WaveBarsPanel
+              exchange={ctx.exchange}
+              segment={ctx.segment}
+              symbol={ctx.symbol}
+              tf={ctx.tf}
+            />
           </div>
         </div>
-        <EarlyStatsPanel />
+        <EarlyStatsPanel symbol={ctx.symbol} tf={ctx.tf} />
       </div>
     </div>
   );
