@@ -9,6 +9,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { LuxAlgoChart } from "./LuxAlgoChart";
+import { WaveBarsPanel } from "./WaveBarsPanel";
 import { apiFetch } from "../lib/api";
 
 type EarlyMarker = {
@@ -125,23 +126,28 @@ function EarlyStatsPanel() {
 export function IQChart() {
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-zinc-800 bg-zinc-900/60 px-4 py-2">
-        <div className="flex items-baseline gap-3">
-          <h1 className="text-sm font-semibold text-emerald-400">IQ Chart</h1>
-          <span className="text-[11px] text-zinc-500">
-            FAZ 25 Predictive Layer · Elliott early-wave (N/F/X)
-          </span>
-        </div>
-        <p className="mt-1 text-[11px] leading-tight text-zinc-400">
-          <span className="font-mono text-emerald-300">N</span> nascent (4 pivots, W3 broke W1) ·
-          <span className="ml-1 font-mono text-cyan-300">F</span> forming (5 pivots, W4 in) ·
-          <span className="ml-1 font-mono text-violet-300">X</span> extended (full motive, tagged).
-          Toggle <span className="font-mono">"N/F/X early"</span> in the chart toolbar to show / hide.
-        </p>
-      </div>
       <div className="flex flex-1 overflow-hidden">
-        <div className="flex-1 overflow-hidden">
-          <LuxAlgoChart />
+        <div className="flex flex-1 flex-col overflow-hidden">
+          {/* Top half: existing OHLC chart with N/F/X early-wave toggle */}
+          <div className="flex-1 overflow-hidden border-b-2 border-zinc-800">
+            <LuxAlgoChart
+              defaults={{
+                showZigzag: false,   // user request: clean baseline for IQ
+                showHarmonic: false, // hide entire harmonic master toggle
+                showRange: false,
+                showGap: false,
+                // Z1-Z5 all enabled out of the box on IQ Chart so the
+                // user sees every degree without having to flip checks.
+                slotsEnabled: [true, true, true, true, true],
+              }}
+            />
+          </div>
+          {/* Bottom half: pivot-based wave bars (each candle = one
+              Elliott wave). FAZ 25.1 — the noise-cleaned candle
+              structure designed for clean Elliott counting. */}
+          <div className="h-[360px] overflow-hidden">
+            <WaveBarsPanel />
+          </div>
         </div>
         <EarlyStatsPanel />
       </div>

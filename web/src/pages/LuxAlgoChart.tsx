@@ -232,16 +232,40 @@ function dedupeByTime(pts: LineData[]): LineData[] {
   return out;
 }
 
-export function LuxAlgoChart() {
+/**
+ * Optional per-host overrides for the default toggle states. Used by
+ * IQChart to hide ZigZag / Harmonic master / Range / Gap on first
+ * render so the Elliott early-wave markers are easier to spot.
+ * `undefined` keeps the existing default (true) to preserve behaviour
+ * on /v2/chart exactly as before.
+ */
+export interface LuxAlgoChartDefaults {
+  showZigzag?: boolean;
+  showHarmonic?: boolean;
+  showRange?: boolean;
+  showGap?: boolean;
+  /** Override Z1..Z5 enabled flags. 5-element bool array. */
+  slotsEnabled?: [boolean, boolean, boolean, boolean, boolean];
+}
+
+export function LuxAlgoChart({
+  defaults,
+}: { defaults?: LuxAlgoChartDefaults } = {}) {
   const [exchange, setExchange] = useState("binance");
   const [segment, setSegment] = useState("futures");
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [tf, setTf] = useState("4h");
-  const [slots, setSlots] = useState<LevelSlot[]>(DEFAULT_SLOTS);
+  const [slots, setSlots] = useState<LevelSlot[]>(() => {
+    if (!defaults?.slotsEnabled) return DEFAULT_SLOTS;
+    return DEFAULT_SLOTS.map((s, i) => ({
+      ...s,
+      enabled: defaults.slotsEnabled![i] ?? s.enabled,
+    }));
+  });
   const [showFibBand, setShowFibBand] = useState(true);
   const [showHhLl, setShowHhLl] = useState(false);
   const [onlyLatestMotive, setOnlyLatestMotive] = useState(true);
-  const [showZigzag, setShowZigzag] = useState(true);
+  const [showZigzag, setShowZigzag] = useState(defaults?.showZigzag ?? true);
   const [showElliott, setShowElliott] = useState(true);
   // FAZ 25 PR-25A — early-wave Elliott markers (nascent / forming /
   // extended impulse). Persisted under pattern_family='elliott_early';
@@ -278,7 +302,7 @@ export function LuxAlgoChart() {
   // with labels and a green PRZ rectangle at D, matching the canonical
   // textbook rendering (Scott Carney). Source follows `detectionSource`
   // so the live/db toggle covers both families at once.
-  const [showHarmonic, setShowHarmonic] = useState(true);
+  const [showHarmonic, setShowHarmonic] = useState(defaults?.showHarmonic ?? true);
 
   // Per-pattern filter for the Harmonic family. Each key matches the
   // Rust spec name from qtss_harmonic::PATTERNS; the suffix _bull/_bear
@@ -455,8 +479,8 @@ export function LuxAlgoChart() {
   // operator can visually diff strategies side-by-side.
   const [modeFilter, setModeFilter] = useState<"live" | "dry" | "backtest">("live");
   const [showClassical, setShowClassical] = useState(false);
-  const [showRange, setShowRange] = useState(true);
-  const [showGap, setShowGap] = useState(true);
+  const [showRange, setShowRange] = useState(defaults?.showRange ?? true);
+  const [showGap, setShowGap] = useState(defaults?.showGap ?? true);
   // Candlestick patterns (43 in the library). Default off to keep the
   // chart legible — 1h has ~3 candle marks per day; 4h a handful per
   // week. Enable when evaluating short-term reversals.
