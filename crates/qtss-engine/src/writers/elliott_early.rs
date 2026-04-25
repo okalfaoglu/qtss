@@ -40,6 +40,36 @@ const WAVE2_FIB_REFS: &[f64] = &[0.382, 0.5, 0.618];
 const WAVE3_EXT_REFS: &[f64] = &[1.618, 2.0, 2.618];
 const WAVE4_FIB_REFS: &[f64] = &[0.236, 0.382];
 
+/// Default ABC anchor Fib targets — used when scoring "how close
+/// did this pivot land to a canonical Fibonacci ratio". A retraces
+/// the impulse, B retraces A, C extends A.
+const ABC_A_FIB_TARGETS: &[f64] = &[0.382, 0.5, 0.618, 0.786];
+const ABC_B_FIB_TARGETS: &[f64] = &[0.382, 0.5, 0.618];
+const ABC_C_FIB_TARGETS: &[f64] = &[0.618, 1.0, 1.618];
+
+/// Score `value` against a set of canonical Fib targets. Returns
+/// 1.0 when value matches a target exactly, decaying with distance.
+/// Used for graded confidence instead of binary in-band/out-of-band.
+fn fib_proximity_score(value: f64, targets: &[f64]) -> f64 {
+    targets
+        .iter()
+        .map(|t| {
+            let d = (value - t).abs() / t.max(0.001);
+            (1.0 - d.min(1.0)).max(0.0)
+        })
+        .fold(0.0_f64, f64::max)
+}
+
+/// Apply a symmetric tolerance widening to a [lo, hi] band.
+/// E.g. (0.236, 0.886, 0.05) → (0.224, 0.930). Accepts pivots a
+/// hair outside the textbook band — Elliott practitioners always
+/// allow ~5% wiggle because pivot prints are noisy.
+fn widen_band(lo: f64, hi: f64, tol_pct: f64) -> (f64, f64) {
+    let span = hi - lo;
+    let pad = span * tol_pct;
+    (lo - pad, hi + pad)
+}
+
 #[derive(Debug, Clone)]
 pub struct EarlyMatch {
     pub subkind: String,
@@ -49,6 +79,12 @@ pub struct EarlyMatch {
     pub invalidation_price: f64, // p0 — same as full impulse rule
     pub stage: &'static str,     // "nascent" | "forming" | "extended"
     pub w3_extension: f64,       // multiple of W1; 1.0 = same length, 1.618 = canonical
+    /// Per-anchor confidence score (0..1, higher = closer to a
+    /// canonical Fib target). Indexed parallel to `anchors`. Empty
+    /// vector if scoring not applicable to this stage. Persisted in
+    /// raw_meta.anchor_scores for the frontend to render graded
+    /// opacity / line width instead of binary solid/dotted.
+    pub anchor_scores: Vec<f64>,
 }
 
 /// Mini pivot detection on raw OHLC bars — used as a fallback when
@@ -331,6 +367,7 @@ pub fn scan_level(
                 invalidation_price: p5.price,
                 stage: "abc_projected",
                 w3_extension: 0.0,
+                anchor_scores: vec![],
             });
         }
         // ─── abc_projected (1 real): A real, simulate B + C ─────────
@@ -368,6 +405,7 @@ pub fn scan_level(
                     invalidation_price: p5.price,
                     stage: "abc_projected",
                     w3_extension: 0.0,
+                    anchor_scores: vec![],
                 });
             }
         }
@@ -395,8 +433,15 @@ pub fn scan_level(
                     // satisfy classic ABC ratios — wait for confirmation".
                     let impulse_len = (p5.price - p0.price).abs();
                     let a_ret = a_len / impulse_len.max(1e-9);
-                    let a_in_band = (0.236..=0.886).contains(&a_ret);
-                    let b_in_band = (0.236..=0.786).contains(&(b_ret / a_len));
+                    // Tolerance-widened bands. Default 5% padding so
+                    // a 0.224 retrace (textbook ceiling 0.236) still
+                    // counts as "real". An operator can tighten or
+                    // loosen via system_config.elliott_early.fib_tolerance_pct.
+                    const FIB_TOL: f64 = 0.05;
+                    let (a_lo, a_hi) = widen_band(0.236, 0.886, FIB_TOL);
+                    let (b_lo, b_hi) = widen_band(0.236, 0.786, FIB_TOL);
+                    let a_in_band = (a_lo..=a_hi).contains(&a_ret);
+                    let b_in_band = (b_lo..=b_hi).contains(&(b_ret / a_len));
                     let mut a_clone = a_anchor.clone();
                     if !a_in_band {
                         a_clone.label_override = Some("a?".into());
@@ -432,6 +477,12 @@ pub fn scan_level(
                         invalidation_price: p5.price,
                         stage: "abc_nascent",
                         w3_extension: 0.0,
+                        anchor_scores: vec![
+                            1.0, // W5 always 1.0 (anchor of motive)
+                            fib_proximity_score(a_ret, ABC_A_FIB_TARGETS),
+                            fib_proximity_score(b_ret / a_len, ABC_B_FIB_TARGETS),
+                            0.0, // C projected — no real value yet
+                        ],
                     });
                 }
             }
@@ -456,11 +507,15 @@ pub fn scan_level(
                     // violation, treat as unconfirmed shape).
                     let impulse_len = (p5.price - p0.price).abs();
                     let b_ret = (b_anchor.price - a_anchor.price).abs();
-                    let a_in_band =
-                        (0.236..=0.886).contains(&(a_len / impulse_len.max(1e-9)));
-                    let b_in_band = (0.236..=0.786).contains(&(b_ret / a_len));
+                    const FIB_TOL: f64 = 0.05;
+                    let a_ratio = a_len / impulse_len.max(1e-9);
+                    let (a_lo, a_hi) = widen_band(0.236, 0.886, FIB_TOL);
+                    let (b_lo, b_hi) = widen_band(0.236, 0.786, FIB_TOL);
+                    let (c_lo, c_hi) = widen_band(0.618, 2.618, FIB_TOL);
+                    let a_in_band = (a_lo..=a_hi).contains(&a_ratio);
+                    let b_in_band = (b_lo..=b_hi).contains(&(b_ret / a_len));
                     let c_ratio = c_len / a_len;
-                    let c_in_band = (0.618..=2.618).contains(&c_ratio);
+                    let c_in_band = (c_lo..=c_hi).contains(&c_ratio);
                     let mut a_clone = a_anchor.clone();
                     if !a_in_band {
                         a_clone.label_override = Some("a?".into());
@@ -481,6 +536,12 @@ pub fn scan_level(
                         invalidation_price: p5.price,
                         stage: "abc_forming",
                         w3_extension: 0.0,
+                        anchor_scores: vec![
+                            1.0, // W5 always anchored
+                            fib_proximity_score(a_ratio, ABC_A_FIB_TARGETS),
+                            fib_proximity_score(b_ret / a_len, ABC_B_FIB_TARGETS),
+                            fib_proximity_score(c_ratio, ABC_C_FIB_TARGETS),
+                        ],
                     });
                 }
             }
@@ -530,6 +591,7 @@ fn detect_nascent(p: &[PivotPoint]) -> Option<EarlyMatch> {
         invalidation_price: p[0].price,
         stage: "nascent",
         w3_extension: w3_ext,
+        anchor_scores: vec![],
     })
 }
 
@@ -578,6 +640,7 @@ fn detect_forming(p: &[PivotPoint]) -> Option<EarlyMatch> {
         invalidation_price: p[0].price,
         stage: "forming",
         w3_extension: w3_dist / w1_dist,
+        anchor_scores: vec![],
     })
 }
 
@@ -616,7 +679,8 @@ fn detect_extended(motive: &MotivePattern) -> Option<EarlyMatch> {
         invalidation_price: p[0].price,
         stage: "extended",
         w3_extension: w3 / w1,
-    })
+            anchor_scores: vec![],
+        })
 }
 
 // ------------------------------------------------------------------ helpers
@@ -704,6 +768,9 @@ pub async fn write_early(
         "stage":              em.stage,
         "w3_extension":       em.w3_extension,
         "invalidation_price": em.invalidation_price,
+        // Per-anchor confidence (0..1). Frontend reads this for
+        // graded line opacity / dash pattern.
+        "anchor_scores":      em.anchor_scores,
     });
 
     // Drop any stale lesser-stage ABC rows for the SAME parent motive
