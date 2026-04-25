@@ -483,7 +483,16 @@ export function LuxAlgoChart({
     end_bar: number;
     start_time: string;
     end_time: string;
-    anchors: Array<{ bar_index: number; price: number; time?: string; direction: number }>;
+    anchors: Array<{
+      bar_index: number;
+      price: number;
+      time?: string;
+      direction: number;
+      // FAZ 25.1 — backend stamps `label_override` ending in "?" on
+      // anchors that are PROJECTED (Fib-simulated, not real pivots).
+      // Frontend uses this to render dotted segments + dim labels.
+      label_override?: string;
+    }>;
     score: number;
     w3_extension: number;
     invalidation_price: number;
@@ -1069,10 +1078,12 @@ export function LuxAlgoChart({
         nascent: "N",
         forming: "F",
         extended: "X",
-        // FAZ 25 — ABC nascent/forming once a motive completes and
-        // the next 2-3 pivots line up like a corrective.
-        abc_nascent: "a?",
-        abc_forming: "ab?",
+        // ABC stages handled separately (multi-anchor render below);
+        // these single-letter fallbacks only fire if anchors come up
+        // empty for some reason.
+        abc_nascent: "abc",
+        abc_forming: "abc",
+        abc_projected: "abc?",
       };
       // Pre-compute motive bar ranges per slot so we can suppress
       // nascent / forming markers that have since been promoted to a
@@ -1132,58 +1143,66 @@ export function LuxAlgoChart({
         //    anchors[3] = C (label "(c)", dotted line B→C — forming).
         //    Each tick re-renders, so labels and lines reposition as
         //    the underlying pivot tape evolves until ABC locks in.
-        if (em.stage === "abc_nascent" || em.stage === "abc_forming") {
-          const isForming = em.stage === "abc_forming";
+        if (
+          em.stage === "abc_nascent" ||
+          em.stage === "abc_forming" ||
+          em.stage === "abc_projected"
+        ) {
           const segLabels = ["", "(a)", "(b)", "(c)"];
-          const color = "#a855f7"; // violet — distinct from blue/red
+          const colorReal = "#a855f7";   // violet for confirmed legs
+          const colorProj = "#c4b5fd";   // dim violet for projected
 
-          const points: Array<{ time: Time; price: number; idx: number }> = [];
+          const isProjectedAnchor = (a: { label_override?: string }) =>
+            !!a.label_override && a.label_override.endsWith("?");
+
+          const points: Array<{
+            time: Time;
+            price: number;
+            idx: number;
+            projected: boolean;
+          }> = [];
           for (let i = 0; i < em.anchors.length; i++) {
             const a = em.anchors[i];
             const t = anchorTime(a);
             if (t === null) continue;
-            points.push({ time: t, price: a.price, idx: i });
+            points.push({
+              time: t,
+              price: a.price,
+              idx: i,
+              projected: isProjectedAnchor(a),
+            });
           }
           if (points.length < 2) continue;
 
-          // Line segments: index 0→1 SOLID (locked W5→A leg),
-          // 1→2 and 2→3 DOTTED (still in motion).
+          // Each segment ENDING at a projected anchor renders dotted +
+          // dim; segments ending at confirmed pivots are solid +
+          // bright. As pivots confirm tick-by-tick, the dotted lines
+          // turn solid automatically.
           for (let i = 0; i < points.length - 1; i++) {
-            const isFirst = i === 0;
+            const dest = points[i + 1];
             const series = chart.addSeries(LineSeries, {
-              color,
+              color: dest.projected ? colorProj : colorReal,
               lineWidth: 2,
-              lineStyle: isFirst ? LineStyle.Solid : LineStyle.Dotted,
+              lineStyle: dest.projected ? LineStyle.Dotted : LineStyle.Solid,
               priceLineVisible: false,
               lastValueVisible: false,
             });
             series.setData([
               { time: points[i].time, value: points[i].price },
-              { time: points[i + 1].time, value: points[i + 1].price },
+              { time: dest.time, value: dest.price },
             ]);
             overlaySeriesRef.current.push(series);
           }
 
           for (const p of points) {
             if (p.idx === 0) continue;
-            const text = segLabels[p.idx] ?? "?";
+            const baseText = segLabels[p.idx] ?? "?";
+            const text = p.projected ? `${baseText}?` : baseText;
             attachLabel(
               p.time,
               p.price,
               text,
-              color,
-              em.direction === 1 ? "above" : "below"
-            );
-          }
-          // For forming, append a small "?" right next to the (c)
-          // label so the user knows C is in motion (not locked).
-          if (isForming && points.length === 4) {
-            const tip = points[points.length - 1];
-            attachLabel(
-              tip.time,
-              tip.price,
-              "?",
-              "#a1a1aa",
+              p.projected ? colorProj : colorReal,
               em.direction === 1 ? "above" : "below"
             );
           }

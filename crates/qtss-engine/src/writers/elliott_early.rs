@@ -180,13 +180,21 @@ pub fn scan_level(
         }
     }
 
-    // ABC nascent / forming — fires after a completed motive when the
-    // post-W5 pivot tape starts to look like a corrective ABC. Two
-    // stages:
-    //   abc_nascent  : 2 post-W5 pivots = potential A + B forming
-    //   abc_forming  : 3 post-W5 pivots = A + B done, C forming
-    // Full ABC (`pattern_family='abc'`) is still emitted by the base
-    // ElliottWriter; this just catches the in-progress states.
+    // ABC stages — every completed motive that hasn't yet been wrapped
+    // by Pine port's full ABC produces an EarlyMatch with up to four
+    // anchors [W5, A, B, C]. Anchors with a `label_override` ending
+    // in "?" are PROJECTIONS (Fib-based simulation); anchors without
+    // such a marker are real pivots from the post-W5 tape. Stages:
+    //
+    //   abc_projected : 0-1 real post-W5 pivots, the rest projected
+    //                   (W5 only → simulate A,B,C; W5+A → simulate
+    //                    B,C). Lets the user PLAN the correction
+    //                    before pivots confirm. Frontend draws the
+    //                    projected segments dotted.
+    //   abc_nascent   : 2 real post-W5 pivots (A,B), C projected.
+    //                   Solid p5→A→B, dotted B→C.
+    //   abc_forming   : 3 real post-W5 pivots (A,B,C in progress).
+    //                   All four anchors solid.
     //
     // CRITICAL invalidation rule (Elliott): a bull motive's W5 high
     // is the upper boundary of any subsequent ABC. If a post-W5
@@ -258,6 +266,97 @@ pub fn scan_level(
         // +1 bullish ABC (after a bearish motive), -1 bearish ABC.
         let abc_dir: i8 = -motive.direction;
         let suffix = if abc_dir == 1 { "bull" } else { "bear" };
+        let p0 = &motive.anchors[0];
+
+        // Projection geometry — Fib-based, mirrored automatically by
+        // the price arithmetic since W5 - W0 carries the impulse sign.
+        // A retraces ~50% of the W0→W5 swing; B retraces ~50% of A's
+        // leg; C is the same length as A (zigzag baseline).
+        let project_a = |from_price: f64| -> f64 {
+            from_price - 0.5 * (motive.anchors[5].price - p0.price)
+        };
+        let project_b = |from_p5: f64, from_a: f64| -> f64 {
+            from_a - 0.5 * (from_a - from_p5)
+        };
+        let project_c = |from_a: f64, from_b: f64| -> f64 {
+            // C = A - (B - A) keeps C on the same side as A relative
+            // to B, with leg length matching A.
+            from_a - (from_b - from_a)
+        };
+        // Bar spacing — use motive's W3 duration as a proxy. Each ABC
+        // leg projects forward by (W3 bars or 5, whichever is bigger).
+        let leg_bars: i64 = (motive.anchors[3].bar_index
+            - motive.anchors[2].bar_index)
+            .max(5);
+        let make_proj = |bar_offset: i64, price: f64, dir: i8, label: &str| PivotPoint {
+            direction: dir,
+            bar_index: motive.anchors[5].bar_index + bar_offset,
+            price,
+            label_override: Some(label.to_string()),
+            hide_label: false,
+        };
+
+        // ─── abc_projected: 0 real post-W5 pivots, simulate ABC ─────
+        if post_w5.is_empty() {
+            let a_dir = -p5.direction;
+            let b_dir = p5.direction;
+            let c_dir = -p5.direction;
+            let a_proj = project_a(p5.price);
+            let b_proj = project_b(p5.price, a_proj);
+            let c_proj = project_c(a_proj, b_proj);
+            out.push(EarlyMatch {
+                subkind: format!("abc_projected_{suffix}"),
+                direction: abc_dir,
+                anchors: vec![
+                    p5.clone(),
+                    make_proj(leg_bars, a_proj, a_dir, "a?"),
+                    make_proj(leg_bars * 2, b_proj, b_dir, "b?"),
+                    make_proj(leg_bars * 3, c_proj, c_dir, "c?"),
+                ],
+                score: 0.30,
+                invalidation_price: p5.price,
+                stage: "abc_projected",
+                w3_extension: 0.0,
+            });
+        }
+        // ─── abc_projected (1 real): A real, simulate B + C ─────────
+        else if post_w5.len() == 1 {
+            let a_anchor = post_w5[0];
+            if a_anchor.direction != p5.direction {
+                let a_leg_bars =
+                    (a_anchor.bar_index - p5.bar_index).max(5);
+                let b_proj = project_b(p5.price, a_anchor.price);
+                let c_proj = project_c(a_anchor.price, b_proj);
+                let b_dir = p5.direction;
+                let c_dir = -p5.direction;
+                out.push(EarlyMatch {
+                    subkind: format!("abc_projected_{suffix}"),
+                    direction: abc_dir,
+                    anchors: vec![
+                        p5.clone(),
+                        a_anchor.clone(),
+                        PivotPoint {
+                            direction: b_dir,
+                            bar_index: a_anchor.bar_index + a_leg_bars,
+                            price: b_proj,
+                            label_override: Some("b?".into()),
+                            hide_label: false,
+                        },
+                        PivotPoint {
+                            direction: c_dir,
+                            bar_index: a_anchor.bar_index + a_leg_bars * 2,
+                            price: c_proj,
+                            label_override: Some("c?".into()),
+                            hide_label: false,
+                        },
+                    ],
+                    score: 0.40,
+                    invalidation_price: p5.price,
+                    stage: "abc_projected",
+                    w3_extension: 0.0,
+                });
+            }
+        }
         // Nascent ABC: p5 + A pivot + B pivot in correct alternation.
         if post_w5.len() >= 2 {
             let a_anchor = post_w5[0];
@@ -273,10 +372,28 @@ pub fn scan_level(
                 // visible — the corrective B printed a 1.02-ratio
                 // intraday spike beyond the original 0.95 ceiling.
                 if a_len > 0.0 && (0.10..=1.30).contains(&(b_ret / a_len)) {
+                    // Add a projected C anchor so the chart can draw
+                    // the dotted continuation segment all the way to
+                    // the expected target. C ≈ A length (zigzag).
+                    let c_proj = project_c(a_anchor.price, b_anchor.price);
+                    let c_dir = a_anchor.direction; // mirrors A direction
+                    let leg_ab =
+                        (b_anchor.bar_index - a_anchor.bar_index).max(5);
                     out.push(EarlyMatch {
                         subkind: format!("abc_nascent_{suffix}"),
                         direction: abc_dir,
-                        anchors: vec![p5.clone(), a_anchor.clone(), b_anchor.clone()],
+                        anchors: vec![
+                            p5.clone(),
+                            a_anchor.clone(),
+                            b_anchor.clone(),
+                            PivotPoint {
+                                direction: c_dir,
+                                bar_index: b_anchor.bar_index + leg_ab,
+                                price: c_proj,
+                                label_override: Some("c?".into()),
+                                hide_label: false,
+                            },
+                        ],
                         score: 0.55,
                         invalidation_price: p5.price,
                         stage: "abc_nascent",
