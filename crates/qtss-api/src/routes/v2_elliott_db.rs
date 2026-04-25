@@ -310,34 +310,45 @@ fn build_pine_output(
             });
         }
 
-        // Latest motive's writer-stored fib_band — pulled from
-        // `latest_meta` we captured above the consume loop.
-        let latest_fib_band: Option<FibBand> = latest_meta
-            .as_ref()
-            .and_then(|m| m.get("fib_band"))
-            .filter(|v| !v.is_null())
-            .and_then(|v| {
-                let x_anchor = v.get("x_anchor")?.as_i64()?;
-                let x_far = v.get("x_far")?.as_i64()?;
-                let pole_top = v.get("pole_top")?.as_f64()?;
-                let pole_bottom = v.get("pole_bottom")?.as_f64()?;
-                let y_500 = v.get("y_500")?.as_f64()?;
-                let y_618 = v.get("y_618")?.as_f64()?;
-                let y_764 = v.get("y_764")?.as_f64()?;
-                let y_854 = v.get("y_854")?.as_f64()?;
-                let broken = v.get("broken").and_then(|x| x.as_bool()).unwrap_or(false);
-                Some(FibBand {
-                    x_anchor,
-                    x_far,
-                    pole_top,
-                    pole_bottom,
+        // Recompute fib_band from the LATEST motive's anchors instead
+        // of trusting raw_meta. The writer stamped raw_meta.fib_band
+        // with bar_index values that were valid at write-time, but the
+        // analysis window slides forward every tick — so stored
+        // x_anchor / x_far point at the wrong bars when the chart
+        // reads them later. Anchor PRICES are immutable, so deriving
+        // y_500..y_854 from p0/p5 prices and mapping x_anchor to the
+        // current chart window via end_bar gives a stable result that
+        // matches what the live source paints.
+        let latest_fib_band: Option<FibBand> = motives
+            .first()
+            .map(|m| {
+                let p0_price = m.anchors[0].price;
+                let p5_price = m.anchors[5].price;
+                let p5_bar = m.anchors[5].bar_index;
+                let diff = (p5_price - p0_price).abs();
+                let bull = m.direction == 1;
+                let sign: f64 = if bull { -1.0 } else { 1.0 };
+                let y_500 = p5_price + sign * diff * 0.5;
+                let y_618 = p5_price + sign * diff * 0.618;
+                let y_764 = p5_price + sign * diff * 0.764;
+                let y_854 = p5_price + sign * diff * 0.854;
+                FibBand {
+                    x_anchor: p5_bar,
+                    // Project ~10 bars past the chart end for a stable
+                    // visual anchor on the right side.
+                    x_far: candles.len() as i64 + 10,
+                    pole_top: p5_price.max(y_854),
+                    pole_bottom: p5_price.min(y_854),
                     y_500,
                     y_618,
                     y_764,
                     y_854,
-                    broken,
-                })
+                    broken: false,
+                }
             });
+        // Discard latest_meta — only fib_band needed it; break_box and
+        // next_marker are stamped per-motive inside the loop above.
+        let _ = latest_meta;
         levels.push(LevelOutput {
             length,
             color,
