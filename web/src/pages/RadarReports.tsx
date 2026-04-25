@@ -70,6 +70,10 @@ interface RadarTrade {
   pnl_usd: number;
   return_pct: number;
   status: string;
+  // FAZ 25 — backend includes the setup profile so the report can
+  // pivot legacy T/D vs IQ-D/IQ-T performance. Field is optional
+  // because old / running deployments may not surface it yet.
+  profile?: string | null;
 }
 
 interface RadarReport {
@@ -220,6 +224,18 @@ export default function RadarReports() {
   const [period, setPeriod] = useState<Period>("weekly");
   const [market, setMarket] = useState<Market>("coin");
   const [mode, setMode] = useState<Mode>("dry");
+  // FAZ 25 — profile filter so the report can split legacy T/D
+  // performance from the new IQ-D / IQ-T pipeline. Default "all"
+  // matches the previous behaviour (no filter).
+  type ProfileFilter = "all" | "legacy" | "iq" | "iq_d" | "iq_t" | "t" | "d";
+  const [profileFilter, setProfileFilter] = useState<ProfileFilter>("all");
+  const matchProfile = (p?: string | null): boolean => {
+    if (profileFilter === "all") return true;
+    const profile = (p ?? "").toLowerCase();
+    if (profileFilter === "legacy") return ["t", "d", "q"].includes(profile);
+    if (profileFilter === "iq") return profile.startsWith("iq_");
+    return profile === profileFilter;
+  };
 
   const isLive = period === "live";
 
@@ -243,7 +259,8 @@ export default function RadarReports() {
   });
 
   const latest = q.data?.latest ?? null;
-  const trades = latest?.trades ?? [];
+  const allTrades = latest?.trades ?? [];
+  const trades = allTrades.filter((t) => matchProfile(t.profile));
 
   return (
     <div className="flex h-full flex-col gap-3 p-4 font-mono text-sm text-zinc-200">
@@ -321,6 +338,31 @@ export default function RadarReports() {
             {m.label}
           </button>
         ))}
+        {/* FAZ 25 — profile pivot. Lets the operator split legacy
+            T / D performance from the new IQ-D / IQ-T pipeline. */}
+        <span className="ml-4 text-[10px] uppercase tracking-wider text-zinc-500">
+          profil
+        </span>
+        {([
+          { key: "all", label: "Hepsi" },
+          { key: "legacy", label: "T+D" },
+          { key: "iq", label: "IQ" },
+          { key: "iq_d", label: "IQ-D" },
+          { key: "iq_t", label: "IQ-T" },
+        ] as Array<{ key: ProfileFilter; label: string }>).map((p) => (
+          <button
+            key={p.key}
+            type="button"
+            onClick={() => setProfileFilter(p.key)}
+            className={`rounded border px-3 py-1 text-xs ${
+              profileFilter === p.key
+                ? "border-indigo-500 bg-indigo-500/20 text-indigo-200"
+                : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500"
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
       </div>
 
       {!isLive && q.isLoading && <div className="text-zinc-500">yükleniyor…</div>}
@@ -339,7 +381,18 @@ export default function RadarReports() {
       )}
 
       {isLive && qLive.data && (
-        <LivePanel data={qLive.data} />
+        <LivePanel
+          data={{
+            ...qLive.data,
+            // Apply the profile pivot to live snapshots too — the
+            // backend doesn't know about it, so we filter client-
+            // side. Aggregate KPIs (total PnL, win rate) downstream
+            // recompute over the filtered list.
+            trades: (qLive.data.trades ?? []).filter((t) =>
+              matchProfile(t.profile),
+            ),
+          }}
+        />
       )}
 
       {!isLive && latest && (

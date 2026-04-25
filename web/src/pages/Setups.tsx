@@ -169,6 +169,7 @@ export default function Setups() {
               <tr>
                 <Th>Tarih</Th>
                 <Th>Mode</Th>
+                <Th>Profil</Th>
                 <Th>Symbol / TF</Th>
                 <Th>Yön</Th>
                 <Th className="text-right">Entry</Th>
@@ -189,6 +190,9 @@ export default function Setups() {
                   <Td>{new Date(r.created_at).toLocaleString("tr-TR")}</Td>
                   <Td>
                     <ModeBadge mode={r.mode ?? "?"} />
+                  </Td>
+                  <Td>
+                    <ProfileBadge profile={r.profile} />
                   </Td>
                   <Td>
                     <div className="font-mono text-zinc-200">{r.symbol}</div>
@@ -317,6 +321,26 @@ function ModeBadge({ mode }: { mode: string }) {
   return (
     <span className={`rounded px-2 py-0.5 text-[10px] uppercase ${cls}`}>
       {mode || "?"}
+    </span>
+  );
+}
+
+// FAZ 25 — Profile badge so Setups page shows T / D / IQ-D / IQ-T
+// at a glance. Colour matches the IQ Chart palette: legacy T/D in
+// neutral grey, IQ-D in indigo (parent macro), IQ-T in amber
+// (tactical child).
+function ProfileBadge({ profile }: { profile: string }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    t:    { label: "T",    cls: "bg-zinc-700/60 text-zinc-200" },
+    d:    { label: "D",    cls: "bg-zinc-600/60 text-zinc-100" },
+    q:    { label: "Q",    cls: "bg-zinc-700/60 text-zinc-200" },
+    iq_d: { label: "IQ-D", cls: "bg-indigo-500/30 text-indigo-200" },
+    iq_t: { label: "IQ-T", cls: "bg-amber-500/30 text-amber-200" },
+  };
+  const e = map[profile] ?? { label: profile.toUpperCase(), cls: "bg-zinc-800 text-zinc-400" };
+  return (
+    <span className={`rounded px-2 py-0.5 text-[10px] font-semibold tracking-wider ${e.cls}`}>
+      {e.label}
     </span>
   );
 }

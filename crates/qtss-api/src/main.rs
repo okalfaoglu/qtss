@@ -45,7 +45,13 @@ async fn main() -> anyhow::Result<()> {
 
     let database_url = postgres_url_from_env_or_default("postgres://qtss:qtss@127.0.0.1:5432/qtss");
     ensure_postgres_scheme(&database_url).map_err(anyhow::Error::msg)?;
-    let pool = create_pool(&database_url, 10).await?;
+    // Pool size raised from 10 to 30 because PR-25F's SSE channel
+    // (`/v2/iq-stream`) holds a long-lived listener connection per
+    // open browser tab. With 5+ tabs (live + db + multiple symbols)
+    // the previous cap of 10 left no headroom for the regular
+    // request-response endpoints, surfacing as 60s `pool timed out`
+    // errors on chart fetches.
+    let pool = create_pool(&database_url, 30).await?;
     run_migrations(&pool).await.context(
         "qtss-api: SQL migrations failed — süreç stdout/stderr. \
          Yaygın: checksum uyuşmazlığı → `cargo run -p qtss-storage --bin qtss-sync-sqlx-checksums` (DATABASE_URL); \
