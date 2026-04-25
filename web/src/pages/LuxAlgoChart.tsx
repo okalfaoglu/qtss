@@ -243,6 +243,11 @@ export function LuxAlgoChart() {
   const [onlyLatestMotive, setOnlyLatestMotive] = useState(true);
   const [showZigzag, setShowZigzag] = useState(true);
   const [showElliott, setShowElliott] = useState(true);
+  // FAZ 25 PR-25A — early-wave Elliott markers (nascent / forming /
+  // extended impulse). Persisted under pattern_family='elliott_early';
+  // separate fetch from /v2/elliott so toggling does not touch the
+  // existing motive/abc/triangle render path.
+  const [showElliottEarly, setShowElliottEarly] = useState(true);
   const [fibExtend, setFibExtend] = useState(false);
   const [barLimit, setBarLimit] = useState(1000);
 
@@ -377,6 +382,42 @@ export function LuxAlgoChart() {
     refetchInterval: 15_000,
   });
   const pineOutput = elliott.data ?? null;
+
+  // FAZ 25 PR-25A — early-wave Elliott markers. Reads
+  // /v2/elliott-early which is fed by the engine writer's elliott_early
+  // sibling module (nascent + forming + extended impulse detection on
+  // the same pivot tape). Strictly additive: the existing motive/abc
+  // render path above is not touched.
+  type EarlyMarker = {
+    slot: number;
+    subkind: string;
+    stage: "nascent" | "forming" | "extended" | string;
+    direction: number;
+    start_bar: number;
+    end_bar: number;
+    start_time: string;
+    end_time: string;
+    anchors: Array<{ bar_index: number; price: number; time?: string; direction: number }>;
+    score: number;
+    w3_extension: number;
+    invalidation_price: number;
+  };
+  type EarlyResponse = {
+    venue: string;
+    symbol: string;
+    timeframe: string;
+    markers: EarlyMarker[];
+  };
+  const elliottEarly = useQuery<EarlyResponse>({
+    queryKey: ["elliott-early", exchange, symbol, tf, segment, barLimit],
+    queryFn: () =>
+      apiFetch(
+        `/v2/elliott-early/${exchange}/${symbol}/${tf}?segment=${segment}&limit=${barLimit}`
+      ),
+    enabled: showElliottEarly,
+    refetchInterval: 15_000,
+  });
+  const earlyMarkers = elliottEarly.data?.markers ?? [];
 
   // Harmonic patterns — same source toggle as Elliott. The live and db
   // endpoints return identical JSON shape so one fetcher handles both.
@@ -914,6 +955,39 @@ export function LuxAlgoChart() {
           candleSeries.attachPrimitive(rect);
           rectPrimitivesRef.current.push(rect);
         }
+      }
+    }
+
+    // ── ELLIOTT EARLY-WAVE MARKERS (FAZ 25 PR-25A) ────────────────────
+    //
+    // Nascent / forming / extended impulse signals from the engine
+    // writer's elliott_early sibling module. Rendered as letter labels
+    // at the LAST anchor of each match so the eye picks them up without
+    // crowding the existing motive/abc/triangle drawings.
+    //
+    //   N  = nascent  (4 pivots; W3 broke W1 — earliest tradable signal)
+    //   F  = forming  (5 pivots; W1+W2+W3+W4 in, W5 forming)
+    //   X  = extended (full motive with one wave clearly extended)
+    //
+    // Bull marks below the bar in green, bear marks above in red.
+    if (showElliottEarly && earlyMarkers.length > 0) {
+      const stageLetter: Record<string, string> = {
+        nascent: "N",
+        forming: "F",
+        extended: "X",
+      };
+      for (const em of earlyMarkers) {
+        // Slot filter follows the existing Z1..Z5 toolbar — early
+        // markers respect the same slot enable as motives.
+        const slotCfg = slots[em.slot];
+        if (slotCfg && !slotCfg.enabled) continue;
+        const last = em.anchors[em.anchors.length - 1];
+        if (!last) continue;
+        const t = timeAt(last.bar_index);
+        if (t === null) continue;
+        const letter = stageLetter[em.stage] ?? "?";
+        const color = em.direction === 1 ? "#22c55e" : "#ef4444";
+        attachLabel(t, last.price, letter, color, em.direction === 1 ? "below" : "above");
       }
     }
 
@@ -1689,6 +1763,7 @@ export function LuxAlgoChart() {
   }, [
     data.data, pineOutput, slots,
     showFibBand, showHhLl, onlyLatestMotive, showZigzag, showElliott, fibExtend,
+    showElliottEarly, earlyMarkers,
     showImpulse, showZigzagAbc,
     showFlatRegular, showFlatExpanded, showFlatRunning,
     showTriContracting, showTriExpanding, showTriBarrier,
@@ -1781,6 +1856,17 @@ export function LuxAlgoChart() {
           <label className="flex cursor-pointer items-center gap-1 text-xs">
             <input type="checkbox" checked={showElliott} onChange={(e) => setShowElliott(e.target.checked)} />
             Elliott formations
+          </label>
+          <label
+            className="flex cursor-pointer items-center gap-1 text-xs"
+            title="FAZ 25 PR-25A — nascent (N), forming (F), extended (X) impulse markers from elliott_early"
+          >
+            <input
+              type="checkbox"
+              checked={showElliottEarly}
+              onChange={(e) => setShowElliottEarly(e.target.checked)}
+            />
+            <span className="text-emerald-400">N/F/X early</span>
           </label>
           <label className="flex cursor-pointer items-center gap-1 text-xs">
             <input type="checkbox" checked={showFibBand} onChange={(e) => setShowFibBand(e.target.checked)} />

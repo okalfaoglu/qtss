@@ -18,6 +18,11 @@ use tracing::warn;
 
 use crate::symbols::{self, EngineSymbol};
 use crate::writer::{RunStats, WriterTask};
+// FAZ 25 PR-25A — sibling module that scans the same pivot stream for
+// nascent / forming / extended impulse signals and writes them to
+// `detections` under `pattern_family = 'elliott_early'`. Strictly
+// additive: existing motive/abc/triangle writes are untouched.
+use crate::writers::elliott_early;
 
 pub struct ElliottWriter;
 
@@ -118,6 +123,8 @@ async fn process_symbol(
 
     let pine_out: PinePortOutput = pine::run(&pine_bars, &cfg);
 
+    let early_enabled = load_early_enabled(pool).await;
+
     let mut written = 0usize;
     for (slot_idx, level) in pine_out.levels.iter().enumerate() {
         for motive in &level.motives {
@@ -129,8 +136,37 @@ async fn process_symbol(
         for tri in &level.triangles {
             written += write_triangle(pool, sym, slot_idx as i16, tri, &chrono).await?;
         }
+        // FAZ 25 PR-25A — early-wave detection on the same level's
+        // pivot tape. Gated by config so an operator can disable
+        // without rebuilding (CLAUDE.md #2).
+        if early_enabled {
+            for em in elliott_early::scan_level(level) {
+                written += elliott_early::write_early(
+                    pool,
+                    sym,
+                    slot_idx as i16,
+                    &em,
+                    &chrono,
+                )
+                .await?;
+            }
+        }
     }
     Ok(written)
+}
+
+async fn load_early_enabled(pool: &PgPool) -> bool {
+    let row = sqlx::query(
+        "SELECT value FROM system_config
+           WHERE module = 'elliott_early' AND config_key = 'enabled'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    let Some(row) = row else { return true; };
+    let val: Value = row.try_get("value").unwrap_or(Value::Null);
+    val.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true)
 }
 
 async fn write_motive(
