@@ -1182,7 +1182,14 @@ export function LuxAlgoChart({
     //   X  = extended (full motive with one wave clearly extended)
     //
     // Bull marks below the bar in green, bear marks above in red.
-    if (showElliottEarly && earlyMarkers.length > 0) {
+    //
+    // 2026-04-26 — User: "formasyon tikini kaldırınca simülasyon
+    // kalkmadı. simülasyon elliott ile ilişkili değil." The
+    // "Elliott formations" master toggle now ALSO gates the
+    // elliott_early overlay (N/F/X markers + abc projection
+    // dotted lines). N/F/X early stays as a sub-toggle that only
+    // takes effect when the Elliott master is on.
+    if (showElliott && showElliottEarly && earlyMarkers.length > 0) {
       const stageLetter: Record<string, string> = {
         nascent: "N",
         forming: "F",
