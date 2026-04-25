@@ -16,6 +16,10 @@ interface NavEntry {
 const NAV_ENTRIES: NavEntry[] = [
   { label: "Dashboard", to: "/v2/dashboard", enabled: true },
   { label: "Chart", to: "/v2/chart", enabled: true },
+  // FAZ 25 PR-25A — dedicated demo page for the IQ-D / IQ-T predictive
+  // layer. Currently shows the Elliott early-wave (N/F/X) markers; will
+  // grow to host IQ structure tracker visualisation as later PRs land.
+  { label: "IQ Chart", to: "/v2/iq-chart", enabled: true },
   { label: "RADAR Reports", to: "/v2/reports", enabled: true },
   { label: "Setups", to: "/v2/setups", enabled: true },
   { label: "Detections", to: "/v2/detections", enabled: true },

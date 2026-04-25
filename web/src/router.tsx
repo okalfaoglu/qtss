@@ -6,6 +6,7 @@ import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { Regime } from "./pages/Regime";
 import { LuxAlgoChart } from "./pages/LuxAlgoChart";
+import { IQChart } from "./pages/IQChart";
 import { Detections } from "./pages/Detections";
 import { Config } from "./pages/Config";
 import { Users } from "./pages/Users";
@@ -39,6 +40,7 @@ export const router = createBrowserRouter(
         { path: "dashboard", element: <Dashboard /> },
         { path: "regime", element: <Regime /> },
         { path: "chart", element: <LuxAlgoChart /> },
+        { path: "iq-chart", element: <IQChart /> },
         { path: "detections", element: <Detections /> },
         { path: "config", element: <Config /> },
         { path: "users", element: <Users /> },
