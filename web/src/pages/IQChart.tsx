@@ -124,31 +124,31 @@ function EarlyStatsPanel() {
 }
 
 export function IQChart() {
+  // Viewport-bazlı yükseklik — Layout.tsx main flex-1 overflow-auto
+  // olduğu için h-full viewport'a değil content'e çözünüyordu; bu
+  // sebepten wave-bars paneli ekrandan aşağı kayıp gözükmez oluyordu.
+  // 100dvh - header - padding = ~ ekran yüksekliği.
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className="flex flex-col"
+      style={{ height: "calc(100dvh - 110px)" }}
+    >
       <div className="flex flex-1 min-h-0">
         <div className="flex flex-1 min-h-0 flex-col">
-          {/* Top half: existing OHLC chart with N/F/X early-wave toggle.
-              `overflow-y-auto` so the toolbar (venue / symbol / TF /
-              indicators) stays reachable even when the panel is squeezed
-              by the wave-bars half. `min-h-0` lets the flex child shrink
-              below the LuxAlgoChart's natural content height. */}
+          {/* Top half: existing OHLC chart with N/F/X early-wave toggle. */}
           <div className="flex-1 min-h-0 overflow-y-auto border-b-2 border-zinc-800">
             <LuxAlgoChart
               defaults={{
-                showZigzag: false,   // user request: clean baseline for IQ
-                showHarmonic: false, // hide entire harmonic master toggle
+                showZigzag: false,
+                showHarmonic: false,
                 showRange: false,
                 showGap: false,
-                // Z1-Z5 all enabled out of the box on IQ Chart so the
-                // user sees every degree without having to flip checks.
                 slotsEnabled: [true, true, true, true, true],
               }}
             />
           </div>
           {/* Bottom half: pivot-based wave bars (each candle = one
-              Elliott wave). FAZ 25.1 — the noise-cleaned candle
-              structure designed for clean Elliott counting. */}
+              Elliott wave). FAZ 25.1. */}
           <div className="h-[320px] shrink-0 overflow-hidden">
             <WaveBarsPanel />
           </div>
