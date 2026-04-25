@@ -197,6 +197,209 @@ struct StructureUpdate {
     raw_meta: Value,
 }
 
+// ─── FAZ 25.2.B — live projection ─────────────────────────────────────
+//
+// Canonical state machine = iq_structures. Detections feed it raw
+// anchors; PROJECTION is computed here, every tick, against the latest
+// known anchor — so the simulation tracks reality instead of locking
+// into a stale future bar_index that pre-dated the current candle.
+//
+// User feedback (2026-04-26): "simülasyon gerçek hayattan kopuk
+// ilerliyor. simülasyonda gerçekleştiğinde o artık elliot olmuştır."
+// The projection structure here exists so the API/chart can render
+// dotted segments that ALWAYS end at or before the latest pivot —
+// promotion to "real" happens automatically when a real pivot lands
+// near the projected anchor.
+
+/// Project the next expected anchor for a given Elliott state.
+///
+/// Inputs:
+/// - `current_wave` — `"W1".."W5"` or `"A"`/`"B"`/`"C"` from the state
+///   machine.
+/// - `direction` — +1 bull motive / -1 bear motive (the parent
+///   impulse's direction; ABC direction is derived inside).
+/// - `structure_anchors` — the `iq_structures.structure_anchors` JSON
+///   array, each element `{wave_label, price, time, bar_index}`.
+///
+/// Output (JSON injected into `iq_structures.raw_meta.projection`):
+/// ```json
+/// {
+///   "expected_next_wave": "W4",
+///   "expected_direction": -1,
+///   "primary": { "label": "W4?", "price": 71500.0 },
+///   "alternatives": [
+///       { "label": "W4? (0.382)", "price": 72100.0 },
+///       { "label": "W4? (0.618)", "price": 70800.0 }
+///   ],
+///   "invalidation_price": 65676.0,
+///   "invalidation_rule": "W4 cannot enter W1 territory"
+/// }
+/// ```
+///
+/// Returns `Value::Null` when no projection applies (e.g. completed
+/// cycles).
+fn compute_projection(
+    current_wave: &str,
+    direction: i16,
+    anchors: &Value,
+) -> Value {
+    let arr = match anchors.as_array() {
+        Some(a) if !a.is_empty() => a,
+        _ => return Value::Null,
+    };
+    let price_at = |label: &str| -> Option<f64> {
+        arr.iter()
+            .find(|a| a.get("wave_label").and_then(|v| v.as_str()) == Some(label))
+            .and_then(|a| a.get("price").and_then(|p| p.as_f64()))
+    };
+    let bull = direction == 1;
+    let dir_sign = if bull { 1.0 } else { -1.0 };
+
+    match current_wave {
+        // Nascent W3 — already see W0/W1/W2/W3. Next expected is W4
+        // retrace of the W2→W3 leg. Canonical Fib: 0.382 (shallow,
+        // strong-trend), 0.500 (neutral), 0.236 (very shallow).
+        "W3" => {
+            let w2 = price_at("W2");
+            let w3 = price_at("W3");
+            let w1 = price_at("W1");
+            match (w1, w2, w3) {
+                (Some(w1p), Some(w2p), Some(w3p)) => {
+                    let leg = w3p - w2p;
+                    let mid = w3p - 0.382 * leg;
+                    let alt_shallow = w3p - 0.236 * leg;
+                    let alt_deep = w3p - 0.500 * leg;
+                    serde_json::json!({
+                        "expected_next_wave": "W4",
+                        "expected_direction": -direction,
+                        "primary": { "label": "W4? (0.382)", "price": mid },
+                        "alternatives": [
+                            { "label": "W4? (0.236)", "price": alt_shallow },
+                            { "label": "W4? (0.500)", "price": alt_deep }
+                        ],
+                        "invalidation_price": w1p,
+                        "invalidation_rule": "W4 cannot enter W1 territory (Frost & Prechter rule 3)"
+                    })
+                }
+                _ => Value::Null,
+            }
+        }
+        // W4 forming/completed — project W5. Canonical W5 ≈ W1 length
+        // from W4 (equality), or 0.618×W1 (truncated), or 1.618×W1
+        // (extended).
+        "W4" => {
+            let w0 = price_at("W0");
+            let w1 = price_at("W1");
+            let w4 = price_at("W4");
+            match (w0, w1, w4) {
+                (Some(w0p), Some(w1p), Some(w4p)) => {
+                    let w1_leg = w1p - w0p;
+                    let mid = w4p + w1_leg;
+                    let alt_short = w4p + 0.618 * w1_leg;
+                    let alt_long = w4p + 1.618 * w1_leg;
+                    serde_json::json!({
+                        "expected_next_wave": "W5",
+                        "expected_direction": direction,
+                        "primary": { "label": "W5? (1.0×W1)", "price": mid },
+                        "alternatives": [
+                            { "label": "W5? (0.618×W1)", "price": alt_short },
+                            { "label": "W5? (1.618×W1)", "price": alt_long }
+                        ],
+                        "invalidation_price": w4p,
+                        "invalidation_rule": "W5 must close beyond W3 (else truncated fifth)"
+                    })
+                }
+                _ => Value::Null,
+            }
+        }
+        // W5 completed — corrective ABC starts. Project A first (50%
+        // retrace of W0→W5 baseline). B and C come later when more
+        // pivots arrive.
+        "W5" => {
+            let w0 = price_at("W0");
+            let w5 = price_at("W5");
+            match (w0, w5) {
+                (Some(w0p), Some(w5p)) => {
+                    let leg = w5p - w0p;
+                    let a_target = w5p - 0.5 * leg;
+                    serde_json::json!({
+                        "expected_next_wave": "A",
+                        "expected_direction": -direction,
+                        "primary": { "label": "A? (0.5×W0-W5)", "price": a_target },
+                        "alternatives": [
+                            { "label": "A? (0.382)", "price": w5p - 0.382 * leg },
+                            { "label": "A? (0.618)", "price": w5p - 0.618 * leg }
+                        ],
+                        "invalidation_price": w5p,
+                        "invalidation_rule": "Post-W5 break above W5 invalidates zigzag corrective (flat allowed)"
+                    })
+                }
+                _ => Value::Null,
+            }
+        }
+        // A complete — project B. Zigzag: 0.382-0.786 retrace of A.
+        // Flat: ~A length. Both shown as alternatives.
+        "A" => {
+            let w5 = price_at("W5");
+            let a = price_at("A");
+            match (w5, a) {
+                (Some(w5p), Some(ap)) => {
+                    let a_leg = ap - w5p;
+                    let zz_target = ap - 0.5 * a_leg;
+                    let flat_target = w5p; // B touches A's start (flat regular)
+                    serde_json::json!({
+                        "expected_next_wave": "B",
+                        "expected_direction": -dir_sign as i32 * -1, // B opposes A direction
+                        "primary": { "label": "B? (zigzag 0.5)", "price": zz_target },
+                        "alternatives": [
+                            { "label": "B? (zigzag 0.382)", "price": ap - 0.382 * a_leg },
+                            { "label": "B? (zigzag 0.786)", "price": ap - 0.786 * a_leg },
+                            { "label": "B? (flat regular)", "price": flat_target },
+                            { "label": "B? (flat expanded 1.272)", "price": w5p + 0.272 * a_leg.abs() * (-dir_sign) }
+                        ],
+                        "invalidation_price": ap,
+                        "invalidation_rule": "B exceeding A by >138% suggests running flat (still valid corrective)"
+                    })
+                }
+                _ => Value::Null,
+            }
+        }
+        // B complete — project C. Zigzag: C ≈ A length (equality) or
+        // 1.272×A / 1.618×A. Flat: C ≈ A length.
+        "B" => {
+            let w5 = price_at("W5");
+            let a = price_at("A");
+            let b = price_at("B");
+            match (w5, a, b) {
+                (Some(w5p), Some(ap), Some(bp)) => {
+                    let a_len = (ap - w5p).abs();
+                    // C direction = same as A (opposite to B).
+                    let c_sign = if ap < w5p { -1.0 } else { 1.0 };
+                    let c_equality = bp + c_sign * a_len;
+                    let c_1272 = bp + c_sign * a_len * 1.272;
+                    let c_1618 = bp + c_sign * a_len * 1.618;
+                    serde_json::json!({
+                        "expected_next_wave": "C",
+                        "expected_direction": (c_sign as i32),
+                        "primary": { "label": "C? (=A)", "price": c_equality },
+                        "alternatives": [
+                            { "label": "C? (1.272×A)", "price": c_1272 },
+                            { "label": "C? (1.618×A)", "price": c_1618 }
+                        ],
+                        "invalidation_price": bp,
+                        "invalidation_rule": "C must clear A end for valid zigzag/flat completion"
+                    })
+                }
+                _ => Value::Null,
+            }
+        }
+        // C complete — corrective cycle done; the next move is a new
+        // impulse. Don't project further at this layer.
+        "C" => Value::Null,
+        _ => Value::Null,
+    }
+}
+
 // ─── tick body ────────────────────────────────────────────────────────
 
 async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize, usize)> {
@@ -275,7 +478,28 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize, usize)> {
         scanned += 1;
         let tf = key.3.as_str();
         let update = derive_update(&group, tol, tf, max_age_bars, now);
-        let Some(update) = update else { continue };
+        let Some(mut update) = update else { continue };
+
+        // FAZ 25.2.B — every state transition gets a freshly-computed
+        // projection injected into raw_meta. Caller (chart, allocator)
+        // reads `iq_structures.raw_meta.projection` as the canonical
+        // forward-look. Anchor list itself stays REAL pivots only.
+        let dir = group.first().map(|r| r.direction).unwrap_or(0);
+        let proj = compute_projection(
+            &update.current_wave,
+            dir,
+            &update.structure_anchors,
+        );
+        if !proj.is_null() {
+            if let Value::Object(map) = &mut update.raw_meta {
+                map.insert("projection".to_string(), proj);
+            } else {
+                update.raw_meta = json!({
+                    "projection": proj,
+                    "previous": update.raw_meta.clone(),
+                });
+            }
+        }
         match upsert_structure(pool, &key, &group[0], &update).await {
             Ok(was_advance) => {
                 if was_advance {

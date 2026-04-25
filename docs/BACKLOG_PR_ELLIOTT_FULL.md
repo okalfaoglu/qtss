@@ -28,3 +28,41 @@ W3 entry tier sets `entry_price = anchor[W3].price` (the W3 PEAK).
 For trend-following continuation the entry should fire at W3 BREAKOUT
 mid-leg, not at the closing peak. ETHUSDT 1w showed long armed at
 $4098 against $2300 spot before the staleness gate caught it.
+
+✅ Resolved in commit `5bf21bf` (W3 → W1 + buffer breakout entry).
+
+## 4. Trade-open TP-proximity gate + actual fill price display
+Triggered by user after FAZ 25.2.D completes.
+
+Symptom (BTCUSDT 15m IQ-T setup `c524ef70`):
+- GİRİŞ (setup entry): $77168.43
+- ANLIK (current):    $77536.25
+- TP:                  $77599.90 (only +0.56% from setup entry)
+- Distance left to TP: $63 / total target distance $432 = 14% remaining
+- Position armed shows +0.48% in profit but trade has 86% of move
+  already gone — almost no upside left, big asymmetry vs SL distance.
+
+Two asks:
+
+(a) **Pre-fill TP-proximity gate** in `execution_bridge.rs::
+build_live_position_for_mode` — before inserting the position,
+compute:
+```
+remaining_to_tp_pct = |tp - current_price| / |tp - entry_price|
+```
+If `remaining_to_tp_pct < cfg.min_tp_remaining_fraction` (default 0.5,
+operator-tunable), reject the trade. The setup is already too close
+to its target to be worth opening — TP would fill almost immediately
+on a benign tick, distorting reports.
+
+(b) **Show actual fill price separately from setup entry**. The GUI
+currently labels `live_positions.entry_avg` as "GİRİŞ" but the user
+reads "GİRİŞ" as "the price the setup said to enter at" — which is
+`qtss_setups.entry_price`. Two distinct numbers for two distinct
+events:
+- Setup entry (target buy/sell level the system armed): from
+  `qtss_setups.entry_price`
+- Actual fill (paper price after slippage / market price for live):
+  from `live_positions.entry_avg`
+Frontend (`/v2/reports` setup detail panel) needs both fields with
+separate labels: e.g. "Hedef Giriş" vs "Açılış Fiyatı".
