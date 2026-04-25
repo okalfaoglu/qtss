@@ -110,6 +110,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1",
             routes::public_locales_routes()
                 .merge(routes::public_bootstrap_routes())
+                // SSE endpoint mounted OUTSIDE the api_router's
+                // global jwt_layer wrap — EventSource can't attach
+                // Authorization headers (FAZ 25 PR-25F).
+                .merge(routes::v2_iq_stream_router())
                 .merge(routes::api_router(state.clone())),
         )
         .layer(GovernorLayer {

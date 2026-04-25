@@ -6,12 +6,13 @@
 // independently. Future PR-25B will extend this page with the IQ-D
 // structure tracker overlay.
 
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { LuxAlgoChart } from "./LuxAlgoChart";
 import { WaveBarsPanel } from "./WaveBarsPanel";
 import { apiFetch } from "../lib/api";
+import { getToken } from "../lib/auth";
 
 type EarlyMarker = {
   slot: number;
@@ -324,6 +325,47 @@ export function IQChart() {
       ),
     refetchInterval: 30_000,
   });
+  // FAZ 25 PR-25F — real-time SSE. PostgreSQL pg_notify on
+  // qtss_iq_changed (and the existing qtss_market_bars_gap_filled)
+  // is forwarded by /v2/iq-stream as Server-Sent Events. We use each
+  // event to invalidate the react-query caches that depend on it,
+  // collapsing the worst-case GUI latency from the 30s polling tick
+  // down to the network round-trip.
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    // SSE endpoint runs unauthenticated (see server-side note in
+    // qtss-api/src/routes/mod.rs); no payload PII so the privacy bar
+    // is low. We still keep getToken() so a future signed-token
+    // upgrade is a one-line change here.
+    const _token = getToken();
+    if (!_token) return; // skip SSE if user is not signed in at all
+    const url =
+      `/api/v1/v2/iq-stream/${ctx.exchange}/${ctx.symbol}/${ctx.tf}` +
+      `?segment=${ctx.segment}`;
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource(url);
+    } catch {
+      return;
+    }
+    const onMsg = () => {
+      // Invalidate every cache the chart paints from. cheap enough
+      // even at high-frequency events because the queries still
+      // throttle at the network layer.
+      queryClient.invalidateQueries({ queryKey: ["iq-structures"] });
+      queryClient.invalidateQueries({ queryKey: ["iq-setups"] });
+      queryClient.invalidateQueries({ queryKey: ["iq-setups-overlay"] });
+      queryClient.invalidateQueries({ queryKey: ["iq-chart"] });
+      queryClient.invalidateQueries({ queryKey: ["elliott-early"] });
+      queryClient.invalidateQueries({ queryKey: ["elliott"] });
+    };
+    es.addEventListener("qtss_iq_changed", onMsg);
+    es.addEventListener("qtss_market_bars_gap_filled", onMsg);
+    return () => {
+      es?.close();
+    };
+  }, [ctx.exchange, ctx.segment, ctx.symbol, ctx.tf, queryClient]);
+
   const priceLineOverlays = useMemo(() => {
     const out: Array<{
       price: number;

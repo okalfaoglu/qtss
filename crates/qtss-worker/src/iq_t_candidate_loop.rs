@@ -213,6 +213,35 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
             continue;
         }
 
+        // Cross-pipeline hedge gate: refuse to spawn an IQ-T setup
+        // that would point in the OPPOSITE direction of an existing
+        // armed/active legacy T/D (or another IQ) setup on the same
+        // symbol + child timeframe. Same direction is fine — that's
+        // confluence stacking. Mixed directions create an unintended
+        // hedge.
+        let dir_str = if expected_dir == 1 { "long" } else { "short" };
+        let opposite = if expected_dir == 1 { "short" } else { "long" };
+        let conflict = sqlx::query(
+            r#"SELECT 1 FROM qtss_setups
+                WHERE exchange = $1 AND symbol = $2 AND timeframe = $3
+                  AND state IN ('armed','active')
+                  AND direction = $4
+                LIMIT 1"#,
+        )
+        .bind(&parent.exchange)
+        .bind(&parent.symbol)
+        .bind(&child_tf)
+        .bind(opposite)
+        .fetch_optional(pool)
+        .await?;
+        if conflict.is_some() {
+            tracing::debug!(
+                symbol=%parent.symbol, tf=%child_tf, my_dir=%dir_str,
+                "iq_t skip: opposite-direction setup already armed (hedge avoidance)"
+            );
+            continue;
+        }
+
         // Avoid duplicates: if an iq_t setup already exists for this
         // parent + child motive end_time, skip (idempotency).
         let already = sqlx::query(
@@ -238,6 +267,19 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
             warn!(symbol=%parent.symbol, %e, "iq_t write failed");
             continue;
         }
+        // Push: notify SSE subscribers (GUI uses this to invalidate
+        // its iq-setups react-query cache without polling).
+        let _ = sqlx::query("SELECT pg_notify('qtss_iq_changed', $1)")
+            .bind(json!({
+                "kind": "iq_setup",
+                "exchange": parent.exchange,
+                "segment": parent.segment,
+                "symbol": parent.symbol,
+                "timeframe": child_tf,
+                "profile": "iq_t",
+            }).to_string())
+            .execute(pool)
+            .await;
         created += 1;
     }
 

@@ -176,6 +176,28 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
             continue;
         }
 
+        // Cross-pipeline hedge gate (mirrors iq_t logic): refuse to
+        // spawn a counter-direction iq_d setup on the same symbol+tf
+        // when another setup is already armed in the opposite
+        // direction.
+        let opposite = if direction_str == "long" { "short" } else { "long" };
+        let conflict = sqlx::query(
+            r#"SELECT 1 FROM qtss_setups
+                WHERE exchange = $1 AND symbol = $2 AND timeframe = $3
+                  AND state IN ('armed','active')
+                  AND direction = $4
+                LIMIT 1"#,
+        )
+        .bind(&p.exchange)
+        .bind(&p.symbol)
+        .bind(&p.timeframe)
+        .bind(opposite)
+        .fetch_optional(pool)
+        .await?;
+        if conflict.is_some() {
+            continue;
+        }
+
         // Idempotency key — one iq_d setup per (structure_id, tier)
         // so we don't spawn a new row on every tick.
         let key = format!("iq_d:{}:{}", p.id, tier);
@@ -221,6 +243,19 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
             warn!(symbol=%p.symbol, %e, "iq_d write failed");
             continue;
         }
+        // Real-time push so SSE-connected GUI tabs invalidate cache
+        // immediately instead of waiting on the 30s react-query poll.
+        let _ = sqlx::query("SELECT pg_notify('qtss_iq_changed', $1)")
+            .bind(json!({
+                "kind": "iq_setup",
+                "exchange": p.exchange,
+                "segment": p.segment,
+                "symbol": p.symbol,
+                "timeframe": p.timeframe,
+                "profile": "iq_d",
+            }).to_string())
+            .execute(pool)
+            .await;
         created += 1;
     }
     Ok((scanned, created))

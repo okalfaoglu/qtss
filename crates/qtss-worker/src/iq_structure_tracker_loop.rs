@@ -219,6 +219,25 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize, usize)> {
                     // on the symbol.
                     let _ = unlock_symbol(pool, &key).await;
                 }
+                if was_advance {
+                    // Push to SSE subscribers so the chart picks up
+                    // structure transitions (e.g. W3 → W4 → W5)
+                    // within a second instead of waiting for the
+                    // 30s polling tick.
+                    let _ = sqlx::query("SELECT pg_notify('qtss_iq_changed', $1)")
+                        .bind(json!({
+                            "kind": "iq_structure",
+                            "exchange": key.0,
+                            "segment": key.1,
+                            "symbol": key.2,
+                            "timeframe": key.3,
+                            "slot": key.4,
+                            "state": update.state,
+                            "current_wave": update.current_wave,
+                        }).to_string())
+                        .execute(pool)
+                        .await;
+                }
             }
             Err(e) => warn!(%e, symbol=%key.2, "iq_structure upsert failed"),
         }
