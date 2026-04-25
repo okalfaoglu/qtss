@@ -346,6 +346,8 @@ export default function RadarReports() {
         {([
           { key: "all", label: "Hepsi" },
           { key: "legacy", label: "T+D" },
+          { key: "t", label: "T" },
+          { key: "d", label: "D" },
           { key: "iq", label: "IQ" },
           { key: "iq_d", label: "IQ-D" },
           { key: "iq_t", label: "IQ-T" },
