@@ -241,6 +241,20 @@ pub fn scan_level(
             detect_post_w5_mini_pivots(chrono_bars, p5_usize, win)
         };
         let _ = pine_post_count;
+        // Filter: ABC's first leg ALWAYS opposes the motive's W5
+        // direction (bull motive p5=high → A=low; bear motive p5=low
+        // → A=high). If the first post-W5 pivot has the SAME
+        // direction as p5 (Pine port mini-noise spike, mini-pivot
+        // ambiguity), drop everything until a valid opposite pivot
+        // appears. Without this filter ETH 4h Z5 produced a
+        // wrong-direction first pivot that dead-ended every branch.
+        let first_valid = post_w5
+            .iter()
+            .position(|p| p.direction != p5.direction);
+        let post_w5: Vec<PivotPoint> = match first_valid {
+            Some(i) => post_w5[i..].to_vec(),
+            None => Vec::new(),
+        };
         let post_w5_refs: Vec<&PivotPoint> = post_w5.iter().collect();
         let post_w5 = post_w5_refs;
         // Price-invalidation check with a small tolerance. For a bull

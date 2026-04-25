@@ -1149,8 +1149,11 @@ export function LuxAlgoChart({
           em.stage === "abc_projected"
         ) {
           const segLabels = ["", "(a)", "(b)", "(c)"];
-          const colorReal = "#a855f7";   // violet for confirmed legs
-          const colorProj = "#c4b5fd";   // dim violet for projected
+          // Single colour — taken from the Z1..Z5 slot palette so the
+          // ABC inherits the same colour as its motive lines. Real
+          // vs projected are distinguished ONLY by line style
+          // (solid vs dotted), per user request.
+          const color = slots[em.slot]?.color ?? "#a855f7";
 
           const isProjectedAnchor = (a: { label_override?: string }) =>
             !!a.label_override && a.label_override.endsWith("?");
@@ -1174,14 +1177,14 @@ export function LuxAlgoChart({
           }
           if (points.length < 2) continue;
 
-          // Each segment ENDING at a projected anchor renders dotted +
-          // dim; segments ending at confirmed pivots are solid +
-          // bright. As pivots confirm tick-by-tick, the dotted lines
-          // turn solid automatically.
+          // Each segment ENDING at a projected anchor is dotted; one
+          // ending at a confirmed pivot is solid. Same colour for
+          // both — the line style alone tells the user which legs
+          // are committed.
           for (let i = 0; i < points.length - 1; i++) {
             const dest = points[i + 1];
             const series = chart.addSeries(LineSeries, {
-              color: dest.projected ? colorProj : colorReal,
+              color,
               lineWidth: 2,
               lineStyle: dest.projected ? LineStyle.Dotted : LineStyle.Solid,
               priceLineVisible: false,
@@ -1202,7 +1205,7 @@ export function LuxAlgoChart({
               p.time,
               p.price,
               text,
-              p.projected ? colorProj : colorReal,
+              color,
               em.direction === 1 ? "above" : "below"
             );
           }
