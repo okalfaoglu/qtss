@@ -85,6 +85,16 @@ pub struct EarlyMatch {
     /// raw_meta.anchor_scores for the frontend to render graded
     /// opacity / line width instead of binary solid/dotted.
     pub anchor_scores: Vec<f64>,
+    /// Corrective shape underneath the umbrella `abc_*` subkind, when
+    /// this match represents an ABC stage. Frontend reads this via
+    /// raw_meta.corrective_kind to distinguish a zigzag's tight A/B
+    /// dotted line from a flat's wide-swing one. Values:
+    ///   - "zigzag"        — 5-3-5, B retraces 38-78% of A
+    ///   - "flat_regular"  — 3-3-5, B ≈ A
+    ///   - "flat_expanded" — 3-3-5, B exceeds A by 105-138%
+    ///   - "flat_running"  — 3-3-5, B exceeds A by 138%+
+    /// `None` for non-ABC matches (impulse_*).
+    pub corrective_kind: Option<&'static str>,
 }
 
 /// Mini pivot detection on raw OHLC bars — used as a fallback when
@@ -293,23 +303,39 @@ pub fn scan_level(
         };
         let post_w5_refs: Vec<&PivotPoint> = post_w5.iter().collect();
         let post_w5 = post_w5_refs;
-        // Price-invalidation check with a small tolerance. For a bull
-        // motive p5 is a HIGH; a post-W5 HIGH that materially exceeds
-        // p5 (more than 0.5%) invalidates. The tolerance prevents
-        // intraday spikes / wick noise from killing otherwise valid
-        // ABC candidates the eye reads as still in formation. Same
-        // mirror for bear motives.
-        const INVALIDATION_TOL_PCT: f64 = 0.005; // 0.5%
-        let invalidated = if motive.direction == 1 {
-            let limit = p5.price * (1.0 + INVALIDATION_TOL_PCT);
+        // Corrective-kind classification (not invalidation — that's the
+        // kind of mistake this block USED to make).
+        //
+        // User feedback (2026-04-26): "ABC düzeltme kalıbının genel adı
+        // değil mi? karşılığı zigzag, bunun yanında diğer düzeltme
+        // kalıpları var." Exactly right. ABC is the umbrella label;
+        // the SHAPE underneath can be:
+        //   * zigzag         (5-3-5; B retraces 38-78% of A; never
+        //                     exceeds W5)
+        //   * flat regular   (3-3-5; B ≈ A length; touches but doesn't
+        //                     break W5)
+        //   * flat expanded  (3-3-5; B EXCEEDS A by 105-138% → CAN
+        //                     break W5 — that's expected, not invalid)
+        //   * flat running   (3-3-5; B exceeds A; C never makes new
+        //                     low → again, W5 break is normal)
+        //
+        // The previous code treated ANY post-W5 break as motive
+        // invalidation and `continue`d, so flats never produced an
+        // abc_* row. Ditched that gate. We still record `corrective_kind`
+        // in raw_meta so the chart / allocator can tell zigzag from
+        // flat at render time.
+        const W5_TOL_PCT: f64 = 0.005; // 0.5%
+        let post_w5_breaks_p5 = if motive.direction == 1 {
+            let limit = p5.price * (1.0 + W5_TOL_PCT);
             post_w5.iter().any(|p| p.direction == 1 && p.price > limit)
         } else {
-            let limit = p5.price * (1.0 - INVALIDATION_TOL_PCT);
+            let limit = p5.price * (1.0 - W5_TOL_PCT);
             post_w5.iter().any(|p| p.direction == -1 && p.price < limit)
         };
-        if invalidated {
-            continue;
-        }
+        // `flat_likely`: a downstream signal the abc_nascent / forming
+        // emit blocks pass into raw_meta.corrective_kind. Doesn't gate
+        // emission anymore.
+        let flat_likely = post_w5_breaks_p5;
         // ABC of a bull motive corrects DOWN: A=low, B=high, C=low.
         // ABC of a bear motive: A=high, B=low, C=high. Direction flag
         // on the EarlyMatch follows the same convention as motive.abc:
@@ -368,6 +394,7 @@ pub fn scan_level(
                 stage: "abc_projected",
                 w3_extension: 0.0,
                 anchor_scores: vec![],
+                corrective_kind: None,
             });
         }
         // ─── abc_projected (1 real): A real, simulate B + C ─────────
@@ -406,6 +433,7 @@ pub fn scan_level(
                     stage: "abc_projected",
                     w3_extension: 0.0,
                     anchor_scores: vec![],
+                    corrective_kind: None,
                 });
             }
         }
@@ -423,7 +451,12 @@ pub fn scan_level(
                 // produced no candidate even though A/B were clearly
                 // visible — the corrective B printed a 1.02-ratio
                 // intraday spike beyond the original 0.95 ceiling.
-                if a_len > 0.0 && (0.10..=1.30).contains(&(b_ret / a_len)) {
+                // Band ceiling raised from 1.30 to 1.50 so expanded
+                // flats (B retraces 105-138% of A) clear the gate.
+                // Running flats can push higher still — operators that
+                // want even broader coverage tune via
+                // system_config.elliott_early.b_to_a_ratio_ceiling.
+                if a_len > 0.0 && (0.10..=1.50).contains(&(b_ret / a_len)) {
                     // Fib validation — a real pivot whose price is OUT of
                     // the canonical Elliott band gets re-tagged as
                     // projected (label_override ending in "?"). Frontend
@@ -466,6 +499,19 @@ pub fn scan_level(
                     // still surface a visible marker.
                     let c_offset_bars =
                         (a_anchor.bar_index - p5.bar_index).max(5);
+                    // Corrective shape classifier — feeds raw_meta so
+                    // the chart can label "abc (zigzag)" vs "abc
+                    // (flat expanded)" without having to recompute
+                    // ratios at render time. Pure ratio-based — Frost
+                    // & Prechter §2.5 / §2.6.
+                    let corrective_kind: &'static str = if flat_likely {
+                        if (b_ret / a_len) > 1.382 { "flat_running" }
+                        else { "flat_expanded" }
+                    } else if (b_ret / a_len) >= 0.95 {
+                        "flat_regular"
+                    } else {
+                        "zigzag"
+                    };
                     out.push(EarlyMatch {
                         subkind: format!("abc_nascent_{suffix}"),
                         direction: abc_dir,
@@ -491,6 +537,7 @@ pub fn scan_level(
                             fib_proximity_score(b_ret / a_len, ABC_B_FIB_TARGETS),
                             0.0, // C projected — no real value yet
                         ],
+                        corrective_kind: Some(corrective_kind),
                     });
                 }
             }
@@ -536,6 +583,19 @@ pub fn scan_level(
                     if !c_in_band {
                         c_clone.label_override = Some("c?".into());
                     }
+                    // Same shape classifier as the nascent branch.
+                    // For forming we already see C; if C exceeds A's
+                    // start (in normalised frame) we still call the
+                    // shape a flat — the sub-classification (regular /
+                    // expanded / running) keys off B alone.
+                    let corrective_kind: &'static str = if flat_likely {
+                        if (b_ret / a_len) > 1.382 { "flat_running" }
+                        else { "flat_expanded" }
+                    } else if (b_ret / a_len) >= 0.95 {
+                        "flat_regular"
+                    } else {
+                        "zigzag"
+                    };
                     out.push(EarlyMatch {
                         subkind: format!("abc_forming_{suffix}"),
                         direction: abc_dir,
@@ -550,6 +610,7 @@ pub fn scan_level(
                             fib_proximity_score(b_ret / a_len, ABC_B_FIB_TARGETS),
                             fib_proximity_score(c_ratio, ABC_C_FIB_TARGETS),
                         ],
+                        corrective_kind: Some(corrective_kind),
                     });
                 }
             }
@@ -600,6 +661,7 @@ fn detect_nascent(p: &[PivotPoint]) -> Option<EarlyMatch> {
         stage: "nascent",
         w3_extension: w3_ext,
         anchor_scores: vec![],
+        corrective_kind: None,
     })
 }
 
@@ -649,6 +711,7 @@ fn detect_forming(p: &[PivotPoint]) -> Option<EarlyMatch> {
         stage: "forming",
         w3_extension: w3_dist / w1_dist,
         anchor_scores: vec![],
+        corrective_kind: None,
     })
 }
 
@@ -688,6 +751,7 @@ fn detect_extended(motive: &MotivePattern) -> Option<EarlyMatch> {
         stage: "extended",
         w3_extension: w3 / w1,
             anchor_scores: vec![],
+            corrective_kind: None,
         })
 }
 
@@ -778,7 +842,7 @@ pub async fn write_early(
     let end_bar = em.anchors.last().map(|a| a.bar_index).unwrap_or(0);
     let (start_time, end_time) = anchor_time_range(chrono_bars, start_bar, end_bar);
     let anchors_json = anchors_with_times(&em.anchors, chrono_bars);
-    let raw_meta = json!({
+    let mut raw_meta = json!({
         "score":              em.score,
         "stage":              em.stage,
         "w3_extension":       em.w3_extension,
@@ -787,6 +851,19 @@ pub async fn write_early(
         // graded line opacity / dash pattern.
         "anchor_scores":      em.anchor_scores,
     });
+    // Corrective shape (zigzag / flat_regular / flat_expanded /
+    // flat_running). User: "ABC düzeltme kalıbının genel adı değil mi?
+    // karşılığı zigzag, bunun yanında diğer düzeltme kalıpları var."
+    // Right — this field carries the actual shape so the chart can
+    // label "abc (flat expanded)" etc. instead of just "ABC".
+    if let Some(kind) = em.corrective_kind {
+        if let Value::Object(map) = &mut raw_meta {
+            map.insert(
+                "corrective_kind".to_string(),
+                Value::String(kind.to_string()),
+            );
+        }
+    }
 
     // Drop any stale lesser-stage ABC rows for the SAME parent motive
     // (same anchors[0] = W5 anchor). Stage hierarchy:

@@ -85,7 +85,42 @@ pub struct ZigzagResponse {
 }
 
 pub fn v2_zigzag_router() -> Router<SharedState> {
-    Router::new().route("/v2/zigzag/{venue}/{symbol}/{tf}", get(get_zigzag))
+    Router::new()
+        .route("/v2/zigzag/{venue}/{symbol}/{tf}", get(get_zigzag))
+        // Single source of truth for the Z1..Z5 slot ladder. Frontend
+        // hits this once on chart mount so the toolbar's lengths and
+        // colors mirror the same `system_config.zigzag.slot_N` rows
+        // the engine writers consume — no more hardcoded TS defaults
+        // drifting from operator tweaks.
+        .route("/v2/zigzag/slots", get(get_zigzag_slots))
+}
+
+#[derive(Debug, Serialize)]
+pub struct SlotConfigDto {
+    pub slot: u8,
+    pub length: u32,
+    pub color: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SlotConfigsResponse {
+    pub slots: Vec<SlotConfigDto>,
+}
+
+async fn get_zigzag_slots(
+    State(st): State<SharedState>,
+) -> Result<Json<SlotConfigsResponse>, ApiError> {
+    let cfgs = load_slot_configs(&st.pool).await;
+    Ok(Json(SlotConfigsResponse {
+        slots: cfgs
+            .into_iter()
+            .map(|c| SlotConfigDto {
+                slot: c.slot,
+                length: c.length,
+                color: c.color,
+            })
+            .collect(),
+    }))
 }
 
 #[derive(Debug, Clone)]

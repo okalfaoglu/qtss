@@ -297,6 +297,34 @@ export function LuxAlgoChart({
       enabled: defaults.slotsEnabled![i] ?? s.enabled,
     }));
   });
+  // Pull the canonical Z1..Z5 ladder (length + color) from the backend
+  // so the toolbar mirrors the same `system_config.zigzag.slot_N` rows
+  // the engine writers consume. Fires once on chart mount; the user's
+  // enabled toggles persist (we only patch length + color, never
+  // enabled). Falls back silently to DEFAULT_SLOTS if the request
+  // fails — avoids breaking the chart when an old API is in front.
+  interface BackendSlotConfig {
+    slot: number;
+    length: number;
+    color: string;
+  }
+  const slotConfigs = useQuery<{ slots: BackendSlotConfig[] }>({
+    queryKey: ["zigzag-slots"],
+    queryFn: () => apiFetch("/v2/zigzag/slots"),
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+  useEffect(() => {
+    const incoming = slotConfigs.data?.slots;
+    if (!incoming) return;
+    setSlots((prev) =>
+      prev.map((s, i) => {
+        const cfg = incoming.find((c) => c.slot === i);
+        if (!cfg) return s;
+        return { ...s, length: cfg.length, color: cfg.color };
+      }),
+    );
+  }, [slotConfigs.data]);
   const [showFibBand, setShowFibBand] = useState(true);
   const [showHhLl, setShowHhLl] = useState(false);
   const [onlyLatestMotive, setOnlyLatestMotive] = useState(
@@ -450,6 +478,15 @@ export function LuxAlgoChart({
   // computation anymore; the chart is pure presentation.
   const enabledLengths = slots.filter((s) => s.enabled).map((s) => s.length).join(",");
   const enabledColors = slots.filter((s) => s.enabled).map((s) => s.color).join(",");
+  // Parallel array: original slot index for each length we send to the
+  // backend. The Pine port returns a PACKED `levels[]` (one entry per
+  // enabled slot), so when slot 2 (Z3) is OFF the returned levels[2]
+  // is actually Z4's data, not Z3's. Without this remap the chart
+  // paints Z4 in the Z3 row and drops Z5 entirely. Bug repro from the
+  // user: "Z1,Z2,Z4,Z5 seçiliyse Z5 e ait veriler gözüküyor."
+  const enabledSlotIndices: number[] = slots
+    .map((s, i) => (s.enabled ? i : -1))
+    .filter((i) => i >= 0);
   const elliott = useQuery<ElliottResponse>({
     queryKey: [
       "elliott",
@@ -913,13 +950,24 @@ export function LuxAlgoChart({
 
     // ── MOTIVE / ABC / FIB BAND / BREAK BOX (TS port) ──
     if (!pineOutput) return;
-    for (let slotIdx = 0; slotIdx < pineOutput.levels.length; slotIdx++) {
-      const level = pineOutput.levels[slotIdx];
-      // Slot enable filter — db source returns ALL slots; respect the
-      // user's Z1..Z5 toolbar checks here so a single-Z view actually
-      // shows a single Z. (Live source already filters server-side via
-      // the `lengths` query param, but db source pulls every row and
-      // we must filter client-side.)
+    for (let levelIdx = 0; levelIdx < pineOutput.levels.length; levelIdx++) {
+      const level = pineOutput.levels[levelIdx];
+      // Translate the API response index into the toolbar slot index.
+      //
+      // - `live` source: the API packs results — only enabled slots make
+      //   it into the response, in send-order. levels[0] is the FIRST
+      //   enabled slot, levels[1] the SECOND, etc. So levels[i] belongs
+      //   to slot `enabledSlotIndices[i]`. (Bug fix: with Z3 unchecked,
+      //   levels[2] used to leak into the Z3 row even though it carried
+      //   Z4 data; meanwhile Z5's row stayed empty.)
+      //
+      // - `db` source: the response always has all 5 slots in canonical
+      //   order; index maps 1:1 to slot index. We still gate by the
+      //   toolbar enable flag so a single-Z view paints exactly one Z.
+      const slotIdx =
+        detectionSource === "live"
+          ? enabledSlotIndices[levelIdx] ?? levelIdx
+          : levelIdx;
       const slotCfgGate = slots[slotIdx];
       if (slotCfgGate && !slotCfgGate.enabled) continue;
       const color = level.color;
@@ -1154,7 +1202,17 @@ export function LuxAlgoChart({
       const motiveRangesBySlot: Map<number, Array<{ start: number; end: number }>> =
         new Map();
       if (pineOutput) {
-        pineOutput.levels.forEach((lvl, slotIdx) => {
+        pineOutput.levels.forEach((lvl, levelIdx) => {
+          // Same packed-vs-canonical remap as the motive draw loop above:
+          // live source ships only enabled slots; db source ships all 5.
+          // Without this remap motiveRangesBySlot stored ranges under
+          // wrong keys when a non-contiguous slot set was selected,
+          // leaving suppression of stale N/F markers in disabled slots
+          // unreachable.
+          const slotIdx =
+            detectionSource === "live"
+              ? enabledSlotIndices[levelIdx] ?? levelIdx
+              : levelIdx;
           const ranges = lvl.motives.map((m) => {
             const bars = m.anchors.map((a) => a.bar_index);
             return { start: Math.min(...bars), end: Math.max(...bars) };
@@ -2170,7 +2228,7 @@ export function LuxAlgoChart({
     showHarmonic, harmonicOutput,
     harmonicFilters, showHarmonicTargets,
     auxDetections, showClassical, showRange, showGap, showCandles, showOrb, showSmc,
-    showElliottFull,
+    showElliottFull, detectionSource, enabledSlotIndices,
     indicators.data, showSuperTrend, showKeltner, showIchimoku, showDonchian, showPsar,
     showRsi, showWilliamsR, showCmf, showAroon, showTtmSqueeze,
     defaults?.priceLineOverlays,
