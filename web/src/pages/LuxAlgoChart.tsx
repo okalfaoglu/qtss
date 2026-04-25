@@ -254,6 +254,18 @@ export interface LuxAlgoChartDefaults {
    * on (true); IQChart turns it off so the user sees ALL completed
    * motives at once — important for spotting in-progress patterns. */
   onlyLatestMotive?: boolean;
+  /** Optional list of price levels to draw as horizontal price lines
+   * on top of the candle series. Used by IQChart to surface IQ-D /
+   * IQ-T entry/SL/TP triplets. Each entry renders one line; the
+   * caller controls colour and label. Lines are detached and
+   * recreated whenever the array reference changes. */
+  priceLineOverlays?: Array<{
+    price: number;
+    color: string;
+    title: string;
+    lineWidth?: number;
+    lineStyle?: "solid" | "dashed" | "dotted";
+  }>;
   /** Notify parent every time the chart's symbol / exchange / segment /
    * tf changes. Used by IQChart so the WaveBarsPanel below the chart
    * stays in sync with the user's TF / symbol selection. */
@@ -671,6 +683,12 @@ export function LuxAlgoChart({
   const overlaySeriesRef = useRef<ISeriesApi<"Line">[]>([]);
   const labelPrimitivesRef = useRef<TextLabelPrimitive[]>([]);
   const rectPrimitivesRef = useRef<RectanglePrimitive[]>([]);
+  // Horizontal price-line overlays (IQ setup entry / SL / TP). Stored
+  // as opaque `IPriceLine` handles so we can detach them on each
+  // re-render before the new ones are attached. lightweight-charts
+  // doesn't expose the type publicly so we use unknown[].
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const priceLineHandlesRef = useRef<any[]>([]);
   const polygonPrimitivesRef = useRef<PolygonPrimitive[]>([]);
 
   // Mount chart
@@ -767,6 +785,11 @@ export function LuxAlgoChart({
       try { candleSeries.detachPrimitive(prim); } catch { /* disposed */ }
     }
     polygonPrimitivesRef.current = [];
+    // Detach old price-line overlays before redrawing.
+    for (const ph of priceLineHandlesRef.current) {
+      try { candleSeries.removePriceLine(ph); } catch { /* disposed */ }
+    }
+    priceLineHandlesRef.current = [];
 
     const candles = data.data.candles;
     const candleData: CandlestickData[] = candles.map((c) => ({
@@ -2012,6 +2035,36 @@ export function LuxAlgoChart({
       );
       addOscLine(vals, "#f472b6", 1);
     }
+
+    // ── IQ price-line overlays (FAZ 25 PR-25C / PR-25D) ─────────────
+    // Caller (IQChart) passes a flat list of {price, color, title}
+    // tuples — one per entry / SL / TP level across all active iq_d
+    // and iq_t setups for this symbol+tf. We attach each as a
+    // horizontal price line on the candle series so it scales with
+    // price axis automatically and follows zoom/pan natively.
+    const overlays = defaults?.priceLineOverlays ?? [];
+    for (const o of overlays) {
+      if (!Number.isFinite(o.price) || o.price <= 0) continue;
+      const styleEnum =
+        o.lineStyle === "dashed"
+          ? LineStyle.Dashed
+          : o.lineStyle === "dotted"
+          ? LineStyle.Dotted
+          : LineStyle.Solid;
+      try {
+        const handle = candleSeries.createPriceLine({
+          price: o.price,
+          color: o.color,
+          lineWidth: (o.lineWidth ?? 1) as 1 | 2 | 3 | 4,
+          lineStyle: styleEnum,
+          axisLabelVisible: true,
+          title: o.title,
+        });
+        priceLineHandlesRef.current.push(handle);
+      } catch {
+        /* createPriceLine on a freshly-disposed chart can throw */
+      }
+    }
   }, [
     data.data, pineOutput, slots,
     showFibBand, showHhLl, onlyLatestMotive, showZigzag, showElliott, fibExtend,
@@ -2024,6 +2077,7 @@ export function LuxAlgoChart({
     auxDetections, showClassical, showRange, showGap, showCandles, showOrb, showSmc,
     indicators.data, showSuperTrend, showKeltner, showIchimoku, showDonchian, showPsar,
     showRsi, showWilliamsR, showCmf, showAroon, showTtmSqueeze,
+    defaults?.priceLineOverlays,
   ]);
 
   const venueList: VenueOpt[] = venues.data ?? [];

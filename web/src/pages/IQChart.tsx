@@ -6,7 +6,7 @@
 // independently. Future PR-25B will extend this page with the IQ-D
 // structure tracker overlay.
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { LuxAlgoChart } from "./LuxAlgoChart";
@@ -108,6 +108,32 @@ function EarlyStatsPanel({
   const structures = iq.data?.structures ?? [];
   const lock = iq.data?.lock ?? null;
 
+  // FAZ 25 PR-25C/D — iq_d / iq_t setups for the same symbol+tf.
+  // Surfaced in the sidebar so the user can verify entry/SL/TP and
+  // the parent → child link without leaving the chart.
+  type IqSetup = {
+    id: string;
+    profile: "iq_d" | "iq_t" | string;
+    direction: "long" | "short" | string;
+    state: string;
+    entry_price?: number | null;
+    entry_sl?: number | null;
+    target_ref?: number | null;
+    parent_setup_id?: string | null;
+    created_at: string;
+    raw_meta?: { entry_tier?: string; parent_current_wave?: string; child_tf?: string };
+  };
+  type IqSetupsResp = { setups: IqSetup[] };
+  const iqSetups = useQuery<IqSetupsResp>({
+    queryKey: ["iq-setups", symbol, tf],
+    queryFn: () =>
+      apiFetch(
+        `/v2/iq-setups/binance/${symbol}/${tf}?segment=futures&limit=20`
+      ),
+    refetchInterval: 30_000,
+  });
+  const setups = iqSetups.data?.setups ?? [];
+
   return (
     <aside className="hidden w-[300px] shrink-0 overflow-y-auto border-l border-zinc-800 bg-zinc-950/40 p-3 text-xs xl:block">
       {/* FAZ 25 PR-25B — IQ-D structure summary at the top so the user
@@ -158,6 +184,57 @@ function EarlyStatsPanel({
             {s.invalidation_reason && (
               <div className="mt-0.5 truncate text-[9px] text-rose-400/70">
                 {s.invalidation_reason}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* IQ-D / IQ-T setups for this symbol+tf. Active rows surface
+          first; closed rows are filtered server-side by default. */}
+      <h3 className="mb-2 mt-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+        {symbol} {tf} — IQ Setups
+      </h3>
+      {setups.length === 0 && (
+        <div className="mb-2 text-[10px] text-zinc-500">No active IQ setups.</div>
+      )}
+      {setups.slice(0, 8).map((s) => {
+        const dirArrow = s.direction === "long" ? "▲" : "▼";
+        const dirColor = s.direction === "long" ? "text-emerald-400" : "text-rose-400";
+        const profileBg = s.profile === "iq_d"
+          ? "bg-indigo-500/20 text-indigo-300"
+          : "bg-amber-500/20 text-amber-300";
+        const tier = s.raw_meta?.entry_tier ?? s.raw_meta?.parent_current_wave;
+        return (
+          <div
+            key={s.id}
+            className="mb-1 rounded bg-zinc-900/60 px-2 py-1 text-[10px]"
+          >
+            <div className="flex items-center justify-between">
+              <span className={`rounded px-1 font-mono uppercase ${profileBg}`}>
+                {s.profile}
+              </span>
+              <span className={`font-mono ${dirColor}`}>
+                {dirArrow} {tier ?? "?"}
+              </span>
+              <span className="text-zinc-500">{s.state}</span>
+            </div>
+            {s.entry_price && s.entry_sl && s.target_ref && (
+              <div className="mt-0.5 grid grid-cols-3 gap-1 font-mono text-[9px]">
+                <span className="text-zinc-400">
+                  E <span className="text-zinc-200">{s.entry_price.toFixed(2)}</span>
+                </span>
+                <span className="text-rose-400">
+                  SL <span>{s.entry_sl.toFixed(2)}</span>
+                </span>
+                <span className="text-emerald-400">
+                  TP <span>{s.target_ref.toFixed(2)}</span>
+                </span>
+              </div>
+            )}
+            {s.parent_setup_id && (
+              <div className="mt-0.5 truncate text-[9px] text-zinc-500">
+                ↑ parent {s.parent_setup_id.slice(0, 8)}
               </div>
             )}
           </div>
@@ -227,6 +304,69 @@ export function IQChart() {
     tf: "4h",
   });
 
+  // FAZ 25 PR-25C/D — pull active iq_d / iq_t setups for THIS symbol
+  // + tf so we can paint entry / SL / TP price lines on the chart
+  // and the right-sidebar list. iq_d in indigo, iq_t in amber so
+  // the user can tell parent macro from child tactical at a glance.
+  type IqOverlaySetup = {
+    id: string;
+    profile: "iq_d" | "iq_t" | string;
+    direction: string;
+    entry_price?: number | null;
+    entry_sl?: number | null;
+    target_ref?: number | null;
+  };
+  const iqOverlay = useQuery<{ setups: IqOverlaySetup[] }>({
+    queryKey: ["iq-setups-overlay", ctx.symbol, ctx.tf],
+    queryFn: () =>
+      apiFetch(
+        `/v2/iq-setups/${ctx.exchange}/${ctx.symbol}/${ctx.tf}?segment=${ctx.segment}&limit=20`
+      ),
+    refetchInterval: 30_000,
+  });
+  const priceLineOverlays = useMemo(() => {
+    const out: Array<{
+      price: number;
+      color: string;
+      title: string;
+      lineWidth?: number;
+      lineStyle?: "solid" | "dashed" | "dotted";
+    }> = [];
+    for (const s of iqOverlay.data?.setups ?? []) {
+      const isD = s.profile === "iq_d";
+      const baseColor = isD ? "#818cf8" : "#fbbf24"; // indigo / amber
+      const tag = s.profile.toUpperCase();
+      if (s.entry_price && Number.isFinite(s.entry_price)) {
+        out.push({
+          price: s.entry_price as number,
+          color: baseColor,
+          lineWidth: 1,
+          lineStyle: "solid",
+          title: `${tag} entry`,
+        });
+      }
+      if (s.entry_sl && Number.isFinite(s.entry_sl)) {
+        out.push({
+          price: s.entry_sl as number,
+          color: "#f87171",                       // rose-400
+          lineWidth: 1,
+          lineStyle: "dashed",
+          title: `${tag} SL`,
+        });
+      }
+      if (s.target_ref && Number.isFinite(s.target_ref)) {
+        out.push({
+          price: s.target_ref as number,
+          color: "#34d399",                       // emerald-400
+          lineWidth: 1,
+          lineStyle: "dashed",
+          title: `${tag} TP`,
+        });
+      }
+    }
+    return out;
+  }, [iqOverlay.data]);
+
   return (
     <div
       className="flex flex-col"
@@ -248,6 +388,7 @@ export function IQChart() {
                 onlyLatestMotive: false, // show all motives, not just the latest
                                          // — important for spotting newly-formed
                                          // patterns and in-progress ABCs
+                priceLineOverlays,
               }}
             />
           </div>
