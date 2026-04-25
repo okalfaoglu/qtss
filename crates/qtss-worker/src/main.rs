@@ -28,6 +28,7 @@ mod market_bars_gap_loop;
 mod iq_structure_tracker_loop;
 mod iq_t_candidate_loop;
 mod iq_d_candidate_loop;
+mod major_dip_candidate_loop;
 mod price_tick_ws;
 mod setup_watcher;
 mod symbol_intel_loops;
@@ -454,6 +455,14 @@ async fn main() -> anyhow::Result<()> {
         // parent_setup_id link.
         let iq_d_pool = pool.clone();
         tokio::spawn(iq_d_candidate_loop::iq_d_candidate_loop(iq_d_pool));
+        // FAZ 25.3.A — Major Dip composite scorer. Computes the 8-
+        // component score per (symbol, tf) tick and upserts into
+        // major_dip_candidates. IQ-D / IQ-T loops gate setup creation
+        // on this composite (faz 25.3.B).
+        let major_dip_pool = pool.clone();
+        tokio::spawn(major_dip_candidate_loop::major_dip_candidate_loop(
+            major_dip_pool,
+        ));
         // RADAR periodic aggregator — daily / weekly / monthly /
         // yearly performance snapshots per market × mode.
         let radar_pool = pool.clone();
