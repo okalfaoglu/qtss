@@ -127,7 +127,23 @@ async fn process_symbol(
 
     let mut written = 0usize;
     for (slot_idx, level) in pine_out.levels.iter().enumerate() {
-        for motive in &level.motives {
+        // 2026-04-26 — User: "iki resimde farklı itki başlangıç yeri var.
+        // bunlardan hangisi gerçek başlangıç noktasıdır." Pine port slides
+        // a 6-pivot window over the ZigZag tape and emits EVERY valid
+        // 1-2-3-4-5 sequence; for the same era it can fire two motives
+        // whose W0 anchors are 2-3 bars (or one ZigZag swing) apart.
+        // Both are technically valid Elliott interpretations but they
+        // disagree on the "major dip" — the structural origin of the
+        // impulse.
+        //
+        // pick_canonical_per_era: groups motives whose [start_bar,
+        // end_bar] ranges overlap >50% of the shorter motive's length
+        // ("same era"), and within each era picks the one with the
+        // strongest impulse score. Tiebreaker prefers the EARLIER W0
+        // — assumes the impulse really started at the first valid low,
+        // not the next one.
+        let canonical_motives = pick_canonical_per_era(&level.motives);
+        for motive in &canonical_motives {
             // Sanity gate — Pine port's ZigZag init can leak an empty
             // pivot (price=0.0) into the first slot when the data
             // window suddenly grows (e.g. the market_bars gap loop
@@ -144,6 +160,14 @@ async fn process_symbol(
                 }
             }
         }
+        // Drop any rows for THIS slot that the previous tick wrote but
+        // the canonical pass just suppressed. Without this the chart
+        // would still show the rejected motive until its row aged out.
+        let canonical_keys: Vec<(i64, i64)> = canonical_motives
+            .iter()
+            .map(|m| (m.anchors[0].bar_index, m.anchors[5].bar_index))
+            .collect();
+        prune_non_canonical_motives(pool, sym, slot_idx as i16, &canonical_keys).await?;
         for tri in &level.triangles {
             if tri.anchors.iter().any(|a| a.price <= 0.0) {
                 continue;
@@ -420,3 +444,150 @@ async fn upsert(
     .await?;
     Ok(1)
 }
+
+
+// ── canonical motive picker (FAZ 25.2 — major dip detection) ─────────
+
+/// Pick one canonical motive per overlapping-bar-range "era". Two
+/// motives are in the same era when their 
+/// ranges overlap more than 50% of the shorter motive's length.
+/// Within an era we pick the entry with:
+///   1. The strongest impulse score () — closer Fib
+///      ratios = higher confidence.
+///   2. Tiebreaker: the EARLIER . Picking the earlier W0
+///      treats the impulse as starting at the first valid low rather
+///      than a noisier later one — matches what a trader would call
+///      the "major dip" after a correction.
+///
+/// Output preserves Pine port's motive ordering for the rows we
+/// keep; rejected motives are filtered out. Caller is responsible
+/// for deleting any previously-written non-canonical rows.
+fn pick_canonical_per_era(motives: &[MotivePattern]) -> Vec<MotivePattern> {
+    use qtss_elliott::score_impulse;
+    if motives.is_empty() {
+        return Vec::new();
+    }
+    let bar_range = |m: &MotivePattern| -> (i64, i64) {
+        let lo = m.anchors.iter().map(|a| a.bar_index).min().unwrap_or(0);
+        let hi = m.anchors.iter().map(|a| a.bar_index).max().unwrap_or(lo);
+        (lo, hi)
+    };
+    let overlaps_significantly = |a: &MotivePattern, b: &MotivePattern| -> bool {
+        let (a_lo, a_hi) = bar_range(a);
+        let (b_lo, b_hi) = bar_range(b);
+        let overlap_lo = a_lo.max(b_lo);
+        let overlap_hi = a_hi.min(b_hi);
+        if overlap_hi <= overlap_lo {
+            return false;
+        }
+        let overlap_len = (overlap_hi - overlap_lo) as f64;
+        let a_len = (a_hi - a_lo).max(1) as f64;
+        let b_len = (b_hi - b_lo).max(1) as f64;
+        overlap_len / a_len.min(b_len) > 0.5
+    };
+    let score_of = |m: &MotivePattern| -> f64 {
+        // qtss_elliott::score_impulse signature is `&[f64; 6]` —
+        // raw price tuple from W0 to W5. Direction sign is implicit
+        // in the price ordering. We feed it the motive's anchors
+        // straight through.
+        let pts: [f64; 6] = [
+            m.anchors[0].price,
+            m.anchors[1].price,
+            m.anchors[2].price,
+            m.anchors[3].price,
+            m.anchors[4].price,
+            m.anchors[5].price,
+        ];
+        score_impulse(&pts)
+    };
+
+    // Greedy era assignment: walk motives in input order; for each
+    // motive, find the first existing era it overlaps with — if any —
+    // else start a new era. Eras are Vec<usize> indices into motives.
+    let mut eras: Vec<Vec<usize>> = Vec::new();
+    for (idx, m) in motives.iter().enumerate() {
+        let mut placed = false;
+        for era in &mut eras {
+            // Use the era's representative (first motive) to test overlap.
+            let rep = &motives[era[0]];
+            if overlaps_significantly(m, rep) {
+                era.push(idx);
+                placed = true;
+                break;
+            }
+        }
+        if !placed {
+            eras.push(vec![idx]);
+        }
+    }
+
+    // Within each era pick the best motive.
+    let mut canonical: Vec<MotivePattern> = Vec::with_capacity(eras.len());
+    for era in eras {
+        let best = era
+            .into_iter()
+            .max_by(|&a, &b| {
+                let sa = score_of(&motives[a]);
+                let sb = score_of(&motives[b]);
+                sa.partial_cmp(&sb)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        // Tiebreaker: prefer earlier W0 (canonical "major dip")
+                        motives[b].anchors[0]
+                            .bar_index
+                            .cmp(&motives[a].anchors[0].bar_index)
+                    })
+            });
+        if let Some(idx) = best {
+            canonical.push(motives[idx].clone());
+        }
+    }
+    canonical
+}
+
+/// Delete previously-written motive rows for this slot whose
+/// (start_bar, end_bar) tuple isn't in the current canonical set.
+/// Without this prune, a motive Pine port emitted last tick but the
+/// canonical picker just rejected stays on the chart until manual
+/// cleanup. Runs once per slot per tick.
+async fn prune_non_canonical_motives(
+    pool: &PgPool,
+    sym: &EngineSymbol,
+    slot: i16,
+    canonical_keys: &[(i64, i64)],
+) -> anyhow::Result<()> {
+    if canonical_keys.is_empty() {
+        // Pine port emitted nothing canonical this tick. Don't blanket-
+        // delete — that would erase rows the chart still needs while a
+        // gap-fill loop catches up. Leave history intact.
+        return Ok(());
+    }
+    // Build TWO arrays we can pass to PostgreSQL: starts[] and ends[].
+    // We then use unnest() in the WHERE clause to express "NOT IN
+    // (any of these tuples)".
+    let starts: Vec<i64> = canonical_keys.iter().map(|(s, _)| *s).collect();
+    let ends: Vec<i64> = canonical_keys.iter().map(|(_, e)| *e).collect();
+    sqlx::query(
+        r#"DELETE FROM detections
+            WHERE exchange = $1 AND segment = $2
+              AND symbol = $3 AND timeframe = $4
+              AND slot = $5
+              AND pattern_family = 'motive'
+              AND mode = 'live'
+              AND NOT EXISTS (
+                  SELECT 1 FROM unnest($6::bigint[], $7::bigint[]) AS t(s, e)
+                   WHERE t.s = detections.start_bar AND t.e = detections.end_bar
+              )"#,
+    )
+    .bind(&sym.exchange)
+    .bind(&sym.segment)
+    .bind(&sym.symbol)
+    .bind(&sym.interval)
+    .bind(slot)
+    .bind(&starts)
+    .bind(&ends)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
