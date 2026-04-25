@@ -880,6 +880,19 @@ fn anchors_with_times(
             if let Some(t) = time {
                 obj["time"] = json!(t);
             }
+            // CRITICAL — label_override carries the "?" suffix that
+            // tags projected anchors. Without it the frontend treats
+            // every anchor as a real pivot and renders the segment
+            // ending at C as solid even though C is just a Fib
+            // projection. (User reported BTCUSDT 1w Z4 painting a
+            // solid B→C line for an unconfirmed C; root cause was
+            // the missing field in this serializer.)
+            if let Some(lo) = &a.label_override {
+                obj["label_override"] = json!(lo);
+            }
+            if a.hide_label {
+                obj["hide_label"] = json!(true);
+            }
             obj
         })
         .collect();
