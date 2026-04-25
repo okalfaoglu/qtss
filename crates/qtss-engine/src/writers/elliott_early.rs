@@ -386,11 +386,31 @@ pub fn scan_level(
                 // visible — the corrective B printed a 1.02-ratio
                 // intraday spike beyond the original 0.95 ceiling.
                 if a_len > 0.0 && (0.10..=1.30).contains(&(b_ret / a_len)) {
-                    // Add a projected C anchor so the chart can draw
-                    // the dotted continuation segment all the way to
-                    // the expected target. C ≈ A length (zigzag).
+                    // Fib validation — a real pivot whose price is OUT of
+                    // the canonical Elliott band gets re-tagged as
+                    // projected (label_override ending in "?"). Frontend
+                    // then renders that segment dotted instead of solid,
+                    // even though the pivot itself is confirmed. The
+                    // user reads this as "the pivot exists but doesn't
+                    // satisfy classic ABC ratios — wait for confirmation".
+                    let impulse_len = (p5.price - p0.price).abs();
+                    let a_ret = a_len / impulse_len.max(1e-9);
+                    let a_in_band = (0.236..=0.886).contains(&a_ret);
+                    let b_in_band = (0.236..=0.786).contains(&(b_ret / a_len));
+                    let mut a_clone = a_anchor.clone();
+                    if !a_in_band {
+                        a_clone.label_override = Some("a?".into());
+                    }
+                    let mut b_clone = b_anchor.clone();
+                    if !b_in_band {
+                        b_clone.label_override = Some("b?".into());
+                    }
+                    // Project C from the candidate (validated or not)
+                    // B price; if B is out-of-band the C target also
+                    // shifts — the projection follows the actual pivot
+                    // tape rather than guessing a "perfect" B.
                     let c_proj = project_c(a_anchor.price, b_anchor.price);
-                    let c_dir = a_anchor.direction; // mirrors A direction
+                    let c_dir = a_anchor.direction;
                     let leg_ab =
                         (b_anchor.bar_index - a_anchor.bar_index).max(5);
                     out.push(EarlyMatch {
@@ -398,8 +418,8 @@ pub fn scan_level(
                         direction: abc_dir,
                         anchors: vec![
                             p5.clone(),
-                            a_anchor.clone(),
-                            b_anchor.clone(),
+                            a_clone,
+                            b_clone,
                             PivotPoint {
                                 direction: c_dir,
                                 bar_index: b_anchor.bar_index + leg_ab,
@@ -430,15 +450,33 @@ pub fn scan_level(
                 let a_len = (a_anchor.price - p5.price).abs();
                 let c_len = (c_anchor.price - b_anchor.price).abs();
                 if a_len > 0.0 && c_len >= 0.5 * a_len {
+                    // Fib validation per anchor — out-of-band gets a
+                    // "?" label_override so the segment renders dotted
+                    // even though the pivot is real (Elliott rule
+                    // violation, treat as unconfirmed shape).
+                    let impulse_len = (p5.price - p0.price).abs();
+                    let b_ret = (b_anchor.price - a_anchor.price).abs();
+                    let a_in_band =
+                        (0.236..=0.886).contains(&(a_len / impulse_len.max(1e-9)));
+                    let b_in_band = (0.236..=0.786).contains(&(b_ret / a_len));
+                    let c_ratio = c_len / a_len;
+                    let c_in_band = (0.618..=2.618).contains(&c_ratio);
+                    let mut a_clone = a_anchor.clone();
+                    if !a_in_band {
+                        a_clone.label_override = Some("a?".into());
+                    }
+                    let mut b_clone = b_anchor.clone();
+                    if !b_in_band {
+                        b_clone.label_override = Some("b?".into());
+                    }
+                    let mut c_clone = c_anchor.clone();
+                    if !c_in_band {
+                        c_clone.label_override = Some("c?".into());
+                    }
                     out.push(EarlyMatch {
                         subkind: format!("abc_forming_{suffix}"),
                         direction: abc_dir,
-                        anchors: vec![
-                            p5.clone(),
-                            a_anchor.clone(),
-                            b_anchor.clone(),
-                            c_anchor.clone(),
-                        ],
+                        anchors: vec![p5.clone(), a_clone, b_clone, c_clone],
                         score: 0.65,
                         invalidation_price: p5.price,
                         stage: "abc_forming",

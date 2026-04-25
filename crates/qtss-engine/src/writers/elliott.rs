@@ -336,6 +336,35 @@ async fn upsert(
     invalidated: bool,
     raw_meta: Value,
 ) -> anyhow::Result<usize> {
+    // De-dup before insert: Pine port emits the same logical motive
+    // every tick with a different start_time because the analysis
+    // window slides as new bars come in. The UNIQUE key uses
+    // (start_time, end_time), so a fresh start_time creates a new
+    // row and the chart paints two (5) labels for the same motive.
+    // Delete any earlier rows for the same end_time / pattern_family
+    // before the upsert. Bot allocator (PR-25E) reads the table
+    // directly so this MUST live in the writer, not the GUI.
+    let _ = sqlx::query(
+        r#"DELETE FROM detections
+            WHERE exchange = $1 AND segment = $2
+              AND symbol = $3 AND timeframe = $4
+              AND slot = $5
+              AND pattern_family = $6
+              AND mode = 'live'
+              AND end_time = $7
+              AND start_time <> $8"#,
+    )
+    .bind(&sym.exchange)
+    .bind(&sym.segment)
+    .bind(&sym.symbol)
+    .bind(&sym.interval)
+    .bind(slot)
+    .bind(family)
+    .bind(end_time)
+    .bind(start_time)
+    .execute(pool)
+    .await;
+
     sqlx::query(
         r#"INSERT INTO detections
               (exchange, segment, symbol, timeframe, slot,
