@@ -263,30 +263,38 @@ pub fn scan_level(
             .filter(|p| p.bar_index > p5_bar)
             .cloned()
             .collect();
-        // Fallback: if the Pine-port ZigZag (Z5 length=21 on 4h is
-        // ~84h displacement) hasn't confirmed a post-W5 pivot but the
-        // raw bars contain a clear correction, run a smaller-window
-        // mini-detector on the raw OHLC. Window scales with the
-        // level's length — half is plenty to catch corrective pivots
-        // without amplifying noise.
-        let pine_post_count = pine_post.len();
-        let post_w5: Vec<PivotPoint> = if pine_post.len() >= 2 {
-            pine_post
-        } else {
-            // Mini-pivot fallback: Pine port's ZigZag (Z5 length=21
-            // on 4h is ~84h displacement) often hasn't confirmed any
-            // post-W5 pivot when the corrective is still small. We
-            // run a shared 3-bar window across ALL slots so the same
-            // structural definition lights up Z1..Z5. Picked 3 by
-            // looking at SOLUSDT 4h Z3/Z4 where it already produced
-            // good (a)(b) anchors and BTCUSDT 4h Z5 where the user
-            // marked the obvious A/B pivots by eye but a 4-bar
-            // window missed them.
-            let win = 3;
+        // 2026-04-26 — User feedback: "abc hala simülasyonda kalmış,
+        // simülasyon gerçek hayattan kopuk ilerliyor." Symptom: Pine
+        // port slot tape can lag (length=21 on 4h ≈ 84 hours of right-
+        // side confirmation), or it returns a single same-direction
+        // post-W5 spike that the `first_valid` filter rejects, leaving
+        // post_w5 empty even though the eye sees clean A/B/C swings
+        // on the bar tape. Old code only ran mini-pivot fallback when
+        // pine_post.len() < 2; that missed the very common case of
+        // "pine confirmed two HIGHS but no LOW yet."
+        //
+        // Fix — ALWAYS merge Pine-port and mini-pivot tapes. Dedupe
+        // by (bar_index ±2, direction) so Pine's confirmed pivot
+        // wins where the two tapes agree, and the mini detector fills
+        // in the LOW/HIGH gap when Pine hasn't confirmed yet. This
+        // makes the simulation track real candles regardless of slot
+        // length — same fix lights up Z1..Z5.
+        let mini_pivots = {
+            let win = 3usize;
             let p5_usize = p5_bar.max(0) as usize;
             detect_post_w5_mini_pivots(chrono_bars, p5_usize, win)
         };
-        let _ = pine_post_count;
+        let mut combined: Vec<PivotPoint> = pine_post.clone();
+        for m in mini_pivots {
+            let near_existing = combined.iter().any(|p| {
+                (p.bar_index - m.bar_index).abs() <= 2 && p.direction == m.direction
+            });
+            if !near_existing {
+                combined.push(m);
+            }
+        }
+        combined.sort_by_key(|p| p.bar_index);
+        let post_w5: Vec<PivotPoint> = combined;
         // Filter: ABC's first leg ALWAYS opposes the motive's W5
         // direction (bull motive p5=high → A=low; bear motive p5=low
         // → A=high). If the first post-W5 pivot has the SAME
@@ -364,9 +372,20 @@ pub fn scan_level(
         let leg_bars: i64 = (motive.anchors[3].bar_index
             - motive.anchors[2].bar_index)
             .max(5);
+        // 2026-04-26 — User feedback: "simülasyon gerçek hayattan
+        // kopuk ilerliyor." Cap projected bar_index at the current
+        // last bar so dotted (a)?(b)?(c)? segments stop AT today's
+        // candle instead of stretching into territory where bars
+        // already exist. As real bars print, the next tick will pick
+        // up the new merged pivots (mini + pine) and promote
+        // abc_projected → abc_nascent → abc_forming naturally.
+        let last_bar_index: i64 = chrono_bars
+            .len()
+            .saturating_sub(1) as i64;
+        let clip_to_last = |bar: i64| -> i64 { bar.min(last_bar_index) };
         let make_proj = |bar_offset: i64, price: f64, dir: i8, label: &str| PivotPoint {
             direction: dir,
-            bar_index: motive.anchors[5].bar_index + bar_offset,
+            bar_index: clip_to_last(motive.anchors[5].bar_index + bar_offset),
             price,
             label_override: Some(label.to_string()),
             hide_label: false,
@@ -415,14 +434,18 @@ pub fn scan_level(
                         a_anchor.clone(),
                         PivotPoint {
                             direction: b_dir,
-                            bar_index: a_anchor.bar_index + a_leg_bars,
+                            bar_index: clip_to_last(
+                                a_anchor.bar_index + a_leg_bars,
+                            ),
                             price: b_proj,
                             label_override: Some("b?".into()),
                             hide_label: false,
                         },
                         PivotPoint {
                             direction: c_dir,
-                            bar_index: a_anchor.bar_index + a_leg_bars * 2,
+                            bar_index: clip_to_last(
+                                a_anchor.bar_index + a_leg_bars * 2,
+                            ),
                             price: c_proj,
                             label_override: Some("c?".into()),
                             hide_label: false,
@@ -521,7 +544,9 @@ pub fn scan_level(
                             b_clone,
                             PivotPoint {
                                 direction: c_dir,
-                                bar_index: b_anchor.bar_index + c_offset_bars,
+                                bar_index: clip_to_last(
+                                    b_anchor.bar_index + c_offset_bars,
+                                ),
                                 price: c_proj,
                                 label_override: Some("c?".into()),
                                 hide_label: false,
