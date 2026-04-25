@@ -759,6 +759,13 @@ pub async fn write_early(
     em: &EarlyMatch,
     chrono_bars: &[qtss_storage::market_bars::MarketBarRow],
 ) -> anyhow::Result<usize> {
+    // Sanity gate — Pine port's ZigZag init can leak a price=0 anchor
+    // when the analysis window grows suddenly (see elliott.rs writer).
+    // Refuse to persist anything with a zero-or-negative price; the
+    // chart and the bot allocator both treat those as bogus.
+    if em.anchors.iter().any(|a| a.price <= 0.0) {
+        return Ok(0);
+    }
     let start_bar = em.anchors.first().map(|a| a.bar_index).unwrap_or(0);
     let end_bar = em.anchors.last().map(|a| a.bar_index).unwrap_or(0);
     let (start_time, end_time) = anchor_time_range(chrono_bars, start_bar, end_bar);

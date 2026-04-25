@@ -128,12 +128,26 @@ async fn process_symbol(
     let mut written = 0usize;
     for (slot_idx, level) in pine_out.levels.iter().enumerate() {
         for motive in &level.motives {
+            // Sanity gate — Pine port's ZigZag init can leak an empty
+            // pivot (price=0.0) into the first slot when the data
+            // window suddenly grows (e.g. the market_bars gap loop
+            // backfilling). Skip motives whose anchor prices aren't
+            // all positive, otherwise the chart paints a (1) at $0
+            // and the bot allocator gets bogus entry levels.
+            if motive.anchors.iter().any(|a| a.price <= 0.0) {
+                continue;
+            }
             written += write_motive(pool, sym, slot_idx as i16, motive, &chrono, level).await?;
             if let Some(abc) = &motive.abc {
-                written += write_abc(pool, sym, slot_idx as i16, motive, abc, &chrono).await?;
+                if abc.anchors.iter().all(|a| a.price > 0.0) {
+                    written += write_abc(pool, sym, slot_idx as i16, motive, abc, &chrono).await?;
+                }
             }
         }
         for tri in &level.triangles {
+            if tri.anchors.iter().any(|a| a.price <= 0.0) {
+                continue;
+            }
             written += write_triangle(pool, sym, slot_idx as i16, tri, &chrono).await?;
         }
         // FAZ 25 PR-25A — early-wave detection on the same level's

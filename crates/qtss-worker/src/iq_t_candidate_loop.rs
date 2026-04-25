@@ -196,6 +196,23 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
             None => continue,
         };
 
+        // Symbol lock check (PR-25E) — same gate as iq_d_candidate.
+        // A locked symbol blocks new IQ-T entries until a fresh
+        // candidate clears the lock.
+        let locked = sqlx::query(
+            "SELECT 1 FROM iq_symbol_locks
+              WHERE exchange = $1 AND segment = $2 AND symbol = $3
+              LIMIT 1",
+        )
+        .bind(&parent.exchange)
+        .bind(&parent.segment)
+        .bind(&parent.symbol)
+        .fetch_optional(pool)
+        .await?;
+        if locked.is_some() {
+            continue;
+        }
+
         // Avoid duplicates: if an iq_t setup already exists for this
         // parent + child motive end_time, skip (idempotency).
         let already = sqlx::query(

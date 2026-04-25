@@ -27,6 +27,7 @@ mod calibration_refresh_loop;
 mod market_bars_gap_loop;
 mod iq_structure_tracker_loop;
 mod iq_t_candidate_loop;
+mod iq_d_candidate_loop;
 mod price_tick_ws;
 mod setup_watcher;
 mod symbol_intel_loops;
@@ -446,6 +447,13 @@ async fn main() -> anyhow::Result<()> {
         // their parent IQ-D structure.
         let iq_t_pool = pool.clone();
         tokio::spawn(iq_t_candidate_loop::iq_t_candidate_loop(iq_t_pool));
+        // FAZ 25 PR-25C — IQ-D candidate creator. Reads
+        // candidate/tracking iq_structures rows whose current_wave is
+        // W1/W2/W3 and writes profile='iq_d' setups. The IQ-T loop
+        // joins on raw_meta.iq_structure_id to backfill its
+        // parent_setup_id link.
+        let iq_d_pool = pool.clone();
+        tokio::spawn(iq_d_candidate_loop::iq_d_candidate_loop(iq_d_pool));
         // RADAR periodic aggregator — daily / weekly / monthly /
         // yearly performance snapshots per market × mode.
         let radar_pool = pool.clone();
