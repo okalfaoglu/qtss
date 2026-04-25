@@ -292,7 +292,44 @@ export function LuxAlgoChart({
   // existing motive/abc/triangle render path.
   const [showElliottEarly, setShowElliottEarly] = useState(true);
   const [fibExtend, setFibExtend] = useState(false);
-  const [barLimit, setBarLimit] = useState(1000);
+  // TF-dependent default bar count. Picked so the visible chart
+  // window is meaningful for each cadence (long-cycle Elliott reads
+  // need years of history on 1d/1w; short scalp TFs only need a few
+  // days). User can still override via the Filters panel below.
+  function defaultBarLimit(timeframe: string): number {
+    switch (timeframe) {
+      case "1m":
+        return 5000;
+      case "3m":
+      case "5m":
+        return 4000;
+      case "15m":
+      case "30m":
+        return 3000;
+      case "1h":
+        return 2000;
+      case "4h":
+        return 1500;
+      case "1d":
+        return 5000;
+      case "1w":
+        return 2000;
+      case "1M":
+        return 500;
+      default:
+        return 1000;
+    }
+  }
+  const [barLimit, setBarLimit] = useState(() => defaultBarLimit("4h"));
+  // Re-apply a fresh TF default whenever the timeframe changes. We
+  // intentionally always reset on TF flip — different TFs need very
+  // different bar counts to be useful. (1d on 1000 bars = ~3y, on
+  // 5000 = ~13y; 1m on 5000 = ~3.5d, on 1000 = ~17h.) If the user
+  // has zoomed back further than the default, the lazy-load handler
+  // below will still bump up to 10k as they pan/zoom.
+  useEffect(() => {
+    setBarLimit(defaultBarLimit(tf));
+  }, [tf]);
 
   // Per-formation toggles. All default on — the user can uncheck any
   // pattern family to prove the backend really detected the remaining
@@ -668,16 +705,24 @@ export function LuxAlgoChart({
     };
   }, []);
 
-  // Pan-left: bump limit when visible range nears left edge.
-  const loadOlder = useCallback(() => {
-    setBarLimit((n) => Math.min(n + 500, 5000));
+  // Pan/zoom-left: bump limit when visible range nears left edge.
+  // Cap raised to 10k bars (was 5k) so daily / weekly users can zoom
+  // out further without running out of data. Increment scales with
+  // how close to the edge we are so far zooms catch up faster than
+  // a single step.
+  const loadOlder = useCallback((step: number) => {
+    setBarLimit((n) => Math.min(n + step, 10_000));
   }, []);
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
     const handler = (range: { from: number; to: number } | null) => {
       if (!range) return;
-      if (range.from < 20) loadOlder();
+      // Bigger step the closer we are to the edge — covers zoom-out
+      // jumps that span multiple page-fetches' worth at once.
+      if (range.from < -50) loadOlder(2000);
+      else if (range.from < 0) loadOlder(1000);
+      else if (range.from < 20) loadOlder(500);
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(handler);
     return () => {
@@ -1026,7 +1071,19 @@ export function LuxAlgoChart({
         if (slotCfg && !slotCfg.enabled) continue;
         const last = em.anchors[em.anchors.length - 1];
         if (!last) continue;
-        const t = timeAt(last.bar_index);
+        // Anchor positioning — use the writer-stored ISO `time` (which
+        // is the canonical reference: pivot's actual open_time)
+        // converted to UTCTimestamp. Fall back to bar_index lookup
+        // only for legacy rows that lack the time field. Using
+        // bar_index alone produced stale positions because the
+        // writer's bar_index is relative to its full data window
+        // while the chart only loaded the last `barLimit` candles.
+        let t: Time | null = null;
+        if (last.time) {
+          const epoch = Math.floor(new Date(last.time).getTime() / 1000);
+          if (!isNaN(epoch) && epoch > 0) t = epoch as UTCTimestamp;
+        }
+        if (t === null) t = timeAt(last.bar_index);
         if (t === null) continue;
         const letter = stageLetter[em.stage] ?? "?";
         const color = em.direction === 1 ? "#22c55e" : "#ef4444";

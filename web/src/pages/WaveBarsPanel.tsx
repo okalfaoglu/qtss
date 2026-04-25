@@ -18,9 +18,11 @@ import {
   CandlestickSeries,
   ColorType,
   CrosshairMode,
+  createSeriesMarkers,
   createChart,
   type IChartApi,
   type ISeriesApi,
+  type SeriesMarker,
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
@@ -85,6 +87,42 @@ export function WaveBarsPanel({
     refetchInterval: 30_000,
   });
   const waves = data?.waves ?? [];
+
+  // Elliott motive + ABC patterns from the same DB the LuxAlgoChart
+  // above reads. We pull just the slot we're rendering so wave-count
+  // labels align 1:1 with the wave bars beneath them.
+  type ElliottDbRow = {
+    pattern_family: "motive" | "abc" | "triangle" | string;
+    direction: number;
+    slot: number;
+    start_time: string;
+    end_time: string;
+    anchors: Array<{ bar_index: number; price: number; time?: string }>;
+  };
+  type ElliottDbResp = {
+    candles: Array<{ time: string }>;
+    rows?: ElliottDbRow[];
+    levels?: Array<{
+      slot: number;
+      motives?: Array<{
+        anchors: Array<{ bar_index: number; price: number; time?: string }>;
+        direction: number;
+        abc?: {
+          anchors: Array<{ bar_index: number; price: number; time?: string }>;
+          direction: number;
+          subkind?: string;
+        } | null;
+      }>;
+    }>;
+  };
+  const elliottDb = useQuery<ElliottDbResp>({
+    queryKey: ["elliott-db-for-wave-bars", exchange, symbol, segment, tf],
+    queryFn: () =>
+      apiFetch(
+        `/v2/elliott-db/${exchange}/${symbol}/${tf}?segment=${segment}&limit=1000`
+      ),
+    refetchInterval: 30_000,
+  });
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -161,6 +199,115 @@ export function WaveBarsPanel({
       chart.timeScale().fitContent();
     }
   }, [candlesticks]);
+
+  // Elliott label overlay — match motive and ABC anchor times to wave
+  // bar boundaries and stamp W1..W5 / A,B,C labels on the matching
+  // bars. Each motive (5 anchors → 4 wave bars between them) writes
+  // the wave number on the bar that ENDS at that anchor's time. ABC
+  // (4 anchors → 3 wave bars: A, B, C) does the same.
+  const wavesByEndEpoch = useMemo(() => {
+    const m = new Map<number, { idx: number; bar: WaveBar }>();
+    waves.forEach((w, idx) => {
+      const epoch = Math.floor(new Date(w.end_time).getTime() / 1000);
+      m.set(epoch, { idx, bar: w });
+    });
+    return m;
+  }, [waves]);
+
+  // Cast result of createSeriesMarkers; lightweight-charts v6's plugin
+  // type uses a generic that doesn't unify cleanly with the chart's
+  // Time alias. Workaround: store as `any` here.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const markersRef = useRef<any>(null);
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    if (waves.length === 0) {
+      // Clear any old markers when data goes empty.
+      markersRef.current?.setMarkers([]);
+      return;
+    }
+    const labels: SeriesMarker<Time>[] = [];
+
+    // The /v2/elliott-db response shape is `levels[].motives[]` from
+    // the LuxAlgoChart side (PinePortOutput). Walk the matching slot.
+    const elliottData = elliottDb.data;
+    const lvl = elliottData?.levels?.find((l) => l.slot === slot);
+    const motives = lvl?.motives ?? [];
+
+    const tolSec = 60 * 60 * 4; // 4h tolerance — pivots can land on
+                                // the bar boundary, so allow ±4h slop
+                                // when matching anchor time → wave end.
+    function findWaveAtTime(targetIso: string): { idx: number; bar: WaveBar } | null {
+      const target = Math.floor(new Date(targetIso).getTime() / 1000);
+      // Exact map first.
+      const exact = wavesByEndEpoch.get(target);
+      if (exact) return exact;
+      // Fall back to nearest within tolerance.
+      let best: { idx: number; bar: WaveBar } | null = null;
+      let bestDelta = Infinity;
+      for (const [epoch, v] of wavesByEndEpoch.entries()) {
+        const d = Math.abs(epoch - target);
+        if (d < bestDelta && d <= tolSec) {
+          bestDelta = d;
+          best = v;
+        }
+      }
+      return best;
+    }
+    const candleTime = (idx: number): UTCTimestamp =>
+      ((1_700_000_000 + idx * 60) as unknown) as UTCTimestamp;
+
+    for (const motive of motives) {
+      // Motive has 6 anchors → 5 wave bars. Anchor[1] is end of W1,
+      // anchor[2] end of W2, …, anchor[5] end of W5. Anchor[0] is the
+      // pre-W1 starting pivot — no label.
+      const dir = motive.direction;
+      const color = dir === 1 ? "#3b82f6" : "#ef4444";
+      for (let waveNo = 1; waveNo <= 5; waveNo++) {
+        const a = motive.anchors[waveNo];
+        if (!a?.time) continue;
+        const match = findWaveAtTime(a.time);
+        if (!match) continue;
+        // Bullish motive → labels above bar (wave ends are highs for
+        // odd waves, lows for even); we keep it simple and put label
+        // above the candle so they don't overlap the wicks.
+        labels.push({
+          time: candleTime(match.idx),
+          position: dir === 1 ? "aboveBar" : "belowBar",
+          color,
+          shape: "circle",
+          text: `(${waveNo})`,
+        });
+      }
+      // ABC follows the motive when present. anchors[1..3] = A, B, C
+      // (anchors[0] coincides with motive p5).
+      const abc = motive.abc;
+      if (abc?.anchors?.length) {
+        const abcLetters = ["", "a", "b", "c"];
+        const abcColor = "#a855f7"; // violet — distinct from blue/red
+        for (let i = 1; i <= 3; i++) {
+          const a = abc.anchors[i];
+          if (!a?.time) continue;
+          const match = findWaveAtTime(a.time);
+          if (!match) continue;
+          labels.push({
+            time: candleTime(match.idx),
+            position: abc.direction === 1 ? "aboveBar" : "belowBar",
+            color: abcColor,
+            shape: "circle",
+            text: `(${abcLetters[i]})`,
+          });
+        }
+      }
+    }
+
+    if (markersRef.current) {
+      markersRef.current.setMarkers(labels);
+    } else {
+      markersRef.current = createSeriesMarkers(series, labels);
+    }
+  }, [waves, slot, elliottDb.data, wavesByEndEpoch]);
 
   const stats = useMemo(() => {
     if (waves.length === 0) return null;
