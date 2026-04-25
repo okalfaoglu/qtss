@@ -34,8 +34,9 @@ use qtss_risk::{
 };
 use qtss_storage::{
     claim_selected_candidates, insert_live_position, mark_selected_errored, mark_selected_placed,
-    resolve_system_string, resolve_system_u64, resolve_worker_enabled_flag,
-    ExchangeAccountRepository, ExchangeOrderRepository, InsertLivePosition, SelectedCandidateRow,
+    resolve_account_equity_usd, resolve_system_f64, resolve_system_string, resolve_system_u64,
+    resolve_worker_enabled_flag, ExchangeAccountRepository, ExchangeOrderRepository,
+    InsertLivePosition, SelectedCandidateRow,
 };
 use sqlx::PgPool;
 use tracing::{debug, info, warn};
@@ -397,6 +398,75 @@ async fn build_live_position_for_mode(
     let side = live_side(&row.direction);
     let liq_price = liquidation_price(&segment, side, row.entry_price, leverage, mmr);
 
+    // Per-symbol-direction dedup — User: "$338K open notional / 3000%
+    // utilisation." Part of that was the SAME (symbol, direction)
+    // opening multiple times because the execution bridge polls every
+    // 2s and the selected_candidates queue can serve adjacent setups
+    // for the same trade. If a position already exists with this
+    // (symbol, side, mode) and isn't closed, skip the new one — the
+    // existing one already owns the exposure.
+    let already_open = sqlx::query_scalar::<_, i64>(
+        r#"SELECT COUNT(*)::bigint FROM live_positions
+            WHERE mode = $1 AND symbol = $2 AND side = $3
+              AND closed_at IS NULL"#,
+    )
+    .bind(mode)
+    .bind(&row.symbol)
+    .bind(side)
+    .fetch_one(pool)
+    .await
+    .ok()
+    .unwrap_or(0);
+    if already_open > 0 {
+        debug!(
+            symbol = %row.symbol, side = %side,
+            "skip: position already open in same direction",
+        );
+        return None;
+    }
+
+    // Aggregate notional cap — total open notional must stay below
+    // equity × leverage × aggregate_fraction. Without this an
+    // operator with $1K equity could see 6 simultaneous $10K
+    // positions = $60K aggregate exposure (= 60× leverage on
+    // realised equity).
+    let agg_fraction = resolve_system_f64(
+        pool,
+        MODULE,
+        "aggregate_notional_fraction",
+        "QTSS_EXEC_AGG_NOTIONAL_FRACTION",
+        1.0,
+    )
+    .await
+    .clamp(0.1, 5.0);
+    let equity_cap_f64 = resolve_account_equity_usd(pool, MODULE, match mode {
+        "live" => "live.default_equity",
+        _ => "dry.default_equity",
+    })
+    .await;
+    let max_aggregate_notional = equity_cap_f64 * (leverage as f64) * agg_fraction;
+    let current_open_notional = sqlx::query_scalar::<_, Option<rust_decimal::Decimal>>(
+        r#"SELECT SUM(qty_filled * entry_avg)
+             FROM live_positions
+            WHERE mode = $1 AND closed_at IS NULL"#,
+    )
+    .bind(mode)
+    .fetch_one(pool)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|d| d.try_into().ok())
+    .unwrap_or(0.0);
+    if current_open_notional >= max_aggregate_notional {
+        warn!(
+            mode = %mode, symbol = %row.symbol,
+            current_notional = %current_open_notional,
+            max_notional = %max_aggregate_notional,
+            "skip: aggregate notional cap reached",
+        );
+        return None;
+    }
+
     let qty = size_from_risk(pool, mode, row).await;
     // v1.1.7 — slippage + spread simulation on dry paper fills so the
     // paper-vs-live gap ChatGPT and Gemini both flagged stops being a
@@ -497,13 +567,22 @@ async fn size_from_risk(
     row: &SelectedCandidateRow,
 ) -> rust_decimal::Decimal {
     let fallback = rust_decimal::Decimal::new(1, 2); // 0.01
-    let (key, env, default_s) = match mode {
-        "live" => ("live.default_equity", "QTSS_LIVE_EQUITY", "1000"),
-        _ => ("dry.default_equity", "QTSS_DRY_EQUITY", "10000"),
+
+    // 2026-04-26 BUG: User reported $1000 starting capital producing
+    // $338K open notional / 3000% utilisation. Root cause: this
+    // function used to read its OWN execution.{mode}.default_equity
+    // key with hardcoded $10K dry default — completely independent of
+    // the `account.equity_usd` master we wired into the rest of the
+    // system. Now reads through the canonical resolver:
+    //   master `account.equity_usd` first → legacy
+    //   `execution.{mode}.default_equity` fallback → built-in $1K.
+    let legacy_key = match mode {
+        "live" => "live.default_equity",
+        _ => "dry.default_equity",
     };
-    let equity_raw = resolve_system_string(pool, MODULE, key, env, default_s).await;
-    let equity = rust_decimal::Decimal::from_str_exact(equity_raw.trim())
-        .unwrap_or_else(|_| rust_decimal::Decimal::new(10_000, 0));
+    let equity_f64 = resolve_account_equity_usd(pool, MODULE, legacy_key).await;
+    let equity = rust_decimal::Decimal::try_from(equity_f64)
+        .unwrap_or_else(|_| rust_decimal::Decimal::new(1_000, 0));
     if equity <= rust_decimal::Decimal::ZERO {
         return fallback;
     }
@@ -513,11 +592,46 @@ async fn size_from_risk(
     }
     let risk_usdt = equity * row.risk_pct;
     let raw_qty = risk_usdt / distance;
-    // Round to 4 decimals — conservative for Binance USDT-M majors
-    // (BTCUSDT step=0.001, ETHUSDT step=0.001, alt majors down to
-    // 0.0001). A proper per-symbol quantizer lands in Faz 9.8.19 along
-    // with the broker balance fetcher.
-    let qty = raw_qty.round_dp(4);
+
+    // Notional CAP: even if risk_pct sizing implies a huge qty (tight
+    // SL, narrow distance), we cap at `equity × leverage ×
+    // max_position_fraction`. Without this cap a 0.1%-tight SL on
+    // BTCUSDT can generate $145K notional on $1K equity — exactly
+    // what the user just witnessed. Default fraction 1.0 (full
+    // leverage); operators tighten via system_config.execution.
+    // max_position_fraction.
+    let leverage_u = resolve_system_u64(
+        pool, MODULE, "dry.default_leverage", "QTSS_DRY_LEVERAGE",
+        10, 1, 125,
+    )
+    .await;
+    let leverage = rust_decimal::Decimal::from(leverage_u);
+    let max_position_fraction = resolve_system_f64(
+        pool,
+        MODULE,
+        "max_position_fraction",
+        "QTSS_EXEC_MAX_POSITION_FRACTION",
+        1.0,
+    )
+    .await
+    .clamp(0.01, 1.0);
+    let frac_dec = rust_decimal::Decimal::try_from(max_position_fraction)
+        .unwrap_or(rust_decimal::Decimal::ONE);
+    let max_notional = equity * leverage * frac_dec;
+    let entry_pos = if row.entry_price > rust_decimal::Decimal::ZERO {
+        row.entry_price
+    } else {
+        // Defensive: shouldn't happen, but if entry is zero we can't
+        // derive a notional cap safely. Fall back to risk-only sizing.
+        return raw_qty.round_dp(4).max(fallback);
+    };
+    let max_qty_by_notional = max_notional / entry_pos;
+
+    // Final qty = the SMALLER of the two:
+    //   - risk_pct sizing (preserves intended dollar risk)
+    //   - notional cap (preserves capital available to lose)
+    let final_qty = raw_qty.min(max_qty_by_notional);
+    let qty = final_qty.round_dp(4);
     if qty <= rust_decimal::Decimal::ZERO {
         fallback
     } else {
