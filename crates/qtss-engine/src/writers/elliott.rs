@@ -140,7 +140,7 @@ async fn process_symbol(
         // pivot tape. Gated by config so an operator can disable
         // without rebuilding (CLAUDE.md #2).
         if early_enabled {
-            for em in elliott_early::scan_level(level) {
+            for em in elliott_early::scan_level(level, &chrono) {
                 written += elliott_early::write_early(
                     pool,
                     sym,

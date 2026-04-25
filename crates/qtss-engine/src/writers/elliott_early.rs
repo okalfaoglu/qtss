@@ -28,6 +28,7 @@
 
 use chrono::{DateTime, Utc};
 use qtss_elliott::luxalgo_pine_port::{LevelOutput, MotivePattern, PivotPoint};
+use rust_decimal::prelude::ToPrimitive;
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use tracing::warn;
@@ -50,12 +51,93 @@ pub struct EarlyMatch {
     pub w3_extension: f64,       // multiple of W1; 1.0 = same length, 1.618 = canonical
 }
 
+/// Mini pivot detection on raw OHLC bars — used as a fallback when
+/// the Pine-port ZigZag (Z5 length=21 etc.) hasn't yet confirmed a
+/// post-W5 pivot but the price has clearly moved enough to define one.
+/// Algorithm: rolling N-bar window centred on each candidate; a high
+/// pivot is a bar whose `high` is the strict max of the window; a low
+/// pivot is the strict min. Returns pivots in chronological order,
+/// with `direction = +1` for highs and `-1` for lows.
+fn detect_post_w5_mini_pivots(
+    chrono_bars: &[qtss_storage::market_bars::MarketBarRow],
+    start_idx: usize,
+    win: usize,
+) -> Vec<PivotPoint> {
+    let mut out: Vec<PivotPoint> = Vec::new();
+    if chrono_bars.len() <= start_idx + 2 * win {
+        return out;
+    }
+    let half = win.max(1);
+    for i in (start_idx + half)..(chrono_bars.len() - half) {
+        let center_high = chrono_bars[i].high.to_f64().unwrap_or(0.0);
+        let center_low = chrono_bars[i].low.to_f64().unwrap_or(0.0);
+        let mut is_high = true;
+        let mut is_low = true;
+        for j in (i - half)..=(i + half) {
+            if j == i {
+                continue;
+            }
+            let h = chrono_bars[j].high.to_f64().unwrap_or(0.0);
+            let l = chrono_bars[j].low.to_f64().unwrap_or(0.0);
+            // Use STRICT comparison so a bar that matches a neighbor
+            // can still qualify (intraday ties are common). The earlier
+            // version used >= / <= and rejected too many candidates.
+            if h > center_high {
+                is_high = false;
+            }
+            if l < center_low {
+                is_low = false;
+            }
+            if !is_high && !is_low {
+                break;
+            }
+        }
+        if is_high {
+            out.push(PivotPoint {
+                direction: 1,
+                bar_index: i as i64,
+                price: center_high,
+                label_override: None,
+                hide_label: false,
+            });
+        } else if is_low {
+            out.push(PivotPoint {
+                direction: -1,
+                bar_index: i as i64,
+                price: center_low,
+                label_override: None,
+                hide_label: false,
+            });
+        }
+    }
+    // Collapse consecutive same-direction pivots — keep the more extreme
+    // one. ABC detection downstream expects strict alternation.
+    let mut collapsed: Vec<PivotPoint> = Vec::new();
+    for p in out {
+        if let Some(prev) = collapsed.last_mut() {
+            if prev.direction == p.direction {
+                let keep_new = (p.direction == 1 && p.price > prev.price)
+                    || (p.direction == -1 && p.price < prev.price);
+                if keep_new {
+                    *prev = p;
+                }
+                continue;
+            }
+        }
+        collapsed.push(p);
+    }
+    collapsed
+}
+
 /// Scan a level's pivot tape for nascent / forming / extended patterns
 /// the LuxAlgo motive detector hasn't yet captured (or won't, because
 /// the 5th pivot isn't in yet). Returns chronologically-distinct
 /// matches; the writer-side dedupe is a UNIQUE-KEY upsert on
 /// (start_time, end_time, subkind).
-pub fn scan_level(level: &LevelOutput) -> Vec<EarlyMatch> {
+pub fn scan_level(
+    level: &LevelOutput,
+    chrono_bars: &[qtss_storage::market_bars::MarketBarRow],
+) -> Vec<EarlyMatch> {
     let pivots = &level.pivots;
     let mut out = Vec::new();
     if pivots.len() < 4 {
@@ -121,20 +203,51 @@ pub fn scan_level(level: &LevelOutput) -> Vec<EarlyMatch> {
         }
         let p5 = &motive.anchors[5];
         let p5_bar = p5.bar_index;
-        // Pivots strictly after p5, in order.
-        let post_w5: Vec<&PivotPoint> = pivots
+        // Pivots strictly after p5 from the Pine-port ZigZag tape.
+        let pine_post: Vec<PivotPoint> = pivots
             .iter()
             .filter(|p| p.bar_index > p5_bar)
+            .cloned()
             .collect();
-        // Price-invalidation check. For a bull motive (direction=+1),
-        // p5 is a HIGH pivot at the top. Any post-W5 HIGH pivot that
-        // exceeds p5.price means the count was wrong (motive was a
-        // sub-wave). For bear motive (direction=-1), p5 is a LOW;
-        // a post-W5 LOW below p5 invalidates symmetrically.
-        let invalidated = if motive.direction == 1 {
-            post_w5.iter().any(|p| p.direction == 1 && p.price > p5.price)
+        // Fallback: if the Pine-port ZigZag (Z5 length=21 on 4h is
+        // ~84h displacement) hasn't confirmed a post-W5 pivot but the
+        // raw bars contain a clear correction, run a smaller-window
+        // mini-detector on the raw OHLC. Window scales with the
+        // level's length — half is plenty to catch corrective pivots
+        // without amplifying noise.
+        let pine_post_count = pine_post.len();
+        let post_w5: Vec<PivotPoint> = if pine_post.len() >= 2 {
+            pine_post
         } else {
-            post_w5.iter().any(|p| p.direction == -1 && p.price < p5.price)
+            // Mini-pivot fallback: Pine port's ZigZag (Z5 length=21
+            // on 4h is ~84h displacement) often hasn't confirmed any
+            // post-W5 pivot when the corrective is still small. We
+            // run a shared 3-bar window across ALL slots so the same
+            // structural definition lights up Z1..Z5. Picked 3 by
+            // looking at SOLUSDT 4h Z3/Z4 where it already produced
+            // good (a)(b) anchors and BTCUSDT 4h Z5 where the user
+            // marked the obvious A/B pivots by eye but a 4-bar
+            // window missed them.
+            let win = 3;
+            let p5_usize = p5_bar.max(0) as usize;
+            detect_post_w5_mini_pivots(chrono_bars, p5_usize, win)
+        };
+        let _ = pine_post_count;
+        let post_w5_refs: Vec<&PivotPoint> = post_w5.iter().collect();
+        let post_w5 = post_w5_refs;
+        // Price-invalidation check with a small tolerance. For a bull
+        // motive p5 is a HIGH; a post-W5 HIGH that materially exceeds
+        // p5 (more than 0.5%) invalidates. The tolerance prevents
+        // intraday spikes / wick noise from killing otherwise valid
+        // ABC candidates the eye reads as still in formation. Same
+        // mirror for bear motives.
+        const INVALIDATION_TOL_PCT: f64 = 0.005; // 0.5%
+        let invalidated = if motive.direction == 1 {
+            let limit = p5.price * (1.0 + INVALIDATION_TOL_PCT);
+            post_w5.iter().any(|p| p.direction == 1 && p.price > limit)
+        } else {
+            let limit = p5.price * (1.0 - INVALIDATION_TOL_PCT);
+            post_w5.iter().any(|p| p.direction == -1 && p.price < limit)
         };
         if invalidated {
             continue;
@@ -153,7 +266,13 @@ pub fn scan_level(level: &LevelOutput) -> Vec<EarlyMatch> {
             if a_anchor.direction != p5.direction && b_anchor.direction != a_anchor.direction {
                 let a_len = (a_anchor.price - p5.price).abs();
                 let b_ret = (b_anchor.price - a_anchor.price).abs();
-                if a_len > 0.0 && (0.10..=0.95).contains(&(b_ret / a_len)) {
+                // Ratio range widened from 0.10..=0.95 to 0.10..=1.30
+                // so expanded-flat / running-flat ABCs (where B exceeds
+                // A length) still register. Without this BTCUSDT 4h Z5
+                // produced no candidate even though A/B were clearly
+                // visible — the corrective B printed a 1.02-ratio
+                // intraday spike beyond the original 0.95 ceiling.
+                if a_len > 0.0 && (0.10..=1.30).contains(&(b_ret / a_len)) {
                     out.push(EarlyMatch {
                         subkind: format!("abc_nascent_{suffix}"),
                         direction: abc_dir,
