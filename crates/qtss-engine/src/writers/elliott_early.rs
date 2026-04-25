@@ -640,6 +640,15 @@ fn nearest_fib_score(value: f64, refs: &[f64]) -> f64 {
 /// Persist one [`EarlyMatch`] into the `detections` table under
 /// `pattern_family = 'elliott_early'` and the per-stage subkind.
 /// Returns 1 on insert/update, 0 on noop (e.g. parse failure).
+///
+/// ABC stage dedup: when this match is an ABC pattern, any older
+/// less-advanced stage rows for the SAME parent motive (matched by
+/// anchors[0].bar_index) get deleted in the same transaction. This
+/// keeps the trading bot — which reads the table directly — from
+/// seeing two rows describing the same logical structure (e.g. a
+/// stale `abc_nascent` lingering after `abc_forming` already locked
+/// in). The frontend dedup added in 9802a48 becomes redundant once
+/// the writer guarantees one row per parent motive.
 #[allow(clippy::too_many_arguments)]
 pub async fn write_early(
     pool: &PgPool,
@@ -658,6 +667,44 @@ pub async fn write_early(
         "w3_extension":       em.w3_extension,
         "invalidation_price": em.invalidation_price,
     });
+
+    // Drop any stale lesser-stage ABC rows for the SAME parent motive
+    // (same anchors[0] = W5 anchor). Stage hierarchy:
+    //   abc_forming > abc_nascent > abc_projected
+    // Only abc_* matches enter this block — impulse N/F/X are slot-
+    // unique already (different subkind per match) and don't need it.
+    if em.subkind.starts_with("abc_") {
+        let lesser: &[&str] = match em.stage {
+            "abc_forming" => &[
+                "abc_nascent_bull", "abc_nascent_bear",
+                "abc_projected_bull", "abc_projected_bear",
+            ],
+            "abc_nascent" => &["abc_projected_bull", "abc_projected_bear"],
+            _ => &[],
+        };
+        if !lesser.is_empty() {
+            let parent_bar = em.anchors.first().map(|a| a.bar_index).unwrap_or(start_bar);
+            let _ = sqlx::query(
+                r#"DELETE FROM detections
+                    WHERE exchange = $1 AND segment = $2
+                      AND symbol = $3 AND timeframe = $4
+                      AND slot = $5
+                      AND pattern_family = 'elliott_early'
+                      AND mode = 'live'
+                      AND subkind = ANY($6)
+                      AND (anchors->0->>'bar_index')::bigint = $7"#,
+            )
+            .bind(&sym.exchange)
+            .bind(&sym.segment)
+            .bind(&sym.symbol)
+            .bind(&sym.interval)
+            .bind(slot)
+            .bind(lesser)
+            .bind(parent_bar)
+            .execute(pool)
+            .await;
+        }
+    }
     if let Err(e) = sqlx::query(
         r#"INSERT INTO detections
               (exchange, segment, symbol, timeframe, slot,

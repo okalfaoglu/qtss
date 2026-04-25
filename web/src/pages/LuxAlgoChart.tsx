@@ -1101,41 +1101,13 @@ export function LuxAlgoChart({
           motiveRangesBySlot.set(slotIdx, ranges);
         });
       }
-      // ── ABC dedup: when the worker emits multiple stages for the
-      //    same parent motive (e.g. abc_nascent + abc_forming +
-      //    abc_projected as price evolves), the chart used to draw all
-      //    of them — producing a confusing 2× (c) marker (one for the
-      //    forming real C, one for the nascent projected C). Pick the
-      //    most-advanced stage per (slot, anchors[0].time) group:
-      //    abc_forming > abc_nascent > abc_projected.
-      const abcStageRank: Record<string, number> = {
-        abc_projected: 1,
-        abc_nascent: 2,
-        abc_forming: 3,
-      };
-      const abcKey = (em: EarlyMarker): string => {
-        const w5 = em.anchors[0];
-        const w5time = w5?.time ?? `${w5?.bar_index ?? "x"}`;
-        return `${em.slot}::${w5time}`;
-      };
-      const bestAbcByKey = new Map<string, EarlyMarker>();
-      for (const em of earlyMarkers) {
-        if (
-          em.stage !== "abc_nascent" &&
-          em.stage !== "abc_forming" &&
-          em.stage !== "abc_projected"
-        ) {
-          continue;
-        }
-        const key = abcKey(em);
-        const prev = bestAbcByKey.get(key);
-        const prevRank = prev ? abcStageRank[prev.stage] ?? 0 : 0;
-        const myRank = abcStageRank[em.stage] ?? 0;
-        if (myRank > prevRank) {
-          bestAbcByKey.set(key, em);
-        }
-      }
-
+      // ABC dedup is enforced server-side in
+      // crates/qtss-engine/src/writers/elliott_early.rs:write_early —
+      // when a higher-stage row writes (forming > nascent > projected),
+      // the lesser-stage rows for the same parent motive are deleted
+      // in the same transaction. That guarantees the bot allocator
+      // (which reads the table directly) and the GUI both see ONE row
+      // per logical structure, no client-side filtering needed.
       for (const em of earlyMarkers) {
         // Slot filter follows the existing Z1..Z5 toolbar — early
         // markers respect the same slot enable as motives.
@@ -1183,12 +1155,6 @@ export function LuxAlgoChart({
           em.stage === "abc_forming" ||
           em.stage === "abc_projected"
         ) {
-          // Dedup: skip if a more-advanced stage exists for the same
-          // parent motive. Without this, the chart paints two (c)
-          // labels — one solid (real C from forming) and one dotted
-          // (projected C from a stale nascent row).
-          const winner = bestAbcByKey.get(abcKey(em));
-          if (winner && winner !== em) continue;
           const segLabels = ["", "(a)", "(b)", "(c)"];
           // Single colour — taken from the Z1..Z5 slot palette so the
           // ABC inherits the same colour as its motive lines. Real
