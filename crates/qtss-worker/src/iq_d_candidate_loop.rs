@@ -284,31 +284,40 @@ fn compute_entry_targets(
     let w2 = price_at("W2");
     let w3 = price_at("W3");
 
+    // W1 leg sign carries direction (positive for bull, negative for
+    // bear). All entry / SL / TP arithmetic below trusts this sign so
+    // the bear branch is just the bull branch with `leg < 0`.
+    let leg = w1 - w0;
+
+    // Buffer used by the W3 breakout tier — 0.3% above (bull) / below
+    // (bear) the W1 high so a wick doesn't accidentally fill the
+    // setup right at the round number.
+    const W3_BREAKOUT_BUFFER_PCT: f64 = 0.003;
+
     match tier {
-        // W1 entry — earliest. Take the price at the candidate W1
-        // anchor (which is the latest pivot), SL just below the W0
-        // start (impulse origin), TP at a Fib extension projection.
+        // W1 tier — only the W0→W1 leg is in. Don't enter at the W1
+        // peak (that was the prior bug: long ETH 1w opened at $4099
+        // because entry = w1). Instead we set a LIMIT at the
+        // anticipated W2 retrace zone (50% of W0→W1) — the same place
+        // a discretionary trader would buy the dip. SL just past W0
+        // (impulse origin invalid below). TP = W1 + 1.618×leg
+        // (canonical W3 extension).
         "W1" => {
-            let entry = w1;
+            let entry = w1 - 0.5 * leg;
             let sl = w0;
-            // TP1 = W1 + 1.618 * (W1 - W0) (canonical W3 extension)
-            let leg = w1 - w0;
             let tp = w1 + 1.618 * leg;
-            // For a bear motive `leg` is negative so tp lands lower
-            // — direction sign carries through naturally.
             Some((entry, sl, tp))
         }
-        // W2 entry — wait for W2 retrace to print, then ride W3.
-        // Entry is W2 price (retrace bottom for bull); SL is W0;
-        // TP is the projected W3 extension.
+        // W2 tier — the retrace already printed; entry at W2 itself
+        // is correct (we're catching the bottom of the pullback).
+        // SL just past W0; TP = W2 + 1.618×leg, with the existing
+        // sanity fallback if the projection lands on the wrong side
+        // of entry (e.g. extreme retracements).
         "W2" => {
             let w2 = w2?;
             let entry = w2;
             let sl = w0;
-            let leg = w1 - w0;
             let tp = w2 + 1.618 * leg;
-            // Quick sanity: if TP wound up on the wrong side of
-            // entry (bull TP must be > entry), fall back to W1 + leg.
             let target = if (bull && tp > entry) || (!bull && tp < entry) {
                 tp
             } else {
@@ -316,16 +325,26 @@ fn compute_entry_targets(
             };
             Some((entry, sl, target))
         }
-        // W3 entry — already mid-impulse. Entry mid-W3, SL at W2
-        // (the recent correction low/high), TP at projected W5.
+        // W3 tier — W3 has printed. The OLD code armed `entry = w3`
+        // (the W3 PEAK) which produced the ETH 1w long at $4099 vs
+        // $2300 spot regression. The CORRECT structural entry is the
+        // W1 BREAKOUT level: a long fires only when price clears the
+        // prior W1 high (proves W3 is in motion). For late entries
+        // where price has already pulled back below W1, a limit at
+        // W1 + buffer behaves like "wait for the next test of the
+        // breakout" — much better R:R than chasing the W3 peak.
+        // SL at W2 (Elliott invalidation: W3 cannot start below W1's
+        // high, and W2 must hold). TP = W3 anchor + leg, the equality
+        // projection of W5 from the realised W3 close.
         "W3" => {
             let w3 = w3?;
             let w2 = w2?;
-            let entry = w3;
+            let entry = if bull {
+                w1 * (1.0 + W3_BREAKOUT_BUFFER_PCT)
+            } else {
+                w1 * (1.0 - W3_BREAKOUT_BUFFER_PCT)
+            };
             let sl = w2;
-            // W5 ≈ W3 + (W1 length) is a reasonable conservative
-            // target — Elliott "equality" baseline.
-            let leg = w1 - w0;
             let tp = w3 + leg;
             Some((entry, sl, tp))
         }
