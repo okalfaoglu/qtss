@@ -791,11 +791,29 @@ export function LuxAlgoChart({
     }
     priceLineHandlesRef.current = [];
 
+    // ETH 1d (and others) sometimes hit
+    //   "Assertion failed: data must be asc ordered by time"
+    // when the API returns rows with an out-of-order entry — usually
+    // when the gap-fill loop re-publishes a stale row whose open_time
+    // sits behind the rest of the page. Defensive sort + dedup by ts
+    // keeps lightweight-charts happy regardless of upstream ordering.
     const candles = data.data.candles;
-    const candleData: CandlestickData[] = candles.map((c) => ({
-      time: Math.floor(new Date(c.time).getTime() / 1000) as Time,
-      open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close),
-    }));
+    const seenTs = new Set<number>();
+    const candleData: CandlestickData[] = candles
+      .map((c) => ({
+        time: Math.floor(new Date(c.time).getTime() / 1000) as Time,
+        open: Number(c.open),
+        high: Number(c.high),
+        low: Number(c.low),
+        close: Number(c.close),
+      }))
+      .filter((row) => {
+        const ts = row.time as unknown as number;
+        if (seenTs.has(ts)) return false;
+        seenTs.add(ts);
+        return true;
+      })
+      .sort((a, b) => (a.time as unknown as number) - (b.time as unknown as number));
     candleSeries.setData(candleData);
 
     const timeAt = (barIndex: number): Time | null => {

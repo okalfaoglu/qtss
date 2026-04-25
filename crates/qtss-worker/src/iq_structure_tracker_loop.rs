@@ -108,6 +108,67 @@ async fn load_invalidation_tol(pool: &PgPool) -> f64 {
     val.get("value").and_then(|v| v.as_f64()).unwrap_or(0.005)
 }
 
+/// Maximum age (in TF bars) of the latest structural anchor before we
+/// flip the structure to `completed` and stop spawning new IQ-D setups.
+///
+/// Why this gate exists: the elliott_early detector scans full history
+/// looking for 4/5-pivot impulse skeletons. Without a recency filter
+/// it happily fingers a 2024 W3 peak as "nascent W3 in progress" even
+/// though price retraced 60% from that peak two years ago. Operators
+/// saw long ETHUSDT setups spawn at $4098 while spot was $2300 and
+/// rightly flagged the regression. Default 8 bars → ~2 months on 1w,
+/// ~8 days on 1d, ~32 hours on 1h. Operators tune via system_config.
+async fn load_nascent_max_anchor_age_bars(pool: &PgPool) -> i64 {
+    let row = sqlx::query(
+        "SELECT value FROM system_config
+           WHERE module='iq_structure' AND config_key='nascent_max_anchor_age_bars'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    let Some(row) = row else { return 8; };
+    let val: Value = row.try_get("value").unwrap_or(Value::Null);
+    val.get("value")
+        .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
+        .unwrap_or(8)
+        .max(1)
+}
+
+/// Convert a timeframe label (`1m`, `15m`, `1h`, `4h`, `1d`, `1w`) into
+/// its bar duration in seconds. Anything we don't recognise falls back
+/// to `1d` so the recency gate still trips eventually.
+fn timeframe_seconds(tf: &str) -> i64 {
+    let trimmed = tf.trim().to_lowercase();
+    let (n, unit) = match trimmed.find(|c: char| c.is_alphabetic()) {
+        Some(idx) => (&trimmed[..idx], &trimmed[idx..]),
+        None => return 86_400,
+    };
+    let n: i64 = n.parse().unwrap_or(1);
+    let secs = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3_600,
+        "d" => 86_400,
+        "w" => 604_800,
+        _ => 86_400,
+    };
+    n * secs
+}
+
+/// `true` when the last anchor in the structure_anchors array is older
+/// than `max_age_bars × tf_seconds`. Used to gate nascent / forming
+/// detections so historic skeletons don't masquerade as live setups.
+fn anchor_too_stale(anchors: &Value, tf: &str, max_age_bars: i64, now: DateTime<Utc>) -> bool {
+    let Some(arr) = anchors.as_array() else { return false; };
+    let Some(last) = arr.last() else { return false; };
+    let Some(ts_str) = last.get("time").and_then(|v| v.as_str()) else { return false; };
+    let Ok(ts) = DateTime::parse_from_rfc3339(ts_str) else { return false; };
+    let age = now.signed_duration_since(ts.with_timezone(&Utc));
+    let max_age_secs = timeframe_seconds(tf) * max_age_bars;
+    age.num_seconds() > max_age_secs
+}
+
 // ─── data shapes ──────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -140,6 +201,18 @@ struct StructureUpdate {
 
 async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize, usize)> {
     let tol = load_invalidation_tol(pool).await;
+    let max_age_bars = load_nascent_max_anchor_age_bars(pool).await;
+    let now = Utc::now();
+
+    // Staleness sweep: any structure whose latest anchor is older than
+    // the configured horizon is flagged `completed` so the IQ-D
+    // candidate loop stops emitting setups for it. Runs ahead of the
+    // normal state-machine pass so a freshly invalidated row still
+    // gets re-scanned this tick.
+    let stale_count = mark_stale_structures_completed(pool, max_age_bars, now).await?;
+    if stale_count > 0 {
+        info!(stale_count, "iq_structure_tracker: marked stale structures completed");
+    }
 
     // Pull every "interesting" detection row from the last 24h. The
     // tracker only cares about the LATEST row per (symbol, tf, slot,
@@ -200,7 +273,8 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize, usize)> {
     let mut locked = 0usize;
     for (key, group) in by_key {
         scanned += 1;
-        let update = derive_update(&group, tol);
+        let tf = key.3.as_str();
+        let update = derive_update(&group, tol, tf, max_age_bars, now);
         let Some(update) = update else { continue };
         match upsert_structure(pool, &key, &group[0], &update).await {
             Ok(was_advance) => {
@@ -252,7 +326,13 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize, usize)> {
 /// (exchange, segment, symbol, tf, slot) tuple and returns the
 /// structure update we should apply. `None` means "nothing actionable
 /// in this group" — typically too few rows or all stale.
-fn derive_update(group: &[DetectionRow], tol_pct: f64) -> Option<StructureUpdate> {
+fn derive_update(
+    group: &[DetectionRow],
+    tol_pct: f64,
+    tf: &str,
+    max_age_bars: i64,
+    now: DateTime<Utc>,
+) -> Option<StructureUpdate> {
     // Pick the freshest row for each family / sub-stage.
     let mut latest_motive: Option<&DetectionRow> = None;
     let mut latest_abc: Option<&DetectionRow> = None;
@@ -348,6 +428,23 @@ fn derive_update(group: &[DetectionRow], tol_pct: f64) -> Option<StructureUpdate
     }
     if let Some(f) = latest_forming {
         let anchors = early_anchor_array(f);
+        // Staleness gate: forming impulse whose W4 anchor is from
+        // months ago is structurally complete by now — flip to
+        // `completed` so IQ-D doesn't open a W3-tier setup at a
+        // long-gone wave peak. (User report: ETHUSDT 1w long opened
+        // at $4098 while spot was $2300 because the W3 anchor was 2
+        // years old.)
+        if anchor_too_stale(&anchors, tf, max_age_bars, now) {
+            return Some(StructureUpdate {
+                state: "completed".into(),
+                current_wave: "W5".into(),
+                current_stage: "completed".into(),
+                seed_hash: seed_hash_from_anchors(&anchors),
+                structure_anchors: anchors,
+                invalidation_reason: Some("anchor too stale (forming)".into()),
+                raw_meta: json!({"source": "impulse_forming", "stale": true}),
+            });
+        }
         return Some(StructureUpdate {
             state: "tracking".into(),
             current_wave: "W5".into(),
@@ -360,6 +457,22 @@ fn derive_update(group: &[DetectionRow], tol_pct: f64) -> Option<StructureUpdate
     }
     if let Some(n) = latest_nascent {
         let anchors = early_anchor_array(n);
+        // Staleness gate (same rationale as the forming branch above):
+        // a nascent W3 whose W3 anchor is older than the configured
+        // horizon means the move already happened and very likely
+        // reversed. We mark it `completed` so the candidate loop's
+        // `state IN ('candidate','tracking')` filter excludes it.
+        if anchor_too_stale(&anchors, tf, max_age_bars, now) {
+            return Some(StructureUpdate {
+                state: "completed".into(),
+                current_wave: "W3".into(),
+                current_stage: "completed".into(),
+                seed_hash: seed_hash_from_anchors(&anchors),
+                structure_anchors: anchors,
+                invalidation_reason: Some("anchor too stale (nascent)".into()),
+                raw_meta: json!({"source": "impulse_nascent", "stale": true}),
+            });
+        }
         return Some(StructureUpdate {
             state: "candidate".into(),
             current_wave: "W3".into(),
@@ -371,6 +484,50 @@ fn derive_update(group: &[DetectionRow], tol_pct: f64) -> Option<StructureUpdate
         });
     }
     None
+}
+
+/// Fast path for sweeping already-stored structures to `completed`
+/// without waiting for a fresh detection row to retrigger
+/// `derive_update`. Runs once per tick. Picks any candidate /
+/// tracking row whose last `structure_anchors[].time` falls outside
+/// the recency window for its timeframe.
+async fn mark_stale_structures_completed(
+    pool: &PgPool,
+    max_age_bars: i64,
+    now: DateTime<Utc>,
+) -> anyhow::Result<usize> {
+    let rows = sqlx::query(
+        r#"SELECT id, timeframe, structure_anchors
+             FROM iq_structures
+            WHERE state IN ('candidate','tracking')"#,
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut count = 0usize;
+    for r in rows {
+        let id: uuid::Uuid = r.try_get("id")?;
+        let tf: String = r.try_get("timeframe").unwrap_or_default();
+        let anchors: Value = r.try_get("structure_anchors").unwrap_or(Value::Null);
+        if !anchor_too_stale(&anchors, &tf, max_age_bars, now) {
+            continue;
+        }
+        sqlx::query(
+            r#"UPDATE iq_structures
+                  SET state = 'completed',
+                      current_stage = 'completed',
+                      completed_at = COALESCE(completed_at, now()),
+                      invalidation_reason = COALESCE(invalidation_reason,
+                                              'anchor too stale (sweep)'),
+                      raw_meta = raw_meta || jsonb_build_object('stale_sweep', true),
+                      updated_at = now()
+                WHERE id = $1"#,
+        )
+        .bind(id)
+        .execute(pool)
+        .await?;
+        count += 1;
+    }
+    Ok(count)
 }
 
 fn motive_anchor_array(m: &DetectionRow) -> Value {
