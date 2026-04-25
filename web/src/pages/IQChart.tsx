@@ -126,10 +126,14 @@ function EarlyStatsPanel() {
 export function IQChart() {
   return (
     <div className="flex h-full flex-col">
-      <div className="flex flex-1 overflow-hidden">
-        <div className="flex flex-1 flex-col overflow-hidden">
-          {/* Top half: existing OHLC chart with N/F/X early-wave toggle */}
-          <div className="flex-1 overflow-hidden border-b-2 border-zinc-800">
+      <div className="flex flex-1 min-h-0">
+        <div className="flex flex-1 min-h-0 flex-col">
+          {/* Top half: existing OHLC chart with N/F/X early-wave toggle.
+              `overflow-y-auto` so the toolbar (venue / symbol / TF /
+              indicators) stays reachable even when the panel is squeezed
+              by the wave-bars half. `min-h-0` lets the flex child shrink
+              below the LuxAlgoChart's natural content height. */}
+          <div className="flex-1 min-h-0 overflow-y-auto border-b-2 border-zinc-800">
             <LuxAlgoChart
               defaults={{
                 showZigzag: false,   // user request: clean baseline for IQ
@@ -145,7 +149,7 @@ export function IQChart() {
           {/* Bottom half: pivot-based wave bars (each candle = one
               Elliott wave). FAZ 25.1 — the noise-cleaned candle
               structure designed for clean Elliott counting. */}
-          <div className="h-[360px] overflow-hidden">
+          <div className="h-[320px] shrink-0 overflow-hidden">
             <WaveBarsPanel />
           </div>
         </div>
