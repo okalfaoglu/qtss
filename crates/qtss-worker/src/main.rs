@@ -25,6 +25,7 @@ mod time_stop_loop;
 mod weight_tuner_loop;
 mod calibration_refresh_loop;
 mod market_bars_gap_loop;
+mod iq_structure_tracker_loop;
 mod price_tick_ws;
 mod setup_watcher;
 mod symbol_intel_loops;
@@ -428,6 +429,16 @@ async fn main() -> anyhow::Result<()> {
         // qtss_market_bars_gap_filled so dependent analyses re-run.
         let gap_pool = pool.clone();
         tokio::spawn(market_bars_gap_loop::market_bars_gap_loop(gap_pool));
+        // FAZ 25 PR-25B — IQ structure tracker. Walks the elliott +
+        // elliott_early detections on a tick and materialises one
+        // iq_structures row per (symbol, tf, slot). State machine
+        // covers candidate → tracking → completed/invalidated; on
+        // invalidation an iq_symbol_locks row blocks further IQ
+        // setups for that symbol until a new candidate appears.
+        let iq_pool = pool.clone();
+        tokio::spawn(iq_structure_tracker_loop::iq_structure_tracker_loop(
+            iq_pool,
+        ));
         // RADAR periodic aggregator — daily / weekly / monthly /
         // yearly performance snapshots per market × mode.
         let radar_pool = pool.clone();

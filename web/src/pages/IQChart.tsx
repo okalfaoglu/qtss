@@ -77,9 +77,94 @@ function EarlyStatsPanel({
     {} as Record<string, number>
   );
 
+  // FAZ 25 PR-25B — IQ structure tracker rows (current wave, state,
+  // symbol-lock). Read-only — the worker writes them; we surface them.
+  type IqAnchor = { wave_label?: string; price?: number; time?: string };
+  type IqStructure = {
+    id: string;
+    slot: number;
+    direction: number;
+    state: string;
+    current_wave: string;
+    current_stage: string;
+    structure_anchors: IqAnchor[];
+    started_at: string;
+    last_advanced_at: string;
+    invalidation_reason?: string | null;
+  };
+  type IqLock = { locked_at: string; reason?: string | null };
+  type IqResp = {
+    structures: IqStructure[];
+    lock: IqLock | null;
+  };
+  const iq = useQuery<IqResp>({
+    queryKey: ["iq-structures", symbol, tf],
+    queryFn: () =>
+      apiFetch(
+        `/v2/iq-structures/binance/${symbol}/${tf}?segment=futures&limit=10`
+      ),
+    refetchInterval: 30_000,
+  });
+  const structures = iq.data?.structures ?? [];
+  const lock = iq.data?.lock ?? null;
+
   return (
     <aside className="hidden w-[300px] shrink-0 overflow-y-auto border-l border-zinc-800 bg-zinc-950/40 p-3 text-xs xl:block">
+      {/* FAZ 25 PR-25B — IQ-D structure summary at the top so the user
+          immediately sees the active wave / state for this chart. */}
       <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+        {symbol} {tf} — IQ Structure
+      </h3>
+      {lock && (
+        <div className="mb-2 rounded border border-amber-700/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-200">
+          🔒 LOCK · {lock.reason || "structure invalidated"}
+          <div className="text-amber-400/60">
+            {new Date(lock.locked_at).toLocaleString("tr-TR")}
+          </div>
+        </div>
+      )}
+      {structures.length === 0 && (
+        <div className="mb-3 text-[10px] text-zinc-500">No tracked structures yet.</div>
+      )}
+      {structures.slice(0, 5).map((s) => {
+        const dirChar = s.direction === 1 ? "▲" : "▼";
+        const dirColor = s.direction === 1 ? "text-emerald-400" : "text-rose-400";
+        const stateColor: Record<string, string> = {
+          candidate: "text-zinc-400",
+          tracking: "text-emerald-300",
+          completed: "text-cyan-300",
+          invalidated: "text-zinc-500 line-through",
+        };
+        return (
+          <div
+            key={s.id}
+            className="mb-2 rounded bg-zinc-900/60 px-2 py-1 text-[10px]"
+          >
+            <div className="flex items-center justify-between">
+              <span className={`font-mono ${dirColor}`}>{dirChar} Z{s.slot + 1}</span>
+              <span className={`font-semibold ${stateColor[s.state] ?? ""}`}>
+                {s.state}
+              </span>
+            </div>
+            <div className="mt-0.5 flex items-center justify-between text-zinc-300">
+              <span>{s.current_wave} · {s.current_stage}</span>
+              <span className="text-zinc-500">
+                {new Date(s.last_advanced_at).toLocaleTimeString("tr-TR", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </span>
+            </div>
+            {s.invalidation_reason && (
+              <div className="mt-0.5 truncate text-[9px] text-rose-400/70">
+                {s.invalidation_reason}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <h3 className="mb-2 mt-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
         {symbol} {tf} — Early-Wave Activity
       </h3>
       <div className="mb-3 flex items-center gap-2 text-[11px]">
