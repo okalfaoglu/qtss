@@ -71,12 +71,16 @@ export function WaveBarsPanel({
 }: WaveBarsPanelProps) {
   const [slot, setSlot] = useState(2); // Z3 default — same as the
                                        // existing chart toolbar default
+  const [collapsed, setCollapsed] = useState(false);
 
+  // Limit aligned with the OHLC chart above (LuxAlgoChart pulls 1001
+  // candles by default) so the wave bars cover the SAME time window
+  // and the two halves are directly comparable.
   const { data, isLoading, isError } = useQuery<WaveBarsResponse>({
     queryKey: ["wave-bars", exchange, symbol, segment, tf, slot],
     queryFn: () =>
       apiFetch(
-        `/v2/wave-bars/${exchange}/${symbol}/${tf}?segment=${segment}&slot=${slot}&limit=2000`
+        `/v2/wave-bars/${exchange}/${symbol}/${tf}?segment=${segment}&slot=${slot}&limit=1000`
       ),
     refetchInterval: 30_000,
   });
@@ -107,6 +111,13 @@ export function WaveBarsPanel({
         borderColor: "#27272a",
         timeVisible: false,
         secondsVisible: false,
+        // X-axis is wave-index (synthetic time). Hide the synthetic
+        // dates that lightweight-charts would otherwise print and
+        // replace each tick label with the underlying wave index.
+        tickMarkFormatter: (t: number) => {
+          const idx = Math.round((t - 1_700_000_000) / 60);
+          return idx >= 0 ? `#${idx}` : "";
+        },
       },
       autoSize: true,
     });
@@ -158,16 +169,45 @@ export function WaveBarsPanel({
     const sizes = waves.map((w) => w.size_norm);
     const maxSize = sizes.reduce((a, b) => Math.max(a, b), 0);
     const totalDuration = waves.reduce((a, w) => a + w.duration_seconds, 0);
-    return { count: waves.length, ups, downs, maxSize, totalHours: totalDuration / 3600 };
+    const firstStart = waves[0]?.start_time;
+    const lastEnd = waves[waves.length - 1]?.end_time;
+    const fmt = (iso?: string) => {
+      if (!iso) return "—";
+      try {
+        return new Date(iso).toLocaleString("tr-TR", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        });
+      } catch {
+        return iso;
+      }
+    };
+    return {
+      count: waves.length,
+      ups,
+      downs,
+      maxSize,
+      totalHours: totalDuration / 3600,
+      rangeStart: fmt(firstStart),
+      rangeEnd: fmt(lastEnd),
+    };
   }, [waves]);
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/40 px-3 py-1.5">
-        <div className="flex items-baseline gap-3">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setCollapsed((v) => !v)}
+            title={collapsed ? "Genişlet" : "Daralt — chart için yer aç"}
+            className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:bg-zinc-700"
+          >
+            {collapsed ? "▲ aç" : "▼ kapat"}
+          </button>
           <h2 className="text-xs font-semibold text-emerald-300">Wave Bars</h2>
           <span className="text-[10px] text-zinc-500">
-            Each candle = one pivot→pivot wave. X-axis is wave-index, not time.
+            Her mum = bir pivot→pivot dalga. X ekseni dalga-indeksi, zaman değil.
           </span>
         </div>
         <div className="flex items-center gap-1">
@@ -187,40 +227,53 @@ export function WaveBarsPanel({
         </div>
       </div>
 
-      <div ref={containerRef} className="min-h-[280px] flex-1" />
+      <div
+        ref={containerRef}
+        className="flex-none"
+        style={{
+          display: collapsed ? "none" : undefined,
+          height: collapsed ? 0 : 160,
+        }}
+      />
 
-      <div className="flex items-center gap-4 border-t border-zinc-800 bg-zinc-900/40 px-3 py-1 text-[10px] text-zinc-400">
-        {isLoading && <span>loading…</span>}
-        {isError && <span className="text-red-400">/v2/wave-bars failed</span>}
-        {stats && (
-          <>
-            <span>
-              <span className="text-zinc-500">waves</span>{" "}
-              <span className="text-zinc-200">{stats.count}</span>
-            </span>
-            <span>
-              <span className="text-emerald-400">▲ {stats.ups}</span>
-              {" / "}
-              <span className="text-rose-400">▼ {stats.downs}</span>
-            </span>
-            <span>
-              <span className="text-zinc-500">max size (median ratio)</span>{" "}
-              <span className="font-mono text-zinc-200">
-                {stats.maxSize.toFixed(2)}×
+      {!collapsed && (
+        <div className="flex flex-wrap items-center gap-3 border-t border-zinc-800 bg-zinc-900/40 px-3 py-1 text-[10px] text-zinc-400">
+          {isLoading && <span>loading…</span>}
+          {isError && <span className="text-red-400">/v2/wave-bars failed</span>}
+          {stats && (
+            <>
+              <span>
+                <span className="text-zinc-500">dalgalar</span>{" "}
+                <span className="text-zinc-200">{stats.count}</span>
               </span>
-            </span>
-            <span>
-              <span className="text-zinc-500">covered</span>{" "}
-              <span className="font-mono text-zinc-200">
-                {stats.totalHours.toFixed(1)}h
+              <span>
+                <span className="text-emerald-400">▲ {stats.ups}</span>
+                {" / "}
+                <span className="text-rose-400">▼ {stats.downs}</span>
               </span>
-            </span>
-            <span className="ml-auto text-zinc-500">
-              slot {data?.slot} · length {data?.length}
-            </span>
-          </>
-        )}
-      </div>
+              <span>
+                <span className="text-zinc-500">max boy (medyana oran)</span>{" "}
+                <span className="font-mono text-zinc-200">
+                  {stats.maxSize.toFixed(2)}×
+                </span>
+              </span>
+              <span>
+                <span className="text-zinc-500">aralık</span>{" "}
+                <span className="font-mono text-zinc-200">
+                  {stats.rangeStart} → {stats.rangeEnd}
+                </span>
+                {" · "}
+                <span className="font-mono text-zinc-300">
+                  {stats.totalHours.toFixed(0)}h
+                </span>
+              </span>
+              <span className="ml-auto text-zinc-500">
+                slot {data?.slot} · length {data?.length}
+              </span>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -147,9 +147,12 @@ export function IQChart() {
               }}
             />
           </div>
-          {/* Bottom half: pivot-based wave bars (each candle = one
-              Elliott wave). FAZ 25.1. */}
-          <div className="h-[320px] shrink-0 overflow-hidden">
+          {/* Bottom half: pivot-based wave bars. WaveBarsPanel keeps
+              its own collapse state — collapsed = header only (~30px),
+              expanded = ~230px (header + chart + footer). flex-none so
+              the panel takes only its natural height; the rest goes
+              to the LuxAlgoChart above. */}
+          <div className="flex-none border-t-2 border-zinc-800">
             <WaveBarsPanel />
           </div>
         </div>
