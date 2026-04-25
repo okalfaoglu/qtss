@@ -107,6 +107,11 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
                   net_score, confidence, verdict, regime, contributors, computed_at
              FROM distinct_strong
             ORDER BY
+              -- v1.2.2 — primary sort by confidence DESC so the
+              -- max_armed_per_tick filter keeps the strongest signals.
+              -- Ties broken by HTF preference so the dedup churn-fix
+              -- (v1.1.5) still wins when confidences are equal.
+              confidence DESC,
               symbol,
               CASE timeframe
                 WHEN '1M' THEN 43200
@@ -139,6 +144,17 @@ async fn run_tick(pool: &PgPool, price_store: &PriceTickStore) -> anyhow::Result
     );
     let mut armed = 0usize;
     for r in rows {
+        // v1.2.2 — best-of-tick brake. Candidates are already sorted
+        // confidence DESC; once we've armed `max_armed_per_tick` the
+        // remaining candidates this tick are saved for next tick.
+        if cfg.max_armed_per_tick > 0 && (armed as i64) >= cfg.max_armed_per_tick {
+            info!(
+                cap = cfg.max_armed_per_tick,
+                armed,
+                "allocator_v2: tick cap reached — remaining candidates deferred to next tick"
+            );
+            break;
+        }
         let exchange: String = r.get("exchange");
         let segment: String = r.get("segment");
         let symbol: String = r.get("symbol");
@@ -1360,6 +1376,13 @@ struct Cfg {
     calibration_enabled: bool,
     calibration_min_winrate: f64,
     calibration_min_sample: i64,
+
+    /// v1.2.2 — best-of-tick filter. Tick'teki tüm strong_*
+    /// candidate'ları topla, confidence DESC sırala, sadece en
+    /// yüksek `max_armed_per_tick` tanesini gate'lerin geri kalanına
+    /// gönder. ChatGPT'nin "aynı anda 5 setup varsa sadece en güçlü
+    /// 1 tanesini al" kuralının gevşek versiyonu.
+    max_armed_per_tick: i64,
 }
 
 // Floor/ceiling sanity-check bounds. For a long, the live price must
@@ -1697,6 +1720,7 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
         calibration_enabled: true,
         calibration_min_winrate: 0.45,
         calibration_min_sample: 20,
+        max_armed_per_tick: 3,
     };
     // Pull the current taker bps so the check matches what the Setup
     // drawer displays. Prefer binance_futures (live trading venue).
@@ -1891,6 +1915,9 @@ async fn load_cfg(pool: &PgPool) -> Cfg {
     }
     if let Some(v) = load_f64(pool, "allocator_v2", "calibration.min_sample").await {
         cfg.calibration_min_sample = v.max(1.0) as i64;
+    }
+    if let Some(v) = load_f64(pool, "allocator_v2", "max_armed_per_tick").await {
+        cfg.max_armed_per_tick = v.max(0.0) as i64;
     }
     // Default org_id from dry-execution config.
     if let Ok(Some(row)) = sqlx::query(
