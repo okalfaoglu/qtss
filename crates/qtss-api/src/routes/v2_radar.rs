@@ -77,7 +77,16 @@ pub struct LiveTrade {
     pub timeframe: String,
     pub direction: String,
     pub mode: String,
+    /// Actual fill price — `live_positions.entry_avg`. After
+    /// slippage/spread for paper, exchange-reported for live.
     pub entry_price: f64,
+    /// Backlog #4 — original setup entry level the system armed at,
+    /// pulled from `qtss_setups.entry_price`. The two diverge on dry
+    /// fills (slippage nudges entry_avg) and live fills (market
+    /// impact). The drawer shows both side-by-side so the operator
+    /// sees the difference between "where the system planned to
+    /// buy/sell" and "where the position actually opened".
+    pub setup_entry_price: Option<f64>,
     pub mark_price: Option<f64>,
     pub qty: f64,
     pub notional_usd: f64,
@@ -144,6 +153,7 @@ async fn get_radar_live(
              s.direction,
              lp.mode,
              lp.entry_avg,
+             s.entry_price  AS setup_entry_price,
              lp.last_mark,
              lp.qty_remaining,
              s.entry_sl,
@@ -209,6 +219,11 @@ async fn get_radar_live(
             }
             _ => (None, None),
         };
+        let setup_entry_price = r
+            .try_get::<Option<f32>, _>("setup_entry_price")
+            .ok()
+            .flatten()
+            .map(|v| v as f64);
         trades.push(LiveTrade {
             setup_id: r.try_get("setup_id").ok(),
             symbol: r.try_get("symbol").unwrap_or_default(),
@@ -220,6 +235,7 @@ async fn get_radar_live(
             direction,
             mode: r.try_get("mode").unwrap_or_default(),
             entry_price: entry_f,
+            setup_entry_price,
             mark_price: mark_f,
             qty: qty_f,
             notional_usd: notional,

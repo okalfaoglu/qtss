@@ -27,6 +27,11 @@ interface LiveTrade {
   direction: string;
   mode: string;
   entry_price: number;
+  /** Backlog #4 — original setup entry level (the price the system
+      armed at) vs entry_price which is the actual fill (entry_avg
+      from live_positions). The drawer renders both so the operator
+      can see slippage + market-impact divergence. */
+  setup_entry_price?: number | null;
   mark_price: number | null;
   qty: number;
   notional_usd: number;
@@ -1139,8 +1144,14 @@ function LiveTradeDrawer({
           </div>
           <div className="grid grid-cols-4 gap-2 text-center">
             <DrawerCell
-              label="Giriş"
+              label="Açılış Fiyatı"
               value={entry.toFixed(6)}
+              sub={
+                trade.setup_entry_price != null &&
+                Math.abs(trade.setup_entry_price - entry) > 1e-9
+                  ? `Hedef: ${trade.setup_entry_price.toFixed(6)}`
+                  : undefined
+              }
               accent="text-zinc-100"
             />
             <DrawerCell

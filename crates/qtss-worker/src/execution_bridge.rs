@@ -398,6 +398,69 @@ async fn build_live_position_for_mode(
     let side = live_side(&row.direction);
     let liq_price = liquidation_price(&segment, side, row.entry_price, leverage, mmr);
 
+    // Backlog #4 — TP-proximity gate. User: "işlem açarken tp ile anlık
+    // değerler kontrol edilemlidir. eğer tp - anlık fiyat x bir oranı
+    // geçmiş ise işlem açılmasın." Concrete repro: BTCUSDT 15m IQ-T
+    // armed with entry=\$77168, TP=\$77600 (only +\$432 target). By the
+    // time the executor saw the row, spot was \$77536 — only \$63
+    // remaining vs \$432 total target = 14% left. Position fills
+    // pretty much at the TP, distorting reports as "+0.48% in profit"
+    // even though the structural move is over.
+    //
+    // Compute remaining_to_tp_fraction = |tp − current| / |tp − entry|
+    // and skip if it's below `min_tp_remaining_fraction` (default 0.5
+    // — "at least half the target distance must still be available").
+    let tp_price_opt = row
+        .tp_ladder
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|t| t.get("price"))
+        .and_then(|p| {
+            p.as_str()
+                .and_then(|s| s.parse::<f64>().ok())
+                .or_else(|| p.as_f64())
+        });
+    if let Some(tp_price) = tp_price_opt {
+        // Current price = last close of the same series. Use
+        // market_bars_open first (live tick) then latest market_bars
+        // row as fallback.
+        let current_price_opt: Option<f64> =
+            current_mark_for(pool, &row.exchange, &segment, &row.symbol, &row.timeframe)
+                .await;
+        if let Some(current_price) = current_price_opt {
+            let entry = row
+                .entry_price
+                .to_string()
+                .parse::<f64>()
+                .unwrap_or(0.0);
+            let total_distance = (tp_price - entry).abs();
+            let remaining = (tp_price - current_price).abs();
+            if total_distance > 0.0 {
+                let remaining_fraction = remaining / total_distance;
+                let min_remaining = resolve_system_f64(
+                    pool,
+                    MODULE,
+                    "min_tp_remaining_fraction",
+                    "QTSS_EXEC_MIN_TP_REMAINING",
+                    0.5,
+                )
+                .await
+                .clamp(0.0, 1.0);
+                if remaining_fraction < min_remaining {
+                    info!(
+                        symbol = %row.symbol,
+                        tp = %tp_price,
+                        current = %current_price,
+                        remaining_pct = %(remaining_fraction * 100.0),
+                        min_pct = %(min_remaining * 100.0),
+                        "skip: TP-proximity gate (move already nearly done)",
+                    );
+                    return None;
+                }
+            }
+        }
+    }
+
     // Per-symbol-direction dedup — User: "$338K open notional / 3000%
     // utilisation." Part of that was the SAME (symbol, direction)
     // opening multiple times because the execution bridge polls every
@@ -662,6 +725,51 @@ fn segment_from_row(meta: &serde_json::Value, default_segment: &str) -> String {
 ///   long:  entry * (1 - 1/lev + mmr)
 ///   short: entry * (1 + 1/lev - mmr)
 /// Returns `None` for spot (never liquidates) or bad leverage.
+/// Latest known mark price for a series. Reads `market_bars_open`
+/// (live still-forming bar) first, falls back to the most recent
+/// closed bar from `market_bars`. Returns `None` only when neither
+/// table has any row for the tuple — which means the gate is
+/// unsafe to enforce and the caller should fall through.
+async fn current_mark_for(
+    pool: &PgPool,
+    exchange: &str,
+    segment: &str,
+    symbol: &str,
+    timeframe: &str,
+) -> Option<f64> {
+    if let Ok(Some(row)) = sqlx::query_scalar::<_, rust_decimal::Decimal>(
+        r#"SELECT close FROM market_bars_open
+            WHERE exchange = $1 AND segment = $2
+              AND symbol = $3 AND interval = $4
+            LIMIT 1"#,
+    )
+    .bind(exchange)
+    .bind(segment)
+    .bind(symbol)
+    .bind(timeframe)
+    .fetch_optional(pool)
+    .await
+    {
+        return row.to_string().parse::<f64>().ok();
+    }
+    sqlx::query_scalar::<_, rust_decimal::Decimal>(
+        r#"SELECT close FROM market_bars
+            WHERE exchange = $1 AND segment = $2
+              AND symbol = $3 AND interval = $4
+            ORDER BY open_time DESC
+            LIMIT 1"#,
+    )
+    .bind(exchange)
+    .bind(segment)
+    .bind(symbol)
+    .bind(timeframe)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|d| d.to_string().parse::<f64>().ok())
+}
+
 fn liquidation_price(
     segment: &str,
     side: &str,
