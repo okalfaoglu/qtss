@@ -130,6 +130,12 @@ pub struct DetectionOverlay {
     /// selected. Other families leave this None.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub targets: Option<serde_json::Value>,
+    /// FAZ 25.4.A — pass-through `raw_meta` for families that need it
+    /// at render time (Wyckoff phase, corrective_kind for elliott_full,
+    /// etc.). Bounded by the family writer's own raw_meta shape; the
+    /// frontend reads only the fields it knows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_meta: Option<serde_json::Value>,
 }
 
 /// One resting/working order overlay.

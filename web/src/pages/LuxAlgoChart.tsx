@@ -186,6 +186,9 @@ interface ChartWorkspaceDetection {
   anchor_time?: string;
   pivot_level?: string;
   mode?: string;             // "live" | "dry" | "backtest"
+  /// FAZ 25.4.A — pass-through raw_meta for families that need
+  /// extra render data (Wyckoff phase, corrective_kind, etc.).
+  raw_meta?: Record<string, unknown>;
 }
 interface ChartWorkspaceResponse {
   venue: string;
@@ -612,6 +615,12 @@ export function LuxAlgoChart({
   // Smart Money Concepts (BOS / CHoCH / MSS / LiquiditySweep / FVI).
   // Single-anchor events rendered as short horizontal markers + labels.
   const [showSmc, setShowSmc] = useState(false);
+  // FAZ 25.4.A — Wyckoff event overlay. Surfaces the 12-event
+  // detector output (SC / BC / Spring / UTAD / SOS / SOW / AR / ST /
+  // LPS / PS / BU / Test) with phase pill (A-E) and bull/bear
+  // coloring so the operator sees institutional accumulation /
+  // distribution footprints alongside the Elliott structure.
+  const [showWyckoff, setShowWyckoff] = useState(false);
   // FAZ 25.x — overlay toggle for the elliott_full writer (diagonals,
   // flats, extended impulses, truncated fifth, W-X-Y combinations).
   // Default off because it's noisy on intraday tapes; operator opts in.
@@ -690,7 +699,7 @@ export function LuxAlgoChart({
     // `slot = ANY($5)` clause would be vacuously false).
     enabled:
       (showClassical || showRange || showGap || showCandles || showOrb || showSmc ||
-       showElliottFull) &&
+       showElliottFull || showWyckoff) &&
       levelsParamAux.length > 0,
     refetchInterval: 30_000,
   });
@@ -1970,6 +1979,78 @@ export function LuxAlgoChart({
       );
     };
 
+    // FAZ 25.4.A — Wyckoff event overlay. Each event paints a marker
+    // at its trigger bar with a label that tells the reader WHAT
+    // fired (SC, Spring, SOS, UTAD, etc.) and a colour that conveys
+    // the institutional bias (bull = emerald, bear = rose). The
+    // schematic phase (A-E) gets a small pill above the marker so
+    // the operator sees where in the accumulation/distribution
+    // sequence we are. Reference: docs/ELLIOTT_WYCKOFF_INTEGRATION.md
+    // §II.1 — Spring + W2 / SOS + W3 / BC + W5 / UTAD + B / SOW + C
+    // are the textbook entry windows.
+    const wyckoffEventLabel = (subkind: string): string => {
+      const head = subkind.replace(/_(bull|bear)$/i, "").toUpperCase();
+      // Pretty-cased canonical names for the 12 events.
+      switch (head) {
+        case "SC":     return "SC";
+        case "BC":     return "BC";
+        case "AR":     return "AR";
+        case "ST":     return "ST";
+        case "SPRING": return "Spring";
+        case "TEST":   return "Test";
+        case "SOS":    return "SOS";
+        case "SOW":    return "SOW";
+        case "LPS":    return "LPS";
+        case "PS":     return "PS";
+        case "UTAD":   return "UTAD";
+        case "BU":     return "BU";
+        default:       return head;
+      }
+    };
+    const renderWyckoff = (d: ChartWorkspaceDetection) => {
+      if (d.anchors.length === 0) return;
+      const a = d.anchors[0];
+      const t = anchorTime(a);
+      const p = parsePrice(a.price);
+      if (t === null || Number.isNaN(p)) return;
+      const isBull = d.subkind.endsWith("_bull");
+      const color = isBull ? "#22c55e" : "#ef4444";
+      // Phase pill — read from the chart workspace detection's
+      // raw_meta (the v2_chart endpoint passes raw_meta through).
+      const phaseRaw = d.raw_meta?.phase;
+      const phase = typeof phaseRaw === "string" ? phaseRaw.toUpperCase() : null;
+      const baseLabel = wyckoffEventLabel(d.subkind);
+      const fullLabel = phase ? `${baseLabel} · P${phase}` : baseLabel;
+      // Position labels: bull events below the bar (the Spring's
+      // wick is below; SOS launches up from a low), bear events
+      // above (BC at the top, UTAD shakeouts above range).
+      const position: "above" | "below" = isBull ? "below" : "above";
+      attachLabel(t, p, fullLabel, color, position);
+      // Vertical accent line — a thin dotted vertical at the event
+      // bar so the reader can scroll horizontally and still see
+      // where every Wyckoff event landed without label overlap.
+      const barIdx =
+        typeof a.bar_index === "number" ? a.bar_index : candles.length - 1;
+      const tEnd = timeAt(Math.min(barIdx + 1, candles.length - 1));
+      if (tEnd !== null) {
+        const s = chart.addSeries(LineSeries, {
+          color,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          priceLineVisible: false,
+          lastValueVisible: false,
+        });
+        // 0.5% above + below the event price for the vertical accent.
+        const span = p * 0.005;
+        s.setData([
+          { time: t, value: p - span },
+          { time: t, value: p + span },
+        ]);
+        overlaySeriesRef.current.push(s);
+        void tEnd;
+      }
+    };
+
     // FAZ 25.x — elliott_full overlay. Surfaces the previously-dormant
     // detector outputs (leading/ending diagonals, regular/expanded/
     // running flats, W1/W3/W5 extended impulses, truncated fifth,
@@ -2048,6 +2129,7 @@ export function LuxAlgoChart({
       orb: renderOrb,
       smc: renderSmc,
       elliott_full: renderElliottFull,
+      wyckoff: renderWyckoff,
     };
     const familyEnabled = (f: string): boolean => {
       if (f === "classical") return showClassical;
@@ -2057,6 +2139,7 @@ export function LuxAlgoChart({
       if (f === "orb") return showOrb;
       if (f === "smc") return showSmc;
       if (f === "elliott_full") return showElliottFull;
+      if (f === "wyckoff") return showWyckoff;
       return false;
     };
 
@@ -2328,7 +2411,7 @@ export function LuxAlgoChart({
     showHarmonic, harmonicOutput,
     harmonicFilters, showHarmonicTargets,
     auxDetections, showClassical, showRange, showGap, showCandles, showOrb, showSmc,
-    showElliottFull, detectionSource, enabledSlotIndices,
+    showElliottFull, showWyckoff, detectionSource, enabledSlotIndices,
     indicators.data, showSuperTrend, showKeltner, showIchimoku, showDonchian, showPsar,
     showRsi, showWilliamsR, showCmf, showAroon, showTtmSqueeze,
     showMacd, showStochastic, showObv, showAtr, showBollinger,
@@ -2564,6 +2647,17 @@ export function LuxAlgoChart({
                 onChange={(e) => setShowElliottFull(e.target.checked)}
               />
               Elliott+
+            </label>
+            <label
+              className="flex cursor-pointer items-center gap-1"
+              title="Wyckoff events: SC / BC / Spring / UTAD / SOS / SOW / AR / ST / LPS / PS / BU / Test — phase A-E label appended"
+            >
+              <input
+                type="checkbox"
+                checked={showWyckoff}
+                onChange={(e) => setShowWyckoff(e.target.checked)}
+              />
+              Wyckoff
             </label>
           </div>
           {/* Technical indicator overlays. Price-pane overlays only —

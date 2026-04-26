@@ -319,6 +319,11 @@ fn row_to_overlay(row: sqlx::postgres::PgRow) -> Option<DetectionOverlay> {
         _ => "",
     };
 
+    let raw_meta_passthrough = if raw_meta.is_null() {
+        None
+    } else {
+        Some(raw_meta.clone())
+    };
     Some(DetectionOverlay {
         id: format!(
             "{}:{}:{}:{}:{}",
@@ -353,6 +358,7 @@ fn row_to_overlay(row: sqlx::postgres::PgRow) -> Option<DetectionOverlay> {
         outcome_exit_price: None,
         outcome_close_reason: None,
         targets: None,
+        raw_meta: raw_meta_passthrough,
     })
 }
 
