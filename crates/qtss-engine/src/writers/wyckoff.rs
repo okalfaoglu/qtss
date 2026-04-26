@@ -652,6 +652,9 @@ async fn load_config(pool: &PgPool) -> WyckoffConfig {
             "climax_range_atr_mult" => cfg.climax_range_atr_mult = v,
             "spring_wick_max_pct" => cfg.spring_wick_max_pct = v,
             "sos_amplifier" => cfg.sos_amplifier = v,
+            // FAZ 26 backlog (B-CTX-MM-1) — Wyckoff volume gate.
+            "spring_min_volume_mult" => cfg.spring_min_volume_mult = v,
+            "spring_max_volume_mult" => cfg.spring_max_volume_mult = v,
             _ => {}
         }
     }

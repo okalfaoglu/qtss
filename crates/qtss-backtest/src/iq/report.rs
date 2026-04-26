@@ -14,7 +14,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use super::attribution::{LossReason, OutcomeAttribution, OutcomeClass};
+use super::attribution::{OutcomeAttribution, OutcomeClass};
 use super::config::IqBacktestConfig;
 use super::trade::IqTrade;
 

@@ -12,7 +12,7 @@
 
 use std::path::Path;
 use std::path::PathBuf;
-use tracing::{info, Level};
+use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use super::config::IqBacktestConfig;
@@ -136,6 +136,20 @@ pub fn print_report(report: &super::report::IqBacktestReport) {
         for (k, v) in rows {
             println!("   {:>30}: {:.3}", k, v);
         }
+    }
+    if report.total_trades == 0 && report.bars_processed > 0 {
+        println!();
+        println!(" ⚠  No trades fired across {} bars.", report.bars_processed);
+        println!("    Likely causes:");
+        println!("    1. min_composite gate too strict (current: {:.2}).", report.config.gates.min_composite);
+        println!("       Lower it temporarily to 0.20 to verify the pipeline sees any signals.");
+        println!("    2. Required component tables are empty for this historical");
+        println!("       window — iq_structures (structural), bar_indicator_snapshots,");
+        println!("       fear_greed_snapshots, external_snapshots (funding) all need");
+        println!("       to be populated by the live worker BEFORE backtest can replay them.");
+        println!("    3. Wyckoff event detections at slot=0 missing — check the wyckoff");
+        println!("       writer ran over this window.");
+        println!("    Run `RUST_LOG=qtss_backtest::iq=debug` to see per-bar score traces.");
     }
     println!("──────────────────────────────────────────────────────");
 }

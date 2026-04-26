@@ -227,22 +227,48 @@ pub fn eval_spring(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
                 break;
             }
         }
-        if reclaimed {
-            out.push(WyckoffEvent {
-                kind: WyckoffEventKind::Spring,
-                variant: "bull",
-                score: 0.7,
-                bar_index: i,
-                reference_price: bar_low(bar),
-                volume_ratio: 0.0,
-                range_ratio: 0.0,
-                note: format!(
-                    "Spring: wick {:.2} below range low {:.2}, reclaimed",
-                    bar_low(bar),
-                    lo
-                ),
-            });
+        if !reclaimed {
+            continue;
         }
+        // FAZ 26 backlog — volume gate.
+        // Real Spring fires on HEAVY volume (sellers exhausting
+        // themselves on the wick). Compute volume_ratio against
+        // the rolling SMA baseline; suppress below the floor and
+        // scale the score linearly between [min, max].
+        let avg_vol = sma_volume(bars, i, cfg.volume_sma_bars as usize);
+        let vol_ratio = if avg_vol > 1e-9 {
+            bar_vol(bar) / avg_vol
+        } else {
+            0.0
+        };
+        if vol_ratio < cfg.spring_min_volume_mult {
+            continue;
+        }
+        // Volume score: 0.55 at min_mult → 1.0 at max_mult, clamped.
+        let v_span =
+            (cfg.spring_max_volume_mult - cfg.spring_min_volume_mult).max(1e-9);
+        let v_norm = ((vol_ratio - cfg.spring_min_volume_mult) / v_span)
+            .clamp(0.0, 1.0);
+        let vol_score = 0.55 + v_norm * 0.45;
+        // Wick depth bonus — deeper wick within tolerance = more
+        // climactic. Up to +0.05 boost.
+        let wick_pct = wick_below / range_height;
+        let wick_score = (wick_pct / cfg.spring_wick_max_pct).clamp(0.0, 1.0);
+        let final_score = (vol_score + 0.05 * wick_score).clamp(0.0, 1.0);
+        out.push(WyckoffEvent {
+            kind: WyckoffEventKind::Spring,
+            variant: "bull",
+            score: final_score,
+            bar_index: i,
+            reference_price: bar_low(bar),
+            volume_ratio: vol_ratio,
+            range_ratio: wick_pct,
+            note: format!(
+                "Spring: wick {:.2} below range low {:.2}, reclaimed; vol {vol_ratio:.2}× SMA",
+                bar_low(bar),
+                lo
+            ),
+        });
     }
     out
 }
@@ -281,22 +307,43 @@ pub fn eval_utad(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
                 break;
             }
         }
-        if rejected {
-            out.push(WyckoffEvent {
-                kind: WyckoffEventKind::Utad,
-                variant: "bear",
-                score: 0.7,
-                bar_index: i,
-                reference_price: bar_high(bar),
-                volume_ratio: 0.0,
-                range_ratio: 0.0,
-                note: format!(
-                    "UTAD: wick {:.2} above range high {:.2}, rejected",
-                    bar_high(bar),
-                    hi
-                ),
-            });
+        if !rejected {
+            continue;
         }
+        // FAZ 26 backlog — volume gate (mirror of Spring). Real
+        // UTAD = heavy buying volume on the upthrust (last gasp
+        // before distribution-driven markdown).
+        let avg_vol = sma_volume(bars, i, cfg.volume_sma_bars as usize);
+        let vol_ratio = if avg_vol > 1e-9 {
+            bar_vol(bar) / avg_vol
+        } else {
+            0.0
+        };
+        if vol_ratio < cfg.spring_min_volume_mult {
+            continue;
+        }
+        let v_span =
+            (cfg.spring_max_volume_mult - cfg.spring_min_volume_mult).max(1e-9);
+        let v_norm = ((vol_ratio - cfg.spring_min_volume_mult) / v_span)
+            .clamp(0.0, 1.0);
+        let vol_score = 0.55 + v_norm * 0.45;
+        let wick_pct = wick_above / range_height;
+        let wick_score = (wick_pct / cfg.spring_wick_max_pct).clamp(0.0, 1.0);
+        let final_score = (vol_score + 0.05 * wick_score).clamp(0.0, 1.0);
+        out.push(WyckoffEvent {
+            kind: WyckoffEventKind::Utad,
+            variant: "bear",
+            score: final_score,
+            bar_index: i,
+            reference_price: bar_high(bar),
+            volume_ratio: vol_ratio,
+            range_ratio: wick_pct,
+            note: format!(
+                "UTAD: wick {:.2} above range high {:.2}, rejected; vol {vol_ratio:.2}× SMA",
+                bar_high(bar),
+                hi
+            ),
+        });
     }
     out
 }

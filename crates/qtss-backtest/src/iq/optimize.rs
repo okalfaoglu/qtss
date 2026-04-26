@@ -608,6 +608,7 @@ fn pearson(xs: &[f64], ys: &[f64]) -> f64 {
 mod tests {
     use super::*;
     use crate::iq::config::IqBacktestConfig;
+    use chrono::TimeZone;
 
     #[test]
     fn weight_range_enumerate_inclusive() {
@@ -734,4 +735,5 @@ mod tests {
     }
 }
 
-use chrono::TimeZone;
+// chrono::TimeZone used only inside #[cfg(test)] blocks; explicit
+// import there.

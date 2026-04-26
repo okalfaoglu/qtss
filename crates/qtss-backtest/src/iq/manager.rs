@@ -19,7 +19,6 @@
 use chrono::{DateTime, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
 use tracing::trace;
 
 use super::config::{IqBacktestConfig, IqPolarity};
@@ -440,6 +439,7 @@ mod tests {
     use crate::iq::config::IqBacktestConfig;
     use crate::iq::config::IqPolarity;
     use chrono::TimeZone;
+    use rust_decimal_macros::dec;
     use serde_json::json;
 
     fn cfg() -> IqBacktestConfig {

@@ -53,6 +53,16 @@ pub struct WyckoffConfig {
     /// LPS = Last Point of Support: forward window from SOS to look
     /// for the higher-low.
     pub lps_lookforward_bars: u64,
+
+    /// FAZ 26 backlog (B-CTX-MM-1) — volume gate for Phase-C events.
+    /// Real Wyckoff Spring / UTAD requires high volume on the
+    /// wick bar (capitulation selling / blow-off buying). Below
+    /// this multiple of the SMA baseline the event is suppressed
+    /// — too thin to be a real climactic action.
+    pub spring_min_volume_mult: f64,
+    /// Soft ceiling — volume multiples >= this get the maximum
+    /// score boost. Linear scaling between min and max.
+    pub spring_max_volume_mult: f64,
 }
 
 impl Default for WyckoffConfig {
@@ -73,6 +83,13 @@ impl Default for WyckoffConfig {
             st_proximity_pct: 0.015,
             st_volume_max_mult: 0.85,
             lps_lookforward_bars: 30,
+            // FAZ 26 backlog (B-CTX-MM-1) — Wyckoff doctrine: real
+            // Spring fires on HEAVY volume (sellers exhausted on the
+            // wick). 1.0 = baseline-or-better gate; below that the
+            // event is suppressed entirely. 2.5 = saturate at max
+            // score (3×+ baseline = textbook climactic).
+            spring_min_volume_mult: 1.0,
+            spring_max_volume_mult: 2.5,
         }
     }
 }
