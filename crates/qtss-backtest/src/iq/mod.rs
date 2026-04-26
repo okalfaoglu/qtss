@@ -44,6 +44,7 @@ pub mod detector;
 pub mod manager;
 pub mod report;
 pub mod runner;
+pub mod scorers;
 pub mod trade;
 pub mod trade_log;
 

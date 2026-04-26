@@ -31,6 +31,11 @@ use tracing::{debug, trace};
 
 use super::config::{IqBacktestConfig, IqPolarity};
 use super::runner::SetupDetector;
+use super::scorers::{
+    cvd_divergence, fib_retrace_quality, funding_oi_signals,
+    indicator_alignment, multi_tf_confluence, sentiment_extreme,
+    structural_completion, volume_capitulation, ScoreKey,
+};
 use super::trade::IqTrade;
 
 /// IQ-specific replay detector. Lives entirely off historical
@@ -201,16 +206,45 @@ impl SetupDetector for IqReplayDetector {
             None => (None, None, 0.0),
         };
 
-        // ── 3) Composite score using only the channels we have data
-        // for in v1 replay. Other channels (volume, fib, sentiment,
-        // funding...) score 0 in 26.2 — they wire up in 26.3 once
-        // the scorers are refactored to accept a time_cutoff. The
-        // composite below is therefore a LOWER BOUND of what the
-        // live worker would have computed; setups that fire here
-        // would also fire live, but live may fire MORE setups too.
+        // ── 3) Compute the remaining 8 component scores (FAZ 26.3 —
+        // live parity). Each scorer accepts bar_time and queries
+        // strictly historical data with a "<=" cutoff so the
+        // backtest never sees future bars. When a data source is
+        // missing for the bar (e.g. the symbol predates indicator
+        // ingestion), the scorer returns 0.0 — same neutral default
+        // the live worker uses.
+        let key = ScoreKey {
+            exchange: &u.exchange,
+            segment: &u.segment,
+            symbol: &u.symbol,
+            timeframe: &u.timeframe,
+        };
+        let c_struct = structural_completion(pool, &key, bar_time).await;
+        let c_fib =
+            fib_retrace_quality(pool, &key, bar_time, bar_close).await;
+        let c_volume =
+            volume_capitulation(pool, &key, bar_time, cfg.polarity).await;
+        let c_cvd = cvd_divergence(pool, &key, bar_time, cfg.polarity).await;
+        let c_indicator =
+            indicator_alignment(pool, &key, bar_time, cfg.polarity).await;
+        let c_sentiment = sentiment_extreme(pool, bar_time, cfg.polarity).await;
+        let c_multi_tf =
+            multi_tf_confluence(pool, &key, bar_time, cfg.polarity).await;
+        let c_funding =
+            funding_oi_signals(pool, &key, bar_time, cfg.polarity).await;
+
         let w = &cfg.weights;
-        let composite = w.wyckoff_alignment * event_score
+        let composite = w.structural * c_struct
+            + w.fib_retrace * c_fib
+            + w.volume_capit * c_volume
+            + w.cvd_divergence * c_cvd
+            + w.indicator * c_indicator
+            + w.sentiment * c_sentiment
+            + w.multi_tf * c_multi_tf
+            + w.funding_oi * c_funding
+            + w.wyckoff_alignment * event_score
             + w.cycle_alignment * cycle_score;
+        let composite = composite.clamp(0.0, 1.0);
 
         // Cycle veto — if cycle phase contradicts polarity, skip
         // entirely (matches live `require_cycle_alignment=true`).
@@ -293,20 +327,19 @@ impl SetupDetector for IqReplayDetector {
         }
 
         let components = json!({
-            "wyckoff_alignment":   event_score,
-            "wyckoff_event":       event_subkind,
-            "cycle_alignment":     cycle_score,
-            "cycle_phase":         cycle_phase,
-            "cycle_source":        cycle_source,
-            // Other channels stub — wire in 26.3.
-            "structural_completion": 0.0,
-            "fib_retrace_quality":   0.0,
-            "volume_capitulation":   0.0,
-            "cvd_divergence":        0.0,
-            "indicator_alignment":   0.0,
-            "sentiment_extreme":     0.0,
-            "multi_tf_confluence":   0.0,
-            "funding_oi_signals":    0.0,
+            "structural_completion": c_struct,
+            "fib_retrace_quality":   c_fib,
+            "volume_capitulation":   c_volume,
+            "cvd_divergence":        c_cvd,
+            "indicator_alignment":   c_indicator,
+            "sentiment_extreme":     c_sentiment,
+            "multi_tf_confluence":   c_multi_tf,
+            "funding_oi_signals":    c_funding,
+            "wyckoff_alignment":     event_score,
+            "wyckoff_event":         event_subkind,
+            "cycle_alignment":       cycle_score,
+            "cycle_phase":           cycle_phase,
+            "cycle_source":          cycle_source,
         });
 
         let mut trade = IqTrade::pending(
