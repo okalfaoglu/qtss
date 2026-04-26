@@ -5,6 +5,7 @@
 *.rs.bk
 web/node_modules/
 web/dist/
+web-v2/
 /node_modules/
 /package.json
 /package-lock.json
@@ -18,3 +19,6 @@ artifacts/
 trainer/src/qtss_trainer.egg-info/
 __pycache__/
 *.pyc
+
+# Claude Code worktrees — local agent workspaces, never commit
+.claude/worktrees/
