@@ -153,6 +153,25 @@ struct SymbolKey {
     timeframe: String,
 }
 
+/// Polarity tag drives which extremum the worker hunts for and how
+/// the volume / CVD / indicator / sentiment / funding scorers
+/// interpret their inputs. FAZ 25.3.E adds Top alongside the
+/// existing Dip; same composite formula, mirrored signal direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Polarity {
+    Dip,
+    Top,
+}
+
+impl Polarity {
+    fn table(self) -> &'static str {
+        match self {
+            Polarity::Dip => "major_dip_candidates",
+            Polarity::Top => "major_top_candidates",
+        }
+    }
+}
+
 async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
     let weights = load_weights(pool).await;
     let series = list_enabled_series(pool).await?;
@@ -160,10 +179,17 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
     let mut written = 0usize;
     for s in &series {
         scanned += 1;
-        match score_series(pool, s, &weights).await {
-            Ok(true) => written += 1,
-            Ok(false) => {}
-            Err(e) => warn!(symbol=%s.symbol, tf=%s.timeframe, %e, "major_dip score failed"),
+        // Run BOTH polarities back-to-back. Each writes to its own
+        // table; if either fails the other still gets a chance.
+        for polarity in [Polarity::Dip, Polarity::Top] {
+            match score_series(pool, s, &weights, polarity).await {
+                Ok(true) => written += 1,
+                Ok(false) => {}
+                Err(e) => warn!(
+                    symbol=%s.symbol, tf=%s.timeframe, ?polarity, %e,
+                    "major_pivot score failed"
+                ),
+            }
         }
     }
     Ok((scanned, written))
@@ -191,22 +217,24 @@ async fn score_series(
     pool: &PgPool,
     s: &SymbolKey,
     w: &Weights,
+    polarity: Polarity,
 ) -> anyhow::Result<bool> {
-    // 1) Find the candidate dip = lowest pivot in the last N bars
-    //    (use L2 prominence so we focus on structural lows).
-    let Some(dip) = find_candidate_dip(pool, s).await? else {
+    // 1) Find the candidate extremum: lowest pivot for Dip, highest
+    //    for Top. Both use L2-prominence pivots so we focus on
+    //    structural reversals, not micro-swings.
+    let Some(extremum) = find_candidate_extremum(pool, s, polarity).await? else {
         return Ok(false);
     };
 
-    // 2) Run each component scorer.
+    // 2) Run each component scorer (polarity-aware where it matters).
     let c_struct = score_structural_completion(pool, s).await;
-    let c_fib = score_fib_retrace(pool, s, &dip).await;
-    let c_volume = score_volume_capit(pool, s, &dip).await;
-    let c_cvd = score_cvd_divergence(pool, s, &dip).await;
-    let c_indicator = score_indicator_alignment(pool, s).await;
-    let c_sentiment = score_sentiment_extreme(pool, s).await;
+    let c_fib = score_fib_retrace(pool, s, &extremum, polarity).await;
+    let c_volume = score_volume_capit(pool, s, &extremum, polarity).await;
+    let c_cvd = score_cvd_divergence(pool, s, &extremum, polarity).await;
+    let c_indicator = score_indicator_alignment(pool, s, polarity).await;
+    let c_sentiment = score_sentiment_extreme(pool, s, polarity).await;
     let c_multi_tf = score_multi_tf_confluence(pool, s).await;
-    let c_funding = score_funding_oi(pool, s).await;
+    let c_funding = score_funding_oi(pool, s, polarity).await;
 
     let composite = w.structural * c_struct
         + w.fib_retrace * c_fib
@@ -236,8 +264,8 @@ async fn score_series(
         "funding_oi_signals":    c_funding,
     });
 
-    sqlx::query(
-        r#"INSERT INTO major_dip_candidates
+    let sql = format!(
+        r#"INSERT INTO {}
               (exchange, segment, symbol, timeframe, candidate_bar,
                candidate_time, candidate_price, score, components, verdict)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -248,23 +276,25 @@ async fn score_series(
                components      = EXCLUDED.components,
                verdict         = EXCLUDED.verdict,
                updated_at      = now()"#,
-    )
-    .bind(&s.exchange)
-    .bind(&s.segment)
-    .bind(&s.symbol)
-    .bind(&s.timeframe)
-    .bind(dip.bar_index)
-    .bind(dip.time)
-    .bind(dip.price)
-    .bind(composite)
-    .bind(&components)
-    .bind(verdict)
-    .execute(pool)
-    .await?;
+        polarity.table()
+    );
+    sqlx::query(&sql)
+        .bind(&s.exchange)
+        .bind(&s.segment)
+        .bind(&s.symbol)
+        .bind(&s.timeframe)
+        .bind(extremum.bar_index)
+        .bind(extremum.time)
+        .bind(extremum.price)
+        .bind(composite)
+        .bind(&components)
+        .bind(verdict)
+        .execute(pool)
+        .await?;
 
     debug!(
-        symbol=%s.symbol, tf=%s.timeframe, score=composite, verdict,
-        "major_dip score upserted"
+        symbol=%s.symbol, tf=%s.timeframe, ?polarity, score=composite, verdict,
+        "major_pivot score upserted"
     );
     Ok(true)
 }
@@ -278,35 +308,45 @@ struct DipPoint {
     price: rust_decimal::Decimal,
 }
 
-async fn find_candidate_dip(
+async fn find_candidate_extremum(
     pool: &PgPool,
     s: &SymbolKey,
+    polarity: Polarity,
 ) -> anyhow::Result<Option<DipPoint>> {
-    // Lowest L2 pivot in the last 200 bars. Scoping to L2 keeps noise
-    // out (L0/L1 fire on every micro-swing).
-    let row = sqlx::query(
+    // L2 pivot in the last 200 bars; for Dip we want the lowest LOW
+    // (direction=-1, ASC); for Top the highest HIGH (direction=+1,
+    // DESC). Scoping to L2 keeps noise out (L0/L1 fire on every
+    // micro-swing).
+    let (pivot_dir, order_clause) = match polarity {
+        Polarity::Dip => (-1_i16, "ASC"),
+        Polarity::Top => (1_i16, "DESC"),
+    };
+    let sql = format!(
         r#"SELECT p.bar_index, p.open_time, p.price
              FROM pivots p
              JOIN engine_symbols es ON es.id = p.engine_symbol_id
             WHERE es.exchange = $1 AND es.segment = $2
               AND es.symbol = $3 AND es.interval = $4
               AND p.level = 2
-              AND p.direction = -1
+              AND p.direction = $5
               AND p.bar_index >= COALESCE(
                   (SELECT MAX(bar_index) - 200
                      FROM pivots
                     WHERE engine_symbol_id = es.id),
                   0
               )
-            ORDER BY p.price ASC
+            ORDER BY p.price {}
             LIMIT 1"#,
-    )
-    .bind(&s.exchange)
-    .bind(&s.segment)
-    .bind(&s.symbol)
-    .bind(&s.timeframe)
-    .fetch_optional(pool)
-    .await?;
+        order_clause
+    );
+    let row = sqlx::query(&sql)
+        .bind(&s.exchange)
+        .bind(&s.segment)
+        .bind(&s.symbol)
+        .bind(&s.timeframe)
+        .bind(pivot_dir)
+        .fetch_optional(pool)
+        .await?;
     let Some(r) = row else { return Ok(None); };
     Ok(Some(DipPoint {
         bar_index: r.try_get("bar_index").unwrap_or(0),
@@ -362,7 +402,13 @@ async fn score_structural_completion(pool: &PgPool, s: &SymbolKey) -> f64 {
 
 /// 12.2 — Fib retracement quality. Score peaks near {0.382, 0.500,
 /// 0.618, 0.786} with linear decay.
-async fn score_fib_retrace(pool: &PgPool, s: &SymbolKey, dip: &DipPoint) -> f64 {
+async fn score_fib_retrace(
+    pool: &PgPool,
+    s: &SymbolKey,
+    extremum: &DipPoint,
+    _polarity: Polarity,
+) -> f64 {
+    let dip = extremum;
     let row = sqlx::query(
         r#"SELECT MAX(price) AS hi, MIN(price) AS lo
              FROM pivots p
@@ -404,7 +450,13 @@ async fn score_fib_retrace(pool: &PgPool, s: &SymbolKey, dip: &DipPoint) -> f64 
 }
 
 /// 12.3 — Volume capitulation (Wyckoff SC heuristic).
-async fn score_volume_capit(pool: &PgPool, s: &SymbolKey, dip: &DipPoint) -> f64 {
+async fn score_volume_capit(
+    pool: &PgPool,
+    s: &SymbolKey,
+    extremum: &DipPoint,
+    polarity: Polarity,
+) -> f64 {
+    let dip = extremum;
     // Pull last 20 bars around the dip + ATR.
     let rows = sqlx::query(
         r#"SELECT high, low, close, volume
@@ -459,14 +511,20 @@ async fn score_volume_capit(pool: &PgPool, s: &SymbolKey, dip: &DipPoint) -> f64
         .unwrap_or(0);
     let climax_range = highs[climax_idx] - lows[climax_idx];
     let climax_range_atr = climax_range / atr;
-    let lower_shadow = if climax_range > 1e-9 {
-        (closes[climax_idx] - lows[climax_idx]) / climax_range
+    // Capitulation shadow direction depends on polarity:
+    //   Dip → LONG LOWER shadow (sellers exhausted, rejection)
+    //   Top → LONG UPPER shadow (buyers exhausted, blow-off top)
+    let shadow_ratio = if climax_range > 1e-9 {
+        match polarity {
+            Polarity::Dip => (closes[climax_idx] - lows[climax_idx]) / climax_range,
+            Polarity::Top => (highs[climax_idx] - closes[climax_idx]) / climax_range,
+        }
     } else {
         0.0
     };
     let ratio_score = ((climax_ratio - 1.5) / 1.5).clamp(0.0, 1.0);
     let range_score = ((climax_range_atr - 1.0) / 1.0).clamp(0.0, 1.0);
-    let shadow_score = ((lower_shadow - 0.5).max(0.0)).min(0.5) * 2.0;
+    let shadow_score = ((shadow_ratio - 0.5).max(0.0)).min(0.5) * 2.0;
     0.4 * ratio_score + 0.3 * range_score + 0.3 * shadow_score
 }
 
@@ -480,7 +538,8 @@ async fn score_volume_capit(pool: &PgPool, s: &SymbolKey, dip: &DipPoint) -> f64
 async fn score_cvd_divergence(
     pool: &PgPool,
     s: &SymbolKey,
-    _dip: &DipPoint,
+    _extremum: &DipPoint,
+    polarity: Polarity,
 ) -> f64 {
     let rows = sqlx::query(
         r#"SELECT high, low, close, volume FROM market_bars
@@ -516,25 +575,38 @@ async fn score_cvd_divergence(
     let mid = cvd.len() / 2;
     let (older_p, older_c) = (&closes[..mid], &cvd[..mid]);
     let (newer_p, newer_c) = (&closes[mid..], &cvd[mid..]);
-    let older_low_idx = older_p
-        .iter()
-        .enumerate()
-        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-    let newer_low_idx = newer_p
-        .iter()
-        .enumerate()
-        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-    let older_low_price = older_p[older_low_idx];
-    let newer_low_price = newer_p[newer_low_idx];
-    let older_cvd = older_c[older_low_idx];
-    let newer_cvd = newer_c[newer_low_idx];
-    if newer_low_price < older_low_price && newer_cvd > older_cvd {
-        // Bullish regular divergence — magnitude based on CVD rebound.
-        let magnitude = (newer_cvd - older_cvd) / older_cvd.abs().max(1.0);
+    // Polarity flip: Dip looks at LOWS (price LL + CVD HL = bullish);
+    // Top looks at HIGHS (price HH + CVD LH = bearish).
+    let pick_extremum = |slice: &[f64]| -> usize {
+        match polarity {
+            Polarity::Dip => slice
+                .iter()
+                .enumerate()
+                .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(i, _)| i)
+                .unwrap_or(0),
+            Polarity::Top => slice
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(i, _)| i)
+                .unwrap_or(0),
+        }
+    };
+    let older_idx = pick_extremum(older_p);
+    let newer_idx = pick_extremum(newer_p);
+    let older_p_val = older_p[older_idx];
+    let newer_p_val = newer_p[newer_idx];
+    let older_cvd = older_c[older_idx];
+    let newer_cvd = newer_c[newer_idx];
+    let divergence = match polarity {
+        // Dip: price newer-LOW + cvd HIGHER-low
+        Polarity::Dip => newer_p_val < older_p_val && newer_cvd > older_cvd,
+        // Top: price newer-HIGH + cvd LOWER-high
+        Polarity::Top => newer_p_val > older_p_val && newer_cvd < older_cvd,
+    };
+    if divergence {
+        let magnitude = (newer_cvd - older_cvd).abs() / older_cvd.abs().max(1.0);
         (magnitude / 0.5).clamp(0.0, 1.0)
     } else {
         0.0
@@ -549,7 +621,7 @@ async fn score_cvd_divergence(
 ///   macd_cross:        signal line cross AND histogram positive → 1.0
 ///   macd_div:          bullish-regular divergence on MACD histogram
 ///   rsi_oversold_reset: RSI was < 30 and now > 35 → momentum unclamping
-async fn score_indicator_alignment(pool: &PgPool, s: &SymbolKey) -> f64 {
+async fn score_indicator_alignment(pool: &PgPool, s: &SymbolKey, polarity: Polarity) -> f64 {
     let rows = sqlx::query(
         r#"SELECT close FROM market_bars
             WHERE exchange=$1 AND segment=$2 AND symbol=$3 AND interval=$4
@@ -569,25 +641,45 @@ async fn score_indicator_alignment(pool: &PgPool, s: &SymbolKey) -> f64 {
     let rsi = qtss_indicators::rsi::rsi(&closes, 14);
     let macd = qtss_indicators::macd::macd(&closes, 12, 26, 9);
 
-    // RSI bullish divergence — price newer-low + rsi higher-low.
+    // Per-polarity helpers.
+    let extremum_idx = |slice: &[f64]| -> usize {
+        match polarity {
+            Polarity::Dip => slice
+                .iter()
+                .enumerate()
+                .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(i, _)| i)
+                .unwrap_or(0),
+            Polarity::Top => slice
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(i, _)| i)
+                .unwrap_or(0),
+        }
+    };
+    let price_outpaces = |new_p: f64, old_p: f64| match polarity {
+        Polarity::Dip => new_p < old_p,
+        Polarity::Top => new_p > old_p,
+    };
+    let momentum_diverges = |new_m: f64, old_m: f64| match polarity {
+        Polarity::Dip => new_m > old_m,
+        Polarity::Top => new_m < old_m,
+    };
+
+    // RSI divergence (regular, polarity-aware).
     let rsi_div = if closes.len() >= 30 && rsi.len() == closes.len() {
         let mid = closes.len() / 2;
-        let oi = closes[..mid]
-            .iter()
-            .enumerate()
-            .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        let ni = closes[mid..]
-            .iter()
-            .enumerate()
-            .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        let n_abs = mid + ni;
+        let oi = extremum_idx(&closes[..mid]);
+        let ni_rel = extremum_idx(&closes[mid..]);
+        let n_abs = mid + ni_rel;
         let rsi_o = rsi.get(oi).copied().unwrap_or(50.0);
         let rsi_n = rsi.get(n_abs).copied().unwrap_or(50.0);
-        if closes[n_abs] < closes[oi] && rsi_n > rsi_o && rsi_o.is_finite() && rsi_n.is_finite() {
+        if price_outpaces(closes[n_abs], closes[oi])
+            && momentum_diverges(rsi_n, rsi_o)
+            && rsi_o.is_finite()
+            && rsi_n.is_finite()
+        {
             1.0
         } else {
             0.0
@@ -596,35 +688,30 @@ async fn score_indicator_alignment(pool: &PgPool, s: &SymbolKey) -> f64 {
         0.0
     };
 
-    // MACD cross (signal cross + histogram positive recently).
+    // MACD cross (Dip wants negative→positive flip; Top wants
+    // positive→negative).
     let macd_cross = {
         let last_hist = macd.histogram.iter().rev().find(|x| x.is_finite()).copied().unwrap_or(0.0);
         let prev_hist = macd.histogram.iter().rev().filter(|x| x.is_finite()).nth(1).copied().unwrap_or(0.0);
-        if prev_hist <= 0.0 && last_hist > 0.0 {
-            1.0
-        } else {
-            0.0
+        match polarity {
+            Polarity::Dip if prev_hist <= 0.0 && last_hist > 0.0 => 1.0,
+            Polarity::Top if prev_hist >= 0.0 && last_hist < 0.0 => 1.0,
+            _ => 0.0,
         }
     };
 
-    // MACD bullish divergence.
+    // MACD histogram divergence (regular, polarity-aware).
     let macd_div = if macd.histogram.len() >= 30 {
         let h = &macd.histogram;
         let mid = h.len() / 2;
-        let oi = h[..mid]
-            .iter()
-            .enumerate()
-            .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        let ni = h[mid..]
-            .iter()
-            .enumerate()
-            .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        let n_abs = mid + ni;
-        if closes[n_abs] < closes[oi] && h[n_abs] > h[oi] && h[oi].is_finite() && h[n_abs].is_finite() {
+        let oi = extremum_idx(&h[..mid]);
+        let ni_rel = extremum_idx(&h[mid..]);
+        let n_abs = mid + ni_rel;
+        if price_outpaces(closes[n_abs], closes[oi])
+            && momentum_diverges(h[n_abs], h[oi])
+            && h[oi].is_finite()
+            && h[n_abs].is_finite()
+        {
             1.0
         } else {
             0.0
@@ -633,18 +720,32 @@ async fn score_indicator_alignment(pool: &PgPool, s: &SymbolKey) -> f64 {
         0.0
     };
 
-    // RSI oversold reset: was < 30 in the recent window, now > 35.
-    let rsi_recent_min = rsi
-        .iter()
-        .rev()
-        .take(20)
-        .filter(|x| x.is_finite())
-        .copied()
-        .fold(f64::INFINITY, f64::min);
+    // Oversold/overbought reset.
     let last_rsi = rsi.iter().rev().find(|x| x.is_finite()).copied().unwrap_or(50.0);
-    let rsi_oversold_reset = if rsi_recent_min < 30.0 && last_rsi > 35.0 { 1.0 } else { 0.0 };
+    let reset = match polarity {
+        Polarity::Dip => {
+            let recent_min = rsi
+                .iter()
+                .rev()
+                .take(20)
+                .filter(|x| x.is_finite())
+                .copied()
+                .fold(f64::INFINITY, f64::min);
+            if recent_min < 30.0 && last_rsi > 35.0 { 1.0 } else { 0.0 }
+        }
+        Polarity::Top => {
+            let recent_max = rsi
+                .iter()
+                .rev()
+                .take(20)
+                .filter(|x| x.is_finite())
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max);
+            if recent_max > 70.0 && last_rsi < 65.0 { 1.0 } else { 0.0 }
+        }
+    };
 
-    0.35 * rsi_div + 0.25 * macd_cross + 0.25 * macd_div + 0.15 * rsi_oversold_reset
+    0.35 * rsi_div + 0.25 * macd_cross + 0.25 * macd_div + 0.15 * reset
 }
 
 /// 12.8 — Funding rate + OI clean reset (real impl, replaces stub).
@@ -653,7 +754,7 @@ async fn score_indicator_alignment(pool: &PgPool, s: &SymbolKey) -> f64 {
 /// canonical table) for the symbol. Sustained-negative funding +
 /// declining OI alongside price drop = textbook short-overcrowding /
 /// liquidation flush bottom signal.
-async fn score_funding_oi(pool: &PgPool, s: &SymbolKey) -> f64 {
+async fn score_funding_oi(pool: &PgPool, s: &SymbolKey, polarity: Polarity) -> f64 {
     // 7-day average funding rate.
     let funding_avg: Option<f64> = sqlx::query_scalar::<_, Option<f64>>(
         r#"SELECT AVG(funding_rate)::DOUBLE PRECISION FROM funding_rates
@@ -667,9 +768,13 @@ async fn score_funding_oi(pool: &PgPool, s: &SymbolKey) -> f64 {
     .ok()
     .flatten()
     .flatten();
-    let funding_score = match funding_avg {
-        Some(f) if f <= -0.0005 => 1.0, // -0.05%+ sustained
-        Some(f) if f <= -0.0002 => 0.5,
+    // Dip: sustained NEGATIVE funding = shorts overcrowded → bottom.
+    // Top: sustained POSITIVE funding = longs overcrowded → top.
+    let funding_score = match (polarity, funding_avg) {
+        (Polarity::Dip, Some(f)) if f <= -0.0005 => 1.0,
+        (Polarity::Dip, Some(f)) if f <= -0.0002 => 0.5,
+        (Polarity::Top, Some(f)) if f >= 0.0005 => 1.0,
+        (Polarity::Top, Some(f)) if f >= 0.0002 => 0.5,
         _ => 0.0,
     };
 
@@ -696,12 +801,17 @@ async fn score_funding_oi(pool: &PgPool, s: &SymbolKey) -> f64 {
             match (now.and_then(|d| d.to_f64()), prev.and_then(|d| d.to_f64())) {
                 (Some(n), Some(p)) if p > 0.0 => {
                     let delta_pct = ((n - p) / p) * 100.0;
-                    if delta_pct < -10.0 {
-                        1.0
-                    } else if delta_pct < -5.0 {
-                        0.5
-                    } else {
-                        0.0
+                    // Dip wants OI shrinking (longs liquidated, clean
+                    // reset). Top wants OI shrinking too — but coupled
+                    // with positive funding it signals long-side
+                    // capitulation. Symmetric magnitude: both directions
+                    // benefit from a >|10%| OI shift.
+                    match polarity {
+                        Polarity::Dip if delta_pct < -10.0 => 1.0,
+                        Polarity::Dip if delta_pct < -5.0 => 0.5,
+                        Polarity::Top if delta_pct < -10.0 => 1.0,
+                        Polarity::Top if delta_pct < -5.0 => 0.5,
+                        _ => 0.0,
                     }
                 }
                 _ => 0.0,
@@ -714,7 +824,7 @@ async fn score_funding_oi(pool: &PgPool, s: &SymbolKey) -> f64 {
 }
 
 /// 12.6 — Sentiment extreme (Fear & Greed).
-async fn score_sentiment_extreme(pool: &PgPool, _s: &SymbolKey) -> f64 {
+async fn score_sentiment_extreme(pool: &PgPool, _s: &SymbolKey, polarity: Polarity) -> f64 {
     // Try common table names — qtss-fearandgreed crate writes daily
     // snapshots. Falls back to 0.0 if the table or row is missing.
     let row = sqlx::query(
@@ -734,10 +844,21 @@ async fn score_sentiment_extreme(pool: &PgPool, _s: &SymbolKey) -> f64 {
         _ => None,
     };
     let Some(v) = v else { return 0.0; };
-    if v <= 25.0 { 1.0 }
-    else if v <= 35.0 { 0.7 }
-    else if v <= 45.0 { 0.3 }
-    else { 0.0 }
+    // Dip wants Extreme Fear (low F&G); Top wants Extreme Greed.
+    match polarity {
+        Polarity::Dip => {
+            if v <= 25.0 { 1.0 }
+            else if v <= 35.0 { 0.7 }
+            else if v <= 45.0 { 0.3 }
+            else { 0.0 }
+        }
+        Polarity::Top => {
+            if v >= 75.0 { 1.0 }
+            else if v >= 65.0 { 0.7 }
+            else if v >= 55.0 { 0.3 }
+            else { 0.0 }
+        }
+    }
 }
 
 /// 12.7 — Multi-TF confluence.

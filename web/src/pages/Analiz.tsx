@@ -23,7 +23,11 @@ type TfSnapshot = {
   primary_branch?: string | null;
   major_dip_score?: number | null;
   major_dip_verdict?: string | null;
-  iq_setups_armed: number;
+  major_top_score?: number | null;
+  major_top_verdict?: string | null;
+  dip_components?: Record<string, number | null> | null;
+  top_components?: Record<string, number | null> | null;
+  setup_lifecycle: Record<string, number>;
   last_advanced_at?: string | null;
 };
 
@@ -36,6 +40,9 @@ type AnalizRow = {
   aggregate_notional_usd: number;
   onchain_snapshot_age_s?: number | null;
   onchain_kind?: string | null;
+  onchain_score?: number | null;
+  onchain_direction?: string | null;
+  onchain_confidence?: number | null;
 };
 
 type AnalizResp = {
@@ -44,23 +51,99 @@ type AnalizResp = {
 };
 
 // Verdict pill — same color scheme as the IQ Chart sidebar so the
-// reader builds one mental model for both views.
-function VerdictPill({ verdict, score }: { verdict?: string | null; score?: number | null }) {
+// reader builds one mental model for both views. Polarity-aware:
+// dip uses emerald (bullish reversal candidate); top uses rose
+// (bearish reversal candidate).
+function VerdictPill({
+  verdict,
+  score,
+  polarity,
+  prefix,
+}: {
+  verdict?: string | null;
+  score?: number | null;
+  polarity: "dip" | "top";
+  prefix: string;
+}) {
   if (!verdict || score == null) {
-    return <span className="rounded bg-zinc-800/60 px-1 text-[9px] text-zinc-500">—</span>;
+    return <span className="rounded bg-zinc-800/60 px-1 text-[9px] text-zinc-500">{prefix}—</span>;
   }
-  const cls =
-    verdict === "very_high"
-      ? "bg-emerald-500/30 text-emerald-200"
-      : verdict === "high"
-      ? "bg-emerald-500/20 text-emerald-300"
-      : verdict === "developing"
-      ? "bg-amber-500/20 text-amber-300"
-      : "bg-zinc-700/40 text-zinc-400";
+  const dipCls: Record<string, string> = {
+    very_high: "bg-emerald-500/30 text-emerald-200",
+    high: "bg-emerald-500/20 text-emerald-300",
+    developing: "bg-amber-500/20 text-amber-300",
+    low: "bg-zinc-700/40 text-zinc-400",
+  };
+  const topCls: Record<string, string> = {
+    very_high: "bg-rose-500/30 text-rose-200",
+    high: "bg-rose-500/20 text-rose-300",
+    developing: "bg-amber-500/20 text-amber-300",
+    low: "bg-zinc-700/40 text-zinc-400",
+  };
+  const cls = (polarity === "dip" ? dipCls : topCls)[verdict] ?? "bg-zinc-700/40 text-zinc-400";
   return (
     <span className={`rounded px-1 font-mono text-[9px] ${cls}`}>
+      {prefix}
       {(score * 100).toFixed(0)}%
     </span>
+  );
+}
+
+// 8-component breakdown sparklines. Renders a tiny inline grid of
+// per-component scores so the reader sees WHICH channels lit up.
+function ComponentBars({ comps }: { comps?: Record<string, number | null> | null }) {
+  if (!comps) return null;
+  const entries: Array<[string, string]> = [
+    ["structural_completion", "STR"],
+    ["fib_retrace_quality", "FIB"],
+    ["volume_capitulation", "VOL"],
+    ["cvd_divergence", "CVD"],
+    ["indicator_alignment", "IND"],
+    ["sentiment_extreme", "SEN"],
+    ["multi_tf_confluence", "MTF"],
+    ["funding_oi_signals", "F/O"],
+  ];
+  return (
+    <div className="mt-1 grid grid-cols-8 gap-0.5">
+      {entries.map(([key, lbl]) => {
+        const v = (comps[key] ?? 0) as number;
+        const w = Math.max(0, Math.min(1, v)) * 100;
+        const tone =
+          v > 0.7 ? "bg-emerald-500/70" : v > 0.3 ? "bg-amber-500/70" : v > 0 ? "bg-rose-500/40" : "bg-zinc-800";
+        return (
+          <div key={key} className="flex flex-col items-center" title={`${lbl} ${v.toFixed(2)}`}>
+            <div className="relative h-3 w-full overflow-hidden rounded-sm bg-zinc-900">
+              <div className={`${tone} absolute bottom-0 w-full`} style={{ height: `${w}%` }} />
+            </div>
+            <span className="font-mono text-[7px] text-zinc-600">{lbl}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Setup pipeline lifecycle pill row. Surfaces every state count for
+// (iq_d + iq_t) on this TF — operator sees the funnel at a glance.
+function LifecycleStrip({ counts }: { counts: Record<string, number> }) {
+  const states: Array<[string, string, string]> = [
+    ["candidate", "C", "bg-zinc-700/40 text-zinc-300"],
+    ["armed", "A", "bg-amber-500/30 text-amber-200"],
+    ["active", "▶", "bg-emerald-500/30 text-emerald-200"],
+    ["triggered", "T", "bg-emerald-600/40 text-emerald-100"],
+    ["closed", "×", "bg-zinc-800 text-zinc-500"],
+    ["rejected", "R", "bg-rose-500/30 text-rose-200"],
+  ];
+  const present = states.filter(([k]) => (counts[k] ?? 0) > 0);
+  if (present.length === 0) return null;
+  return (
+    <div className="mt-0.5 flex flex-wrap gap-0.5 text-[8px]">
+      {present.map(([k, label, cls]) => (
+        <span key={k} className={`rounded px-1 font-mono ${cls}`} title={k}>
+          {label} {counts[k]}
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -189,20 +272,39 @@ export default function Analiz() {
                                 </td>
                               );
                             }
+                            // Choose dip or top breakdown based on
+                            // higher composite score so the reader
+                            // sees the dominant direction's channels.
+                            const dipS = tf.major_dip_score ?? 0;
+                            const topS = tf.major_top_score ?? 0;
+                            const dominant: "dip" | "top" = topS > dipS ? "top" : "dip";
                             return (
-                              <td key={tfKey} className="px-2 py-1">
+                              <td key={tfKey} className="px-2 py-1 align-top">
                                 <div className="flex items-center justify-between gap-1">
                                   <WaveCell tf={tf} />
-                                  <VerdictPill
-                                    verdict={tf.major_dip_verdict}
-                                    score={tf.major_dip_score}
-                                  />
-                                </div>
-                                {tf.iq_setups_armed > 0 && (
-                                  <div className="mt-0.5 text-center text-[8px] text-amber-400">
-                                    {tf.iq_setups_armed} armed
+                                  <div className="flex flex-col items-end gap-0.5">
+                                    <VerdictPill
+                                      polarity="dip"
+                                      prefix="↑"
+                                      verdict={tf.major_dip_verdict}
+                                      score={tf.major_dip_score}
+                                    />
+                                    <VerdictPill
+                                      polarity="top"
+                                      prefix="↓"
+                                      verdict={tf.major_top_verdict}
+                                      score={tf.major_top_score}
+                                    />
                                   </div>
-                                )}
+                                </div>
+                                <ComponentBars
+                                  comps={
+                                    dominant === "dip"
+                                      ? tf.dip_components
+                                      : tf.top_components
+                                  }
+                                />
+                                <LifecycleStrip counts={tf.setup_lifecycle ?? {}} />
                               </td>
                             );
                           })}
@@ -213,7 +315,33 @@ export default function Analiz() {
                             {fmtNotional(row.aggregate_notional_usd)}
                           </td>
                           <td className="px-2 py-1 text-right font-mono text-[10px]">
-                            {row.onchain_kind ? (
+                            {row.onchain_score != null ? (
+                              <div className="flex flex-col items-end gap-0.5">
+                                <span
+                                  className={
+                                    row.onchain_direction === "strong_buy"
+                                      ? "rounded bg-emerald-500/30 px-1 text-emerald-200"
+                                      : row.onchain_direction === "buy"
+                                      ? "rounded bg-emerald-500/20 px-1 text-emerald-300"
+                                      : row.onchain_direction === "strong_sell"
+                                      ? "rounded bg-rose-500/30 px-1 text-rose-200"
+                                      : row.onchain_direction === "sell"
+                                      ? "rounded bg-rose-500/20 px-1 text-rose-300"
+                                      : "rounded bg-zinc-700/40 px-1 text-zinc-400"
+                                  }
+                                >
+                                  {row.onchain_direction ?? "—"} {(row.onchain_score * 100).toFixed(0)}%
+                                </span>
+                                {row.onchain_kind && (
+                                  <span className="text-cyan-400">
+                                    {row.onchain_kind}
+                                    {ageMin != null && (
+                                      <span className="ml-1 text-zinc-500">{ageMin}m</span>
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+                            ) : row.onchain_kind ? (
                               <span className="text-cyan-400">
                                 {row.onchain_kind}
                                 {ageMin != null && (
