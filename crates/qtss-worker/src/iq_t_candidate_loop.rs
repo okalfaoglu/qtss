@@ -89,6 +89,23 @@ async fn load_min_anchor_score(pool: &PgPool) -> f64 {
     val.get("value").and_then(|v| v.as_f64()).unwrap_or(0.40)
 }
 
+async fn load_min_dip_score(pool: &PgPool) -> f64 {
+    let row = sqlx::query(
+        "SELECT value FROM system_config
+           WHERE module='major_dip' AND config_key='min_score_for_setup'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    let Some(row) = row else { return 0.55; };
+    let val: Value = row.try_get("value").unwrap_or(Value::Null);
+    val.get("value")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.55)
+        .clamp(0.0, 1.0)
+}
+
 async fn load_child_tf(pool: &PgPool, parent_tf: &str) -> Option<String> {
     let row = sqlx::query(
         "SELECT value FROM system_config
@@ -211,6 +228,35 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
             Some(c) => c,
             None => continue,
         };
+
+        // FAZ 25.3.B — Major Dip composite gate. Look up the latest
+        // major_dip_candidates row for the CHILD TF (the timeframe
+        // we'\''re actually opening a position on) — IQ-T trades the
+        // child motive directly. Skip if score is below the operator
+        // threshold; a low score means the multi-channel scorer
+        // doesn'\''t agree this dip is structurally significant.
+        let min_dip_score = load_min_dip_score(pool).await;
+        if min_dip_score > 0.0 {
+            let dip_score = sqlx::query_scalar::<_, Option<f64>>(
+                r#"SELECT score FROM major_dip_candidates
+                    WHERE exchange=$1 AND segment=$2
+                      AND symbol=$3 AND timeframe=$4
+                    ORDER BY candidate_time DESC LIMIT 1"#,
+            )
+            .bind(&parent.exchange)
+            .bind(&parent.segment)
+            .bind(&parent.symbol)
+            .bind(&child_tf)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten()
+            .flatten()
+            .unwrap_or(0.0);
+            if dip_score < min_dip_score {
+                continue;
+            }
+        }
 
         // Symbol lock check (PR-25E) — same gate as iq_d_candidate.
         // A locked symbol blocks new IQ-T entries until a fresh

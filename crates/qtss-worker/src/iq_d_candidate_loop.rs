@@ -70,6 +70,23 @@ async fn load_enabled(pool: &PgPool) -> bool {
     val.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true)
 }
 
+async fn load_min_dip_score(pool: &PgPool) -> f64 {
+    let row = sqlx::query(
+        "SELECT value FROM system_config
+           WHERE module='major_dip' AND config_key='min_score_for_setup'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    let Some(row) = row else { return 0.55; };
+    let val: Value = row.try_get("value").unwrap_or(Value::Null);
+    val.get("value")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.55)
+        .clamp(0.0, 1.0)
+}
+
 async fn load_tick_secs(pool: &PgPool) -> u64 {
     let row = sqlx::query(
         "SELECT value FROM system_config WHERE module='iq_d_candidate' AND config_key='tick_secs'",
@@ -152,6 +169,38 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
         }
         if !targets_are_sane(p.direction, entry, sl, tp) {
             continue;
+        }
+
+        // FAZ 25.3.B — Major Dip composite gate. The score is computed
+        // by major_dip_candidate_loop and tells us whether the latest
+        // structural low has enough multi-channel confirmation
+        // (Wyckoff volume + Fib zone + multi-TF alignment + sentiment +
+        // structural completion) to be worth opening a setup against.
+        // User: "ezbere olmuş ... dalganın başladığını bize söyleyecek
+        // ek bilgi veriler gerekir." Below the threshold = composite
+        // doesn't agree the dip is real → skip rather than spawning
+        // mechanically.
+        let min_dip_score = load_min_dip_score(pool).await;
+        if min_dip_score > 0.0 {
+            let dip_score = sqlx::query_scalar::<_, Option<f64>>(
+                r#"SELECT score FROM major_dip_candidates
+                    WHERE exchange=$1 AND segment=$2
+                      AND symbol=$3 AND timeframe=$4
+                    ORDER BY candidate_time DESC LIMIT 1"#,
+            )
+            .bind(&p.exchange)
+            .bind(&p.segment)
+            .bind(&p.symbol)
+            .bind(&p.timeframe)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten()
+            .flatten()
+            .unwrap_or(0.0);
+            if dip_score < min_dip_score {
+                continue;
+            }
         }
 
         // Symbol lock check (PR-25E) — when the structure tracker
