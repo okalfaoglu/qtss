@@ -44,6 +44,7 @@ pub mod cost;
 pub mod detector;
 pub mod manager;
 pub mod optimize;
+pub mod persistence;
 pub mod report;
 pub mod runner;
 pub mod scorers;

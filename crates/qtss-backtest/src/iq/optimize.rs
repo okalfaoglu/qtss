@@ -26,7 +26,9 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use tracing::info;
+use std::sync::Arc;
+use tokio::task::JoinSet;
+use tracing::{info, warn};
 
 use super::config::{CompositeWeights, IqBacktestConfig};
 use super::report::IqBacktestReport;
@@ -247,6 +249,10 @@ pub struct OptimizationRunner {
     pub base_config: IqBacktestConfig,
     pub grid: GridSpec,
     pub walk_forward: WalkForwardSpec,
+    /// Concurrency for the parallel `run_parallel`. Defaults to 4
+    /// — sensible for an 8-conn pool. Cap at the pool size or DB
+    /// will starve.
+    pub max_concurrency: usize,
 }
 
 impl OptimizationRunner {
@@ -259,11 +265,17 @@ impl OptimizationRunner {
             base_config,
             grid,
             walk_forward,
+            max_concurrency: 4,
         }
     }
 
-    /// Drive the full sweep. Sequential execution in 26.4 — see
-    /// module docs for the parallelisation note.
+    pub fn with_concurrency(mut self, n: usize) -> Self {
+        self.max_concurrency = n.max(1);
+        self
+    }
+
+    /// Sequential execution. Kept for determinism + small runs;
+    /// large sweeps should use `run_parallel`.
     pub async fn run(&self, pool: &PgPool) -> anyhow::Result<OptimizationReport> {
         let configs = self.grid.enumerate(&self.base_config.weights);
         let windows = self.walk_forward.windows();
@@ -271,47 +283,165 @@ impl OptimizationRunner {
             configs = configs.len(),
             windows = windows.len(),
             total_runs = configs.len() * windows.len() * 2,
-            "iq-optimize starting"
+            "iq-optimize starting (sequential)"
         );
 
         let mut results: Vec<OptimizationResult> = Vec::new();
         for (ci, weights) in configs.iter().enumerate() {
             for (wi, window) in windows.iter().enumerate() {
-                // Build IS run config.
-                let mut is_cfg = self.base_config.clone();
-                is_cfg.weights = weights.clone();
-                is_cfg.universe.start_time = window.in_sample_start;
-                is_cfg.universe.end_time = window.in_sample_end;
-                is_cfg.run_tag = format!(
-                    "opt-c{}-w{}-is",
-                    ci, wi
-                );
-                let is_runner = IqBacktestRunner::new(is_cfg)?;
-                let is_report = is_runner.run(pool).await?;
+                let r = self.run_one(pool, ci, wi, weights, window).await?;
+                results.push(r);
+            }
+        }
+        Ok(self.aggregate(&results))
+    }
 
-                // Build OOS run config.
-                let mut oos_cfg = self.base_config.clone();
-                oos_cfg.weights = weights.clone();
-                oos_cfg.universe.start_time = window.oos_start;
-                oos_cfg.universe.end_time = window.oos_end;
-                oos_cfg.run_tag = format!(
-                    "opt-c{}-w{}-oos",
-                    ci, wi
-                );
-                let oos_runner = IqBacktestRunner::new(oos_cfg)?;
-                let oos_report = oos_runner.run(pool).await?;
+    /// FAZ 26.5 finish — parallel execution. Spawns up to
+    /// `max_concurrency` (config × window) tasks at a time on a
+    /// `JoinSet`. The DB pool is the actual concurrency cap; never
+    /// set max_concurrency > pool.max_connections.
+    pub async fn run_parallel(
+        &self,
+        pool: &PgPool,
+    ) -> anyhow::Result<OptimizationReport> {
+        let configs = self.grid.enumerate(&self.base_config.weights);
+        let windows = self.walk_forward.windows();
+        info!(
+            configs = configs.len(),
+            windows = windows.len(),
+            total_runs = configs.len() * windows.len() * 2,
+            concurrency = self.max_concurrency,
+            "iq-optimize starting (parallel)"
+        );
 
-                let rank = oos_report.score();
-                results.push(OptimizationResult {
-                    weights: weights.clone(),
-                    window: window.clone(),
-                    in_sample: is_report,
-                    out_of_sample: oos_report,
-                    rank_score: rank,
+        let pool = pool.clone();
+        let base_config = Arc::new(self.base_config.clone());
+        let mut set: JoinSet<anyhow::Result<OptimizationResult>> =
+            JoinSet::new();
+        let mut completed: Vec<OptimizationResult> = Vec::new();
+        let mut idx = 0usize;
+        let total = configs.len() * windows.len();
+
+        // Pre-build the (config, window) work queue.
+        type Work = (usize, usize, CompositeWeights, WalkForwardWindow);
+        let work: Vec<Work> = configs
+            .iter()
+            .enumerate()
+            .flat_map(|(ci, w)| {
+                windows.iter().enumerate().map(move |(wi, win)| {
+                    (ci, wi, w.clone(), win.clone())
+                })
+            })
+            .collect();
+
+        // Prime the join set up to max_concurrency.
+        while idx < work.len() && set.len() < self.max_concurrency {
+            let (ci, wi, weights, window) = work[idx].clone();
+            let pool_c = pool.clone();
+            let base_c = base_config.clone();
+            set.spawn(async move {
+                run_window(pool_c, base_c, ci, wi, weights, window).await
+            });
+            idx += 1;
+        }
+
+        while let Some(joined) = set.join_next().await {
+            match joined {
+                Ok(Ok(r)) => completed.push(r),
+                Ok(Err(e)) => warn!(%e, "optimization task failed"),
+                Err(e) => warn!(%e, "optimization task panicked"),
+            }
+            if idx < work.len() {
+                let (ci, wi, weights, window) = work[idx].clone();
+                let pool_c = pool.clone();
+                let base_c = base_config.clone();
+                set.spawn(async move {
+                    run_window(pool_c, base_c, ci, wi, weights, window).await
                 });
+                idx += 1;
+            }
+            if completed.len() % 10 == 0 {
+                info!(
+                    completed = completed.len(),
+                    total = total,
+                    "iq-optimize progress"
+                );
             }
         }
 
+        Ok(self.aggregate(&completed))
+    }
+
+    async fn run_one(
+        &self,
+        pool: &PgPool,
+        ci: usize,
+        wi: usize,
+        weights: &CompositeWeights,
+        window: &WalkForwardWindow,
+    ) -> anyhow::Result<OptimizationResult> {
+        let mut is_cfg = self.base_config.clone();
+        is_cfg.weights = weights.clone();
+        is_cfg.universe.start_time = window.in_sample_start;
+        is_cfg.universe.end_time = window.in_sample_end;
+        is_cfg.run_tag = format!("opt-c{}-w{}-is", ci, wi);
+        let is_runner = IqBacktestRunner::new(is_cfg)?;
+        let is_report = is_runner.run(pool).await?;
+
+        let mut oos_cfg = self.base_config.clone();
+        oos_cfg.weights = weights.clone();
+        oos_cfg.universe.start_time = window.oos_start;
+        oos_cfg.universe.end_time = window.oos_end;
+        oos_cfg.run_tag = format!("opt-c{}-w{}-oos", ci, wi);
+        let oos_runner = IqBacktestRunner::new(oos_cfg)?;
+        let oos_report = oos_runner.run(pool).await?;
+
+        let rank = oos_report.score();
+        Ok(OptimizationResult {
+            weights: weights.clone(),
+            window: window.clone(),
+            in_sample: is_report,
+            out_of_sample: oos_report,
+            rank_score: rank,
+        })
+    }
+
+    /// FAZ 26.5 finish — random search. Samples N random points
+    /// from the grid, evaluates each against every walk-forward
+    /// window. Useful when the cartesian product is too large.
+    pub async fn run_random(
+        &self,
+        pool: &PgPool,
+        sample_n: usize,
+        seed: u64,
+    ) -> anyhow::Result<OptimizationReport> {
+        let configs = self.grid.enumerate(&self.base_config.weights);
+        let windows = self.walk_forward.windows();
+        let n = sample_n.min(configs.len());
+        // Linear-congruential PRNG seeded by `seed` — deterministic
+        // sampling so a "this seed gave best result" replay works.
+        let mut state = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        let mut indices: Vec<usize> = (0..configs.len()).collect();
+        for i in (1..indices.len()).rev() {
+            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            let j = (state as usize) % (i + 1);
+            indices.swap(i, j);
+        }
+        info!(
+            sampled = n,
+            from_grid = configs.len(),
+            windows = windows.len(),
+            "iq-optimize starting (random search)"
+        );
+        let mut results: Vec<OptimizationResult> = Vec::new();
+        for (ci_out, ci) in indices.iter().take(n).enumerate() {
+            for (wi, window) in windows.iter().enumerate() {
+                let r = self
+                    .run_one(pool, ci_out, wi, &configs[*ci], window)
+                    .await?;
+                results.push(r);
+            }
+        }
         Ok(self.aggregate(&results))
     }
 
@@ -412,6 +542,41 @@ impl OptimizationRunner {
         }
         out
     }
+}
+
+/// Free function for parallel spawning — `IqBacktestRunner` is not
+/// `Sync` (owns a JSONL writer mutex), so we build a fresh one
+/// inside each task.
+async fn run_window(
+    pool: PgPool,
+    base_config: Arc<IqBacktestConfig>,
+    ci: usize,
+    wi: usize,
+    weights: CompositeWeights,
+    window: WalkForwardWindow,
+) -> anyhow::Result<OptimizationResult> {
+    let mut is_cfg = (*base_config).clone();
+    is_cfg.weights = weights.clone();
+    is_cfg.universe.start_time = window.in_sample_start;
+    is_cfg.universe.end_time = window.in_sample_end;
+    is_cfg.run_tag = format!("opt-c{}-w{}-is", ci, wi);
+    let is_report = IqBacktestRunner::new(is_cfg)?.run(&pool).await?;
+
+    let mut oos_cfg = (*base_config).clone();
+    oos_cfg.weights = weights.clone();
+    oos_cfg.universe.start_time = window.oos_start;
+    oos_cfg.universe.end_time = window.oos_end;
+    oos_cfg.run_tag = format!("opt-c{}-w{}-oos", ci, wi);
+    let oos_report = IqBacktestRunner::new(oos_cfg)?.run(&pool).await?;
+
+    let rank = oos_report.score();
+    Ok(OptimizationResult {
+        weights,
+        window,
+        in_sample: is_report,
+        out_of_sample: oos_report,
+        rank_score: rank,
+    })
 }
 
 fn pearson(xs: &[f64], ys: &[f64]) -> f64 {
@@ -551,6 +716,21 @@ mod tests {
             end_at: chrono::Utc.with_ymd_and_hms(2026, 4, 1, 0, 0, 0).unwrap(),
         };
         let _ = OptimizationRunner::new(cfg, grid, wf);
+    }
+
+    #[test]
+    fn optimization_with_concurrency_clamps_to_one() {
+        let cfg = IqBacktestConfig::default();
+        let grid = GridSpec::default();
+        let wf = WalkForwardSpec {
+            in_sample: Duration::days(30),
+            out_of_sample: Duration::days(15),
+            slide_step: Duration::days(15),
+            start_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+            end_at: chrono::Utc.with_ymd_and_hms(2026, 4, 1, 0, 0, 0).unwrap(),
+        };
+        let r = OptimizationRunner::new(cfg, grid, wf).with_concurrency(0);
+        assert_eq!(r.max_concurrency, 1);
     }
 }
 

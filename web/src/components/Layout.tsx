@@ -23,6 +23,7 @@ const NAV_ENTRIES: NavEntry[] = [
   { label: "RADAR Reports", to: "/v2/reports", enabled: true },
   { label: "Setups", to: "/v2/setups", enabled: true },
   { label: "Analiz", to: "/v2/analiz", enabled: true },
+  { label: "Backtest Studio", to: "/v2/backtest-studio", enabled: true },
   { label: "Detections", to: "/v2/detections", enabled: true },
   { label: "Regime", to: "/v2/regime", enabled: true },
   { label: "Config", to: "/v2/config", enabled: true },

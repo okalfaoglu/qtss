@@ -32,6 +32,7 @@ mod v2_position_events;
 mod v2_selected_candidates;
 mod v2_audit;
 mod v2_backtest;
+mod v2_iq_backtest;
 mod v2_blotter;
 mod v2_chart;
 mod v2_elliott;
@@ -74,6 +75,7 @@ pub use v2_position_events::v2_position_events_router;
 pub use v2_selected_candidates::v2_selected_candidates_router;
 pub use v2_audit::v2_audit_router;
 pub use v2_backtest::v2_backtest_router;
+pub use v2_iq_backtest::v2_iq_backtest_router;
 pub use v2_blotter::v2_blotter_router;
 pub use v2_chart::v2_chart_router;
 pub use v2_elliott::v2_elliott_router;
@@ -188,6 +190,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_symbols_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_reconcile_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_backtest_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_iq_backtest_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_blotter_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_live_positions_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_selected_candidates_router().layer(from_fn(require_dashboard_roles)))

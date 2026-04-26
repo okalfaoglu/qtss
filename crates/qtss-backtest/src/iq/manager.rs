@@ -27,6 +27,13 @@ use super::cost::{CostModel, FillCost};
 use super::runner::TradeManager;
 use super::trade::{IqTrade, TradeOutcome, TradeState};
 
+/// Hook for external invalidation events — tests inject a
+/// closure that returns `true` when the supplied trade should be
+/// invalidated as of the current bar (e.g. a UTAD fired against
+/// an open IQ-D long). Default: never invalidate.
+pub type InvalidationCheck =
+    std::sync::Arc<dyn Fn(&IqTrade, chrono::DateTime<chrono::Utc>) -> bool + Send + Sync>;
+
 /// Default TP ladder distribution. Three tiers, fairly even split
 /// with a slight bias to the final tier so the longest-held portion
 /// of the position captures the strongest move.
@@ -35,11 +42,25 @@ const DEFAULT_TP_FRACTIONS: [&str; 3] = ["0.33", "0.33", "0.34"];
 pub struct IqLifecycleManager {
     pub config: IqBacktestConfig,
     pub cost: CostModel,
+    pub invalidation_check: Option<InvalidationCheck>,
 }
 
 impl IqLifecycleManager {
     pub fn new(config: IqBacktestConfig, cost: CostModel) -> Self {
-        Self { config, cost }
+        Self {
+            config,
+            cost,
+            invalidation_check: None,
+        }
+    }
+
+    /// Plug in an invalidation hook (e.g. "Wyckoff event flipped
+    /// against this trade since entry"). Default = no invalidation
+    /// to keep v1 deterministic; FAZ 26.6 will wire this to a
+    /// detection-stream watcher.
+    pub fn with_invalidation(mut self, check: InvalidationCheck) -> Self {
+        self.invalidation_check = Some(check);
+        self
     }
 
     /// Realise PnL on a fraction of the position at `exit_price`.
@@ -232,7 +253,21 @@ impl TradeManager for IqLifecycleManager {
                 let last_idx = trade.tier_pnls.len() - 1;
                 trade.tier_pnls[last_idx] = slice_pnl;
                 let any_tp = tier_filled.iter().any(|f| *f);
-                let outcome = if any_tp {
+                // Classification: if the SL has been tightened past
+                // the entry price (long: SL > entry; short: SL <
+                // entry), this is a TRAILING stop hit, not a regular
+                // stop. Trailing fired only after the position went
+                // sufficiently favourable for the trail to lift past
+                // entry. Otherwise: TakeProfitPartial when at least
+                // one TP filled, raw StopLoss when no TPs.
+                let trail_active = if long {
+                    sl_price > trade.entry_price
+                } else {
+                    sl_price < trade.entry_price
+                };
+                let outcome = if trail_active {
+                    TradeOutcome::TrailingStop
+                } else if any_tp {
                     TradeOutcome::TakeProfitPartial
                 } else {
                     TradeOutcome::StopLoss
@@ -257,6 +292,113 @@ impl TradeManager for IqLifecycleManager {
                 );
                 closed_now.push(trade);
                 continue;
+            }
+
+            // FAZ 26.5 finish — trailing stop. After the first TP
+            // tier fills, drag the stop in the favourable direction
+            // by `trailing_stop_atr_mult * (initial SL distance)`.
+            //
+            // Two-bar protocol: the trail TIGHTENS at bar N's close,
+            // and the new stop is only CHECKED against bar N+1's
+            // adverse extreme. Same-bar firing is wrong because the
+            // bar's adverse low/high may have happened BEFORE the
+            // close that drives the new trail price. v1 uses a
+            // fixed fraction of (initial SL distance) as the trail
+            // step — robust default that doesn't require an ATR
+            // sub-query per bar.
+            if let Some(mult) = self.config.risk.trailing_stop_atr_mult {
+                let any_tp_filled = tier_filled.iter().any(|f| *f);
+                if any_tp_filled && mult > 0.0 {
+                    // (1) check trigger against the EXISTING (pre-bar)
+                    // trail first.
+                    let touched_trail = if long {
+                        bar_low <= trade.stop_loss
+                            && trade.stop_loss > trade.entry_price
+                            // only fire if trail has actually moved past entry,
+                            // otherwise this is just the original SL path
+                            // (handled by sl_hit above)
+                    } else {
+                        bar_high >= trade.stop_loss
+                            && trade.stop_loss < trade.entry_price
+                    };
+                    if touched_trail {
+                        let sl_price = trade.stop_loss;
+                        let qty_left = trade.remaining_qty;
+                        let (slice_pnl, _cost) = self.realise_slice(
+                            &mut trade,
+                            qty_left,
+                            sl_price,
+                            bar_time,
+                            long,
+                        );
+                        let last_idx = trade.tier_pnls.len() - 1;
+                        if last_idx < trade.tier_pnls.len() {
+                            trade.tier_pnls[last_idx] = slice_pnl;
+                        }
+                        self.finalize(
+                            &mut trade,
+                            bar_index,
+                            bar_time,
+                            sl_price,
+                            TradeOutcome::TrailingStop,
+                        );
+                        closed_now.push(trade);
+                        continue;
+                    }
+                    // (2) tighten at bar close (next bar checks).
+                    let initial_sl_dist =
+                        (trade.entry_price - trade.stop_loss).abs();
+                    let trail_dist = initial_sl_dist
+                        * Decimal::from_f64_retain(mult).unwrap_or(Decimal::ONE);
+                    let new_sl = if long {
+                        bar_close - trail_dist
+                    } else {
+                        bar_close + trail_dist
+                    };
+                    let tighter = if long {
+                        new_sl > trade.stop_loss
+                    } else {
+                        new_sl < trade.stop_loss
+                    };
+                    if tighter {
+                        trace!(
+                            bar = bar_index,
+                            old_sl = %trade.stop_loss,
+                            new_sl = %new_sl,
+                            "trailing stop tightened"
+                        );
+                        trade.stop_loss = new_sl;
+                    }
+                }
+            }
+
+            // FAZ 26.5 finish — external invalidation. Hook checks
+            // an external signal stream; when fired, exit at bar
+            // close as Invalidated outcome.
+            if let Some(check) = &self.invalidation_check {
+                if check(&trade, bar_time) {
+                    let qty_left = trade.remaining_qty;
+                    if qty_left > Decimal::ZERO {
+                        let (slice_pnl, _cost) = self.realise_slice(
+                            &mut trade,
+                            qty_left,
+                            bar_close,
+                            bar_time,
+                            long,
+                        );
+                        let last_idx = trade.tier_pnls.len() - 1;
+                        trade.tier_pnls[last_idx] = slice_pnl;
+                    }
+                    self.finalize(
+                        &mut trade,
+                        bar_index,
+                        bar_time,
+                        bar_close,
+                        TradeOutcome::Invalidated,
+                    );
+                    closed_now.push(trade);
+                    continue;
+                }
             }
 
             // Timeout?
@@ -411,6 +553,51 @@ mod tests {
         assert_eq!(closed.len(), 1);
         assert_eq!(closed[0].outcome, Some(TradeOutcome::TakeProfitFull));
         assert!(closed[0].gross_pnl > Decimal::ZERO);
+    }
+
+    #[tokio::test]
+    async fn trailing_stop_tightens_after_tp1_and_fires() {
+        let mut c = cfg();
+        c.risk.trailing_stop_atr_mult = Some(0.5);
+        let mgr = IqLifecycleManager::new(c, CostModel::default());
+        let mut trade = fixture_trade();
+        trade.state = TradeState::Open;
+        let mut open = vec![trade];
+
+        // Bar 1 — TP1 hit but no further movement. Trailing stop
+        // should tighten on the next bar.
+        let _ = mgr
+            .on_bar(101, Utc::now(), dec!(50500), dec!(49800), dec!(50300), &mut open)
+            .await;
+        assert_eq!(open[0].state, TradeState::ScalingOut);
+
+        // Bar 2 — price stalls then dips into the new tighter trail.
+        // Initial SL was 49500, distance 500; trail mult 0.5 → 250.
+        // After bar 1's close 50300, trail = 50300 - 250 = 50050.
+        // Bar 2 low 50000 < 50050 → trailing stop fires.
+        let closed = mgr
+            .on_bar(102, Utc::now(), dec!(50400), dec!(50000), dec!(50100), &mut open)
+            .await;
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].outcome, Some(TradeOutcome::TrailingStop));
+    }
+
+    #[tokio::test]
+    async fn invalidation_hook_closes_trade() {
+        use std::sync::Arc;
+        let mgr = IqLifecycleManager::new(cfg(), CostModel::default())
+            .with_invalidation(Arc::new(|_t, _ts| true));
+        let mut trade = fixture_trade();
+        trade.state = TradeState::Open;
+        let mut open = vec![trade];
+
+        // First bar — invalidation hook returns true → trade closes
+        // at bar close as Invalidated outcome.
+        let closed = mgr
+            .on_bar(101, Utc::now(), dec!(50100), dec!(49800), dec!(50000), &mut open)
+            .await;
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].outcome, Some(TradeOutcome::Invalidated));
     }
 
     #[tokio::test]

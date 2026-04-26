@@ -20,7 +20,8 @@
 //! working backtest with progressively richer signal coverage.
 
 use std::sync::Arc;
-use tracing::{debug, info};
+use std::time::Instant;
+use tracing::{debug, info, warn};
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
@@ -162,7 +163,7 @@ impl IqBacktestRunner {
         // Pull bars in chronological order (oldest first). Stream so
         // long windows don't blow memory.
         let mut rows = sqlx::query(
-            r#"SELECT bar_index, open_time, open, high, low, close, volume
+            r#"SELECT open_time, open, high, low, close, volume
                  FROM market_bars
                 WHERE exchange = $1 AND segment = $2
                   AND symbol = $3 AND interval = $4
@@ -179,8 +180,21 @@ impl IqBacktestRunner {
         .await?;
         debug!(rows = rows.len(), "fetched bar tape");
 
+        // FAZ 26.5 — slow-bar metric. Bars taking longer than
+        // SLOW_BAR_THRESHOLD_MS to process emit a structured warn
+        // event so the operator can find DB / detector hot paths
+        // without running a profiler. 100ms is a generous default —
+        // raise via env var when running over noisy symbols.
+        let slow_threshold_ms: u64 = std::env::var("QTSS_BACKTEST_SLOW_BAR_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(100);
+        let mut slow_bars: u64 = 0;
+        let mut total_processing_ms: u128 = 0;
+
         for (i, row) in rows.drain(..).enumerate() {
             use sqlx::Row;
+            let bar_start = Instant::now();
             let open_time: DateTime<Utc> = row.try_get("open_time")?;
             let high: Decimal = row.try_get("high")?;
             let low: Decimal = row.try_get("low")?;
@@ -197,6 +211,18 @@ impl IqBacktestRunner {
                 self.detector.detect_at(pool, i, open_time, close).await;
             for t in new_trades {
                 open.push(t);
+            }
+            let bar_ms = bar_start.elapsed().as_millis();
+            total_processing_ms += bar_ms;
+            if (bar_ms as u64) > slow_threshold_ms {
+                slow_bars += 1;
+                warn!(
+                    bar = i,
+                    bar_time = %open_time,
+                    bar_ms = bar_ms,
+                    threshold_ms = slow_threshold_ms,
+                    "slow-bar — detection / lifecycle pass exceeded threshold"
+                );
             }
 
             // 3. Path snapshots (every N bars) for still-open trades.
@@ -231,12 +257,20 @@ impl IqBacktestRunner {
         }
 
         let report = aggregate(self.config.clone(), bars_processed, &all_closed);
+        let avg_bar_ms = if bars_processed > 0 {
+            total_processing_ms as f64 / bars_processed as f64
+        } else {
+            0.0
+        };
         info!(
             total_trades = report.total_trades,
             wins = report.wins,
             losses = report.losses,
             net_pnl = %report.net_pnl,
             max_dd_pct = report.max_drawdown_pct,
+            slow_bars = slow_bars,
+            avg_bar_ms = avg_bar_ms,
+            total_ms = total_processing_ms,
             "iq-backtest done"
         );
         Ok(report)
