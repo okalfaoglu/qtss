@@ -248,11 +248,13 @@ async fn detections_for(
     // families (classical, range, gap, candle, orb) could saturate
     // the 2000-row budget and starve slot-1+ families like SMC.
     //
-    // FAZ 25.4.A — symbol-level families (wyckoff, gap, candle) are
-    // independent of the Z-slot ladder; they reflect price + volume
-    // mechanics on the raw bar tape, not pivot tree level. Bypass
-    // the `slot = ANY($5)` filter for them so they render even when
-    // the operator has only a non-L0 Z slot enabled.
+    // FAZ 25.4.A — symbol-level families bypass the Z-slot filter:
+    //   gap / candle: price+volume mechanics on raw bar tape
+    //   wyckoff events + ranges: stored at slot=0 (per-symbol annotation)
+    // FAZ 25.4.E — wyckoff CYCLES are now per-slot (0-5) and MUST
+    // respect the slot filter so toggling Z5 doesn't paint Z0..Z4
+    // distribution boxes on top of each other. Detected via subkind
+    // prefix `cycle_*` — events stay at slot=0, cycles at slot=N.
     let rows = match sqlx::query(
         r#"SELECT slot, pattern_family, subkind, direction,
                   start_time, end_time,
@@ -262,7 +264,9 @@ async fn detections_for(
               AND timeframe = $4
               AND (
                   slot = ANY($5)
-                  OR pattern_family IN ('wyckoff', 'gap', 'candle')
+                  OR pattern_family IN ('gap', 'candle')
+                  OR (pattern_family = 'wyckoff'
+                      AND subkind NOT LIKE 'cycle_%')
               )
               AND mode = ANY($6)
               AND invalidated = false

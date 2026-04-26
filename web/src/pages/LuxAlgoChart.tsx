@@ -2043,37 +2043,97 @@ export function LuxAlgoChart({
         const t0 = anchorTime(a0);
         const t1 = anchorTime(a1);
         if (t0 === null || t1 === null) return;
-        // Color palette: cool → warm follows the cycle.
-        //   Accumulation: emerald  (low, base)
-        //   Markup:       sky blue (rising)
-        //   Distribution: amber    (high, top)
-        //   Markdown:     rose     (falling)
-        const cyclePalette: Record<string, { rgb: string; label: string }> = {
-          cycle_accumulation: { rgb: "16,185,129", label: "Accumulation" },
-          cycle_markup:       { rgb: "14,165,233",  label: "Markup" },
-          cycle_distribution: { rgb: "245,158,11",  label: "Distribution" },
-          cycle_markdown:     { rgb: "244,63,94",   label: "Markdown" },
+        // FAZ 25.4.E — color = ZigZag slot color (Z1..Z5 toolbar
+        // palette), NOT phase color. Each Z degree's cycle paints in
+        // its own ZigZag color so the operator can read at-a-glance
+        // which Z's tilesheet they're looking at. Phase is conveyed by
+        // the label text + position, not by hue.
+        const phaseLabel: Record<string, string> = {
+          cycle_accumulation: "Accumulation",
+          cycle_markup:       "Markup",
+          cycle_distribution: "Distribution",
+          cycle_markdown:     "Markdown",
         };
-        const palette = cyclePalette[d.subkind];
-        if (!palette) return;
-        // FAZ 25.4.E — source-aware visual hierarchy.
-        //   confluent (event ∩ elliott) → strongest: filled, thick border
-        //   elliott  (Pruden mapping)   → medium: medium fill, mid border
-        //   event    (Wyckoff climax)   → light: low alpha, thin border
+        const label = phaseLabel[d.subkind];
+        if (!label) return;
+        // Slot comes back from the API as `pivot_level: "L0".."L5"`.
+        // Parse the digit. Falls back to raw_meta.slot if pivot_level
+        // is missing for any reason.
+        const parseSlot = (): number => {
+          if (typeof d.pivot_level === "string") {
+            const m = d.pivot_level.match(/^L(\d+)$/);
+            if (m) return parseInt(m[1], 10);
+          }
+          if (typeof d.raw_meta?.slot === "number") {
+            return d.raw_meta.slot as number;
+          }
+          return 0;
+        };
+        const slotIdx = parseSlot();
+        const slotColor =
+          slots[slotIdx]?.color ?? DEFAULT_SLOTS[slotIdx]?.color ?? "#a78bfa";
+        // Hex → "r,g,b" for rgba() string. Accepts "#RGB" / "#RRGGBB".
+        const hexToRgb = (hex: string): string => {
+          const h = hex.replace("#", "");
+          const expand =
+            h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+          const r = parseInt(expand.slice(0, 2), 16);
+          const g = parseInt(expand.slice(2, 4), 16);
+          const b = parseInt(expand.slice(4, 6), 16);
+          if ([r, g, b].some((n) => Number.isNaN(n))) return "167,139,250";
+          return `${r},${g},${b}`;
+        };
+        const rgb = hexToRgb(slotColor);
+        // Phase has two visual idioms because phases mean two
+        // different things on a chart:
+        //   - Accumulation / Distribution = SIDEWAYS RANGE → filled
+        //     box reads as "price contained inside this rectangle"
+        //   - Markup / Markdown = TREND LEG → top+bottom borders
+        //     only (no fill) reads as "price travelled through this
+        //     tunnel". A filled rectangle would dominate the chart
+        //     because trend tiles span the whole motive (huge area)
+        //     and any meaningful fill alpha makes candles unreadable.
+        const isTrend =
+          d.subkind === "cycle_markup" || d.subkind === "cycle_markdown";
+        // Source-aware alpha hierarchy. Trend tiles use higher border
+        // visibility (no fill compensating) so the channel reads.
         const sourceRaw = d.raw_meta?.source;
         const source =
           typeof sourceRaw === "string" ? sourceRaw : "event";
         const styleBySource: Record<
           string,
-          { fillAlpha: number; borderAlpha: number; borderWidth: 1 | 2 | 3 }
+          {
+            rangeFill: number;
+            rangeBorder: number;
+            rangeWidth: 1 | 2 | 3;
+            trendFill: number;
+            trendBorder: number;
+            trendWidth: 1 | 2 | 3;
+          }
         > = {
-          confluent: { fillAlpha: 0.20, borderAlpha: 0.95, borderWidth: 2 },
-          elliott:   { fillAlpha: 0.10, borderAlpha: 0.55, borderWidth: 1 },
-          event:     { fillAlpha: 0.06, borderAlpha: 0.40, borderWidth: 1 },
+          confluent: {
+            rangeFill: 0.20, rangeBorder: 0.95, rangeWidth: 2,
+            trendFill: 0.04, trendBorder: 0.95, trendWidth: 2,
+          },
+          elliott: {
+            rangeFill: 0.14, rangeBorder: 0.70, rangeWidth: 1,
+            trendFill: 0.02, trendBorder: 0.70, trendWidth: 2,
+          },
+          event: {
+            rangeFill: 0.08, rangeBorder: 0.50, rangeWidth: 1,
+            trendFill: 0.01, trendBorder: 0.45, trendWidth: 1,
+          },
         };
-        const style = styleBySource[source] ?? styleBySource.event;
-        const fill = `rgba(${palette.rgb},${style.fillAlpha})`;
-        const border = `rgba(${palette.rgb},${style.borderAlpha})`;
+        const styleSrc = styleBySource[source] ?? styleBySource.event;
+        const fillAlpha = isTrend ? styleSrc.trendFill : styleSrc.rangeFill;
+        const borderAlpha = isTrend
+          ? styleSrc.trendBorder
+          : styleSrc.rangeBorder;
+        const borderWidth = isTrend
+          ? styleSrc.trendWidth
+          : styleSrc.rangeWidth;
+        const fill = `rgba(${rgb},${fillAlpha})`;
+        const border = `rgba(${rgb},${borderAlpha})`;
         // Use phase_high / phase_low from raw_meta when present so
         // the box hugs the actual price range of the phase rather than
         // spanning the entire visible chart. Falls back to full-height
@@ -2095,15 +2155,22 @@ export function LuxAlgoChart({
           priceBottom: bottom,
           fillColor: fill,
           borderColor: border,
-          borderWidth: style.borderWidth,
+          borderWidth,
         });
         candleSeries.attachPrimitive(rect);
         rectPrimitivesRef.current.push(rect);
-        // Label includes source tag so the user can read the
-        // confidence at a glance: confluent rows get an asterisk.
-        const labelSuffix =
+        // Label: phase name + Z-slot tag + source tag.
+        // Confluent gets ★, Elliott ◆ for at-a-glance confidence read.
+        const sourceSuffix =
           source === "confluent" ? " ★" : source === "elliott" ? " ◆" : "";
-        attachLabel(t0, top, `${palette.label}${labelSuffix}`, border, "above");
+        const zTag = `Z${slotIdx + 1}`;
+        attachLabel(
+          t0,
+          top,
+          `${label} · ${zTag}${sourceSuffix}`,
+          border,
+          "above"
+        );
         return;
       }
       // FAZ 25.4.B — schematic range boxes (Accumulation / Distribution
