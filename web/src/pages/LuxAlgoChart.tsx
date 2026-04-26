@@ -2026,13 +2026,16 @@ export function LuxAlgoChart({
       // above (BC at the top, UTAD shakeouts above range).
       const position: "above" | "below" = isBull ? "below" : "above";
       attachLabel(t, p, fullLabel, color, position);
-      // Vertical accent line — a thin dotted vertical at the event
-      // bar so the reader can scroll horizontally and still see
-      // where every Wyckoff event landed without label overlap.
+      // Short horizontal accent segment at the event price (5-bar
+      // forward) so the marker has visible mass on the chart and the
+      // reader can find it when scrolling horizontally. Mirrors the
+      // SMC overlay pattern. lightweight-charts requires strictly
+      // ascending timestamps; identical-time points trip the assert,
+      // so we draw across bars rather than vertically.
       const barIdx =
         typeof a.bar_index === "number" ? a.bar_index : candles.length - 1;
-      const tEnd = timeAt(Math.min(barIdx + 1, candles.length - 1));
-      if (tEnd !== null) {
+      const tEnd = timeAt(Math.min(barIdx + 5, candles.length - 1));
+      if (tEnd !== null && (tEnd as number) > (t as number)) {
         const s = chart.addSeries(LineSeries, {
           color,
           lineWidth: 1,
@@ -2040,14 +2043,11 @@ export function LuxAlgoChart({
           priceLineVisible: false,
           lastValueVisible: false,
         });
-        // 0.5% above + below the event price for the vertical accent.
-        const span = p * 0.005;
         s.setData([
-          { time: t, value: p - span },
-          { time: t, value: p + span },
+          { time: t, value: p },
+          { time: tEnd, value: p },
         ]);
         overlaySeriesRef.current.push(s);
-        void tEnd;
       }
     };
 
