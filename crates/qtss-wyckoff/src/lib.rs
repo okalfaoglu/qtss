@@ -36,10 +36,10 @@ mod range;
 
 pub use config::WyckoffConfig;
 pub use cycle::{
-    boost_with_phase_c_events, detect_cycles, detect_cycles_for_slot,
-    detect_cycles_from_elliott, merge_cycles_with_confluence,
-    ElliottSegment, ElliottSegmentKind, WyckoffCycle, WyckoffCyclePhase,
-    WyckoffCycleSource,
+    boost_with_phase_c_events, dedupe_consecutive_same_phase, detect_cycles,
+    detect_cycles_for_slot, detect_cycles_from_elliott,
+    merge_cycles_with_confluence, ElliottSegment, ElliottSegmentKind,
+    WyckoffCycle, WyckoffCyclePhase, WyckoffCycleSource,
 };
 pub use event::{WyckoffEvent, WyckoffEventKind, WyckoffSpec};
 pub use events::{

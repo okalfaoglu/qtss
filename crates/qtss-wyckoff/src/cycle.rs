@@ -708,6 +708,83 @@ fn overlap_ratio(a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> 
     intersection / shorter
 }
 
+/// BUG3 — Coalesce consecutive same-phase tiles into a single
+/// spanning tile.
+///
+/// `merge_cycles_with_confluence` only pairs ONE event tile with ONE
+/// Elliott tile by overlap. When the Elliott detector emits multiple
+/// adjacent same-phase tiles (e.g. several ABC corrections within an
+/// Accumulation base, or two consecutive motives both labelled
+/// Markup), they all flow through unchanged and the chart renders 2-3
+/// boxes stacked on top of each other for the same macro phase.
+///
+/// Wyckoff doctrine: the four-phase cycle is a strict alternation
+/// (Acc → Markup → Dist → Markdown → Acc → …). Two consecutive
+/// Accumulation tiles without an intervening Markup is structurally
+/// invalid; they belong to the SAME accumulation range.
+///
+/// This pass:
+///   1. Sorts by start_bar.
+///   2. For each pair of adjacent tiles with identical phase, fuses
+///      them: span = [min start, max end], price band = [min low,
+///      max high]. Source upgrades by priority Confluent > Elliott
+///      > Event so the highest-conviction tag survives.
+///   3. Distinct phases stay separated.
+///
+/// Pure function — preserves the input ordering invariant the
+/// downstream writer expects (sorted by start_bar).
+pub fn dedupe_consecutive_same_phase(
+    cycles: Vec<WyckoffCycle>,
+) -> Vec<WyckoffCycle> {
+    let mut sorted = cycles;
+    sorted.sort_by_key(|c| (c.start_bar, c.end_bar));
+    let mut out: Vec<WyckoffCycle> = Vec::new();
+    for c in sorted {
+        match out.last_mut() {
+            Some(prev) if prev.phase == c.phase => {
+                // Same phase consecutive → fuse.
+                if c.end_bar > prev.end_bar {
+                    prev.end_bar = c.end_bar;
+                    prev.end_price = c.end_price;
+                }
+                if c.phase_high > prev.phase_high {
+                    prev.phase_high = c.phase_high;
+                }
+                if c.phase_low < prev.phase_low {
+                    prev.phase_low = c.phase_low;
+                }
+                prev.source = source_priority(prev.source, c.source);
+                // The fused tile is "completed" only when the LAST
+                // contributing tile says so (chronologically).
+                prev.completed = c.completed;
+                if prev.source_pattern_id.is_none() {
+                    prev.source_pattern_id = c.source_pattern_id;
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn source_priority(
+    a: WyckoffCycleSource,
+    b: WyckoffCycleSource,
+) -> WyckoffCycleSource {
+    fn rank(s: WyckoffCycleSource) -> u8 {
+        match s {
+            WyckoffCycleSource::Confluent => 3,
+            WyckoffCycleSource::Elliott => 2,
+            WyckoffCycleSource::Event => 1,
+        }
+    }
+    if rank(a) >= rank(b) {
+        a
+    } else {
+        b
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────
 
 fn open_segment(
@@ -1132,5 +1209,108 @@ mod tests {
         assert_eq!(z0.len(), 2);
         assert_eq!(z3.len(), 1);
         assert_eq!(z3[0].phase, WyckoffCyclePhase::Distribution);
+    }
+
+    // BUG3 — three Accumulation tiles stacked on the same Z-level
+    // must collapse to one spanning tile after dedupe.
+    #[test]
+    fn dedupe_collapses_three_accumulation_tiles() {
+        let make = |source, start: usize, end: usize| WyckoffCycle {
+            phase: WyckoffCyclePhase::Accumulation,
+            source,
+            start_bar: start,
+            end_bar: end,
+            start_price: 100.0,
+            end_price: 110.0,
+            phase_high: 115.0,
+            phase_low: 95.0,
+            completed: true,
+            source_pattern_id: None,
+        };
+        let cycles = vec![
+            make(WyckoffCycleSource::Event, 100, 150),
+            make(WyckoffCycleSource::Elliott, 140, 180),
+            make(WyckoffCycleSource::Event, 170, 200),
+        ];
+        let out = dedupe_consecutive_same_phase(cycles);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].start_bar, 100);
+        assert_eq!(out[0].end_bar, 200);
+        // Highest-priority source wins (Elliott > Event).
+        assert_eq!(out[0].source, WyckoffCycleSource::Elliott);
+    }
+
+    // Distinct phases must NOT be collapsed even when adjacent.
+    #[test]
+    fn dedupe_keeps_distinct_phases_separate() {
+        let cycles = vec![
+            WyckoffCycle {
+                phase: WyckoffCyclePhase::Accumulation,
+                source: WyckoffCycleSource::Elliott,
+                start_bar: 0,
+                end_bar: 50,
+                start_price: 100.0,
+                end_price: 110.0,
+                phase_high: 110.0,
+                phase_low: 95.0,
+                completed: true,
+                source_pattern_id: None,
+            },
+            WyckoffCycle {
+                phase: WyckoffCyclePhase::Markup,
+                source: WyckoffCycleSource::Elliott,
+                start_bar: 50,
+                end_bar: 120,
+                start_price: 110.0,
+                end_price: 200.0,
+                phase_high: 205.0,
+                phase_low: 108.0,
+                completed: true,
+                source_pattern_id: None,
+            },
+            WyckoffCycle {
+                phase: WyckoffCyclePhase::Accumulation,
+                source: WyckoffCycleSource::Event,
+                start_bar: 200,
+                end_bar: 240,
+                start_price: 150.0,
+                end_price: 155.0,
+                phase_high: 158.0,
+                phase_low: 148.0,
+                completed: true,
+                source_pattern_id: None,
+            },
+        ];
+        let out = dedupe_consecutive_same_phase(cycles);
+        // Two non-adjacent Accumulations + one Markup — all preserved.
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].phase, WyckoffCyclePhase::Accumulation);
+        assert_eq!(out[1].phase, WyckoffCyclePhase::Markup);
+        assert_eq!(out[2].phase, WyckoffCyclePhase::Accumulation);
+    }
+
+    // Confluent must beat both Elliott and Event in source priority.
+    #[test]
+    fn dedupe_promotes_to_confluent_when_present() {
+        let make = |source, start: usize, end: usize| WyckoffCycle {
+            phase: WyckoffCyclePhase::Markup,
+            source,
+            start_bar: start,
+            end_bar: end,
+            start_price: 100.0,
+            end_price: 200.0,
+            phase_high: 200.0,
+            phase_low: 100.0,
+            completed: true,
+            source_pattern_id: None,
+        };
+        let cycles = vec![
+            make(WyckoffCycleSource::Event, 0, 50),
+            make(WyckoffCycleSource::Confluent, 40, 90),
+            make(WyckoffCycleSource::Elliott, 80, 120),
+        ];
+        let out = dedupe_consecutive_same_phase(cycles);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].source, WyckoffCycleSource::Confluent);
     }
 }

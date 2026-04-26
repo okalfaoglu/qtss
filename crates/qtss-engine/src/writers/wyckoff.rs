@@ -18,7 +18,8 @@ use qtss_storage::market_bars::{self, MarketBarRow};
 use qtss_wyckoff::{
     boost_with_phase_c_events, detect_cycles_for_slot,
     detect_cycles_from_elliott, detect_events, detect_ranges,
-    filter_phase_c_events_in_context, merge_cycles_with_confluence,
+    dedupe_consecutive_same_phase, filter_phase_c_events_in_context,
+    merge_cycles_with_confluence,
     ElliottSegment, ElliottSegmentKind, WyckoffBias, WyckoffConfig,
     WyckoffCycle, WyckoffCyclePhase, WyckoffCycleSource, WyckoffEvent,
     WyckoffPhaseTracker, WyckoffRange,
@@ -221,6 +222,15 @@ async fn process_symbol(
             &bars,
             0.5,
         );
+
+        // (3c) BUG3 — Wyckoff doctrine demands a strict
+        // Acc→Markup→Dist→Markdown alternation. The merge step pairs
+        // ONE event with ONE Elliott tile but doesn't squash adjacent
+        // same-phase tiles, so the chart renders 2-3 boxes stacked
+        // for the same macro Accumulation. Coalesce them into a
+        // single spanning tile, preserving the highest-priority
+        // source tag (Confluent > Elliott > Event).
+        let merged = dedupe_consecutive_same_phase(merged);
 
         for c in &merged {
             written += write_cycle(pool, sym, &chrono, c, slot).await?;
