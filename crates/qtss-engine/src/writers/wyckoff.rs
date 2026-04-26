@@ -16,8 +16,11 @@ use qtss_domain::v2::instrument::{AssetClass, Instrument, SessionCalendar, Venue
 use qtss_domain::v2::timeframe::Timeframe;
 use qtss_storage::market_bars::{self, MarketBarRow};
 use qtss_wyckoff::{
-    detect_cycles, detect_events, detect_ranges, WyckoffBias, WyckoffConfig,
-    WyckoffCycle, WyckoffCyclePhase, WyckoffEvent, WyckoffPhaseTracker, WyckoffRange,
+    detect_cycles_for_slot, detect_cycles_from_elliott, detect_events,
+    detect_ranges, merge_cycles_with_confluence, ElliottSegment,
+    ElliottSegmentKind, WyckoffBias, WyckoffConfig, WyckoffCycle,
+    WyckoffCyclePhase, WyckoffCycleSource, WyckoffEvent,
+    WyckoffPhaseTracker, WyckoffRange,
 };
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
@@ -125,27 +128,150 @@ async fn process_symbol(
     .execute(pool)
     .await;
 
+    // Schematic accumulation / distribution range boxes (slot 0 only —
+    // they're a per-symbol annotation, not a per-degree breakdown).
     let ranges = detect_ranges(&sorted);
     for r in &ranges {
         written += write_range(pool, sym, &chrono, r).await?;
     }
 
-    // FAZ 25.4.D — four-phase macro cycle (Accumulation → Markup →
-    // Distribution → Markdown). User asked: "Bu döngü bizde var mı?"
-    // The schematic ranges (Accum / Dist) are persisted above; the
-    // trend legs (Markup / Markdown) connecting them were missing.
-    // detect_cycles tiles the entire tape into a contiguous segment
-    // sequence — every bar belongs to exactly one of the 4 phases.
+    // FAZ 25.4.D + E — hybrid four-phase macro cycle per Z-degree slot.
+    //
+    // User asked: "Accumulation, Markup, Distribution, Markdown
+    // fazları elliot dalgalarla ilişkilendirme en doğru yöntem değil
+    // mi" + "z1-z5 herbiri için kutu". Answer (per Pruden's canonical
+    // mapping in docs/ELLIOTT_WYCKOFF_INTEGRATION.md §VII): yes, but
+    // Elliott alone has wave-count subjectivity. The robust answer is
+    // a HYBRID — combine three sources per slot:
+    //
+    //   1. Event-driven (SC/BC/Bu/Sos/Sow events) — `source=Event`
+    //   2. Elliott-anchored (motive + abc rows) — `source=Elliott`
+    //   3. Confluence (overlap of 1+2 on same phase) — `source=Confluent`
+    //
+    // The chart renderer differentiates via raw_meta.source; downstream
+    // composite scoring boosts confidence on confluent tiles.
     let tape_end_bar = chrono.len().saturating_sub(1);
     let tape_end_price = chrono
         .last()
         .and_then(|r| r.close.to_string().parse::<f64>().ok())
         .unwrap_or(0.0);
-    let cycles = detect_cycles(&sorted, tape_end_bar, tape_end_price);
-    for c in &cycles {
-        written += write_cycle(pool, sym, &chrono, c).await?;
+    for slot in 0i16..=5 {
+        // (1) Event-driven, slot-aware.
+        let min_score = slot_min_score(slot);
+        let event_cycles = detect_cycles_for_slot(
+            &sorted,
+            &bars,
+            min_score,
+            tape_end_bar,
+            tape_end_price,
+        );
+
+        // (2) Elliott-anchored — query motive + abc rows for this slot.
+        let segments = load_elliott_segments(pool, sym, slot, &chrono).await?;
+        let elliott_cycles = detect_cycles_from_elliott(
+            &segments,
+            &bars,
+            tape_end_bar,
+            tape_end_price,
+        );
+
+        // (3) Hybrid confluence merge (50% overlap on same phase).
+        let merged = merge_cycles_with_confluence(
+            event_cycles,
+            elliott_cycles,
+            &bars,
+            0.5,
+        );
+
+        for c in &merged {
+            written += write_cycle(pool, sym, &chrono, c, slot).await?;
+        }
     }
     Ok(written)
+}
+
+/// Pull Elliott motive + abc detections for a given slot, convert
+/// them into the `ElliottSegment` shape the cycle detector expects.
+/// `chrono` provides bar-index → time mapping (anchors store both;
+/// we trust bar_index from the row directly).
+async fn load_elliott_segments(
+    pool: &PgPool,
+    sym: &EngineSymbol,
+    slot: i16,
+    chrono: &[MarketBarRow],
+) -> anyhow::Result<Vec<ElliottSegment>> {
+    let rows = sqlx::query(
+        r#"SELECT id::text AS id, pattern_family, direction,
+                  start_bar, end_bar, anchors
+             FROM detections
+            WHERE exchange = $1 AND segment = $2
+              AND symbol = $3 AND timeframe = $4
+              AND slot = $5
+              AND mode = 'live'
+              AND pattern_family IN ('motive', 'abc')
+              AND invalidated = false
+            ORDER BY start_bar"#,
+    )
+    .bind(&sym.exchange)
+    .bind(&sym.segment)
+    .bind(&sym.symbol)
+    .bind(&sym.interval)
+    .bind(slot)
+    .fetch_all(pool)
+    .await?;
+
+    let bar_count = chrono.len();
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let id: String = r.try_get("id").unwrap_or_default();
+        let family: String = r.try_get("pattern_family").unwrap_or_default();
+        let direction: i16 = r.try_get("direction").unwrap_or(0);
+        let start_bar: i64 = r.try_get("start_bar").unwrap_or(0);
+        let end_bar: i64 = r.try_get("end_bar").unwrap_or(0);
+        let anchors: Value = r.try_get("anchors").unwrap_or(Value::Null);
+
+        let kind = match family.as_str() {
+            "motive" => ElliottSegmentKind::Motive,
+            "abc" => ElliottSegmentKind::Abc,
+            _ => continue,
+        };
+        let bullish = direction >= 0;
+        let s_bar = (start_bar.max(0) as usize).min(bar_count.saturating_sub(1));
+        let e_bar = (end_bar.max(0) as usize).min(bar_count.saturating_sub(1));
+        // Pull start/end prices from the anchors array (first and last
+        // entry). Anchors are `[{price: ..., bar_index: ...}, ...]`.
+        let (start_price, end_price) = anchors
+            .as_array()
+            .and_then(|arr| {
+                let first = arr.first().and_then(|v| v.get("price"))
+                    .and_then(|v| v.as_f64());
+                let last = arr.last().and_then(|v| v.get("price"))
+                    .and_then(|v| v.as_f64());
+                first.zip(last)
+            })
+            .unwrap_or((0.0, 0.0));
+
+        out.push(ElliottSegment {
+            kind,
+            bullish,
+            start_bar: s_bar,
+            end_bar: e_bar,
+            start_price,
+            end_price,
+            source_id: Some(id),
+        });
+    }
+    Ok(out)
+}
+
+/// Slot → minimum event score for a cycle to count at that degree.
+/// Slot 0 mirrors `WyckoffConfig::min_structural_score` (base 0.55);
+/// each higher slot tightens by 0.05, so slot 5 = 0.80 (only the very
+/// strongest climaxes survive).
+fn slot_min_score(slot: i16) -> f32 {
+    let base: f32 = 0.55;
+    let step: f32 = 0.05;
+    base + (slot.max(0) as f32) * step
 }
 
 async fn write_cycle(
@@ -153,6 +279,7 @@ async fn write_cycle(
     sym: &EngineSymbol,
     chrono: &[MarketBarRow],
     c: &WyckoffCycle,
+    slot: i16,
 ) -> anyhow::Result<usize> {
     let phase_str = match c.phase {
         WyckoffCyclePhase::Accumulation => "accumulation",
@@ -190,12 +317,22 @@ async fn write_cycle(
             "time": end_time,
         }
     ]);
+    let source_str = match c.source {
+        WyckoffCycleSource::Event => "event",
+        WyckoffCycleSource::Elliott => "elliott",
+        WyckoffCycleSource::Confluent => "confluent",
+    };
     let raw_meta = json!({
-        "phase":       phase_str,
-        "start_price": c.start_price,
-        "end_price":   c.end_price,
-        "completed":   c.completed,
-        "kind":        "wyckoff_cycle",
+        "phase":              phase_str,
+        "source":             source_str,
+        "source_pattern_id":  c.source_pattern_id,
+        "start_price":        c.start_price,
+        "end_price":          c.end_price,
+        "phase_high":         c.phase_high,
+        "phase_low":          c.phase_low,
+        "completed":          c.completed,
+        "slot":               slot,
+        "kind":               "wyckoff_cycle",
     });
     sqlx::query(
         r#"INSERT INTO detections
@@ -216,7 +353,7 @@ async fn write_cycle(
     .bind(&sym.segment)
     .bind(&sym.symbol)
     .bind(&sym.interval)
-    .bind(0i16)
+    .bind(slot)
     .bind("wyckoff")
     .bind(&subkind)
     .bind(direction)

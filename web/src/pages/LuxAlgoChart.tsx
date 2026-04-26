@@ -2048,29 +2048,62 @@ export function LuxAlgoChart({
         //   Markup:       sky blue (rising)
         //   Distribution: amber    (high, top)
         //   Markdown:     rose     (falling)
-        const cyclePalette: Record<string, { fill: string; border: string; label: string }> = {
-          cycle_accumulation: { fill: "#10b9810f", border: "#10b98166", label: "Accumulation" },
-          cycle_markup:       { fill: "#0ea5e90f", border: "#0ea5e966", label: "Markup" },
-          cycle_distribution: { fill: "#f59e0b14", border: "#f59e0b66", label: "Distribution" },
-          cycle_markdown:     { fill: "#f43f5e14", border: "#f43f5e66", label: "Markdown" },
+        const cyclePalette: Record<string, { rgb: string; label: string }> = {
+          cycle_accumulation: { rgb: "16,185,129", label: "Accumulation" },
+          cycle_markup:       { rgb: "14,165,233",  label: "Markup" },
+          cycle_distribution: { rgb: "245,158,11",  label: "Distribution" },
+          cycle_markdown:     { rgb: "244,63,94",   label: "Markdown" },
         };
         const palette = cyclePalette[d.subkind];
         if (!palette) return;
+        // FAZ 25.4.E — source-aware visual hierarchy.
+        //   confluent (event ∩ elliott) → strongest: filled, thick border
+        //   elliott  (Pruden mapping)   → medium: medium fill, mid border
+        //   event    (Wyckoff climax)   → light: low alpha, thin border
+        const sourceRaw = d.raw_meta?.source;
+        const source =
+          typeof sourceRaw === "string" ? sourceRaw : "event";
+        const styleBySource: Record<
+          string,
+          { fillAlpha: number; borderAlpha: number; borderWidth: 1 | 2 | 3 }
+        > = {
+          confluent: { fillAlpha: 0.20, borderAlpha: 0.95, borderWidth: 2 },
+          elliott:   { fillAlpha: 0.10, borderAlpha: 0.55, borderWidth: 1 },
+          event:     { fillAlpha: 0.06, borderAlpha: 0.40, borderWidth: 1 },
+        };
+        const style = styleBySource[source] ?? styleBySource.event;
+        const fill = `rgba(${palette.rgb},${style.fillAlpha})`;
+        const border = `rgba(${palette.rgb},${style.borderAlpha})`;
+        // Use phase_high / phase_low from raw_meta when present so
+        // the box hugs the actual price range of the phase rather than
+        // spanning the entire visible chart. Falls back to full-height
+        // backdrop when bounds are absent (legacy rows).
+        const phaseHi =
+          typeof d.raw_meta?.phase_high === "number"
+            ? d.raw_meta.phase_high
+            : null;
+        const phaseLo =
+          typeof d.raw_meta?.phase_low === "number"
+            ? d.raw_meta.phase_low
+            : null;
+        const top = phaseHi !== null ? phaseHi : cycleBandTop;
+        const bottom = phaseLo !== null ? phaseLo : cycleBandBottom;
         const rect = new RectanglePrimitive({
           time1: t0,
           time2: t1,
-          priceTop: cycleBandTop,
-          priceBottom: cycleBandBottom,
-          fillColor: palette.fill,
-          borderColor: palette.border,
-          borderWidth: 1,
+          priceTop: top,
+          priceBottom: bottom,
+          fillColor: fill,
+          borderColor: border,
+          borderWidth: style.borderWidth,
         });
         candleSeries.attachPrimitive(rect);
         rectPrimitivesRef.current.push(rect);
-        // Phase label sits at the top edge of the band, anchored to
-        // the START of the phase (so a contiguous tiling reads as one
-        // label per phase rather than a stack).
-        attachLabel(t0, cycleBandTop, palette.label, palette.border, "above");
+        // Label includes source tag so the user can read the
+        // confidence at a glance: confluent rows get an asterisk.
+        const labelSuffix =
+          source === "confluent" ? " ★" : source === "elliott" ? " ◆" : "";
+        attachLabel(t0, top, `${palette.label}${labelSuffix}`, border, "above");
         return;
       }
       // FAZ 25.4.B — schematic range boxes (Accumulation / Distribution

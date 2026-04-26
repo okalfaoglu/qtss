@@ -358,3 +358,147 @@ intensifies (alignment-boosted).
    `wyckoffanalytics.com/archive`).
 6. QTSS-internal: `crates/qtss-wyckoff/src/lib.rs`, `crates/qtss-engine/src/writers/wyckoff.rs`,
    `docs/FAZ_10_WYCKOFF_FULL.md` (existing implementation spec).
+
+---
+
+## VII — Phase-level tilesheet (FAZ 25.4.E — added 2026-04-26)
+
+Sections I-VI cover **event-level** alignment (Spring↔W2, BC↔W5, etc.).
+This section closes the gap to **phase-level tiling**: how the
+contiguous 4-phase cycle (Accumulation → Markup → Distribution →
+Markdown) is derived from Elliott wave structure for chart-wide
+visualization, not just discrete event confluence.
+
+### VII.1 — Why event-anchored cycle is insufficient
+
+The first cycle implementation (`crates/qtss-wyckoff/src/cycle.rs`,
+FAZ 25.4.D) walks Wyckoff events: SC opens Accumulation, BC opens
+Distribution, Bu/Sos breaks Markup, Sow breaks Markdown. Issues:
+- **Sparse coverage**: when no climax fires (most of the tape), no
+  cycle exists. ETH 4h: ~75% of bars uncovered between climaxes.
+- **No predictive lead**: cycle phase changes only AFTER the event
+  prints — late by definition.
+- **No native multi-degree**: forced score-stratification (`min_score
+  = 0.55 + 0.05*slot`) approximates degrees but isn't structural.
+
+### VII.2 — Pruden's canonical mapping
+
+Hank Pruden formalized the Wyckoff↔Elliott bridge in *The Three Skills
+of Top Trading* (2007); Wyckoff Analytics' "Combining Elliott Wave and
+Wyckoff Methods" course is the modern canonical reference.
+
+| Wyckoff phase | Elliott structure                     | Confirming event |
+|---------------|---------------------------------------|------------------|
+| Accumulation  | W1 + W2 (W2 low = Spring zone)        | Spring + W2 = highest-conviction long |
+| Markup        | W3 dominant + W1 + W5                 | SOS = W3 ignition; LPS = W4 low |
+| Distribution  | W5 top + B-wave platform              | BC = W5 top; UTAD = B-wave fakeout |
+| Markdown      | A → B → C (C dominant)                | SOW = A start; capitulation = C bottom |
+
+**Fractal note**: at sub-degrees, W2 and W4 of a higher-degree motive
+each contain their OWN full 4-phase rotation — Pruden treats this
+recursively. Implementation uses per-slot stratification (slot 0-4 ≈
+PivotLevel L0-L4) so each Z degree gets its own tilesheet.
+
+### VII.3 — Tiling algorithm
+
+Input: chronologically-sorted `ElliottSegment[]` per slot, each =
+{ kind: Motive | Abc, bullish: bool, start_bar, end_bar, start_price,
+end_price, source_id }.
+
+Pseudo-code:
+```
+prev_end = 0
+tiles = []
+for seg in segments_sorted_by_start_bar:
+    if seg.start > prev_end + threshold:
+        # gap — fill with transition phase
+        if last_tile.phase in [Markup, Distribution]:
+            tiles.push(Distribution { prev_end, seg.start })
+        elif last_tile.phase in [Markdown, Accumulation]:
+            tiles.push(Accumulation { prev_end, seg.start })
+
+    if seg.kind == Motive and seg.bullish:
+        tiles.push(Markup { seg.start, seg.end, source = Elliott })
+    elif seg.kind == Abc and not seg.bullish:
+        tiles.push(Markdown { seg.start, seg.end, source = Elliott })
+    elif seg.kind == Motive and not seg.bullish:
+        tiles.push(Markdown { seg.start, seg.end, source = Elliott })
+    elif seg.kind == Abc and seg.bullish:
+        tiles.push(Accumulation { seg.start, seg.end, source = Elliott })
+    prev_end = seg.end
+```
+
+Tail bar is filled with the final tile extended to `tape_end`.
+
+### VII.4 — Hybrid (Plan C — chosen)
+
+Single `cycle.rs` produces tiles from BOTH sources, tagged via
+`WyckoffCycleSource`:
+
+| Source        | Origin                              | Strength |
+|---------------|-------------------------------------|----------|
+| `Event`       | SC/BC/Bu/Sos/Sow climax events      | Volume + range validated, low latency |
+| `Elliott`     | Motive + ABC structural segments    | Continuous tiling, predictive |
+| `Confluent`   | Both agree (≤8-bar overlap on phase)| Highest confidence (composite boost) |
+
+**Confluence rule**: two tiles `A: source=Event` and `B: source=Elliott`
+merge into `Confluent` when:
+1. `A.phase == B.phase`
+2. Time overlap ≥ 50% of `min(A.duration, B.duration)`
+3. Both at the same `slot`
+
+Emitted as `subkind='cycle_<phase>'` with `raw_meta.source ∈
+{event, elliott, confluent}`. Chart renderer differentiates via
+border thickness / fill alpha.
+
+### VII.5 — Persistence schema
+
+Same row format as FAZ 25.4.D:
+```sql
+INSERT INTO detections (..., pattern_family, subkind, slot, raw_meta, ...)
+VALUES (..., 'wyckoff', 'cycle_markup', 3, '{
+  "phase": "markup",
+  "source": "elliott",
+  "source_pattern_family": "motive",
+  "source_detection_id": "<uuid>",
+  "phase_high": ...,
+  "phase_low":  ...,
+  "completed":  true
+}', ...);
+```
+
+The DELETE sweep at writer start covers `subkind LIKE 'cycle_%'`
+across all sources — single source of truth, no merge conflicts.
+
+### VII.6 — Edge cases (per Pruden + EWP)
+
+| Pattern             | Phase mapping adjustment |
+|---------------------|--------------------------|
+| Truncated W5        | Distribution band shifts to W3-W4 (W5 fails to make new high); shorter Markup |
+| Extended W3         | Markup duration 3-5× normal; W3 alone may span the entire visible Markup |
+| Diagonal (leading/ending) | Same Markup/Distribution mapping, but W3 is overlapping → noisier confidence |
+| Running flat / running triangle (B-wave) | Distribution platform = ENTIRE B-wave plus fakeout high; UTAD often on the running flat top |
+| W-X-Y combination   | Two consecutive Markdown phases separated by a brief Accumulation (X-wave) |
+| Open-ended top slot | Last tile `completed=false`, `end_bar=tape_head`; renderer paints with dashed border |
+
+### VII.7 — Implementation roadmap (FAZ 25.4.E – H)
+
+| PR | Scope | Status |
+|----|-------|--------|
+| 25.4.D | Event-driven cycle tiling, slot 0-5 score-stratified | ✅ shipped |
+| 25.4.E | Elliott-anchored tiling + hybrid `cycle.rs` with `source` tag | ⚙ in progress |
+| 25.4.F | Confluence merge layer (event ∩ elliott → confluent tile) | next |
+| 25.4.G | Major-Dip composite scorer reads `cycle.phase_alignment` channel | next+1 |
+| 25.4.H | True Elliott-degree stratification (Subminuette → Primary) replacing PivotLevel mapping | future |
+
+### VII.8 — References (additional)
+
+- Hank Pruden, *The Three Skills of Top Trading* (Wiley 2007), ch. 5
+  "Combining Wyckoff with Elliott Wave"
+- Wyckoff Analytics, "Combining Elliott Wave and Wyckoff Methods"
+  (online course, Pruden-derived)
+  https://www.wyckoffanalytics.com/demand/combining-elliott-wave-and-wyckoff/
+- Valeon, "The Script and the Rhythm — Understanding Wyckoff
+  Mechanics and Elliott Waves" (2025)
+- Forex.in.rs, "UTAD Wyckoff & Elliott Strategy"
+- StockCharts ChartSchool, "The Wyckoff Method: A Tutorial"
