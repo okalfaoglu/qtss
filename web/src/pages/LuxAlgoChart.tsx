@@ -2542,7 +2542,19 @@ export function LuxAlgoChart({
     // event whose bar is within `proximityBars` of an already-kept
     // event of the same subkind. Keeps the freshest per cluster, lets
     // every distinct event type surface.
-    const proximityBars = 8;
+    // FAZ 25.4.E — wider proximity dedup window + per-subkind cap.
+    // User audit (Gemini + Claude both flagged): \"5+ UTAD/Test/SOS
+    // labels stacking at the right edge, unreadable\". Wyckoff
+    // schematic should fire each Phase-C event ONCE per range; our
+    // detector currently fires at every minor wick + reclaim. Until
+    // the backend Phase-C state machine ships, the chart-side
+    // dedup needs to be MUCH stricter. 8-bar window was 32h on 4h —
+    // not enough. 24 bars = 4 days, closer to what a real Phase C
+    // event window looks like. Also cap each subkind to the top-N
+    // strongest globally so the chart can't be drowned by one
+    // event type even if many pass the dedup proximity.
+    const proximityBars = 24;
+    const maxPerSubkind = 3;
     const wyckoffEvents = auxDetections.filter((d) => {
       const family = d.family || d.kind;
       if (family !== "wyckoff") return false;
@@ -2603,6 +2615,11 @@ export function LuxAlgoChart({
           : NaN;
       if (!Number.isFinite(ts)) continue;
       const list = keptByKind.get(det.subkind) ?? [];
+      // Per-subkind global cap — even outside the proximity window,
+      // never render more than `maxPerSubkind` total per chart.
+      // wyckoffEvents is already sorted by score DESC so we keep
+      // the strongest N.
+      if (list.length >= maxPerSubkind) continue;
       const tooClose = list.some((b) => Math.abs(b - ts) < proximitySecs);
       if (!tooClose) {
         list.push(ts);
