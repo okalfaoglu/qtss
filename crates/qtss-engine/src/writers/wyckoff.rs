@@ -375,7 +375,15 @@ async fn write_cycle(
     .bind(start_time)
     .bind(end_time)
     .bind(&anchors)
-    .bind(c.completed)
+    // BUG FIX: previously bound `c.completed` here. The `invalidated`
+    // column means "no longer valid / should not render" — but
+    // `completed` means "this phase has rotated to the next" (a
+    // historical / closed tile), which is precisely what the chart
+    // SHOULD render. Mixing them caused every closed Markup/
+    // Accumulation/Markdown tile to vanish from the API response
+    // (filter `invalidated = false`). Cycle tiles never invalidate;
+    // they only complete. Track completion via raw_meta.completed.
+    .bind(false)
     .bind(&raw_meta)
     .execute(pool)
     .await?;
@@ -463,7 +471,11 @@ async fn write_range(
     .bind(start_time)
     .bind(end_time)
     .bind(&anchors)
-    .bind(r.completed)
+    // Same fix as write_cycle — completion is NOT invalidation.
+    // `invalidated` is for "should not render" semantics; ranges
+    // never invalidate, they just close. Track completion via
+    // raw_meta.completed.
+    .bind(false)
     .bind(&raw_meta)
     .execute(pool)
     .await?;
