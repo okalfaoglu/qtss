@@ -656,23 +656,27 @@ pub fn merge_cycles_with_confluence(
             Some(j) => {
                 elliott_used[j] = true;
                 let el = &elliott_cycles[j];
-                let start_bar = ev.start_bar.min(el.start_bar);
-                let end_bar = ev.end_bar.max(el.end_bar);
-                let start_price =
-                    if ev.start_bar <= el.start_bar { ev.start_price } else { el.start_price };
-                let end_price =
-                    if ev.end_bar >= el.end_bar { ev.end_price } else { el.end_price };
-                let (hi, lo) =
-                    compute_bounds(bars, start_bar, end_bar, start_price);
+                // FAZ 25.4.E — Elliott bounds are AUTHORITATIVE for
+                // the confluent tile; event presence only upgrades the
+                // source tag. Earlier behaviour took union (min start
+                // / max end) which let the BC event (often firing a
+                // few bars BEFORE W5) bleed Distribution into the
+                // Markup zone — the user observed a Distribution box
+                // starting 3 days before W5 on BTC 4h Z4.
+                //
+                // Structural sub-wave anchors (W2/W5 for motive,
+                // X0/B/C for ABC) define the phase boundary; the
+                // event timing is a *confirmation* of that boundary,
+                // not a redefinition of it.
                 out.push(WyckoffCycle {
-                    phase: ev.phase,
+                    phase: el.phase,
                     source: WyckoffCycleSource::Confluent,
-                    start_bar,
-                    end_bar,
-                    start_price,
-                    end_price,
-                    phase_high: hi,
-                    phase_low: lo,
+                    start_bar: el.start_bar,
+                    end_bar: el.end_bar,
+                    start_price: el.start_price,
+                    end_price: el.end_price,
+                    phase_high: el.phase_high,
+                    phase_low: el.phase_low,
                     completed: ev.completed && el.completed,
                     source_pattern_id: el.source_pattern_id.clone(),
                 });
@@ -987,8 +991,11 @@ mod tests {
             merge_cycles_with_confluence(event_cycles, elliott_cycles, &[], 0.5);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].source, WyckoffCycleSource::Confluent);
-        assert_eq!(merged[0].start_bar, 15); // union start
-        assert_eq!(merged[0].end_bar, 65); // union end
+        // Elliott bounds are authoritative — confluent tile uses
+        // Elliott's start/end, not the union. Event presence only
+        // upgrades the source tag.
+        assert_eq!(merged[0].start_bar, 15); // = Elliott start
+        assert_eq!(merged[0].end_bar, 65);   // = Elliott end
         assert_eq!(merged[0].source_pattern_id.as_deref(), Some("m-15"));
     }
 
