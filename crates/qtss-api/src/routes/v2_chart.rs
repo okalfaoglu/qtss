@@ -247,6 +247,12 @@ async fn detections_for(
     // range, etc.) make the cut. With `ORDER BY slot` first, slot-0
     // families (classical, range, gap, candle, orb) could saturate
     // the 2000-row budget and starve slot-1+ families like SMC.
+    //
+    // FAZ 25.4.A — symbol-level families (wyckoff, gap, candle) are
+    // independent of the Z-slot ladder; they reflect price + volume
+    // mechanics on the raw bar tape, not pivot tree level. Bypass
+    // the `slot = ANY($5)` filter for them so they render even when
+    // the operator has only a non-L0 Z slot enabled.
     let rows = match sqlx::query(
         r#"SELECT slot, pattern_family, subkind, direction,
                   start_time, end_time,
@@ -254,7 +260,10 @@ async fn detections_for(
              FROM detections
             WHERE exchange = $1 AND segment = $2 AND symbol = $3
               AND timeframe = $4
-              AND slot = ANY($5)
+              AND (
+                  slot = ANY($5)
+                  OR pattern_family IN ('wyckoff', 'gap', 'candle')
+              )
               AND mode = ANY($6)
               AND invalidated = false
             ORDER BY start_time DESC
