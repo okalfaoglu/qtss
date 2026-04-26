@@ -1291,6 +1291,32 @@ export function LuxAlgoChart({
           const isProjectedAnchor = (a: { label_override?: string }) =>
             !!a.label_override && a.label_override.endsWith("?");
 
+          // Backlog #5 (2026-04-26 BTC 4h Z4 (c)? at 70K vs spot 77K):
+          // a projected anchor's price can fall in a zone the candles
+          // never visited, painting a diagonal dotted line into empty
+          // space. Compute the visible range from the last 100 candles
+          // and refuse to draw projected segments whose target price
+          // sits more than 30% beyond either edge of that band — at
+          // that point the projection is no longer informative, just
+          // visually misleading. Real (non-projected) anchors are
+          // never clipped (they reflect actual pivots).
+          const clipWindow = candles.slice(Math.max(0, candles.length - 100));
+          let chartMin = Infinity;
+          let chartMax = -Infinity;
+          for (const c of clipWindow) {
+            const lo = Number(c.low);
+            const hi = Number(c.high);
+            if (Number.isFinite(lo) && lo < chartMin) chartMin = lo;
+            if (Number.isFinite(hi) && hi > chartMax) chartMax = hi;
+          }
+          const chartBand = chartMax - chartMin;
+          const tolerance = chartBand * 0.30;
+          const priceWithinBand = (p: number, projected: boolean) => {
+            if (!projected) return true;
+            if (!Number.isFinite(chartMin) || !Number.isFinite(chartMax)) return true;
+            return p >= chartMin - tolerance && p <= chartMax + tolerance;
+          };
+
           const points: Array<{
             time: Time;
             price: number;
@@ -1301,11 +1327,18 @@ export function LuxAlgoChart({
             const a = em.anchors[i];
             const t = anchorTime(a);
             if (t === null) continue;
+            const projected = isProjectedAnchor(a);
+            if (!priceWithinBand(a.price, projected)) {
+              // Out-of-band projected anchor — drop it AND every later
+              // anchor, since the polyline downstream of an unreasonable
+              // price would also be a fabrication.
+              break;
+            }
             points.push({
               time: t,
               price: a.price,
               idx: i,
-              projected: isProjectedAnchor(a),
+              projected,
             });
           }
           if (points.length < 2) continue;
