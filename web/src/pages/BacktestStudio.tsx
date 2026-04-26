@@ -11,7 +11,7 @@
 //   • Single run detail   → GET /v2/iq-backtest/runs/{id}
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../lib/api";
 
 interface RunRow {
@@ -83,6 +83,40 @@ export default function BacktestStudio() {
     queryFn: () => apiFetch(`/v2/iq-backtest/runs/${selectedId}`),
     enabled: !!selectedId,
   });
+
+  // 🔁 Re-run — clone the selected run's config and POST to dispatch.
+  // Backend tokio task picks it up; we just need to refresh the list
+  // afterwards. Status messaging is intentionally minimal — the new
+  // row will simply appear in the list once the task persists.
+  const queryClient = useQueryClient();
+  const [dispatchStatus, setDispatchStatus] = useState<string | null>(null);
+  async function rerunSelected() {
+    if (!detail.data) return;
+    const cfg = { ...(detail.data.config as Record<string, unknown>) };
+    // Tag the new run so the user can find it in the list. Append
+    // -rerun + timestamp; preserves the original config tag visually.
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    cfg.run_tag = `${cfg.run_tag ?? "rerun"}-${stamp}`;
+    setDispatchStatus("queueing…");
+    try {
+      const resp = await apiFetch<{ status: string; run_tag: string }>(
+        "/v2/iq-backtest/dispatch",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ config: cfg }),
+        },
+      );
+      setDispatchStatus(`queued — ${resp.run_tag}`);
+      // Soft-refresh after a few seconds; long-running backtests
+      // surface in subsequent polls anyway thanks to refetchInterval.
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["iq-backtest-runs"] });
+      }, 3000);
+    } catch (e) {
+      setDispatchStatus(`failed: ${(e as Error).message}`);
+    }
+  }
 
   // Auto-select the first run on load.
   useEffect(() => {
@@ -215,7 +249,30 @@ export default function BacktestStudio() {
               {selectedId ? "Loading detail…" : "Select a run to view details."}
             </div>
           ) : (
-            <RunDetailView data={detail.data} />
+            <>
+              <div className="mb-3 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={rerunSelected}
+                  className="rounded border border-zinc-700 bg-zinc-800 px-3 py-1 text-xs hover:bg-zinc-700"
+                  title="Clone this run's config and queue a fresh backtest"
+                >
+                  🔁 Re-run with same config
+                </button>
+                {dispatchStatus && (
+                  <span
+                    className={`text-[11px] ${
+                      dispatchStatus.startsWith("failed")
+                        ? "text-rose-400"
+                        : "text-emerald-400"
+                    }`}
+                  >
+                    {dispatchStatus}
+                  </span>
+                )}
+              </div>
+              <RunDetailView data={detail.data} />
+            </>
           )}
         </main>
       </div>

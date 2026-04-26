@@ -17,20 +17,27 @@
 //!   GET  /v2/iq-backtest/runs/{id}
 //!        — single run detail by UUID. UUIDs are global so no scope
 //!          segment is needed.
-//!
-//! Writes (dispatch a run) live in a separate module — backtest
-//! runs can take minutes; the dispatch endpoint queues the work
-//! into a background task and returns 202 immediately. That ships
-//! with the GUI Backtest Studio commit.
+//!   POST /v2/iq-backtest/dispatch
+//!        — queue a new run from a JSON config payload. Returns 202
+//!          immediately with the future run_id; persistence happens
+//!          in a tokio task that writes to iq_backtest_runs when
+//!          done. Poll the runs list to see when it lands.
+
+use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
-use axum::routing::get;
+use axum::http::StatusCode;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use qtss_backtest::iq::persistence;
 use qtss_backtest::iq::persistence::PersistedRun;
+use qtss_backtest::iq::{
+    CostModel, IqBacktestConfig, IqBacktestRunner, IqLifecycleManager,
+    IqReplayDetector,
+};
 
 use crate::error::ApiError;
 use crate::state::SharedState;
@@ -47,6 +54,90 @@ pub fn v2_iq_backtest_router() -> Router<SharedState> {
         .route("/v2/iq-backtest/runs", get(list_runs))
         // UUID-keyed detail (UUIDs are global, no scope needed).
         .route("/v2/iq-backtest/runs/{id}", get(get_run))
+        // Dispatch — queue a fresh run from a config payload.
+        .route("/v2/iq-backtest/dispatch", post(dispatch_run))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DispatchPayload {
+    /// Full IqBacktestConfig as JSON. Same shape as the example
+    /// configs in crates/qtss-backtest/examples/. Validated by serde
+    /// at deserialise time; semantic validation (e.g. window sanity)
+    /// surfaces from the runner.
+    pub config: IqBacktestConfig,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DispatchResponse {
+    /// Submitted-task acknowledgement. The actual run_id appears in
+    /// the runs list once the worker completes — poll
+    /// /v2/iq-backtest/runs?run_tag=… to find it.
+    pub status: String,
+    pub run_tag: String,
+    pub note: String,
+}
+
+/// Spawn a fresh backtest in a tokio task. Returns 202 immediately.
+///
+/// The task does not stream progress — it persists the report when
+/// done and the GUI polls the runs list. Future iteration could add
+/// a job table for granular status tracking.
+async fn dispatch_run(
+    State(st): State<SharedState>,
+    Json(payload): Json<DispatchPayload>,
+) -> Result<(StatusCode, Json<DispatchResponse>), ApiError> {
+    let cfg = payload.config;
+    let run_tag = cfg.run_tag.clone();
+    let pool = st.pool.clone();
+
+    // Spawn detached task — the runner self-persists when done.
+    tokio::spawn(async move {
+        let detector = Arc::new(IqReplayDetector::new(cfg.clone()));
+        let lifecycle = Arc::new(IqLifecycleManager::new(
+            cfg.clone(),
+            CostModel::default(),
+        ));
+        let runner = match IqBacktestRunner::new(cfg.clone()) {
+            Ok(r) => r.with_detector(detector).with_lifecycle(lifecycle),
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    run_tag = %cfg.run_tag,
+                    "iq-backtest dispatch: runner init failed"
+                );
+                return;
+            }
+        };
+        match runner.run(&pool).await {
+            Ok(report) => {
+                if let Err(e) =
+                    persistence::persist_report(&pool, &report, None).await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        run_tag = %cfg.run_tag,
+                        "iq-backtest dispatch: persist failed"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    run_tag = %cfg.run_tag,
+                    "iq-backtest dispatch: runner.run() failed"
+                );
+            }
+        }
+    });
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(DispatchResponse {
+            status: "queued".into(),
+            run_tag,
+            note: "poll /v2/iq-backtest/runs to see when the persisted run appears".into(),
+        }),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
