@@ -42,6 +42,8 @@ pub use cycle::{
     WyckoffCycleSource,
 };
 pub use event::{WyckoffEvent, WyckoffEventKind, WyckoffSpec};
-pub use events::{detect_events, WYCKOFF_SPECS};
+pub use events::{
+    detect_events, filter_phase_c_events_in_context, WYCKOFF_SPECS,
+};
 pub use phase::{WyckoffBias, WyckoffPhase, WyckoffPhaseTracker};
 pub use range::{detect_ranges, WyckoffRange};

@@ -991,3 +991,222 @@ pub fn detect_events(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
     }
     out
 }
+
+/// FAZ 25.4.E — Wyckoff context filter (Gemini + Claude audit).
+///
+/// Spring is a Phase-C event that lives ONLY inside an active
+/// Accumulation range; UTAD is the Phase-C event for an active
+/// Distribution range. The raw evaluators in this module fire on
+/// any wick + reclaim geometry and don't know about the surrounding
+/// schematic, so they spam at every minor sweep. This post-filter
+/// drops Spring/UTAD events that fall outside their canonical
+/// schematic context, AND caps each range to a single
+/// strongest-scored Spring (or UTAD) — the Wyckoff doctrine says
+/// Phase C contains ONE such event per range.
+///
+/// Other event kinds are passed through unchanged.
+///
+/// `ranges` should come from `detect_ranges(&events)` BEFORE this
+/// filter runs — the filter operates on the raw event stream and
+/// the range list together.
+pub fn filter_phase_c_events_in_context(
+    events: Vec<WyckoffEvent>,
+    ranges: &[crate::range::WyckoffRange],
+) -> Vec<WyckoffEvent> {
+    use crate::phase::WyckoffBias;
+
+    // Index the strongest Spring per Accumulation range and the
+    // strongest UTAD per Distribution range. Spring/UTAD events
+    // outside any range get dropped. Other events pass through.
+    let accum_ranges: Vec<&crate::range::WyckoffRange> = ranges
+        .iter()
+        .filter(|r| r.bias == WyckoffBias::Accumulation)
+        .collect();
+    let dist_ranges: Vec<&crate::range::WyckoffRange> = ranges
+        .iter()
+        .filter(|r| r.bias == WyckoffBias::Distribution)
+        .collect();
+
+    let find_range = |bar: usize, accum: bool| -> Option<usize> {
+        // Returns the index (into accum_ranges or dist_ranges) of
+        // the range containing this bar, if any.
+        let pool = if accum { &accum_ranges } else { &dist_ranges };
+        for (i, r) in pool.iter().enumerate() {
+            if bar >= r.start_bar && bar <= r.end_bar {
+                return Some(i);
+            }
+        }
+        None
+    };
+
+    // First pass — separate Spring/UTAD events from the rest.
+    let mut springs: Vec<WyckoffEvent> = Vec::new();
+    let mut utads: Vec<WyckoffEvent> = Vec::new();
+    let mut others: Vec<WyckoffEvent> = Vec::new();
+    for ev in events {
+        match ev.kind {
+            WyckoffEventKind::Spring => springs.push(ev),
+            WyckoffEventKind::Utad => utads.push(ev),
+            _ => others.push(ev),
+        }
+    }
+
+    // Per-range strongest Spring (Accumulation context only).
+    let mut best_spring_per_range: std::collections::HashMap<
+        usize,
+        WyckoffEvent,
+    > = std::collections::HashMap::new();
+    for ev in springs {
+        let Some(idx) = find_range(ev.bar_index, true) else {
+            continue;
+        };
+        let entry = best_spring_per_range.entry(idx);
+        match entry {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(ev);
+            }
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                if ev.score > e.get().score {
+                    e.insert(ev);
+                }
+            }
+        }
+    }
+
+    // Per-range strongest UTAD (Distribution context only).
+    let mut best_utad_per_range: std::collections::HashMap<
+        usize,
+        WyckoffEvent,
+    > = std::collections::HashMap::new();
+    for ev in utads {
+        let Some(idx) = find_range(ev.bar_index, false) else {
+            continue;
+        };
+        let entry = best_utad_per_range.entry(idx);
+        match entry {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(ev);
+            }
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                if ev.score > e.get().score {
+                    e.insert(ev);
+                }
+            }
+        }
+    }
+
+    // Reassemble the event list in chronological order.
+    others.extend(best_spring_per_range.into_values());
+    others.extend(best_utad_per_range.into_values());
+    others.sort_by_key(|e| e.bar_index);
+    others
+}
+
+#[cfg(test)]
+mod context_filter_tests {
+    use super::*;
+    use crate::range::WyckoffRange;
+    use crate::phase::{WyckoffBias, WyckoffPhase};
+
+    fn ev(kind: WyckoffEventKind, bar: usize, score: f64) -> WyckoffEvent {
+        WyckoffEvent {
+            kind,
+            variant: "bull",
+            score,
+            bar_index: bar,
+            reference_price: 100.0,
+            volume_ratio: 0.0,
+            range_ratio: 0.0,
+            note: String::new(),
+        }
+    }
+
+    fn range(bias: WyckoffBias, start: usize, end: usize) -> WyckoffRange {
+        WyckoffRange {
+            bias,
+            phase: WyckoffPhase::B,
+            start_bar: start,
+            end_bar: end,
+            range_high: 110.0,
+            range_low: 90.0,
+            event_indices: vec![],
+            completed: false,
+        }
+    }
+
+    #[test]
+    fn spring_outside_accumulation_dropped() {
+        let events = vec![ev(WyckoffEventKind::Spring, 50, 0.7)];
+        let ranges = vec![range(WyckoffBias::Distribution, 40, 60)];
+        let filtered = filter_phase_c_events_in_context(events, &ranges);
+        assert_eq!(filtered.len(), 0);
+    }
+
+    #[test]
+    fn spring_inside_accumulation_kept() {
+        let events = vec![ev(WyckoffEventKind::Spring, 50, 0.7)];
+        let ranges = vec![range(WyckoffBias::Accumulation, 40, 60)];
+        let filtered = filter_phase_c_events_in_context(events, &ranges);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].kind, WyckoffEventKind::Spring);
+    }
+
+    #[test]
+    fn multiple_springs_only_strongest_kept_per_range() {
+        let events = vec![
+            ev(WyckoffEventKind::Spring, 45, 0.6),
+            ev(WyckoffEventKind::Spring, 50, 0.9), // strongest
+            ev(WyckoffEventKind::Spring, 55, 0.7),
+        ];
+        let ranges = vec![range(WyckoffBias::Accumulation, 40, 60)];
+        let filtered = filter_phase_c_events_in_context(events, &ranges);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].bar_index, 50);
+        assert_eq!(filtered[0].score, 0.9);
+    }
+
+    #[test]
+    fn utad_inside_distribution_kept_one_strongest() {
+        let events = vec![
+            ev(WyckoffEventKind::Utad, 45, 0.6),
+            ev(WyckoffEventKind::Utad, 50, 0.85),
+            ev(WyckoffEventKind::Utad, 55, 0.7),
+        ];
+        let ranges = vec![range(WyckoffBias::Distribution, 40, 60)];
+        let filtered = filter_phase_c_events_in_context(events, &ranges);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].score, 0.85);
+    }
+
+    #[test]
+    fn other_events_pass_through_unchanged() {
+        let events = vec![
+            ev(WyckoffEventKind::Sc, 45, 0.8),
+            ev(WyckoffEventKind::Bc, 55, 0.8),
+            ev(WyckoffEventKind::Sos, 60, 0.7),
+        ];
+        let filtered = filter_phase_c_events_in_context(events, &[]);
+        assert_eq!(filtered.len(), 3);
+    }
+
+    #[test]
+    fn springs_per_range_isolated() {
+        // Two separate accumulation ranges, each with their own
+        // strongest Spring.
+        let events = vec![
+            ev(WyckoffEventKind::Spring, 50, 0.7), // range A
+            ev(WyckoffEventKind::Spring, 55, 0.8), // range A — wins
+            ev(WyckoffEventKind::Spring, 100, 0.65), // range B — wins
+            ev(WyckoffEventKind::Spring, 105, 0.6),  // range B
+        ];
+        let ranges = vec![
+            range(WyckoffBias::Accumulation, 40, 60),
+            range(WyckoffBias::Accumulation, 90, 110),
+        ];
+        let filtered = filter_phase_c_events_in_context(events, &ranges);
+        assert_eq!(filtered.len(), 2);
+        let bars: Vec<usize> = filtered.iter().map(|e| e.bar_index).collect();
+        assert!(bars.contains(&55));
+        assert!(bars.contains(&100));
+    }
+}

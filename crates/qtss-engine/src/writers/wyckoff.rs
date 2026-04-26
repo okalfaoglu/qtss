@@ -18,9 +18,10 @@ use qtss_storage::market_bars::{self, MarketBarRow};
 use qtss_wyckoff::{
     boost_with_phase_c_events, detect_cycles_for_slot,
     detect_cycles_from_elliott, detect_events, detect_ranges,
-    merge_cycles_with_confluence, ElliottSegment, ElliottSegmentKind,
-    WyckoffBias, WyckoffConfig, WyckoffCycle, WyckoffCyclePhase,
-    WyckoffCycleSource, WyckoffEvent, WyckoffPhaseTracker, WyckoffRange,
+    filter_phase_c_events_in_context, merge_cycles_with_confluence,
+    ElliottSegment, ElliottSegmentKind, WyckoffBias, WyckoffConfig,
+    WyckoffCycle, WyckoffCyclePhase, WyckoffCycleSource, WyckoffEvent,
+    WyckoffPhaseTracker, WyckoffRange,
 };
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
@@ -86,8 +87,33 @@ async fn process_symbol(
         .map(|r| to_domain_bar(r, &instrument, tf))
         .collect();
 
-    let events = detect_events(&bars, cfg);
-    // Feed the phase tracker in chronological order (already sorted).
+    let raw_events = detect_events(&bars, cfg);
+
+    // FAZ 25.4.E — Phase-C context filter. Run range detection FIRST
+    // so we know which Accumulation / Distribution windows are active,
+    // then drop Spring/UTAD events that fall outside their canonical
+    // schematic context (Spring inside Distribution OR no range at
+    // all → suppress; same for UTAD inside Accumulation). Per Wyckoff
+    // doctrine each range's Phase C contains EXACTLY ONE Spring (or
+    // UTAD), so the filter also collapses multiple within-range
+    // candidates to the strongest score.
+    //
+    // Why filter at the writer level rather than inside detect_events?
+    // Range detection (detect_ranges) consumes the event stream — if
+    // we filtered before range detection, the range boundaries would
+    // be miscomputed (Spring contributes to range_LOW). So order is:
+    //   1. detect_events → all candidates
+    //   2. detect_ranges(events) → range windows
+    //   3. filter_phase_c_events_in_context → drop spam Spring/UTAD
+    //   4. persist filtered events + the same ranges
+    let mut sorted = raw_events.clone();
+    sorted.sort_by_key(|e| e.bar_index);
+    let raw_ranges = detect_ranges(&sorted);
+    let events = filter_phase_c_events_in_context(raw_events, &raw_ranges);
+
+    // Feed the phase tracker on the FILTERED event stream so phase
+    // labels reflect the canonical Wyckoff schematic rather than
+    // every spam wick.
     let mut tracker = WyckoffPhaseTracker::new();
     let mut sorted = events.clone();
     sorted.sort_by_key(|e| e.bar_index);
@@ -130,6 +156,9 @@ async fn process_symbol(
 
     // Schematic accumulation / distribution range boxes (slot 0 only —
     // they're a per-symbol annotation, not a per-degree breakdown).
+    // Recompute against the FILTERED sorted stream so range_low /
+    // range_high reflect the canonical (per-range strongest) Spring
+    // / UTAD instead of the raw spam.
     let ranges = detect_ranges(&sorted);
     for r in &ranges {
         written += write_range(pool, sym, &chrono, r).await?;
