@@ -66,21 +66,21 @@ function VerdictPill({
   prefix: string;
 }) {
   if (!verdict || score == null) {
-    return <span className="rounded bg-zinc-800/60 px-1 text-[9px] text-zinc-500">{prefix}—</span>;
+    return <span className="rounded bg-zinc-800/60 px-1 text-[9px] text-zinc-200">{prefix}—</span>;
   }
   const dipCls: Record<string, string> = {
     very_high: "bg-emerald-500/30 text-emerald-200",
     high: "bg-emerald-500/20 text-emerald-300",
     developing: "bg-amber-500/20 text-amber-300",
-    low: "bg-zinc-700/40 text-zinc-400",
+    low: "bg-zinc-700/40 text-zinc-100",
   };
   const topCls: Record<string, string> = {
     very_high: "bg-rose-500/30 text-rose-200",
     high: "bg-rose-500/20 text-rose-300",
     developing: "bg-amber-500/20 text-amber-300",
-    low: "bg-zinc-700/40 text-zinc-400",
+    low: "bg-zinc-700/40 text-zinc-100",
   };
-  const cls = (polarity === "dip" ? dipCls : topCls)[verdict] ?? "bg-zinc-700/40 text-zinc-400";
+  const cls = (polarity === "dip" ? dipCls : topCls)[verdict] ?? "bg-zinc-700/40 text-zinc-100";
   return (
     <span className={`rounded px-1 font-mono text-[9px] ${cls}`}>
       {prefix}
@@ -115,7 +115,7 @@ function ComponentBars({ comps }: { comps?: Record<string, number | null> | null
             <div className="relative h-3 w-full overflow-hidden rounded-sm bg-zinc-900">
               <div className={`${tone} absolute bottom-0 w-full`} style={{ height: `${w}%` }} />
             </div>
-            <span className="font-mono text-[7px] text-zinc-600">{lbl}</span>
+            <span className="font-mono text-[7px] text-zinc-200">{lbl}</span>
           </div>
         );
       })}
@@ -131,7 +131,7 @@ function LifecycleStrip({ counts }: { counts: Record<string, number> }) {
     ["armed", "A", "bg-amber-500/30 text-amber-200"],
     ["active", "▶", "bg-emerald-500/30 text-emerald-200"],
     ["triggered", "T", "bg-emerald-600/40 text-emerald-100"],
-    ["closed", "×", "bg-zinc-800 text-zinc-500"],
+    ["closed", "×", "bg-zinc-800 text-zinc-200"],
     ["rejected", "R", "bg-rose-500/30 text-rose-200"],
   ];
   const present = states.filter(([k]) => (counts[k] ?? 0) > 0);
@@ -151,19 +151,19 @@ function LifecycleStrip({ counts }: { counts: Record<string, number> }) {
 // etc. so the user spots non-zigzag corrections at a glance.
 function WaveCell({ tf }: { tf: TfSnapshot }) {
   if (!tf.iq_state) {
-    return <span className="text-zinc-600">—</span>;
+    return <span className="text-zinc-200">—</span>;
   }
   const stateColor: Record<string, string> = {
-    candidate: "text-zinc-400",
+    candidate: "text-zinc-100",
     tracking: "text-emerald-300",
     completed: "text-cyan-300",
-    invalidated: "text-zinc-500",
+    invalidated: "text-zinc-200",
   };
   const bc = (tf.primary_branch || "").replace(/^flat_/, "f.");
   return (
     <span className={`font-mono text-[10px] ${stateColor[tf.iq_state] ?? "text-zinc-300"}`}>
       {tf.iq_wave ?? "?"}
-      {bc && <span className="ml-0.5 text-[8px] text-zinc-500">·{bc}</span>}
+      {bc && <span className="ml-0.5 text-[8px] text-zinc-200">·{bc}</span>}
     </span>
   );
 }
@@ -211,17 +211,17 @@ export default function Analiz() {
       <div className="mb-4 flex items-baseline justify-between border-b border-zinc-800 pb-2">
         <div>
           <h1 className="text-lg font-bold text-amber-300">QTSS Analiz</h1>
-          <p className="text-[11px] text-zinc-500">
+          <p className="text-[11px] text-zinc-200">
             Exchange · Market · Sembol kırılımında IQ dalgaları, Major Dip
             skorları, açık pozisyonlar ve onchain durum.
           </p>
         </div>
-        <div className="text-[10px] text-zinc-500">
+        <div className="text-[10px] text-zinc-200">
           {data && new Date(data.generated_at).toLocaleString("tr-TR")}
         </div>
       </div>
 
-      {isLoading && <div className="text-zinc-500">Yükleniyor…</div>}
+      {isLoading && <div className="text-zinc-200">Yükleniyor…</div>}
 
       {grouped.map(([groupKey, rows]) => {
         const open = expanded[groupKey] ?? true;
@@ -235,13 +235,13 @@ export default function Analiz() {
               <span className="font-mono text-xs uppercase tracking-wider text-zinc-300">
                 {groupKey}
               </span>
-              <span className="text-[10px] text-zinc-500">{open ? "−" : "+"} {rows.length}</span>
+              <span className="text-[10px] text-zinc-200">{open ? "−" : "+"} {rows.length}</span>
             </button>
             {open && (
               <div className="overflow-x-auto rounded border border-zinc-800">
                 <table className="w-full text-[11px]">
                   <thead className="bg-zinc-900/40">
-                    <tr className="text-left text-[9px] uppercase tracking-wider text-zinc-500">
+                    <tr className="text-left text-[9px] uppercase tracking-wider text-zinc-200">
                       <th className="px-2 py-1">Sembol</th>
                       {allTfs.map((tf) => (
                         <th key={tf} className="px-2 py-1 text-center">
@@ -267,7 +267,7 @@ export default function Analiz() {
                             const tf = row.timeframes.find((x) => x.timeframe === tfKey);
                             if (!tf) {
                               return (
-                                <td key={tfKey} className="px-2 py-1 text-center text-zinc-700">
+                                <td key={tfKey} className="px-2 py-1 text-center text-zinc-500">
                                   —
                                 </td>
                               );
@@ -309,7 +309,7 @@ export default function Analiz() {
                             );
                           })}
                           <td className="px-2 py-1 text-right font-mono">
-                            {row.open_positions || <span className="text-zinc-700">—</span>}
+                            {row.open_positions || <span className="text-zinc-500">—</span>}
                           </td>
                           <td className="px-2 py-1 text-right font-mono text-zinc-300">
                             {fmtNotional(row.aggregate_notional_usd)}
@@ -327,7 +327,7 @@ export default function Analiz() {
                                       ? "rounded bg-rose-500/30 px-1 text-rose-200"
                                       : row.onchain_direction === "sell"
                                       ? "rounded bg-rose-500/20 px-1 text-rose-300"
-                                      : "rounded bg-zinc-700/40 px-1 text-zinc-400"
+                                      : "rounded bg-zinc-700/40 px-1 text-zinc-100"
                                   }
                                 >
                                   {row.onchain_direction ?? "—"} {(row.onchain_score * 100).toFixed(0)}%
@@ -336,7 +336,7 @@ export default function Analiz() {
                                   <span className="text-cyan-400">
                                     {row.onchain_kind}
                                     {ageMin != null && (
-                                      <span className="ml-1 text-zinc-500">{ageMin}m</span>
+                                      <span className="ml-1 text-zinc-200">{ageMin}m</span>
                                     )}
                                   </span>
                                 )}
@@ -345,11 +345,11 @@ export default function Analiz() {
                               <span className="text-cyan-400">
                                 {row.onchain_kind}
                                 {ageMin != null && (
-                                  <span className="ml-1 text-zinc-500">{ageMin}m</span>
+                                  <span className="ml-1 text-zinc-200">{ageMin}m</span>
                                 )}
                               </span>
                             ) : (
-                              <span className="text-zinc-700">—</span>
+                              <span className="text-zinc-500">—</span>
                             )}
                           </td>
                         </tr>
@@ -364,7 +364,7 @@ export default function Analiz() {
       })}
 
       {!isLoading && (data?.rows ?? []).length === 0 && (
-        <div className="rounded border border-zinc-800 bg-zinc-900/40 p-3 text-zinc-500">
+        <div className="rounded border border-zinc-800 bg-zinc-900/40 p-3 text-zinc-200">
           Aktif sembol yok. Engine Symbols sayfasından sembol etkinleştir.
         </div>
       )}
