@@ -2492,10 +2492,12 @@ export function LuxAlgoChart({
       // and ranges already are at most one per (sym, tf, slot).
       if (d.subkind.startsWith("range_")) return false;
       if (d.subkind.startsWith("cycle_")) return false;
-      const lastAnchor = d.anchors[d.anchors.length - 1];
-      const anchorBar =
-        typeof lastAnchor?.bar_index === "number" ? lastAnchor.bar_index : -1;
-      return anchorBar >= 0 && anchorBar < candles.length;
+      // FAZ 25.4.E — was filtering by `anchorBar < candles.length`
+      // which DROPPED every Spring/UTAD/etc. event because writer
+      // bar_index lives in a 2000-bar frame while the chart loads
+      // 1500 candles at 4h. anchor.time is the invariant — let
+      // anchorTime() handle out-of-range times naturally.
+      return d.anchors.length > 0;
     });
     // Score-based dedup (user: \"utad-pc'lerden hangisini neye göre
     // tekilleştireceksin\"). Sort by `confidence` DESC — the
@@ -2537,12 +2539,10 @@ export function LuxAlgoChart({
         !det.subkind.startsWith("range_") &&
         !det.subkind.startsWith("cycle_")
       ) {
-        const lastAnchor = det.anchors[det.anchors.length - 1];
-        const anchorBar =
-          typeof lastAnchor?.bar_index === "number"
-            ? lastAnchor.bar_index
-            : -1;
-        if (anchorBar < 0 || anchorBar >= candles.length) continue;
+        // bar_index check removed — see wyckoffEvents filter above.
+        // The writer's bar_index frame (2000 bars) != chart's candles
+        // frame (e.g. 1500 at 4h), so this gate was rejecting valid
+        // events. anchorTime() handles visibility via anchor.time.
         if (!wyckoffKeep.has(det.id)) continue;
       }
       const render = renderByFamily[family];
