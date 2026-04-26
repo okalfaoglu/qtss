@@ -16,11 +16,11 @@ use qtss_domain::v2::instrument::{AssetClass, Instrument, SessionCalendar, Venue
 use qtss_domain::v2::timeframe::Timeframe;
 use qtss_storage::market_bars::{self, MarketBarRow};
 use qtss_wyckoff::{
-    detect_cycles_for_slot, detect_cycles_from_elliott, detect_events,
-    detect_ranges, merge_cycles_with_confluence, ElliottSegment,
-    ElliottSegmentKind, WyckoffBias, WyckoffConfig, WyckoffCycle,
-    WyckoffCyclePhase, WyckoffCycleSource, WyckoffEvent,
-    WyckoffPhaseTracker, WyckoffRange,
+    boost_with_phase_c_events, detect_cycles_for_slot,
+    detect_cycles_from_elliott, detect_events, detect_ranges,
+    merge_cycles_with_confluence, ElliottSegment, ElliottSegmentKind,
+    WyckoffBias, WyckoffConfig, WyckoffCycle, WyckoffCyclePhase,
+    WyckoffCycleSource, WyckoffEvent, WyckoffPhaseTracker, WyckoffRange,
 };
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
@@ -175,7 +175,17 @@ async fn process_symbol(
             tape_end_price,
         );
 
-        // (3) Hybrid confluence merge (50% overlap on same phase).
+        // (3a) Phase-C event boost: Spring (Wyckoff Accumulation Phase
+        // C) at the start of an Elliott Markup tile, OR UTAD
+        // (Distribution Phase C) at the start of a Markdown tile,
+        // upgrades the tile's source to Confluent. This captures
+        // Pruden's canonical highest-conviction signal (Spring = W2 dip
+        // = Markup ignition; UTAD = B-wave = Markdown trigger).
+        let boost_window_bars: usize = 5;
+        let elliott_cycles =
+            boost_with_phase_c_events(elliott_cycles, &sorted, boost_window_bars);
+
+        // (3b) Hybrid confluence merge (50% overlap on same phase).
         let merged = merge_cycles_with_confluence(
             event_cycles,
             elliott_cycles,

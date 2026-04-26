@@ -621,6 +621,30 @@ export function LuxAlgoChart({
   // coloring so the operator sees institutional accumulation /
   // distribution footprints alongside the Elliott structure.
   const [showWyckoff, setShowWyckoff] = useState(false);
+  // FAZ 25.4.E — per-element Wyckoff filter. The master `showWyckoff`
+  // toggle gates the whole family; these sub-toggles let the operator
+  // pick which elements actually paint when Wyckoff is on. Each
+  // grouping has its own switch:
+  //   - 4 cycle phases (Markup / Distribution / Markdown / Accumulation)
+  //   - schematic ranges (Wyckoff Phase A-E inner box)
+  //   - 12 individual events (climaxes, springs, sos/sow, ar/st, ...)
+  //   - source filter (event-only / elliott-only / confluent-only)
+  // Defaults: cycles + ranges on, events off (events are noisy at low Z).
+  const [wyckoffFilter, setWyckoffFilter] = useState({
+    cycle_markup: true,
+    cycle_distribution: true,
+    cycle_markdown: true,
+    cycle_accumulation: true,
+    ranges: true,
+    events_climax: false,   // SC, BC
+    events_spring: true,    // Spring, UTAD (Phase-C high-conviction)
+    events_sos_sow: false,  // SOS, SOW
+    events_other: false,    // AR, ST, LPS, PS, BU, Test
+    src_event: true,
+    src_elliott: true,
+    src_confluent: true,
+  });
+  const [wyckoffFilterOpen, setWyckoffFilterOpen] = useState(false);
   // FAZ 25.x — overlay toggle for the elliott_full writer (diagonals,
   // flats, extended impulses, truncated fifth, W-X-Y combinations).
   // Default off because it's noisy on intraday tapes; operator opts in.
@@ -2065,6 +2089,22 @@ export function LuxAlgoChart({
       // enough to read through; the schematic range boxes (Accum/Dist)
       // sit ON TOP for the tighter framing.
       if (d.subkind.startsWith("cycle_") && d.anchors.length >= 2) {
+        // FAZ 25.4.E — per-element Wyckoff filter gating.
+        const cycleEnabled =
+          (d.subkind === "cycle_markup" && wyckoffFilter.cycle_markup) ||
+          (d.subkind === "cycle_distribution" && wyckoffFilter.cycle_distribution) ||
+          (d.subkind === "cycle_markdown" && wyckoffFilter.cycle_markdown) ||
+          (d.subkind === "cycle_accumulation" && wyckoffFilter.cycle_accumulation);
+        if (!cycleEnabled) return;
+        const sourceForFilter =
+          typeof d.raw_meta?.source === "string"
+            ? (d.raw_meta.source as string)
+            : "event";
+        const sourceEnabled =
+          (sourceForFilter === "event" && wyckoffFilter.src_event) ||
+          (sourceForFilter === "elliott" && wyckoffFilter.src_elliott) ||
+          (sourceForFilter === "confluent" && wyckoffFilter.src_confluent);
+        if (!sourceEnabled) return;
         const a0 = d.anchors[0];
         const a1 = d.anchors[1];
         const t0 = anchorTime(a0);
@@ -2205,6 +2245,7 @@ export function LuxAlgoChart({
       // [end_bar, range_high]. Tinted fill behind the bar tape so the
       // events read like annotations on a labelled box.
       if (d.subkind.startsWith("range_") && d.anchors.length >= 2) {
+        if (!wyckoffFilter.ranges) return;
         const a0 = d.anchors[0];
         const a1 = d.anchors[1];
         const t0 = anchorTime(a0);
@@ -2246,6 +2287,29 @@ export function LuxAlgoChart({
         attachLabel(t0, hi, label, border, "above");
         return;
       }
+      // FAZ 25.4.E — per-event-group filter. Group the 12 Wyckoff
+      // events into 4 toggleable buckets so the operator can quickly
+      // mute the noisy ones (AR/ST/LPS/PS/BU/Test fire often).
+      const eventGroup = (sk: string): keyof typeof wyckoffFilter | null => {
+        if (sk.startsWith("sc_") || sk.startsWith("bc_"))
+          return "events_climax";
+        if (sk.startsWith("spring_") || sk.startsWith("utad_"))
+          return "events_spring";
+        if (sk.startsWith("sos_") || sk.startsWith("sow_"))
+          return "events_sos_sow";
+        if (
+          sk.startsWith("ar_") ||
+          sk.startsWith("st_") ||
+          sk.startsWith("lps_") ||
+          sk.startsWith("ps_") ||
+          sk.startsWith("bu_") ||
+          sk.startsWith("test_")
+        )
+          return "events_other";
+        return null;
+      };
+      const grp = eventGroup(d.subkind);
+      if (grp && !wyckoffFilter[grp]) return;
       const a = d.anchors[0];
       const t = anchorTime(a);
       const p = parsePrice(a.price);
@@ -2720,7 +2784,7 @@ export function LuxAlgoChart({
     showHarmonic, harmonicOutput,
     harmonicFilters, showHarmonicTargets,
     auxDetections, showClassical, showRange, showGap, showCandles, showOrb, showSmc,
-    showElliottFull, showWyckoff, detectionSource, enabledSlotIndices,
+    showElliottFull, showWyckoff, wyckoffFilter, detectionSource, enabledSlotIndices,
     indicators.data, showSuperTrend, showKeltner, showIchimoku, showDonchian, showPsar,
     showRsi, showWilliamsR, showCmf, showAroon, showTtmSqueeze,
     showMacd, showStochastic, showObv, showAtr, showBollinger,
@@ -2959,7 +3023,7 @@ export function LuxAlgoChart({
             </label>
             <label
               className="flex cursor-pointer items-center gap-1"
-              title="Wyckoff: 12 events (SC/BC/Spring/UTAD/SOS/SOW/AR/ST/LPS/PS/BU/Test) + accumulation/distribution range boxes + 4-phase macro cycle bands (Accumulation → Markup → Distribution → Markdown)"
+              title="Wyckoff: 12 events + ranges + 4-phase macro cycle. Click ⚙ to filter."
             >
               <input
                 type="checkbox"
@@ -2968,7 +3032,153 @@ export function LuxAlgoChart({
               />
               Wyckoff
             </label>
+            {showWyckoff && (
+              <button
+                type="button"
+                className="ml-1 rounded border border-zinc-700 px-1 text-[10px] text-zinc-300 hover:bg-zinc-800"
+                onClick={() => setWyckoffFilterOpen((v) => !v)}
+                title="Wyckoff alt-filtre paneli (kutu/event/source aç-kapat)"
+              >
+                ⚙ {wyckoffFilterOpen ? "▼" : "▶"}
+              </button>
+            )}
           </div>
+          {showWyckoff && wyckoffFilterOpen && (
+            <div className="ml-2 mt-1 flex flex-wrap items-center gap-3 rounded border border-zinc-800 bg-zinc-950/60 px-2 py-1 text-[11px]">
+              <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+                cycles
+              </span>
+              <label className="flex cursor-pointer items-center gap-1">
+                <input
+                  type="checkbox"
+                  checked={wyckoffFilter.cycle_accumulation}
+                  onChange={(e) =>
+                    setWyckoffFilter((f) => ({ ...f, cycle_accumulation: e.target.checked }))
+                  }
+                />
+                Accum
+              </label>
+              <label className="flex cursor-pointer items-center gap-1">
+                <input
+                  type="checkbox"
+                  checked={wyckoffFilter.cycle_markup}
+                  onChange={(e) =>
+                    setWyckoffFilter((f) => ({ ...f, cycle_markup: e.target.checked }))
+                  }
+                />
+                Markup
+              </label>
+              <label className="flex cursor-pointer items-center gap-1">
+                <input
+                  type="checkbox"
+                  checked={wyckoffFilter.cycle_distribution}
+                  onChange={(e) =>
+                    setWyckoffFilter((f) => ({ ...f, cycle_distribution: e.target.checked }))
+                  }
+                />
+                Dist
+              </label>
+              <label className="flex cursor-pointer items-center gap-1">
+                <input
+                  type="checkbox"
+                  checked={wyckoffFilter.cycle_markdown}
+                  onChange={(e) =>
+                    setWyckoffFilter((f) => ({ ...f, cycle_markdown: e.target.checked }))
+                  }
+                />
+                Markdown
+              </label>
+              <span className="ml-2 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+                ranges
+              </span>
+              <label className="flex cursor-pointer items-center gap-1">
+                <input
+                  type="checkbox"
+                  checked={wyckoffFilter.ranges}
+                  onChange={(e) =>
+                    setWyckoffFilter((f) => ({ ...f, ranges: e.target.checked }))
+                  }
+                />
+                A-E box
+              </label>
+              <span className="ml-2 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+                events
+              </span>
+              <label className="flex cursor-pointer items-center gap-1" title="SC + BC">
+                <input
+                  type="checkbox"
+                  checked={wyckoffFilter.events_climax}
+                  onChange={(e) =>
+                    setWyckoffFilter((f) => ({ ...f, events_climax: e.target.checked }))
+                  }
+                />
+                Climax
+              </label>
+              <label className="flex cursor-pointer items-center gap-1" title="Spring + UTAD (Phase-C high-conviction)">
+                <input
+                  type="checkbox"
+                  checked={wyckoffFilter.events_spring}
+                  onChange={(e) =>
+                    setWyckoffFilter((f) => ({ ...f, events_spring: e.target.checked }))
+                  }
+                />
+                Spring/UTAD
+              </label>
+              <label className="flex cursor-pointer items-center gap-1" title="SOS + SOW">
+                <input
+                  type="checkbox"
+                  checked={wyckoffFilter.events_sos_sow}
+                  onChange={(e) =>
+                    setWyckoffFilter((f) => ({ ...f, events_sos_sow: e.target.checked }))
+                  }
+                />
+                SOS/SOW
+              </label>
+              <label className="flex cursor-pointer items-center gap-1" title="AR / ST / LPS / PS / BU / Test">
+                <input
+                  type="checkbox"
+                  checked={wyckoffFilter.events_other}
+                  onChange={(e) =>
+                    setWyckoffFilter((f) => ({ ...f, events_other: e.target.checked }))
+                  }
+                />
+                Other
+              </label>
+              <span className="ml-2 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+                source
+              </span>
+              <label className="flex cursor-pointer items-center gap-1" title="Confluent (event ∩ Elliott — highest confidence)">
+                <input
+                  type="checkbox"
+                  checked={wyckoffFilter.src_confluent}
+                  onChange={(e) =>
+                    setWyckoffFilter((f) => ({ ...f, src_confluent: e.target.checked }))
+                  }
+                />
+                ★
+              </label>
+              <label className="flex cursor-pointer items-center gap-1" title="Elliott-anchored (Pruden mapping)">
+                <input
+                  type="checkbox"
+                  checked={wyckoffFilter.src_elliott}
+                  onChange={(e) =>
+                    setWyckoffFilter((f) => ({ ...f, src_elliott: e.target.checked }))
+                  }
+                />
+                ◆
+              </label>
+              <label className="flex cursor-pointer items-center gap-1" title="Event-driven (climax-anchored)">
+                <input
+                  type="checkbox"
+                  checked={wyckoffFilter.src_event}
+                  onChange={(e) =>
+                    setWyckoffFilter((f) => ({ ...f, src_event: e.target.checked }))
+                  }
+                />
+                event
+              </label>
+            </div>
+          )}
           {/* Technical indicator overlays. Price-pane overlays only —
               oscillator pane lands in PR-11H. */}
           <div className="ml-2 flex items-center gap-1 text-xs">

@@ -571,6 +571,50 @@ fn preceding_phase(next: WyckoffCyclePhase) -> WyckoffCyclePhase {
 
 // ── Confluence merge ──────────────────────────────────────────────
 
+/// Boost an Elliott-anchored Markup/Markdown tile to `Confluent` when
+/// its START aligns (within `boost_window_bars`) with a Spring (for
+/// Markup) or UTAD (for Markdown) event. Pruden's canonical mapping:
+/// Spring is the Phase-C bottom that ignites Markup; UTAD is the
+/// Phase-C top that triggers Markdown. Co-occurrence of these
+/// volume-validated events with the structural sub-wave anchor is the
+/// highest-conviction trade signal in Wyckoff doctrine.
+pub fn boost_with_phase_c_events(
+    cycles: Vec<WyckoffCycle>,
+    events: &[WyckoffEvent],
+    boost_window_bars: usize,
+) -> Vec<WyckoffCycle> {
+    cycles
+        .into_iter()
+        .map(|c| {
+            // Only Elliott-anchored Markup / Markdown tiles are
+            // candidates — Event-anchored tiles already have their
+            // own confluence semantics, and ranges (Accum / Dist)
+            // aren't ignited by Spring / UTAD.
+            if c.source != WyckoffCycleSource::Elliott {
+                return c;
+            }
+            let target_kind = match c.phase {
+                WyckoffCyclePhase::Markup => WyckoffEventKind::Spring,
+                WyckoffCyclePhase::Markdown => WyckoffEventKind::Utad,
+                _ => return c,
+            };
+            let aligned = events.iter().any(|e| {
+                e.kind == target_kind
+                    && e.bar_index <= c.start_bar + boost_window_bars
+                    && c.start_bar <= e.bar_index + boost_window_bars
+            });
+            if aligned {
+                WyckoffCycle {
+                    source: WyckoffCycleSource::Confluent,
+                    ..c
+                }
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 /// Combine event-driven and Elliott-anchored tiles. When both sources
 /// produce a tile of the SAME phase whose time-windows overlap by at
 /// least `min_overlap_ratio` of the shorter tile, emit a single
@@ -979,6 +1023,93 @@ mod tests {
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[0].source, WyckoffCycleSource::Event);
         assert_eq!(merged[1].source, WyckoffCycleSource::Elliott);
+    }
+
+    #[test]
+    fn spring_boost_upgrades_markup_to_confluent() {
+        // Markup tile [W2=50, W5=90]; Spring event at bar 53 (3 bars
+        // after W2 = inside the 5-bar boost window).
+        let cycles = vec![WyckoffCycle {
+            phase: WyckoffCyclePhase::Markup,
+            source: WyckoffCycleSource::Elliott,
+            start_bar: 50,
+            end_bar: 90,
+            start_price: 100.0,
+            end_price: 150.0,
+            phase_high: 150.0,
+            phase_low: 100.0,
+            completed: true,
+            source_pattern_id: Some("m-50".into()),
+        }];
+        let events = vec![WyckoffEvent {
+            kind: WyckoffEventKind::Spring,
+            variant: "bull",
+            score: 1.0,
+            bar_index: 53,
+            reference_price: 99.0,
+            volume_ratio: 0.0,
+            range_ratio: 0.0,
+            note: String::new(),
+        }];
+        let boosted = boost_with_phase_c_events(cycles, &events, 5);
+        assert_eq!(boosted.len(), 1);
+        assert_eq!(boosted[0].source, WyckoffCycleSource::Confluent);
+    }
+
+    #[test]
+    fn utad_boost_upgrades_markdown_to_confluent() {
+        let cycles = vec![WyckoffCycle {
+            phase: WyckoffCyclePhase::Markdown,
+            source: WyckoffCycleSource::Elliott,
+            start_bar: 100,
+            end_bar: 140,
+            start_price: 150.0,
+            end_price: 110.0,
+            phase_high: 150.0,
+            phase_low: 110.0,
+            completed: true,
+            source_pattern_id: None,
+        }];
+        let events = vec![WyckoffEvent {
+            kind: WyckoffEventKind::Utad,
+            variant: "bear",
+            score: 1.0,
+            bar_index: 102,
+            reference_price: 152.0,
+            volume_ratio: 0.0,
+            range_ratio: 0.0,
+            note: String::new(),
+        }];
+        let boosted = boost_with_phase_c_events(cycles, &events, 5);
+        assert_eq!(boosted[0].source, WyckoffCycleSource::Confluent);
+    }
+
+    #[test]
+    fn boost_skips_when_no_aligned_event() {
+        let cycles = vec![WyckoffCycle {
+            phase: WyckoffCyclePhase::Markup,
+            source: WyckoffCycleSource::Elliott,
+            start_bar: 50,
+            end_bar: 90,
+            start_price: 100.0,
+            end_price: 150.0,
+            phase_high: 150.0,
+            phase_low: 100.0,
+            completed: true,
+            source_pattern_id: None,
+        }];
+        let events = vec![WyckoffEvent {
+            kind: WyckoffEventKind::Spring,
+            variant: "bull",
+            score: 1.0,
+            bar_index: 200, // far away
+            reference_price: 99.0,
+            volume_ratio: 0.0,
+            range_ratio: 0.0,
+            note: String::new(),
+        }];
+        let boosted = boost_with_phase_c_events(cycles, &events, 5);
+        assert_eq!(boosted[0].source, WyckoffCycleSource::Elliott);
     }
 
     #[test]
