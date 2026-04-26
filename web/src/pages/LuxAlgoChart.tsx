@@ -2519,14 +2519,34 @@ export function LuxAlgoChart({
     wyckoffEvents.sort((a, b) => scoreOf(b) - scoreOf(a));
     const keptByKind = new Map<string, number[]>();
     const wyckoffKeep = new Set<string>();
+    // Estimate the bar duration in seconds so we can convert the
+    // proximityBars threshold (in BARS) to a time delta. Falls back
+    // to 4h = 14400s if we can't measure.
+    let secsPerBar = 14400;
+    if (candles.length >= 2) {
+      const t0 = Math.floor(new Date(candles[0].time).getTime() / 1000);
+      const t1 = Math.floor(new Date(candles[1].time).getTime() / 1000);
+      const dt = Math.abs(t1 - t0);
+      if (dt > 0) secsPerBar = dt;
+    }
+    const proximitySecs = proximityBars * secsPerBar;
     for (const det of wyckoffEvents) {
       const a = det.anchors[0];
-      const bar = typeof a?.bar_index === "number" ? a.bar_index : -1;
-      if (bar < 0) continue;
+      // FAZ 25.4.E — API DetectionAnchor only carries time/price/label
+      // (no bar_index). Previous proximity dedup used `a.bar_index`
+      // which was always undefined → bar=-1 → every event skipped →
+      // wyckoffKeep empty → render loop drops every event. User
+      // report: \"wyckoff eventleri seçili olduğu halde grafikte
+      // işaretlenmemiş\". Switch to TIME-based proximity.
+      const ts =
+        typeof a?.time === "string"
+          ? Math.floor(new Date(a.time).getTime() / 1000)
+          : NaN;
+      if (!Number.isFinite(ts)) continue;
       const list = keptByKind.get(det.subkind) ?? [];
-      const tooClose = list.some((b) => Math.abs(b - bar) < proximityBars);
+      const tooClose = list.some((b) => Math.abs(b - ts) < proximitySecs);
       if (!tooClose) {
-        list.push(bar);
+        list.push(ts);
         keptByKind.set(det.subkind, list);
         wyckoffKeep.add(det.id);
       }
