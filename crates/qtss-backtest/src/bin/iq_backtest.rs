@@ -12,6 +12,7 @@
 //!   1 — config / DB / IO error.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use sqlx::postgres::PgPoolOptions;
@@ -21,7 +22,9 @@ use qtss_backtest::iq::cli::{
     resolve_log_path,
 };
 use qtss_backtest::iq::persistence;
-use qtss_backtest::iq::IqBacktestRunner;
+use qtss_backtest::iq::{
+    CostModel, IqBacktestRunner, IqLifecycleManager, IqReplayDetector,
+};
 
 fn main() -> Result<()> {
     // Naive arg parse — no clap dep yet to keep deps light. The
@@ -102,7 +105,19 @@ fn main() -> Result<()> {
             .connect(&database_url)
             .await
             .context("connecting to Postgres")?;
-        let runner = IqBacktestRunner::new(config)?;
+        // BUG6 fix — wire the real detector + lifecycle. Default
+        // `IqBacktestRunner::new()` was leaving NoSetups + NoLifecycle
+        // installed, so the bar loop ran in 17ms with 0 trades. The
+        // actual replay logic lives in IqReplayDetector +
+        // IqLifecycleManager and needs to be plugged in here.
+        let detector = Arc::new(IqReplayDetector::new(config.clone()));
+        let lifecycle = Arc::new(IqLifecycleManager::new(
+            config.clone(),
+            CostModel::default(),
+        ));
+        let runner = IqBacktestRunner::new(config)?
+            .with_detector(detector)
+            .with_lifecycle(lifecycle);
         let report = runner.run(&pool).await?;
         if persist {
             match persistence::persist_report(
