@@ -40,6 +40,8 @@
 pub mod attribution;
 pub mod config;
 pub mod cost;
+pub mod detector;
+pub mod manager;
 pub mod report;
 pub mod runner;
 pub mod trade;
@@ -48,6 +50,8 @@ pub mod trade_log;
 pub use attribution::{LossReason, OutcomeAttribution, OutcomeClass};
 pub use config::IqBacktestConfig;
 pub use cost::{CostModel, FillCost};
+pub use detector::IqReplayDetector;
+pub use manager::IqLifecycleManager;
 pub use report::IqBacktestReport;
 pub use runner::IqBacktestRunner;
 pub use trade::{IqTrade, TradeOutcome, TradeState};
