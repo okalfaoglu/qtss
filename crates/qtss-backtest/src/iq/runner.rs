@@ -28,6 +28,9 @@ use rust_decimal::Decimal;
 use sqlx::PgPool;
 
 use super::attribution::{classify, OutcomeAttribution};
+use super::availability::{
+    probe as probe_data_availability, DataAvailabilityReport,
+};
 use super::config::IqBacktestConfig;
 use super::cost::CostModel;
 use super::report::{aggregate, IqBacktestReport};
@@ -156,6 +159,19 @@ impl IqBacktestRunner {
             "iq-backtest starting"
         );
 
+        // BUG BACKTEST — pre-flight data availability probe. Surfaces
+        // missing/empty channels BEFORE the bar loop so the operator
+        // doesn't waste 100s wondering why a fully-populated tape
+        // produced zero trades.
+        let availability: DataAvailabilityReport =
+            probe_data_availability(pool, &self.config).await;
+        availability.print();
+        if availability.has_critical_gap() {
+            warn!(
+                "data availability has critical gaps — 0-trade output is expected"
+            );
+        }
+
         let mut open: Vec<IqTrade> = Vec::new();
         let mut all_closed: Vec<(IqTrade, OutcomeAttribution)> = Vec::new();
         let mut bars_processed: u64 = 0;
@@ -256,7 +272,9 @@ impl IqBacktestRunner {
             all_closed.push((trade, attr));
         }
 
-        let report = aggregate(self.config.clone(), bars_processed, &all_closed);
+        let mut report =
+            aggregate(self.config.clone(), bars_processed, &all_closed);
+        report.data_availability = Some(availability);
         let avg_bar_ms = if bars_processed > 0 {
             total_processing_ms as f64 / bars_processed as f64
         } else {

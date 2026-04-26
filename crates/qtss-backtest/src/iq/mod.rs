@@ -38,6 +38,7 @@
 //! plus emits per-trade JSONL if a log path is configured.
 
 pub mod attribution;
+pub mod availability;
 pub mod cli;
 pub mod config;
 pub mod cost;
@@ -52,6 +53,10 @@ pub mod trade;
 pub mod trade_log;
 
 pub use attribution::{LossReason, OutcomeAttribution, OutcomeClass};
+pub use availability::{
+    probe as probe_data_availability, ChannelAvailability,
+    DataAvailabilityReport,
+};
 pub use config::IqBacktestConfig;
 pub use cost::{CostModel, FillCost};
 pub use detector::IqReplayDetector;
