@@ -2140,15 +2140,15 @@ export function LuxAlgoChart({
         > = {
           confluent: {
             rangeFill: 0.22, rangeBorder: 1.00, rangeWidth: 2,
-            trendFill: 0.07, trendBorder: 1.00, trendWidth: 3,
+            trendFill: 0.18, trendBorder: 1.00, trendWidth: 3,
           },
           elliott: {
-            rangeFill: 0.16, rangeBorder: 0.90, rangeWidth: 2,
-            trendFill: 0.05, trendBorder: 0.90, trendWidth: 2,
+            rangeFill: 0.16, rangeBorder: 0.95, rangeWidth: 2,
+            trendFill: 0.13, trendBorder: 0.95, trendWidth: 2,
           },
           event: {
-            rangeFill: 0.10, rangeBorder: 0.65, rangeWidth: 1,
-            trendFill: 0.03, trendBorder: 0.60, trendWidth: 1,
+            rangeFill: 0.10, rangeBorder: 0.70, rangeWidth: 1,
+            trendFill: 0.08, trendBorder: 0.70, trendWidth: 1,
           },
         };
         const styleSrc = styleBySource[source] ?? styleBySource.event;
