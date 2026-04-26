@@ -1675,13 +1675,22 @@ export function LuxAlgoChart({
       return NaN;
     };
     const anchorTime = (a: ChartWorkspaceAnchor): Time | null => {
-      if (typeof a.bar_index === "number") {
-        const t = timeAt(a.bar_index);
-        if (t !== null) return t;
-      }
+      // Prefer the absolute datetime over bar_index. Writers persist
+      // both, but bar_index is in the WRITER's bar slice frame
+      // (typically 2000 bars) which may not match the CHART's candles
+      // array (e.g. 1500 bars at 4h) — passing a writer-frame
+      // bar_index into timeAt() triggers the extrapolation path and
+      // returns a future timestamp far off the right edge, so the
+      // primitive renders off-screen and looks "missing". `time` is
+      // an invariant ISO string that maps the same regardless of
+      // frame.
       if (typeof a.time === "string") {
         const ts = Math.floor(new Date(a.time).getTime() / 1000);
         if (!Number.isNaN(ts)) return ts as UTCTimestamp;
+      }
+      if (typeof a.bar_index === "number") {
+        const t = timeAt(a.bar_index);
+        if (t !== null) return t;
       }
       return null;
     };
