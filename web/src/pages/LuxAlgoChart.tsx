@@ -739,15 +739,41 @@ export function LuxAlgoChart({
   // every tick. User report: \"eventler seçili olduğu halde grafikte
   // gözükmüyor\" — events were getting cut by the AUX_RENDER_CAP=120
   // when SMC / classical / gap / candle saturated the top 120.
+  //
+  // Sub-cap on cycle rows per (slot, phase): keep only the LATEST 2.
+  // Z3 chart screenshots showed multiple historical Markdown +
+  // Accumulation tiles stacked, creating visual conflicts. Showing
+  // only the most-recent tiles per phase per slot keeps the active
+  // rotation visible without 6-month history clutter.
   const AUX_RENDER_CAP = 120;
+  const CYCLES_PER_SLOT_PHASE = 2;
   const _allAuxDetections = auxWorkspace.data?.detections ?? [];
-  const _wyckoffRows = _allAuxDetections.filter(
-    (d) => d.family === "wyckoff",
+  const _wyckoffNonCycle = _allAuxDetections.filter(
+    (d) =>
+      d.family === "wyckoff" && !d.subkind.startsWith("cycle_"),
   );
+  // Cycle rows: keep most-recent N per (slot, subkind) bucket.
+  const _wyckoffCycles = _allAuxDetections.filter(
+    (d) => d.family === "wyckoff" && d.subkind.startsWith("cycle_"),
+  );
+  const _cycleBucketCounts = new Map<string, number>();
+  const _wyckoffCyclesKept = _wyckoffCycles
+    .slice() // already start_time DESC from API
+    .filter((d) => {
+      const key = `${d.pivot_level ?? ""}::${d.subkind}`;
+      const cnt = _cycleBucketCounts.get(key) ?? 0;
+      if (cnt >= CYCLES_PER_SLOT_PHASE) return false;
+      _cycleBucketCounts.set(key, cnt + 1);
+      return true;
+    });
   const _otherRows = _allAuxDetections
     .filter((d) => d.family !== "wyckoff")
     .slice(0, AUX_RENDER_CAP);
-  const auxDetections = [..._wyckoffRows, ..._otherRows];
+  const auxDetections = [
+    ..._wyckoffNonCycle,
+    ..._wyckoffCyclesKept,
+    ..._otherRows,
+  ];
 
   // ── /v2/indicators query — pulls the technical-indicator series map
   //    for whichever overlays the operator has toggled on. Aligned to
@@ -2325,9 +2351,14 @@ export function LuxAlgoChart({
         const phaseRaw = d.raw_meta?.phase;
         const phase =
           typeof phaseRaw === "string" ? phaseRaw.toUpperCase() : "";
+        // FAZ 25.4.E — schematic range label disambiguated from
+        // macro cycle labels. Cycle tiles read "Distribution · Z5 ◆"
+        // while schematic ranges read "Range Dist · PC". The "P{x}"
+        // suffix is the inner Wyckoff schematic phase (A/B/C/D/E),
+        // a different concept from the 4-phase macro cycle.
         const label = isAccum
-          ? `Accumulation${phase ? ` · P${phase}` : ""}`
-          : `Distribution${phase ? ` · P${phase}` : ""}`;
+          ? `Range Accum${phase ? ` · P${phase}` : ""}`
+          : `Range Dist${phase ? ` · P${phase}` : ""}`;
         attachLabel(t0, hi, label, border, "above");
         return;
       }
