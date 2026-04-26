@@ -525,10 +525,32 @@ pub fn scan_level(
             }
         }
         // Nascent ABC: p5 + A pivot + B pivot in correct alternation.
+        //
+        // 2026-04-26 user critique (BTCUSDT 4h Z3): "zigzag çizgisi N nin
+        // oraya kadar gitmiş sen kalkmışsın b yi a-b ortasına koymuşsun."
+        // Mini-pivot fallback can insert same-direction-as-A pivots
+        // between real Pine port confirmations, breaking the naive
+        // post_w5[1] indexing. We now pick the FIRST opposite-direction
+        // pivot AFTER A — guaranteed to be a real B candidate, not a
+        // stuttering mini-low between two Pine lows.
         if post_w5.len() >= 2 {
             let a_anchor = post_w5[0];
-            let b_anchor = post_w5[1];
-            // Direction sanity: A opposite to motive end pivot, B opposite to A.
+            let b_idx_opt = post_w5
+                .iter()
+                .enumerate()
+                .skip(1)
+                .find(|(_, p)| p.direction != a_anchor.direction)
+                .map(|(i, _)| i);
+            // No proper alternation B → forming block below also can't
+            // fire (it requires A,B,C alternation too). Skip both.
+            // The next tick may emit abc_projected (0 or 1 real pivot
+            // path) once stale data clears.
+            if b_idx_opt.is_none() {
+                continue;
+            }
+            let b_idx = b_idx_opt.unwrap();
+            let b_anchor = post_w5[b_idx];
+            // Direction sanity (defensive — b_idx selection guarantees this).
             if a_anchor.direction != p5.direction && b_anchor.direction != a_anchor.direction {
                 let a_len = (a_anchor.price - p5.price).abs();
                 let b_ret = (b_anchor.price - a_anchor.price).abs();
@@ -633,11 +655,28 @@ pub fn scan_level(
         }
         // Forming ABC: p5 + A + B + C-so-far. Full ABC fires from the
         // base writer once C completes; this catches the in-progress
-        // C leg.
+        // C leg. Same alternation-aware indexing as the nascent block:
+        // pick the next opposite-direction pivot at each step instead
+        // of trusting raw post_w5 indices that mini-pivot fallback can
+        // pollute.
         if post_w5.len() >= 3 {
             let a_anchor = post_w5[0];
-            let b_anchor = post_w5[1];
-            let c_anchor = post_w5[2];
+            let b_idx_opt = post_w5
+                .iter()
+                .enumerate()
+                .skip(1)
+                .find(|(_, p)| p.direction != a_anchor.direction)
+                .map(|(i, _)| i);
+            let Some(b_idx) = b_idx_opt else { continue; };
+            let b_anchor = post_w5[b_idx];
+            let c_idx_opt = post_w5
+                .iter()
+                .enumerate()
+                .skip(b_idx + 1)
+                .find(|(_, p)| p.direction != b_anchor.direction)
+                .map(|(i, _)| i);
+            let Some(c_idx) = c_idx_opt else { continue; };
+            let c_anchor = post_w5[c_idx];
             if a_anchor.direction != p5.direction
                 && b_anchor.direction != a_anchor.direction
                 && c_anchor.direction != b_anchor.direction
@@ -954,13 +993,19 @@ pub async fn write_early(
         }
     }
 
-    // 2026-04-26 user report (white circle): old motives' ABC
-    // simulations leaked into the chart even after a newer motive
-    // structurally superseded them. The latest-motive-only emit
-    // gate (in scan_level) stops new writes, but rows from older
-    // motives still polluted the DB. Sweep: when emitting an ABC
-    // for the LATEST motive (anchors[0] = current W5), delete any
-    // OTHER ABC rows for the same slot whose anchors[0] differs.
+    // 2026-04-26 user critique: "değişimler varsa düzelteceksin db de
+    // eski hatalı kayıt kalmayacak şekilde yapıyı düzelteceksin." The
+    // simulation must hold ONE canonical ABC row per slot at any
+    // time — every other abc_* row (different W5 bar, different
+    // stage suffix, anything else) gets swept BEFORE the current
+    // emit's INSERT. This collapses the previous 3-stage
+    // (projected / nascent / forming) co-existence into a single
+    // live row that promotes itself in place as real pivots arrive.
+    //
+    // Single sweep query: delete every abc_* row for this slot
+    // EXCEPT one whose (subkind, W5_bar) equals the current emit.
+    // The ON CONFLICT in the INSERT below then either updates that
+    // matching row in place or creates it.
     if em.subkind.starts_with("abc_") {
         let parent_bar = em.anchors.first().map(|a| a.bar_index).unwrap_or(start_bar);
         let _ = sqlx::query(
@@ -971,54 +1016,20 @@ pub async fn write_early(
                   AND pattern_family = 'elliott_early'
                   AND mode = 'live'
                   AND subkind LIKE 'abc_%'
-                  AND (anchors->0->>'bar_index')::bigint <> $6"#,
+                  AND NOT (
+                      subkind = $6
+                      AND (anchors->0->>'bar_index')::bigint = $7
+                  )"#,
         )
         .bind(&sym.exchange)
         .bind(&sym.segment)
         .bind(&sym.symbol)
         .bind(&sym.interval)
         .bind(slot)
+        .bind(&em.subkind)
         .bind(parent_bar)
         .execute(pool)
         .await;
-    }
-
-    // Drop any stale lesser-stage ABC rows for the SAME parent motive
-    // (same anchors[0] = W5 anchor). Stage hierarchy:
-    //   abc_forming > abc_nascent > abc_projected
-    // Only abc_* matches enter this block — impulse N/F/X are slot-
-    // unique already (different subkind per match) and don't need it.
-    if em.subkind.starts_with("abc_") {
-        let lesser: &[&str] = match em.stage {
-            "abc_forming" => &[
-                "abc_nascent_bull", "abc_nascent_bear",
-                "abc_projected_bull", "abc_projected_bear",
-            ],
-            "abc_nascent" => &["abc_projected_bull", "abc_projected_bear"],
-            _ => &[],
-        };
-        if !lesser.is_empty() {
-            let parent_bar = em.anchors.first().map(|a| a.bar_index).unwrap_or(start_bar);
-            let _ = sqlx::query(
-                r#"DELETE FROM detections
-                    WHERE exchange = $1 AND segment = $2
-                      AND symbol = $3 AND timeframe = $4
-                      AND slot = $5
-                      AND pattern_family = 'elliott_early'
-                      AND mode = 'live'
-                      AND subkind = ANY($6)
-                      AND (anchors->0->>'bar_index')::bigint = $7"#,
-            )
-            .bind(&sym.exchange)
-            .bind(&sym.segment)
-            .bind(&sym.symbol)
-            .bind(&sym.interval)
-            .bind(slot)
-            .bind(lesser)
-            .bind(parent_bar)
-            .execute(pool)
-            .await;
-        }
     }
     if let Err(e) = sqlx::query(
         r#"INSERT INTO detections
