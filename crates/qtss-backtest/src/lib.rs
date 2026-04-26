@@ -19,3 +19,9 @@ pub use engine::{BacktestConfig, BacktestEngine, BacktestResult, EquityPoint};
 pub use metrics::PerformanceReport;
 pub use optimize::{OptimizationResult, Optimizer, ParameterGrid, WalkForwardConfig};
 pub use strategy::Strategy;
+
+// FAZ 26 — IQ-D / IQ-T enterprise backtest pipeline. Lives alongside
+// v1 / v2 — re-uses bar-stream + cost ideas but focuses on the
+// user-defined Setup pipeline (Wyckoff + Elliott + cycle confluence)
+// and adds first-class loss attribution.
+pub mod iq;
