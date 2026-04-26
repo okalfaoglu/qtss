@@ -96,19 +96,24 @@ struct Weights {
     sentiment: f64,
     multi_tf: f64,
     funding_oi: f64,
+    /// FAZ 25.4.A — Wyckoff phase + event alignment with the
+    /// Elliott wave context. See docs/ELLIOTT_WYCKOFF_INTEGRATION.md
+    /// for the full alignment matrix.
+    wyckoff_alignment: f64,
 }
 
 impl Weights {
     fn defaults() -> Self {
         Self {
-            structural: 0.20,
-            fib_retrace: 0.15,
-            volume_capit: 0.15,
-            cvd_divergence: 0.10,
-            indicator: 0.10,
-            sentiment: 0.10,
-            multi_tf: 0.10,
-            funding_oi: 0.10,
+            structural: 0.18,
+            fib_retrace: 0.13,
+            volume_capit: 0.13,
+            cvd_divergence: 0.08,
+            indicator: 0.08,
+            sentiment: 0.08,
+            multi_tf: 0.08,
+            funding_oi: 0.09,
+            wyckoff_alignment: 0.15,
         }
     }
 }
@@ -132,14 +137,15 @@ async fn load_weights(pool: &PgPool) -> Weights {
             }
         };
     }
-    pull!(structural,     "weights.structural_completion");
-    pull!(fib_retrace,    "weights.fib_retrace_quality");
-    pull!(volume_capit,   "weights.volume_capitulation");
-    pull!(cvd_divergence, "weights.cvd_divergence");
-    pull!(indicator,      "weights.indicator_alignment");
-    pull!(sentiment,      "weights.sentiment_extreme");
-    pull!(multi_tf,       "weights.multi_tf_confluence");
-    pull!(funding_oi,     "weights.funding_oi_signals");
+    pull!(structural,        "weights.structural_completion");
+    pull!(fib_retrace,       "weights.fib_retrace_quality");
+    pull!(volume_capit,      "weights.volume_capitulation");
+    pull!(cvd_divergence,    "weights.cvd_divergence");
+    pull!(indicator,         "weights.indicator_alignment");
+    pull!(sentiment,         "weights.sentiment_extreme");
+    pull!(multi_tf,          "weights.multi_tf_confluence");
+    pull!(funding_oi,        "weights.funding_oi_signals");
+    pull!(wyckoff_alignment, "weights.wyckoff_alignment");
     w
 }
 
@@ -235,6 +241,8 @@ async fn score_series(
     let c_sentiment = score_sentiment_extreme(pool, s, polarity).await;
     let c_multi_tf = score_multi_tf_confluence(pool, s).await;
     let c_funding = score_funding_oi(pool, s, polarity).await;
+    let (c_wyckoff, wyckoff_event_meta) =
+        score_wyckoff_alignment(pool, s, polarity).await;
 
     let composite = w.structural * c_struct
         + w.fib_retrace * c_fib
@@ -243,7 +251,8 @@ async fn score_series(
         + w.indicator * c_indicator
         + w.sentiment * c_sentiment
         + w.multi_tf * c_multi_tf
-        + w.funding_oi * c_funding;
+        + w.funding_oi * c_funding
+        + w.wyckoff_alignment * c_wyckoff;
     let composite = composite.clamp(0.0, 1.0);
 
     let verdict = match composite {
@@ -262,6 +271,8 @@ async fn score_series(
         "sentiment_extreme":     c_sentiment,
         "multi_tf_confluence":   c_multi_tf,
         "funding_oi_signals":    c_funding,
+        "wyckoff_alignment":     c_wyckoff,
+        "wyckoff_event":         wyckoff_event_meta,
     });
 
     let sql = format!(
@@ -821,6 +832,110 @@ async fn score_funding_oi(pool: &PgPool, s: &SymbolKey, polarity: Polarity) -> f
     };
 
     0.5 * funding_score + 0.5 * oi_score
+}
+
+/// FAZ 25.4.A — Wyckoff alignment with the active Elliott wave.
+///
+/// Reads:
+///   1. iq_structures.current_wave for this (sym, tf)
+///   2. latest detections row with pattern_family='wyckoff' for this
+///      (sym, tf), inside `lookback` bars of the candidate dip
+///
+/// Returns (score, meta_json) where:
+///   score ∈ 0..1 per the alignment matrix from
+///         docs/ELLIOTT_WYCKOFF_INTEGRATION.md §II.1
+///   meta_json carries the event subkind + phase + age so the
+///         component breakdown can render "Spring + W2" etc. in
+///         the GUI without an extra fetch.
+async fn score_wyckoff_alignment(
+    pool: &PgPool,
+    s: &SymbolKey,
+    polarity: Polarity,
+) -> (f64, Value) {
+    // Step 1 — current Elliott wave for this (sym, tf).
+    let iq_row = sqlx::query(
+        r#"SELECT current_wave FROM iq_structures
+            WHERE exchange=$1 AND segment=$2 AND symbol=$3 AND timeframe=$4
+              AND state IN ('candidate','tracking','completed')
+            ORDER BY last_advanced_at DESC LIMIT 1"#,
+    )
+    .bind(&s.exchange).bind(&s.segment).bind(&s.symbol).bind(&s.timeframe)
+    .fetch_optional(pool).await.ok().flatten();
+    let current_wave: Option<String> = iq_row.and_then(|r| r.try_get("current_wave").ok());
+
+    // Step 2 — latest Wyckoff event in the last 50 bars.
+    let wy_row = sqlx::query(
+        r#"SELECT subkind, raw_meta, end_time
+             FROM detections
+            WHERE exchange=$1 AND segment=$2 AND symbol=$3 AND timeframe=$4
+              AND pattern_family='wyckoff' AND mode='live'
+            ORDER BY end_time DESC LIMIT 1"#,
+    )
+    .bind(&s.exchange).bind(&s.segment).bind(&s.symbol).bind(&s.timeframe)
+    .fetch_optional(pool).await.ok().flatten();
+    let Some(row) = wy_row else {
+        return (0.0, Value::Null);
+    };
+    let subkind: String = row.try_get("subkind").unwrap_or_default();
+    let wy_meta: Value = row.try_get("raw_meta").unwrap_or(Value::Null);
+    let phase: Option<String> = wy_meta
+        .get("phase")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Step 3 — alignment matrix (research doc §II.1).
+    // Polarity = Dip means we want bullish-reversal patterns; Top
+    // wants bearish-reversal patterns. Wyckoff variants encoded in
+    // subkind suffix (`_bull` / `_bear`) already match this lens.
+    let cw = current_wave.as_deref().unwrap_or("");
+    let alignment_score = match (polarity, subkind.as_str(), cw) {
+        // ── Dip (bullish reversal lens) ─────────────────────────────
+        // Spring + W2 = textbook accumulation Phase C → W3 launch
+        (Polarity::Dip, "spring_bull", "W2") => 1.0,
+        // Spring without W2 context — still a high-conviction event
+        (Polarity::Dip, "spring_bull", _)    => 0.7,
+        // SC = capitulation, end of a bearish move = next motive's W0
+        (Polarity::Dip, "sc_bull", "C")      => 0.95,
+        (Polarity::Dip, "sc_bull", _)        => 0.7,
+        // SOS + W3 = Phase D markup launch confirmation
+        (Polarity::Dip, "sos_bull", "W3")    => 0.85,
+        (Polarity::Dip, "sos_bull", _)       => 0.5,
+        // ST + W2 = secondary test of support during W2 retrace
+        (Polarity::Dip, "st_bull", "W2")     => 0.7,
+        (Polarity::Dip, "st_bull", _)        => 0.4,
+        // LPS + W4 = higher-low after SOS coincides with W4 retrace
+        (Polarity::Dip, "lps_bull", "W4")    => 0.7,
+        (Polarity::Dip, "lps_bull", _)       => 0.4,
+        // PS / Test / BU — supporting events, modest score
+        (Polarity::Dip, "ps_bull", _)        => 0.4,
+        (Polarity::Dip, "test_bull", _)      => 0.55,
+        (Polarity::Dip, "bu_bull", _)        => 0.55,
+        // AR — bounce after SC, marks range top, moderate dip signal
+        (Polarity::Dip, "ar_bull", _)        => 0.4,
+
+        // ── Top (bearish reversal lens) ─────────────────────────────
+        // BC + W5 = blowoff distribution Phase A → A-wave launch
+        (Polarity::Top, "bc_bear", "W5")     => 1.0,
+        (Polarity::Top, "bc_bear", _)        => 0.7,
+        // UTAD + B = Phase C distribution shakeout, C-wave imminent
+        (Polarity::Top, "utad_bear", "B")    => 0.95,
+        (Polarity::Top, "utad_bear", _)      => 0.7,
+        // SOW + C = Phase D markdown
+        (Polarity::Top, "sow_bear", "C")     => 0.85,
+        (Polarity::Top, "sow_bear", _)       => 0.5,
+
+        // Cross-polarity events (bullish event under top lens, etc.)
+        // contribute ZERO — actively bearish for the lens.
+        _ => 0.0,
+    };
+
+    let meta = json!({
+        "subkind":       subkind,
+        "phase":         phase,
+        "current_wave":  current_wave,
+        "score":         alignment_score,
+    });
+    (alignment_score, meta)
 }
 
 /// 12.6 — Sentiment extreme (Fear & Greed).

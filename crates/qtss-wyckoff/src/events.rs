@@ -365,29 +365,312 @@ pub fn eval_sow(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
     out
 }
 
-// ── AR / ST / PS / LPS / BU / Test — placeholder stubs ────────────
-// First-pass release keeps these inactive (empty-vec) until Wyckoff
-// outcomes data is collected. Wiring the structure now means adding
-// the evaluator body later is a zero-touch change for the engine
-// writer.
+// ── AR — Automatic Rally (post-SC bounce defining range top) ──────
+//
+// Heuristic: scan recent SCs; for each, find the highest CLOSE within
+// `ar_window` bars after the SC bar. That high becomes AR. We don't
+// repeat-fire — only the latest AR per range.
+pub fn eval_ar(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
+    let mut out = Vec::new();
+    let n = bars.len();
+    let window = cfg.ar_window_bars.max(3) as usize;
+    if n < (cfg.volume_sma_bars as usize) + window + 2 {
+        return out;
+    }
+    let scs = eval_selling_climax(bars, cfg);
+    for sc in scs {
+        let sc_idx = sc.bar_index;
+        let end = (sc_idx + window).min(n - 1);
+        if end <= sc_idx {
+            continue;
+        }
+        let mut best_idx = sc_idx + 1;
+        let mut best_high = bar_high(&bars[sc_idx + 1]);
+        for k in (sc_idx + 1)..=end {
+            let h = bar_high(&bars[k]);
+            if h > best_high {
+                best_high = h;
+                best_idx = k;
+            }
+        }
+        // AR must rise meaningfully above SC low (≥ 1× ATR).
+        let a = atr(bars, sc_idx, 14).max(1e-9);
+        if best_high - sc.reference_price < a {
+            continue;
+        }
+        out.push(WyckoffEvent {
+            kind: WyckoffEventKind::Ar,
+            variant: "bull",
+            score: 0.55,
+            bar_index: best_idx,
+            reference_price: best_high,
+            volume_ratio: 0.0,
+            range_ratio: 0.0,
+            note: format!(
+                "AR: {} bars after SC, top {:.2}",
+                best_idx - sc_idx,
+                best_high
+            ),
+        });
+    }
+    out
+}
 
-pub fn eval_ar(_bars: &[Bar], _cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
-    Vec::new()
+// ── ST — Secondary Test (low-volume retest of SC) ─────────────────
+//
+// After AR defines range top, a healthy accumulation revisits the SC
+// area on REDUCED volume. Heuristic: bar whose low is within
+// `st_proximity_pct` of an SC low AND volume is below baseline SMA.
+pub fn eval_st(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
+    let mut out = Vec::new();
+    let n = bars.len();
+    if n < (cfg.volume_sma_bars as usize) + 5 {
+        return out;
+    }
+    let scs = eval_selling_climax(bars, cfg);
+    for sc in scs {
+        let sc_idx = sc.bar_index;
+        let sc_low = sc.reference_price;
+        let proximity = sc_low * cfg.st_proximity_pct;
+        // Look at bars [sc_idx + ar_window/2, n) for retests.
+        let start = (sc_idx + (cfg.ar_window_bars as usize) / 2).min(n);
+        for i in start..n {
+            let bar = &bars[i];
+            let dist = (bar_low(bar) - sc_low).abs();
+            if dist > proximity {
+                continue;
+            }
+            let avg = sma_volume(bars, i, cfg.volume_sma_bars as usize);
+            if avg < 1e-9 || bar_vol(bar) > avg * cfg.st_volume_max_mult {
+                continue;
+            }
+            // Reclaim required: close above sc_low.
+            if bar_close(bar) <= sc_low {
+                continue;
+            }
+            out.push(WyckoffEvent {
+                kind: WyckoffEventKind::St,
+                variant: "bull",
+                score: 0.55,
+                bar_index: i,
+                reference_price: bar_low(bar),
+                volume_ratio: bar_vol(bar) / avg,
+                range_ratio: 0.0,
+                note: format!("ST: low-vol retest of SC at {:.2}", sc_low),
+            });
+            break; // one ST per SC
+        }
+    }
+    out
 }
-pub fn eval_st(_bars: &[Bar], _cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
-    Vec::new()
+
+// ── LPS — Last Point of Support (higher-low after SOS) ────────────
+//
+// Heuristic: after a SOS, the first higher-low (close < SOS close
+// but > prior swing low) on declining volume = LPS. Marks the W4
+// of the impulse / Phase D pullback.
+pub fn eval_lps(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
+    let mut out = Vec::new();
+    let n = bars.len();
+    if n < (cfg.volume_sma_bars as usize) + 5 {
+        return out;
+    }
+    let sos_events = eval_sos(bars, cfg);
+    for sos in sos_events {
+        let sos_idx = sos.bar_index;
+        let sos_close = sos.reference_price;
+        let scan_end = (sos_idx + cfg.lps_lookforward_bars as usize).min(n - 1);
+        if scan_end <= sos_idx + 1 {
+            continue;
+        }
+        // Find the lowest LOW in (sos_idx, scan_end] that is still
+        // ABOVE the SOS bar's low (= higher-low confirmation).
+        let sos_low = bar_low(&bars[sos_idx]);
+        let mut best_idx = 0usize;
+        let mut best_low = f64::INFINITY;
+        for k in (sos_idx + 1)..=scan_end {
+            let l = bar_low(&bars[k]);
+            if l <= sos_low {
+                continue;
+            }
+            if l < best_low {
+                best_low = l;
+                best_idx = k;
+            }
+        }
+        if best_idx == 0 || !best_low.is_finite() {
+            continue;
+        }
+        // Volume should be DECREASING vs the SOS spike.
+        let avg = sma_volume(bars, best_idx, cfg.volume_sma_bars as usize);
+        if avg > 0.0 && bar_vol(&bars[best_idx]) > avg {
+            continue; // too much volume — not a clean pullback
+        }
+        out.push(WyckoffEvent {
+            kind: WyckoffEventKind::Lps,
+            variant: "bull",
+            score: 0.55,
+            bar_index: best_idx,
+            reference_price: best_low,
+            volume_ratio: 0.0,
+            range_ratio: 0.0,
+            note: format!(
+                "LPS: higher-low {:.2} after SOS at {:.2}",
+                best_low, sos_close
+            ),
+        });
+    }
+    out
 }
-pub fn eval_ps(_bars: &[Bar], _cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
-    Vec::new()
+
+// ── PS — Preliminary Support (first volume spike on the way down) ─
+//
+// Heuristic: scan a downtrend; the FIRST bar whose volume exceeds
+// SMA × climax_volume_mult / 1.3 (slightly looser than full SC) AND
+// closes off the low (lower-wick reclaim) = PS. Distinct from SC by
+// being EARLIER + smaller magnitude.
+pub fn eval_ps(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
+    let mut out = Vec::new();
+    let n = bars.len();
+    if n < (cfg.volume_sma_bars as usize) + 10 {
+        return out;
+    }
+    let start = n.saturating_sub(cfg.scan_lookback);
+    let ps_threshold = cfg.climax_volume_mult / 1.3;
+    let mut emitted = false;
+    for i in start.max(cfg.volume_sma_bars as usize)..n {
+        if emitted {
+            break;
+        }
+        let bar = &bars[i];
+        let avg = sma_volume(bars, i, cfg.volume_sma_bars as usize);
+        if avg < 1e-9 {
+            continue;
+        }
+        let vr = bar_vol(bar) / avg;
+        if vr < ps_threshold || vr >= cfg.climax_volume_mult {
+            continue; // SC zone — handled separately
+        }
+        let lower_wick =
+            bar.open.to_f64().unwrap_or(0.0).min(bar_close(bar)) - bar_low(bar);
+        let range = bar_range(bar).max(1e-9);
+        if lower_wick < range * 0.30 {
+            continue;
+        }
+        out.push(WyckoffEvent {
+            kind: WyckoffEventKind::Ps,
+            variant: "bull",
+            score: 0.45,
+            bar_index: i,
+            reference_price: bar_low(bar),
+            volume_ratio: vr,
+            range_ratio: 0.0,
+            note: format!("PS: vol {vr:.1}× SMA, lower-wick reclaim"),
+        });
+        emitted = true;
+    }
+    out
 }
-pub fn eval_lps(_bars: &[Bar], _cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
-    Vec::new()
+
+// ── BU/JAC — Back-Up after breakout (Jump-Across-Creek pullback) ─
+//
+// Heuristic: after a SOS that broke a recent range high, look for
+// the next HIGHER-LOW that retests the broken range high from above
+// (the "creek" being jumped). Volume on the BU should be light.
+pub fn eval_bu(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
+    let mut out = Vec::new();
+    let n = bars.len();
+    if n < (cfg.volume_sma_bars as usize) + 10 {
+        return out;
+    }
+    let sos_events = eval_sos(bars, cfg);
+    for sos in sos_events {
+        let sos_idx = sos.bar_index;
+        let scan_end = (sos_idx + cfg.lps_lookforward_bars as usize).min(n - 1);
+        // Define the "creek" as the highest HIGH in the 20 bars
+        // preceding SOS (the range top SOS just broke).
+        let creek_start = sos_idx.saturating_sub(20);
+        let mut creek = f64::NEG_INFINITY;
+        for k in creek_start..sos_idx {
+            creek = creek.max(bar_high(&bars[k]));
+        }
+        if !creek.is_finite() {
+            continue;
+        }
+        // Find a bar in (sos, scan_end] whose LOW touches creek
+        // from above and CLOSES back above.
+        let proximity = creek * 0.005; // 0.5% tolerance
+        for k in (sos_idx + 1)..=scan_end {
+            let l = bar_low(&bars[k]);
+            let c = bar_close(&bars[k]);
+            if (l - creek).abs() <= proximity && c > creek {
+                let avg = sma_volume(bars, k, cfg.volume_sma_bars as usize);
+                let light = avg < 1e-9 || bar_vol(&bars[k]) < avg;
+                if !light {
+                    continue;
+                }
+                out.push(WyckoffEvent {
+                    kind: WyckoffEventKind::Bu,
+                    variant: "bull",
+                    score: 0.55,
+                    bar_index: k,
+                    reference_price: l,
+                    volume_ratio: 0.0,
+                    range_ratio: 0.0,
+                    note: format!(
+                        "BU/JAC: retest of creek {:.2} from above",
+                        creek
+                    ),
+                });
+                break;
+            }
+        }
+    }
+    out
 }
-pub fn eval_bu(_bars: &[Bar], _cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
-    Vec::new()
-}
-pub fn eval_test(_bars: &[Bar], _cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
-    Vec::new()
+
+// ── Test — Test of Spring (low-volume retest of spring low) ───────
+//
+// Mirror of ST but for Spring instead of SC. After a spring fires,
+// the first low-volume retest of the spring low = Test event.
+pub fn eval_test(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
+    let mut out = Vec::new();
+    let n = bars.len();
+    if n < (cfg.volume_sma_bars as usize) + 5 {
+        return out;
+    }
+    let springs = eval_spring(bars, cfg);
+    for sp in springs {
+        let sp_idx = sp.bar_index;
+        let sp_low = sp.reference_price;
+        let proximity = sp_low * cfg.st_proximity_pct;
+        let start = (sp_idx + (cfg.ar_window_bars as usize) / 2).min(n);
+        for i in start..n {
+            let bar = &bars[i];
+            if (bar_low(bar) - sp_low).abs() > proximity {
+                continue;
+            }
+            let avg = sma_volume(bars, i, cfg.volume_sma_bars as usize);
+            if avg < 1e-9 || bar_vol(bar) > avg * cfg.st_volume_max_mult {
+                continue;
+            }
+            if bar_close(bar) <= sp_low {
+                continue;
+            }
+            out.push(WyckoffEvent {
+                kind: WyckoffEventKind::Test,
+                variant: "bull",
+                score: 0.60,
+                bar_index: i,
+                reference_price: bar_low(bar),
+                volume_ratio: bar_vol(bar) / avg,
+                range_ratio: 0.0,
+                note: format!("Test: low-vol retest of Spring at {:.2}", sp_low),
+            });
+            break;
+        }
+    }
+    out
 }
 
 pub static WYCKOFF_SPECS: &[WyckoffSpec] = &[

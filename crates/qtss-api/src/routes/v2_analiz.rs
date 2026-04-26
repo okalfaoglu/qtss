@@ -45,6 +45,17 @@ pub struct TfSnapshot {
     /// IQ-D / IQ-T setup pipeline lifecycle counts for this TF.
     /// Keys: candidate / armed / active / triggered / closed.
     pub setup_lifecycle: Value,
+    /// FAZ 25.4.A — latest Wyckoff phase (A/B/C/D/E) read from
+    /// detections.raw_meta.phase for this (sym, tf).
+    pub wyckoff_phase: Option<String>,
+    /// FAZ 25.4.A — latest Wyckoff event subkind (e.g. spring_bull,
+    /// utad_bear) and age in minutes.
+    pub wyckoff_last_event: Option<String>,
+    pub wyckoff_event_age_min: Option<i64>,
+    /// FAZ 25.4.A — alignment score with the current Elliott wave
+    /// (mirror of the wyckoff_alignment component score in the
+    /// dominant polarity of major_dip / major_top).
+    pub wyckoff_alignment_score: Option<f64>,
     pub last_advanced_at: Option<DateTime<Utc>>,
 }
 
@@ -185,6 +196,52 @@ async fn get_analiz(State(st): State<SharedState>) -> Result<Json<AnalizResponse
                 lifecycle.insert(st_name, Value::from(cnt));
             }
 
+            // FAZ 25.4.A — latest Wyckoff event + phase for this TF.
+            let wy_row = sqlx::query(
+                r#"SELECT subkind, raw_meta,
+                          EXTRACT(EPOCH FROM (now() - end_time))::bigint / 60 AS age_min
+                     FROM detections
+                    WHERE exchange=$1 AND segment=$2
+                      AND symbol=$3 AND timeframe=$4
+                      AND pattern_family='wyckoff' AND mode='live'
+                    ORDER BY end_time DESC LIMIT 1"#,
+            )
+            .bind(&exchange).bind(&segment).bind(&symbol).bind(&timeframe)
+            .fetch_optional(&st.pool).await?;
+            let (wyckoff_phase, wyckoff_last_event, wyckoff_event_age_min) =
+                match wy_row {
+                    Some(r) => {
+                        let raw_meta: Value = r.try_get("raw_meta").unwrap_or(Value::Null);
+                        let phase = raw_meta
+                            .get("phase")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        let event = r.try_get::<String, _>("subkind").ok();
+                        let age = r.try_get::<i64, _>("age_min").ok();
+                        (phase, event, age)
+                    }
+                    None => (None, None, None),
+                };
+
+            // FAZ 25.4.A — pull the wyckoff_alignment component from
+            // whichever polarity (dip / top) scored higher.
+            let wyckoff_alignment_score = {
+                let dip_v = dip_comps
+                    .as_ref()
+                    .and_then(|c| c.get("wyckoff_alignment"))
+                    .and_then(|v| v.as_f64());
+                let top_v = top_comps
+                    .as_ref()
+                    .and_then(|c| c.get("wyckoff_alignment"))
+                    .and_then(|v| v.as_f64());
+                match (dip_v, top_v) {
+                    (Some(d), Some(t)) => Some(d.max(t)),
+                    (Some(d), None) => Some(d),
+                    (None, Some(t)) => Some(t),
+                    _ => None,
+                }
+            };
+
             timeframes.push(TfSnapshot {
                 timeframe,
                 iq_state,
@@ -197,6 +254,10 @@ async fn get_analiz(State(st): State<SharedState>) -> Result<Json<AnalizResponse
                 dip_components: dip_comps,
                 top_components: top_comps,
                 setup_lifecycle: Value::Object(lifecycle),
+                wyckoff_phase,
+                wyckoff_last_event,
+                wyckoff_event_age_min,
+                wyckoff_alignment_score,
                 last_advanced_at,
             });
         }

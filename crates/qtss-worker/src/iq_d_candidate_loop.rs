@@ -171,6 +171,48 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
             continue;
         }
 
+        // FAZ 25.4.A — Wyckoff↔Elliott alignment gate. If the major-
+        // dip composite includes a wyckoff_alignment component AND
+        // the latest Wyckoff event for this (sym, tf) actively
+        // CONTRADICTS the Elliott wave intent, refuse to spawn the
+        // setup. Examples: Spring + W2 = good; UTAD + W3 = bad
+        // (volume signals top, structure says bull continuation).
+        // Default behaviour: only block hard CONFLICT; missing data
+        // or neutral events fall through (no penalty).
+        let require_wyckoff = sqlx::query_scalar::<_, Option<bool>>(
+            r#"SELECT (value->>'enabled')::boolean FROM system_config
+                WHERE module='iq_d_candidate' AND config_key='require_wyckoff_alignment'"#,
+        )
+        .fetch_optional(pool).await.ok().flatten().flatten().unwrap_or(true);
+        if require_wyckoff {
+            let alignment_meta = sqlx::query(
+                r#"SELECT components->'wyckoff_event' AS wy
+                     FROM major_dip_candidates
+                    WHERE exchange=$1 AND segment=$2
+                      AND symbol=$3 AND timeframe=$4
+                    ORDER BY candidate_time DESC LIMIT 1"#,
+            )
+            .bind(&p.exchange).bind(&p.segment).bind(&p.symbol).bind(&p.timeframe)
+            .fetch_optional(pool).await.ok().flatten();
+            let conflicts = alignment_meta
+                .map(|r| {
+                    let wy: Value = r.try_get("wy").unwrap_or(Value::Null);
+                    let subkind = wy
+                        .get("subkind")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    // Bear-tagged event under a bull entry tier =
+                    // structural conflict; refuse the setup.
+                    let bear_event = subkind.ends_with("_bear");
+                    let bull_setup = p.direction == 1;
+                    bear_event && bull_setup
+                })
+                .unwrap_or(false);
+            if conflicts {
+                continue;
+            }
+        }
+
         // FAZ 25.3.B — Major Dip composite gate. The score is computed
         // by major_dip_candidate_loop and tells us whether the latest
         // structural low has enough multi-channel confirmation

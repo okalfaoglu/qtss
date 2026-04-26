@@ -229,6 +229,41 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
             None => continue,
         };
 
+        // FAZ 25.4.A — Wyckoff↔Elliott alignment gate (mirror of
+        // iq_d_candidate version). Refuse to spawn an IQ-T whose
+        // intended direction contradicts the latest Wyckoff event.
+        let require_wyckoff = sqlx::query_scalar::<_, Option<bool>>(
+            r#"SELECT (value->>'enabled')::boolean FROM system_config
+                WHERE module='iq_t_candidate' AND config_key='require_wyckoff_alignment'"#,
+        )
+        .fetch_optional(pool).await.ok().flatten().flatten().unwrap_or(true);
+        if require_wyckoff {
+            let alignment_meta = sqlx::query(
+                r#"SELECT components->'wyckoff_event' AS wy
+                     FROM major_dip_candidates
+                    WHERE exchange=$1 AND segment=$2
+                      AND symbol=$3 AND timeframe=$4
+                    ORDER BY candidate_time DESC LIMIT 1"#,
+            )
+            .bind(&parent.exchange).bind(&parent.segment).bind(&parent.symbol).bind(&child_tf)
+            .fetch_optional(pool).await.ok().flatten();
+            let conflicts = alignment_meta
+                .map(|r| {
+                    let wy: Value = r.try_get("wy").unwrap_or(Value::Null);
+                    let subkind = wy
+                        .get("subkind")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let bear_event = subkind.ends_with("_bear");
+                    let bull_setup = expected_dir == 1;
+                    bear_event && bull_setup
+                })
+                .unwrap_or(false);
+            if conflicts {
+                continue;
+            }
+        }
+
         // FAZ 25.3.B — Major Dip composite gate. Look up the latest
         // major_dip_candidates row for the CHILD TF (the timeframe
         // we'\''re actually opening a position on) — IQ-T trades the

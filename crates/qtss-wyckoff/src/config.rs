@@ -38,6 +38,21 @@ pub struct WyckoffConfig {
     pub sos_amplifier: f64,
 
     pub scan_lookback: usize,
+
+    /// FAZ 25.4.A — Phase-progression knobs for the previously-stub
+    /// AR / ST / LPS / PS / BU / Test evaluators.
+    /// AR = Automatic Rally: window after SC to look for the bounce
+    /// high (canonical: 5-15 bars).
+    pub ar_window_bars: u64,
+    /// ST = Secondary Test: how close to SC low (fraction of price)
+    /// the retest bar must come.
+    pub st_proximity_pct: f64,
+    /// ST = Secondary Test: max volume relative to SMA. Real ST
+    /// happens on REDUCED volume — that's the whole signal.
+    pub st_volume_max_mult: f64,
+    /// LPS = Last Point of Support: forward window from SOS to look
+    /// for the higher-low.
+    pub lps_lookforward_bars: u64,
 }
 
 impl Default for WyckoffConfig {
@@ -54,6 +69,10 @@ impl Default for WyckoffConfig {
             range_min_bars: 20,
             sos_amplifier: 1.5,
             scan_lookback: 200,
+            ar_window_bars: 12,
+            st_proximity_pct: 0.015,
+            st_volume_max_mult: 0.85,
+            lps_lookforward_bars: 30,
         }
     }
 }

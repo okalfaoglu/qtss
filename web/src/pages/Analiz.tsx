@@ -28,6 +28,11 @@ type TfSnapshot = {
   dip_components?: Record<string, number | null> | null;
   top_components?: Record<string, number | null> | null;
   setup_lifecycle: Record<string, number>;
+  // FAZ 25.4.A — Wyckoff phase + last event per TF.
+  wyckoff_phase?: string | null;
+  wyckoff_last_event?: string | null;
+  wyckoff_event_age_min?: number | null;
+  wyckoff_alignment_score?: number | null;
   last_advanced_at?: string | null;
 };
 
@@ -97,6 +102,7 @@ function ComponentBars({ comps }: { comps?: Record<string, number | null> | null
     ["structural_completion", "STR"],
     ["fib_retrace_quality", "FIB"],
     ["volume_capitulation", "VOL"],
+    ["wyckoff_alignment", "WYC"],
     ["cvd_divergence", "CVD"],
     ["indicator_alignment", "IND"],
     ["sentiment_extreme", "SEN"],
@@ -104,7 +110,7 @@ function ComponentBars({ comps }: { comps?: Record<string, number | null> | null
     ["funding_oi_signals", "F/O"],
   ];
   return (
-    <div className="mt-1 grid grid-cols-8 gap-0.5">
+    <div className="mt-1 grid grid-cols-9 gap-0.5">
       {entries.map(([key, lbl]) => {
         const v = (comps[key] ?? 0) as number;
         const w = Math.max(0, Math.min(1, v)) * 100;
@@ -119,6 +125,76 @@ function ComponentBars({ comps }: { comps?: Record<string, number | null> | null
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// Wyckoff strip: phase pill (A-E) + last-event pill (Spring / SC /
+// SOS / etc.) + alignment score badge. The phase tells WHERE in the
+// schematic we are; the event tells WHAT just fired; the alignment
+// score tells how well it matches the Elliott wave context.
+function WyckoffStrip({
+  phase,
+  event,
+  age,
+  alignment,
+}: {
+  phase?: string | null;
+  event?: string | null;
+  age?: number | null;
+  alignment?: number | null;
+}) {
+  if (!phase && !event) return null;
+  const phaseColor: Record<string, string> = {
+    a: "bg-rose-500/30 text-rose-200",      // capitulation / climax
+    b: "bg-amber-500/20 text-amber-200",    // building cause
+    c: "bg-amber-500/30 text-amber-100",    // final test (spring/utad)
+    d: "bg-emerald-500/30 text-emerald-100", // confirmation
+    e: "bg-emerald-500/40 text-emerald-50", // markup / markdown
+  };
+  const phaseLower = (phase ?? "").toLowerCase();
+  const phaseCls =
+    phaseColor[phaseLower] ?? "bg-zinc-700/40 text-zinc-100";
+  // Strip the _bull / _bear suffix from event subkind for display.
+  const eventLabel = (event ?? "").replace(/_(bull|bear)$/i, "").toUpperCase();
+  const isBull = (event ?? "").endsWith("_bull");
+  const eventCls = isBull
+    ? "bg-emerald-500/20 text-emerald-200"
+    : "bg-rose-500/20 text-rose-200";
+  const alignCls =
+    alignment != null && alignment >= 0.85
+      ? "bg-emerald-500/40 text-emerald-100"
+      : alignment != null && alignment >= 0.5
+      ? "bg-amber-500/20 text-amber-200"
+      : alignment != null && alignment > 0
+      ? "bg-zinc-700/40 text-zinc-200"
+      : "";
+  return (
+    <div className="mt-0.5 flex flex-wrap items-center gap-0.5 text-[8px]">
+      {phase && (
+        <span
+          className={`rounded px-1 font-mono ${phaseCls}`}
+          title={`Wyckoff Phase ${phase.toUpperCase()}`}
+        >
+          P{phase.toUpperCase()}
+        </span>
+      )}
+      {event && (
+        <span
+          className={`rounded px-1 font-mono ${eventCls}`}
+          title={`${event} (${age ?? "?"}m ago)`}
+        >
+          {eventLabel}
+        </span>
+      )}
+      {alignment != null && alignment > 0 && (
+        <span
+          className={`rounded px-1 font-mono ${alignCls}`}
+          title={`Wyckoff↔Elliott alignment ${(alignment * 100).toFixed(0)}%`}
+        >
+          ↔{(alignment * 100).toFixed(0)}
+        </span>
+      )}
     </div>
   );
 }
@@ -303,6 +379,12 @@ export default function Analiz() {
                                       ? tf.dip_components
                                       : tf.top_components
                                   }
+                                />
+                                <WyckoffStrip
+                                  phase={tf.wyckoff_phase}
+                                  event={tf.wyckoff_last_event}
+                                  age={tf.wyckoff_event_age_min}
+                                  alignment={tf.wyckoff_alignment_score}
                                 />
                                 <LifecycleStrip counts={tf.setup_lifecycle ?? {}} />
                               </td>
