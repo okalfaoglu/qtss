@@ -572,7 +572,7 @@ pub fn eval_ps(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
         out.push(WyckoffEvent {
             kind: WyckoffEventKind::Ps,
             variant: "bull",
-            score: 0.45,
+            score: 0.55,
             bar_index: i,
             reference_price: bar_low(bar),
             volume_ratio: vr,
@@ -685,19 +685,297 @@ pub fn eval_test(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
     out
 }
 
+// ── FAZ 25.4.C — distribution-side evaluators (the missing half) ──
+//
+// User audit flag: \"Wyckoff eventleri neden eksik?\" Six events
+// (AR, ST, LPS, PS, BU, Test) had only accumulation-side
+// implementations — distribution counterparts (post-BC reaction
+// LOW, LPSY = lower-high after SOW, PSY = preliminary supply,
+// BU/JAC down, Test of UTAD) never fired. These six close that
+// gap. All emit variant=\"bear\"; the writer'\\''s subkind suffix
+// (ar_bear / st_bear / lps_bear / ps_bear / bu_bear / test_bear)
+// distinguishes them in DB from their accumulation siblings.
+
+// AR-distribution: lowest LOW within `ar_window` after BC (post-BC
+// drop). Mirror of accumulation AR (highest HIGH after SC).
+pub fn eval_ar_distribution(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
+    let mut out = Vec::new();
+    let n = bars.len();
+    let window = cfg.ar_window_bars.max(3) as usize;
+    if n < (cfg.volume_sma_bars as usize) + window + 2 {
+        return out;
+    }
+    for bc in eval_buying_climax(bars, cfg) {
+        let bc_idx = bc.bar_index;
+        let end = (bc_idx + window).min(n - 1);
+        if end <= bc_idx {
+            continue;
+        }
+        let mut best_idx = bc_idx + 1;
+        let mut best_low = bar_low(&bars[bc_idx + 1]);
+        for k in (bc_idx + 1)..=end {
+            let l = bar_low(&bars[k]);
+            if l < best_low {
+                best_low = l;
+                best_idx = k;
+            }
+        }
+        let a = atr(bars, bc_idx, 14).max(1e-9);
+        if bc.reference_price - best_low < a {
+            continue;
+        }
+        out.push(WyckoffEvent {
+            kind: WyckoffEventKind::Ar,
+            variant: "bear",
+            score: 0.55,
+            bar_index: best_idx,
+            reference_price: best_low,
+            volume_ratio: 0.0,
+            range_ratio: 0.0,
+            note: format!("AR (dist): low {:.2} after BC", best_low),
+        });
+    }
+    out
+}
+
+// ST-distribution: low-vol retest of BC level (rejection close
+// below BC high confirms supply).
+pub fn eval_st_distribution(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
+    let mut out = Vec::new();
+    let n = bars.len();
+    if n < (cfg.volume_sma_bars as usize) + 5 {
+        return out;
+    }
+    for bc in eval_buying_climax(bars, cfg) {
+        let bc_idx = bc.bar_index;
+        let bc_high = bc.reference_price;
+        let proximity = bc_high * cfg.st_proximity_pct;
+        let start = (bc_idx + (cfg.ar_window_bars as usize) / 2).min(n);
+        for i in start..n {
+            let bar = &bars[i];
+            if (bar_high(bar) - bc_high).abs() > proximity {
+                continue;
+            }
+            let avg = sma_volume(bars, i, cfg.volume_sma_bars as usize);
+            if avg < 1e-9 || bar_vol(bar) > avg * cfg.st_volume_max_mult {
+                continue;
+            }
+            if bar_close(bar) >= bc_high {
+                continue;
+            }
+            out.push(WyckoffEvent {
+                kind: WyckoffEventKind::St,
+                variant: "bear",
+                score: 0.55,
+                bar_index: i,
+                reference_price: bar_high(bar),
+                volume_ratio: bar_vol(bar) / avg,
+                range_ratio: 0.0,
+                note: format!("ST (dist): low-vol retest of BC at {:.2}", bc_high),
+            });
+            break;
+        }
+    }
+    out
+}
+
+// LPSY (LPS-distribution): lower-high after SOW with declining
+// volume — Phase D markdown pullback marker.
+pub fn eval_lps_distribution(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
+    let mut out = Vec::new();
+    let n = bars.len();
+    if n < (cfg.volume_sma_bars as usize) + 5 {
+        return out;
+    }
+    for sow in eval_sow(bars, cfg) {
+        let sow_idx = sow.bar_index;
+        let scan_end = (sow_idx + cfg.lps_lookforward_bars as usize).min(n - 1);
+        if scan_end <= sow_idx + 1 {
+            continue;
+        }
+        let sow_high = bar_high(&bars[sow_idx]);
+        let mut best_idx = 0usize;
+        let mut best_high = f64::NEG_INFINITY;
+        for k in (sow_idx + 1)..=scan_end {
+            let h = bar_high(&bars[k]);
+            if h >= sow_high {
+                continue;
+            }
+            if h > best_high {
+                best_high = h;
+                best_idx = k;
+            }
+        }
+        if best_idx == 0 || !best_high.is_finite() {
+            continue;
+        }
+        let avg = sma_volume(bars, best_idx, cfg.volume_sma_bars as usize);
+        if avg > 0.0 && bar_vol(&bars[best_idx]) > avg {
+            continue;
+        }
+        out.push(WyckoffEvent {
+            kind: WyckoffEventKind::Lps,
+            variant: "bear",
+            score: 0.55,
+            bar_index: best_idx,
+            reference_price: best_high,
+            volume_ratio: 0.0,
+            range_ratio: 0.0,
+            note: format!("LPSY: lower-high {:.2} after SOW", best_high),
+        });
+    }
+    out
+}
+
+// PSY (PS-distribution): pre-BC volume spike with upper wick.
+pub fn eval_ps_distribution(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
+    let mut out = Vec::new();
+    let n = bars.len();
+    if n < (cfg.volume_sma_bars as usize) + 10 {
+        return out;
+    }
+    let start = n.saturating_sub(cfg.scan_lookback);
+    let psy_threshold = cfg.climax_volume_mult / 1.3;
+    let mut emitted = false;
+    for i in start.max(cfg.volume_sma_bars as usize)..n {
+        if emitted {
+            break;
+        }
+        let bar = &bars[i];
+        let avg = sma_volume(bars, i, cfg.volume_sma_bars as usize);
+        if avg < 1e-9 {
+            continue;
+        }
+        let vr = bar_vol(bar) / avg;
+        if vr < psy_threshold || vr >= cfg.climax_volume_mult {
+            continue;
+        }
+        let upper_wick =
+            bar_high(bar) - bar.open.to_f64().unwrap_or(0.0).max(bar_close(bar));
+        let range = bar_range(bar).max(1e-9);
+        if upper_wick < range * 0.30 {
+            continue;
+        }
+        out.push(WyckoffEvent {
+            kind: WyckoffEventKind::Ps,
+            variant: "bear",
+            score: 0.55,
+            bar_index: i,
+            reference_price: bar_high(bar),
+            volume_ratio: vr,
+            range_ratio: 0.0,
+            note: format!("PSY: vol {vr:.1}× SMA, upper-wick rejection"),
+        });
+        emitted = true;
+    }
+    out
+}
+
+// BU-distribution: rally back to broken range LOW (creek-down).
+pub fn eval_bu_distribution(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
+    let mut out = Vec::new();
+    let n = bars.len();
+    if n < (cfg.volume_sma_bars as usize) + 10 {
+        return out;
+    }
+    for sow in eval_sow(bars, cfg) {
+        let sow_idx = sow.bar_index;
+        let scan_end = (sow_idx + cfg.lps_lookforward_bars as usize).min(n - 1);
+        let creek_start = sow_idx.saturating_sub(20);
+        let mut creek = f64::INFINITY;
+        for k in creek_start..sow_idx {
+            creek = creek.min(bar_low(&bars[k]));
+        }
+        if !creek.is_finite() {
+            continue;
+        }
+        let proximity = creek * 0.005;
+        for k in (sow_idx + 1)..=scan_end {
+            let h = bar_high(&bars[k]);
+            let c = bar_close(&bars[k]);
+            if (h - creek).abs() <= proximity && c < creek {
+                let avg = sma_volume(bars, k, cfg.volume_sma_bars as usize);
+                let light = avg < 1e-9 || bar_vol(&bars[k]) < avg;
+                if !light {
+                    continue;
+                }
+                out.push(WyckoffEvent {
+                    kind: WyckoffEventKind::Bu,
+                    variant: "bear",
+                    score: 0.55,
+                    bar_index: k,
+                    reference_price: h,
+                    volume_ratio: 0.0,
+                    range_ratio: 0.0,
+                    note: format!("BU (dist): retest creek {:.2} from below", creek),
+                });
+                break;
+            }
+        }
+    }
+    out
+}
+
+// Test-distribution: low-vol retest of UTAD high.
+pub fn eval_test_distribution(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
+    let mut out = Vec::new();
+    let n = bars.len();
+    if n < (cfg.volume_sma_bars as usize) + 5 {
+        return out;
+    }
+    for u in eval_utad(bars, cfg) {
+        let u_idx = u.bar_index;
+        let u_high = u.reference_price;
+        let proximity = u_high * cfg.st_proximity_pct;
+        let start = (u_idx + (cfg.ar_window_bars as usize) / 2).min(n);
+        for i in start..n {
+            let bar = &bars[i];
+            if (bar_high(bar) - u_high).abs() > proximity {
+                continue;
+            }
+            let avg = sma_volume(bars, i, cfg.volume_sma_bars as usize);
+            if avg < 1e-9 || bar_vol(bar) > avg * cfg.st_volume_max_mult {
+                continue;
+            }
+            if bar_close(bar) >= u_high {
+                continue;
+            }
+            out.push(WyckoffEvent {
+                kind: WyckoffEventKind::Test,
+                variant: "bear",
+                score: 0.60,
+                bar_index: i,
+                reference_price: bar_high(bar),
+                volume_ratio: bar_vol(bar) / avg,
+                range_ratio: 0.0,
+                note: format!("Test (dist): low-vol retest of UTAD at {:.2}", u_high),
+            });
+            break;
+        }
+    }
+    out
+}
+
 pub static WYCKOFF_SPECS: &[WyckoffSpec] = &[
-    WyckoffSpec { name: "ps",     kind: WyckoffEventKind::Ps,     eval: eval_ps },
-    WyckoffSpec { name: "sc",     kind: WyckoffEventKind::Sc,     eval: eval_selling_climax },
-    WyckoffSpec { name: "ar",     kind: WyckoffEventKind::Ar,     eval: eval_ar },
-    WyckoffSpec { name: "st",     kind: WyckoffEventKind::St,     eval: eval_st },
-    WyckoffSpec { name: "spring", kind: WyckoffEventKind::Spring, eval: eval_spring },
-    WyckoffSpec { name: "test",   kind: WyckoffEventKind::Test,   eval: eval_test },
-    WyckoffSpec { name: "sos",    kind: WyckoffEventKind::Sos,    eval: eval_sos },
-    WyckoffSpec { name: "lps",    kind: WyckoffEventKind::Lps,    eval: eval_lps },
-    WyckoffSpec { name: "bu",     kind: WyckoffEventKind::Bu,     eval: eval_bu },
-    WyckoffSpec { name: "bc",     kind: WyckoffEventKind::Bc,     eval: eval_buying_climax },
-    WyckoffSpec { name: "utad",   kind: WyckoffEventKind::Utad,   eval: eval_utad },
-    WyckoffSpec { name: "sow",    kind: WyckoffEventKind::Sow,    eval: eval_sow },
+    WyckoffSpec { name: "ps",        kind: WyckoffEventKind::Ps,     eval: eval_ps },
+    WyckoffSpec { name: "sc",        kind: WyckoffEventKind::Sc,     eval: eval_selling_climax },
+    WyckoffSpec { name: "ar",        kind: WyckoffEventKind::Ar,     eval: eval_ar },
+    WyckoffSpec { name: "st",        kind: WyckoffEventKind::St,     eval: eval_st },
+    WyckoffSpec { name: "spring",    kind: WyckoffEventKind::Spring, eval: eval_spring },
+    WyckoffSpec { name: "test",      kind: WyckoffEventKind::Test,   eval: eval_test },
+    WyckoffSpec { name: "sos",       kind: WyckoffEventKind::Sos,    eval: eval_sos },
+    WyckoffSpec { name: "lps",       kind: WyckoffEventKind::Lps,    eval: eval_lps },
+    WyckoffSpec { name: "bu",        kind: WyckoffEventKind::Bu,     eval: eval_bu },
+    WyckoffSpec { name: "bc",        kind: WyckoffEventKind::Bc,     eval: eval_buying_climax },
+    WyckoffSpec { name: "utad",      kind: WyckoffEventKind::Utad,   eval: eval_utad },
+    WyckoffSpec { name: "sow",       kind: WyckoffEventKind::Sow,    eval: eval_sow },
+    // FAZ 25.4.C — distribution-side variants.
+    WyckoffSpec { name: "ar_dist",   kind: WyckoffEventKind::Ar,     eval: eval_ar_distribution },
+    WyckoffSpec { name: "st_dist",   kind: WyckoffEventKind::St,     eval: eval_st_distribution },
+    WyckoffSpec { name: "lpsy",      kind: WyckoffEventKind::Lps,    eval: eval_lps_distribution },
+    WyckoffSpec { name: "psy",       kind: WyckoffEventKind::Ps,     eval: eval_ps_distribution },
+    WyckoffSpec { name: "bu_dist",   kind: WyckoffEventKind::Bu,     eval: eval_bu_distribution },
+    WyckoffSpec { name: "test_dist", kind: WyckoffEventKind::Test,   eval: eval_test_distribution },
 ];
 
 /// Run every spec against the bar slice. Returns all events above
