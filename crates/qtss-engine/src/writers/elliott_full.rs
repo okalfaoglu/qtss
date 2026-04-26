@@ -70,32 +70,63 @@ impl WriterTask for ElliottFullWriter {
         let pivots_per_slot = pivots_per_slot.fetch(pool).await;
 
         let toggles = load_toggles(pool).await;
-        let pivot_level = load_pivot_level(pool).await;
-        let cfg = build_config(pool, pivot_level).await;
-        let set = match ElliottDetectorSet::new(cfg, &toggles) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(%e, "elliott_full: invalid config, skipping tick");
-                return Ok(stats);
+        // FAZ 25.4.E — multi-level detection. The detector previously
+        // used a single configured pivot_level (default L1), so higher
+        // Z slots (Z3-Z5 = L2-L4) never received flat / diagonal /
+        // triangle / combination pattern detection. User flagged this
+        // when Z5 ABC corrective at BTC 1d (running-flat Apr→Aug 2025)
+        // was missing entirely. We now iterate every L0..L4 level per
+        // tick and persist with `slot = level.as_index()` so each Z
+        // toggle on the chart shows its own degree's patterns.
+        let levels = [
+            PivotLevel::L0,
+            PivotLevel::L1,
+            PivotLevel::L2,
+            PivotLevel::L3,
+            PivotLevel::L4,
+        ];
+        let mut sets: Vec<(PivotLevel, ElliottDetectorSet)> = Vec::new();
+        for &level in &levels {
+            let cfg = build_config(pool, level).await;
+            match ElliottDetectorSet::new(cfg, &toggles) {
+                Ok(s) if !s.is_empty() => sets.push((level, s)),
+                Ok(_) => {}
+                Err(e) => warn!(
+                    %e,
+                    level = level.as_str(),
+                    "elliott_full: invalid config for level, skipping",
+                ),
             }
-        };
-        if set.is_empty() {
+        }
+        if sets.is_empty() {
             return Ok(stats);
         }
 
         for sym in &syms {
-            match process_symbol(pool, sym, bars_limit, pivots_per_slot, pivot_level, &set).await {
-                Ok(n) => {
-                    stats.series_processed += 1;
-                    stats.rows_upserted += n;
+            for (level, set) in &sets {
+                match process_symbol(
+                    pool,
+                    sym,
+                    bars_limit,
+                    pivots_per_slot,
+                    *level,
+                    set,
+                )
+                .await
+                {
+                    Ok(n) => {
+                        stats.series_processed += 1;
+                        stats.rows_upserted += n;
+                    }
+                    Err(e) => warn!(
+                        exchange = %sym.exchange,
+                        symbol = %sym.symbol,
+                        tf = %sym.interval,
+                        level = level.as_str(),
+                        %e,
+                        "elliott_full: series failed"
+                    ),
                 }
-                Err(e) => warn!(
-                    exchange = %sym.exchange,
-                    symbol = %sym.symbol,
-                    tf = %sym.interval,
-                    %e,
-                    "elliott_full: series failed"
-                ),
             }
         }
         Ok(stats)
