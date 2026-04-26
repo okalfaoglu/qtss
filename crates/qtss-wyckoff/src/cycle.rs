@@ -314,15 +314,26 @@ pub fn detect_cycles_from_elliott(
         if first_seg.start_bar > gap_min_bars {
             let first_phase = phase_for_segment(first_seg);
             let leading_phase = preceding_phase(first_phase);
+            // Bound leading window to roughly the same duration as
+            // the first segment (clamped to [50, 500] bars). A wider
+            // window across all pre-segment history gives a tile so
+            // tall it dominates the chart vertically; matching the
+            // segment's own length keeps the basing/topping context
+            // visually comparable to the impulse itself.
+            let seg_dur = first_seg.end_bar.saturating_sub(first_seg.start_bar);
+            let lookback = seg_dur.max(50).min(500);
+            let leading_start = first_seg.start_bar.saturating_sub(lookback);
             let start_price = bars
-                .first()
+                .get(leading_start)
                 .map(bar_low)
+                .filter(|p| p.is_finite() && *p > 0.0)
+                .or_else(|| bars.first().map(bar_low))
                 .filter(|p| p.is_finite() && *p > 0.0)
                 .unwrap_or(first_seg.start_price);
             let leading = open_segment(
                 leading_phase,
                 WyckoffCycleSource::Elliott,
-                0,
+                leading_start,
                 start_price,
                 None,
             );
@@ -630,25 +641,37 @@ mod tests {
 
     #[test]
     fn leading_fill_emits_accumulation_before_first_motive() {
-        // Bull motive starts at bar 50; leading fill should emit an
-        // Accumulation tile [0, 50] BEFORE the Markup tile.
-        let segs = vec![motive(true, 50, 90, 100.0, 150.0)];
-        let cycles = detect_cycles_from_elliott(&segs, &[], 200, 140.0);
+        // Bull motive [800, 840] (40-bar dur) — leading window is
+        // clamped to max(seg_dur, 50) = 50 bars, so leading
+        // Accumulation should span [750, 800].
+        let segs = vec![motive(true, 800, 840, 100.0, 150.0)];
+        let cycles = detect_cycles_from_elliott(&segs, &[], 1000, 140.0);
         assert!(cycles.len() >= 2);
         assert_eq!(cycles[0].phase, WyckoffCyclePhase::Accumulation);
-        assert_eq!(cycles[0].start_bar, 0);
-        assert_eq!(cycles[0].end_bar, 50);
+        assert_eq!(cycles[0].start_bar, 750);
+        assert_eq!(cycles[0].end_bar, 800);
         assert_eq!(cycles[1].phase, WyckoffCyclePhase::Markup);
     }
 
     #[test]
     fn leading_fill_emits_distribution_before_first_bearish_abc() {
-        let segs = vec![abc(false, 50, 90, 150.0, 120.0)];
-        let cycles = detect_cycles_from_elliott(&segs, &[], 200, 110.0);
+        let segs = vec![abc(false, 800, 840, 150.0, 120.0)];
+        let cycles = detect_cycles_from_elliott(&segs, &[], 1000, 110.0);
         assert!(cycles.len() >= 2);
         assert_eq!(cycles[0].phase, WyckoffCyclePhase::Distribution);
-        assert_eq!(cycles[0].start_bar, 0);
+        assert_eq!(cycles[0].start_bar, 750);
         assert_eq!(cycles[1].phase, WyckoffCyclePhase::Markdown);
+    }
+
+    #[test]
+    fn leading_fill_capped_to_500_bars_for_giant_segments() {
+        // A 1000-bar segment would request a 1000-bar leading window;
+        // cap kicks in at 500.
+        let segs = vec![motive(true, 1500, 2500, 100.0, 200.0)];
+        let cycles = detect_cycles_from_elliott(&segs, &[], 3000, 180.0);
+        assert!(cycles.len() >= 2);
+        assert_eq!(cycles[0].phase, WyckoffCyclePhase::Accumulation);
+        assert_eq!(cycles[0].start_bar, 1000); // 1500 - 500 (cap)
     }
 
     #[test]
