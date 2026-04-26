@@ -238,18 +238,30 @@ async fn load_elliott_segments(
         let bullish = direction >= 0;
         let s_bar = (start_bar.max(0) as usize).min(bar_count.saturating_sub(1));
         let e_bar = (end_bar.max(0) as usize).min(bar_count.saturating_sub(1));
-        // Pull start/end prices from the anchors array (first and last
-        // entry). Anchors are `[{price: ..., bar_index: ...}, ...]`.
-        let (start_price, end_price) = anchors
-            .as_array()
-            .and_then(|arr| {
-                let first = arr.first().and_then(|v| v.get("price"))
-                    .and_then(|v| v.as_f64());
-                let last = arr.last().and_then(|v| v.get("price"))
-                    .and_then(|v| v.as_f64());
-                first.zip(last)
-            })
-            .unwrap_or((0.0, 0.0));
+        // Parse the full anchors array into `wave_anchors` —
+        // motive: 6 entries (W0..W5); abc: 4 entries (X0, A, B, C).
+        // Each anchor JSON object has `bar_index` + `price`. Out-of-
+        // range bar indices clip to the chrono slice.
+        let mut wave_anchors: Vec<(usize, f64)> = Vec::new();
+        if let Some(arr) = anchors.as_array() {
+            for v in arr {
+                let bi = v.get("bar_index").and_then(|x| x.as_i64()).unwrap_or(-1);
+                let pr = v.get("price").and_then(|x| x.as_f64()).unwrap_or(0.0);
+                if bi < 0 || !pr.is_finite() {
+                    continue;
+                }
+                let bar = (bi as usize).min(bar_count.saturating_sub(1));
+                wave_anchors.push((bar, pr));
+            }
+        }
+        let start_price = wave_anchors
+            .first()
+            .map(|(_, p)| *p)
+            .unwrap_or(0.0);
+        let end_price = wave_anchors
+            .last()
+            .map(|(_, p)| *p)
+            .unwrap_or(0.0);
 
         out.push(ElliottSegment {
             kind,
@@ -259,6 +271,7 @@ async fn load_elliott_segments(
             start_price,
             end_price,
             source_id: Some(id),
+            wave_anchors,
         });
     }
     Ok(out)

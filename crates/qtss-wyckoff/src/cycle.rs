@@ -86,7 +86,16 @@ pub struct WyckoffCycle {
 /// Elliott structural segment used as input by
 /// `detect_cycles_from_elliott`. Caller (engine writer) builds the
 /// vector by querying `detections WHERE pattern_family IN
-/// ('motive','abc') AND slot = N`.
+/// ('motive','abc') AND slot = N` and parsing the JSONB `anchors`
+/// array.
+///
+/// `wave_anchors` carries each sub-wave anchor as `(bar_index, price)`
+/// so the cycle detector can emit phase tiles at the correct
+/// SUB-WAVE positions:
+///   * Motive (6 anchors): W0, W1, W2, W3, W4, W5
+///   * ABC    (4 anchors): X0, A,  B,  C
+/// When `wave_anchors` is empty the detector falls back to the
+/// whole-segment mapping (single tile per segment).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ElliottSegment {
     pub kind: ElliottSegmentKind,
@@ -96,6 +105,7 @@ pub struct ElliottSegment {
     pub start_price: f64,
     pub end_price: f64,
     pub source_id: Option<String>,
+    pub wave_anchors: Vec<(usize, f64)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -367,18 +377,36 @@ pub fn detect_cycles_from_elliott(
             }
         }
 
-        let phase = phase_for_segment(seg);
-        let tile = open_segment(
-            phase,
-            WyckoffCycleSource::Elliott,
-            seg.start_bar,
-            seg.start_price,
-            seg.source_id.clone(),
-        );
-        let closed =
-            close_segment(tile, seg.end_bar, seg.end_price, bars);
-        prev_end = Some((closed.end_bar, closed.end_price, closed.phase));
-        out.push(closed);
+        // Pruden's sub-wave mapping (when all anchors are available):
+        //   Bullish motive  W0..W5  →  Accumulation [W0,W2] + Markup     [W2,W5]
+        //   Bearish ABC     X0..C   →  Distribution [X0,B]  + Markdown   [B,C]
+        //   Bearish motive  W0..W5  →  Distribution [W0,W2] + Markdown   [W2,W5]
+        //   Bullish ABC     X0..C   →  Markdown    [X0,B]   + Accumulation [B,C]
+        // Falls back to whole-segment mapping when sub-wave anchors
+        // are missing (legacy rows / partial detections).
+        let tiles_emitted = emit_subwave_tiles(seg, bars, &mut out);
+        if !tiles_emitted {
+            // Fallback: single tile spanning the entire segment.
+            let phase = phase_for_segment(seg);
+            let tile = open_segment(
+                phase,
+                WyckoffCycleSource::Elliott,
+                seg.start_bar,
+                seg.start_price,
+                seg.source_id.clone(),
+            );
+            out.push(close_segment(
+                tile,
+                seg.end_bar,
+                seg.end_price,
+                bars,
+            ));
+        }
+        // The "previous end" tracker uses the FINAL tile we emitted —
+        // that's what gap-fill / trailing-fill chain off.
+        if let Some(last) = out.last() {
+            prev_end = Some((last.end_bar, last.end_price, last.phase));
+        }
     }
 
     // Trailing fill — extend the last tile (or its transition) to the
@@ -418,6 +446,72 @@ fn phase_for_segment(seg: &ElliottSegment) -> WyckoffCyclePhase {
         (ElliottSegmentKind::Abc, true) => WyckoffCyclePhase::Accumulation,
         (ElliottSegmentKind::Abc, false) => WyckoffCyclePhase::Markdown,
     }
+}
+
+/// Emit per-segment tiles using sub-wave anchors (Pruden mapping).
+/// Returns `true` when sub-wave tiles were emitted, `false` if the
+/// segment lacked enough anchors and the caller should fall back to
+/// the whole-segment mapping.
+///
+/// Mapping (anchor indices):
+///   Bullish motive  (W0..W5):  Accumulation [W0,W2] + Markup     [W2,W5]
+///   Bearish motive  (W0..W5):  Distribution [W0,W2] + Markdown   [W2,W5]
+///   Bearish ABC     (X0..C):   Distribution [X0,B]  + Markdown   [B,C]
+///   Bullish ABC     (X0..C):   Markdown     [X0,B]  + Accumulation [B,C]
+fn emit_subwave_tiles(
+    seg: &ElliottSegment,
+    bars: &[Bar],
+    out: &mut Vec<WyckoffCycle>,
+) -> bool {
+    let phases = match (seg.kind, seg.bullish, seg.wave_anchors.len()) {
+        // Motive needs 6 anchors (W0..W5). Tile A = [W0,W2], B = [W2,W5].
+        (ElliottSegmentKind::Motive, true, 6) => Some((
+            (0usize, 2usize, WyckoffCyclePhase::Accumulation),
+            (2usize, 5usize, WyckoffCyclePhase::Markup),
+        )),
+        (ElliottSegmentKind::Motive, false, 6) => Some((
+            (0, 2, WyckoffCyclePhase::Distribution),
+            (2, 5, WyckoffCyclePhase::Markdown),
+        )),
+        // ABC needs 4 anchors (X0, A, B, C). Tile A = [X0,B], B = [B,C].
+        (ElliottSegmentKind::Abc, false, 4) => Some((
+            (0, 2, WyckoffCyclePhase::Distribution),
+            (2, 3, WyckoffCyclePhase::Markdown),
+        )),
+        (ElliottSegmentKind::Abc, true, 4) => Some((
+            (0, 2, WyckoffCyclePhase::Markdown),
+            (2, 3, WyckoffCyclePhase::Accumulation),
+        )),
+        _ => None,
+    };
+    let Some(((a0, a1, p_a), (b0, b1, p_b))) = phases else {
+        return false;
+    };
+    let wa = &seg.wave_anchors;
+    let (a_start_bar, a_start_price) = wa[a0];
+    let (a_end_bar, a_end_price) = wa[a1];
+    let (b_start_bar, b_start_price) = wa[b0];
+    let (b_end_bar, b_end_price) = wa[b1];
+
+    let tile_a = open_segment(
+        p_a,
+        WyckoffCycleSource::Elliott,
+        a_start_bar,
+        a_start_price,
+        seg.source_id.clone(),
+    );
+    out.push(close_segment(tile_a, a_end_bar, a_end_price, bars));
+
+    let tile_b = open_segment(
+        p_b,
+        WyckoffCycleSource::Elliott,
+        b_start_bar,
+        b_start_price,
+        seg.source_id.clone(),
+    );
+    out.push(close_segment(tile_b, b_end_bar, b_end_price, bars));
+
+    true
 }
 
 /// Phase that fills the gap AFTER a tile of `prev` phase. Markup ends
@@ -611,6 +705,7 @@ mod tests {
             start_price: sp,
             end_price: ep,
             source_id: Some(format!("m-{start}")),
+            wave_anchors: Vec::new(),
         }
     }
     fn abc(bullish: bool, start: usize, end: usize, sp: f64, ep: f64) -> ElliottSegment {
@@ -622,6 +717,45 @@ mod tests {
             start_price: sp,
             end_price: ep,
             source_id: Some(format!("a-{start}")),
+            wave_anchors: Vec::new(),
+        }
+    }
+    fn motive_with_waves(
+        bullish: bool,
+        start: usize,
+        end: usize,
+        sp: f64,
+        ep: f64,
+        anchors: Vec<(usize, f64)>,
+    ) -> ElliottSegment {
+        ElliottSegment {
+            kind: ElliottSegmentKind::Motive,
+            bullish,
+            start_bar: start,
+            end_bar: end,
+            start_price: sp,
+            end_price: ep,
+            source_id: Some(format!("m-{start}")),
+            wave_anchors: anchors,
+        }
+    }
+    fn abc_with_waves(
+        bullish: bool,
+        start: usize,
+        end: usize,
+        sp: f64,
+        ep: f64,
+        anchors: Vec<(usize, f64)>,
+    ) -> ElliottSegment {
+        ElliottSegment {
+            kind: ElliottSegmentKind::Abc,
+            bullish,
+            start_bar: start,
+            end_bar: end,
+            start_price: sp,
+            end_price: ep,
+            source_id: Some(format!("a-{start}")),
+            wave_anchors: anchors,
         }
     }
 
@@ -661,6 +795,63 @@ mod tests {
         assert_eq!(cycles[0].phase, WyckoffCyclePhase::Distribution);
         assert_eq!(cycles[0].start_bar, 750);
         assert_eq!(cycles[1].phase, WyckoffCyclePhase::Markdown);
+    }
+
+    #[test]
+    fn subwave_motive_emits_accumulation_then_markup() {
+        // Bull motive with full W0..W5 anchors → emits Accumulation
+        // [W0,W2] then Markup [W2,W5]. No fallback Markup-of-whole.
+        let waves = vec![
+            (50, 100.0),  // W0
+            (60, 110.0),  // W1
+            (65, 102.0),  // W2 (Spring zone)
+            (80, 145.0),  // W3 (ignition top)
+            (85, 130.0),  // W4
+            (90, 150.0),  // W5
+        ];
+        let segs = vec![motive_with_waves(true, 50, 90, 100.0, 150.0, waves)];
+        let cycles = detect_cycles_from_elliott(&segs, &[], 200, 140.0);
+        let phases: Vec<_> = cycles.iter().map(|c| c.phase).collect();
+        // Leading Accumulation, then sub-wave Accumulation [50,65],
+        // then sub-wave Markup [65,90], then trailing Distribution.
+        assert!(phases.contains(&WyckoffCyclePhase::Accumulation));
+        assert!(phases.contains(&WyckoffCyclePhase::Markup));
+        // Find the Markup tile and confirm it spans [W2, W5].
+        let markup = cycles
+            .iter()
+            .find(|c| c.phase == WyckoffCyclePhase::Markup)
+            .expect("markup tile expected");
+        assert_eq!(markup.start_bar, 65);
+        assert_eq!(markup.end_bar, 90);
+        assert_eq!(markup.start_price, 102.0);
+        assert_eq!(markup.end_price, 150.0);
+    }
+
+    #[test]
+    fn subwave_bearish_abc_emits_distribution_then_markdown() {
+        let waves = vec![
+            (90, 150.0),   // X0 (= prev W5 top)
+            (100, 130.0),  // A
+            (110, 145.0),  // B (UTAD fakeout)
+            (130, 110.0),  // C (capitulation low)
+        ];
+        let segs = vec![abc_with_waves(false, 90, 130, 150.0, 110.0, waves)];
+        let cycles = detect_cycles_from_elliott(&segs, &[], 200, 115.0);
+        // Skip the leading-fill Distribution; pick the sub-wave one
+        // that starts exactly at X0 = 90.
+        let dist = cycles
+            .iter()
+            .find(|c| {
+                c.phase == WyckoffCyclePhase::Distribution && c.start_bar == 90
+            })
+            .expect("sub-wave distribution tile expected");
+        let mkdn = cycles
+            .iter()
+            .find(|c| c.phase == WyckoffCyclePhase::Markdown)
+            .expect("markdown tile expected");
+        assert_eq!(dist.end_bar, 110); // X0 → B
+        assert_eq!(mkdn.start_bar, 110); // B → C
+        assert_eq!(mkdn.end_bar, 130);
     }
 
     #[test]
