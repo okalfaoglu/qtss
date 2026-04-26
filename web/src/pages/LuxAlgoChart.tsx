@@ -1065,11 +1065,29 @@ export function LuxAlgoChart({
               const labels = ["(1)", "(2)", "(3)", "(4)", "(5)"];
               for (let i = 1; i < mw.anchors.length; i++) {
                 const a = mw.anchors[i];
-                if (a.hide_label) continue;
+                // FAZ 25.4.E — was honouring `hide_label` from Pine
+                // port's chained-motive logic. Pine hides W1/W2 of a
+                // new motive when previous ABC's b/c shares the same
+                // bar (label_override "(b)(1)" / "(c)(2)" replaces
+                // them). But if the previous ABC isn't drawn (filter
+                // off, or pruned by abcVisibleFor), the user sees
+                // motives missing (1)/(2) labels — Claude audit:
+                // \"(1)→(4)→(5) skipping (2),(3)\". Always render the
+                // default wave label so every motive shows its full
+                // (1)..(5) sequence. Duplicate labels at chained
+                // bars are visually mild compared to missing waves.
                 const t = timeAt(a.bar_index);
                 if (t === null) continue;
                 const aboveBar = (mw.direction === 1 && i % 2 === 1) || (mw.direction === -1 && i % 2 === 0);
-                const text = a.label_override ?? labels[i - 1];
+                // Prefer override when present AND non-empty, else
+                // fall back to the canonical wave label. Treats
+                // empty-string override (Pine's suppress hint) the
+                // same as null so it never blanks out.
+                const override = a.label_override;
+                const text =
+                  typeof override === "string" && override.length > 0
+                    ? override
+                    : labels[i - 1];
                 attachLabel(t, a.price, text, color, aboveBar ? "above" : "below");
               }
             }
