@@ -732,28 +732,22 @@ export function LuxAlgoChart({
   // showing the most recent N is the pragmatic default and keeps the
   // chart responsive. Operator can bump this via config later.
   //
-  // FAZ 25.4.E — Wyckoff CYCLE + RANGE rows bypass the cap. They're a
-  // small set (≤ ~24 cycle tiles per symbol across 6 slots, ≤ 1 range)
-  // and represent the high-level macro framing the operator most needs
-  // to see. The cap pushed them out at busy 4h symbols where SMC /
-  // Wyckoff EVENT rows saturated the top 120.
+  // FAZ 25.4.E — ALL Wyckoff rows bypass the cap. The 12 events (each
+  // deduped per-subkind in proximity windows) plus cycles + ranges
+  // are a small set (~50-100 rows total per symbol/tf). The cap was
+  // designed for noisy classical / SMC scans that fire near-duplicates
+  // every tick. User report: \"eventler seçili olduğu halde grafikte
+  // gözükmüyor\" — events were getting cut by the AUX_RENDER_CAP=120
+  // when SMC / classical / gap / candle saturated the top 120.
   const AUX_RENDER_CAP = 120;
   const _allAuxDetections = auxWorkspace.data?.detections ?? [];
-  const _cycleRangeRows = _allAuxDetections.filter(
-    (d) =>
-      d.family === "wyckoff" &&
-      (d.subkind.startsWith("cycle_") || d.subkind.startsWith("range_")),
+  const _wyckoffRows = _allAuxDetections.filter(
+    (d) => d.family === "wyckoff",
   );
   const _otherRows = _allAuxDetections
-    .filter(
-      (d) =>
-        !(
-          d.family === "wyckoff" &&
-          (d.subkind.startsWith("cycle_") || d.subkind.startsWith("range_"))
-        ),
-    )
+    .filter((d) => d.family !== "wyckoff")
     .slice(0, AUX_RENDER_CAP);
-  const auxDetections = [..._cycleRangeRows, ..._otherRows];
+  const auxDetections = [..._wyckoffRows, ..._otherRows];
 
   // ── /v2/indicators query — pulls the technical-indicator series map
   //    for whichever overlays the operator has toggled on. Aligned to
@@ -1189,7 +1183,15 @@ export function LuxAlgoChart({
         // `fibExtend` opts into Pine's ~10-bar extension + chart edge.
         const shortEnd = fb.x_anchor + 5;
         const tEnd = timeAt(fibExtend ? fb.x_far : shortEnd);
-        if (tStart !== null && tEnd !== null) {
+        // Guard against tStart === tEnd — lightweight-charts asserts
+        // strictly-ascending time on setData; equal timestamps crash
+        // the page. User report ETH 1h: \"Assertion failed: data must
+        // be asc ordered by time, index=1, time=X, prev time=X\".
+        if (
+          tStart !== null &&
+          tEnd !== null &&
+          (tEnd as number) > (tStart as number)
+        ) {
           const interp = (k: number) =>
             fb.y_500 + (fb.y_854 - fb.y_500) * (k - 0.5) / (0.854 - 0.5);
           const y_236 = interp(0.236);
@@ -1424,6 +1426,10 @@ export function LuxAlgoChart({
           // are committed.
           for (let i = 0; i < points.length - 1; i++) {
             const dest = points[i + 1];
+            // Guard against equal timestamps (collapsed segment) —
+            // lightweight-charts requires strictly-ascending time on
+            // setData; equal timestamps trip the assertion and crash.
+            if ((dest.time as number) <= (points[i].time as number)) continue;
             const series = chart.addSeries(LineSeries, {
               color,
               lineWidth: 2,
@@ -1537,6 +1543,8 @@ export function LuxAlgoChart({
           // LineSeries so the dash style is independent from the
           // main polyline.
           const dashSeries = (p0: LineData, p1: LineData) => {
+            // Guard equal-time crash.
+            if ((p1.time as number) <= (p0.time as number)) return;
             const s = chart.addSeries(LineSeries, {
               color: stroke,
               lineWidth: 1,
@@ -1633,7 +1641,12 @@ export function LuxAlgoChart({
         const targetEnd =
           timeAt(dBar + TARGET_BARS_FORWARD)
           ?? timeAt((data.data?.candles.length ?? 0) - 1);
-        if (showHarmonicTargets && dTime !== null && targetEnd !== null) {
+        if (
+          showHarmonicTargets &&
+          dTime !== null &&
+          targetEnd !== null &&
+          (targetEnd as number) > (dTime as number)
+        ) {
           const cPrice = pat.anchors[3].price;
           const cdLeg = cPrice - dPrice; // signed (positive=bull)
           const targetColor = bull ? "#10b981" : "#ef4444"; // emerald / red
@@ -1872,11 +1885,24 @@ export function LuxAlgoChart({
         priceLineVisible: false,
         lastValueVisible: false,
       });
-      s.setData([
-        { time: tG, value: p },
-        { time: tG, value: p * (1 + sign * 0.015) },
-      ]);
-      overlaySeriesRef.current.push(s);
+      // Render a 5-bar horizontal accent at the gap price instead of a
+      // vertical at a single bar — lightweight-charts asserts strictly
+      // ascending time so two points at tG would crash.
+      const barIdx =
+        typeof gapAnchor.bar_index === "number"
+          ? gapAnchor.bar_index
+          : candles.length - 1;
+      const tEnd = timeAt(Math.min(barIdx + 5, candles.length - 1));
+      if (tEnd !== null && (tEnd as number) > (tG as number)) {
+        s.setData([
+          { time: tG, value: p },
+          { time: tEnd, value: p },
+        ]);
+        overlaySeriesRef.current.push(s);
+      }
+      // Use sign in label position so bull/bear gap glyph still
+      // visually distinct without the vertical line trick.
+      void sign;
       attachLabel(
         tG,
         p,
@@ -2015,7 +2041,7 @@ export function LuxAlgoChart({
         typeof a.bar_index === "number" ? a.bar_index : candles.length - 1;
       const endIdx = Math.min(barIdx + 10, candles.length - 1);
       const tEnd = timeAt(endIdx);
-      if (tEnd === null) return;
+      if (tEnd === null || (tEnd as number) <= (t as number)) return;
       s.setData([
         { time: t, value: p },
         { time: tEnd, value: p },
