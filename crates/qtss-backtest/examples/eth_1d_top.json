@@ -1,0 +1,39 @@
+{
+  "universe": {
+    "exchange": "binance",
+    "segment": "futures",
+    "symbol": "ETHUSDT",
+    "timeframe": "1d",
+    "start_time": "2024-01-01T00:00:00Z",
+    "end_time": "2026-04-01T00:00:00Z"
+  },
+  "polarity": "top",
+  "weights": {
+    "structural": 0.16,
+    "fib_retrace": 0.12,
+    "volume_capit": 0.12,
+    "cvd_divergence": 0.07,
+    "indicator": 0.07,
+    "sentiment": 0.07,
+    "multi_tf": 0.07,
+    "funding_oi": 0.08,
+    "wyckoff_alignment": 0.14,
+    "cycle_alignment": 0.10
+  },
+  "gates": {
+    "min_dip_score": 0.0,
+    "require_wyckoff_alignment": true,
+    "require_cycle_alignment": false,
+    "min_composite": 0.55
+  },
+  "risk": {
+    "starting_equity": "10000",
+    "risk_per_trade_pct": 0.01,
+    "max_concurrent_trades": 5,
+    "max_holding_bars": 100,
+    "trailing_stop_atr_mult": null
+  },
+  "trade_log_path": null,
+  "path_snapshot_every_bars": 3,
+  "run_tag": "eth_1d_top_baseline"
+}
