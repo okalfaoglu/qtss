@@ -2096,7 +2096,7 @@ export function LuxAlgoChart({
         const isTrend =
           d.subkind === "cycle_markup" || d.subkind === "cycle_markdown";
         // Source-aware alpha hierarchy. Trend tiles use higher border
-        // visibility (no fill compensating) so the channel reads.
+        // visibility + subtle fill so the channel reads through candles.
         const sourceRaw = d.raw_meta?.source;
         const source =
           typeof sourceRaw === "string" ? sourceRaw : "event";
@@ -2112,16 +2112,16 @@ export function LuxAlgoChart({
           }
         > = {
           confluent: {
-            rangeFill: 0.20, rangeBorder: 0.95, rangeWidth: 2,
-            trendFill: 0.04, trendBorder: 0.95, trendWidth: 2,
+            rangeFill: 0.22, rangeBorder: 1.00, rangeWidth: 2,
+            trendFill: 0.07, trendBorder: 1.00, trendWidth: 3,
           },
           elliott: {
-            rangeFill: 0.14, rangeBorder: 0.70, rangeWidth: 1,
-            trendFill: 0.02, trendBorder: 0.70, trendWidth: 2,
+            rangeFill: 0.16, rangeBorder: 0.90, rangeWidth: 2,
+            trendFill: 0.05, trendBorder: 0.90, trendWidth: 2,
           },
           event: {
-            rangeFill: 0.08, rangeBorder: 0.50, rangeWidth: 1,
-            trendFill: 0.01, trendBorder: 0.45, trendWidth: 1,
+            rangeFill: 0.10, rangeBorder: 0.65, rangeWidth: 1,
+            trendFill: 0.03, trendBorder: 0.60, trendWidth: 1,
           },
         };
         const styleSrc = styleBySource[source] ?? styleBySource.event;
