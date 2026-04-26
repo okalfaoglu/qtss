@@ -100,20 +100,30 @@ struct Weights {
     /// Elliott wave context. See docs/ELLIOTT_WYCKOFF_INTEGRATION.md
     /// for the full alignment matrix.
     wyckoff_alignment: f64,
+    /// FAZ 25.4.G — macro 4-phase cycle context. Reads the latest
+    /// cycle_* tile for (sym, tf, slot) and grades alignment with
+    /// the polarity (Dip wants Accumulation/Markup-early; Top wants
+    /// Distribution/Markdown-early). Confluent-source tiles
+    /// (event ∩ Elliott) score highest.
+    cycle_alignment: f64,
 }
 
 impl Weights {
     fn defaults() -> Self {
+        // Sums to 1.00 after introducing cycle_alignment = 0.10.
+        // Other weights trimmed proportionally — major signals
+        // (structural / wyckoff_alignment) keep larger shares.
         Self {
-            structural: 0.18,
-            fib_retrace: 0.13,
-            volume_capit: 0.13,
-            cvd_divergence: 0.08,
-            indicator: 0.08,
-            sentiment: 0.08,
-            multi_tf: 0.08,
-            funding_oi: 0.09,
-            wyckoff_alignment: 0.15,
+            structural: 0.16,
+            fib_retrace: 0.12,
+            volume_capit: 0.12,
+            cvd_divergence: 0.07,
+            indicator: 0.07,
+            sentiment: 0.07,
+            multi_tf: 0.07,
+            funding_oi: 0.08,
+            wyckoff_alignment: 0.14,
+            cycle_alignment: 0.10,
         }
     }
 }
@@ -146,6 +156,7 @@ async fn load_weights(pool: &PgPool) -> Weights {
     pull!(multi_tf,          "weights.multi_tf_confluence");
     pull!(funding_oi,        "weights.funding_oi_signals");
     pull!(wyckoff_alignment, "weights.wyckoff_alignment");
+    pull!(cycle_alignment,   "weights.cycle_alignment");
     w
 }
 
@@ -243,6 +254,8 @@ async fn score_series(
     let c_funding = score_funding_oi(pool, s, polarity).await;
     let (c_wyckoff, wyckoff_event_meta) =
         score_wyckoff_alignment(pool, s, polarity).await;
+    let (c_cycle, cycle_meta) =
+        score_cycle_alignment(pool, s, polarity).await;
 
     let composite = w.structural * c_struct
         + w.fib_retrace * c_fib
@@ -252,7 +265,8 @@ async fn score_series(
         + w.sentiment * c_sentiment
         + w.multi_tf * c_multi_tf
         + w.funding_oi * c_funding
-        + w.wyckoff_alignment * c_wyckoff;
+        + w.wyckoff_alignment * c_wyckoff
+        + w.cycle_alignment * c_cycle;
     let composite = composite.clamp(0.0, 1.0);
 
     let verdict = match composite {
@@ -273,6 +287,8 @@ async fn score_series(
         "funding_oi_signals":    c_funding,
         "wyckoff_alignment":     c_wyckoff,
         "wyckoff_event":         wyckoff_event_meta,
+        "cycle_alignment":       c_cycle,
+        "cycle_context":         cycle_meta,
     });
 
     let sql = format!(
@@ -934,6 +950,139 @@ async fn score_wyckoff_alignment(
         "phase":         phase,
         "current_wave":  current_wave,
         "score":         alignment_score,
+    });
+    (alignment_score, meta)
+}
+
+/// FAZ 25.4.G — macro 4-phase cycle context scoring.
+///
+/// Reads the most-recent cycle_* tile that COVERS the current bar
+/// for (sym, tf) — looking across all slots and picking the highest-
+/// confidence match. Returns a polarity-aware alignment score:
+///
+/// IQ-D (Long, Polarity::Dip) wants:
+///   Accumulation phase   → highest (early markup launch zone)
+///   Markup phase early   → moderate (still in trend)
+///   Markup phase late    → low (Distribution risk near)
+///   Distribution / Markdown → 0.0 (active veto)
+///
+/// IQ-T (Short, Polarity::Top) wants:
+///   Distribution phase   → highest (markdown launch zone)
+///   Markdown phase early → moderate
+///   Markdown phase late  → low
+///   Accumulation / Markup → 0.0 (active veto)
+///
+/// Source matters:
+///   Confluent tile (event ∩ Elliott) → multiplied by 1.0 (full)
+///   Elliott-only tile                → multiplied by 0.85
+///   Event-only tile                  → multiplied by 0.65
+async fn score_cycle_alignment(
+    pool: &PgPool,
+    s: &SymbolKey,
+    polarity: Polarity,
+) -> (f64, Value) {
+    // Step 1 — find the cycle tile covering the latest bar. Prefer
+    // confluent rows; fall back to elliott then event. We look at
+    // ALL slots and pick the most-recent one that contains the
+    // current time.
+    let tile_row = sqlx::query(
+        r#"SELECT slot, subkind, raw_meta, start_time, end_time
+             FROM detections
+            WHERE exchange=$1 AND segment=$2 AND symbol=$3
+              AND timeframe=$4
+              AND pattern_family='wyckoff'
+              AND mode='live'
+              AND subkind LIKE 'cycle_%'
+              AND invalidated=false
+              AND end_time >= NOW() - INTERVAL '1 day'
+            ORDER BY
+              CASE raw_meta->>'source'
+                WHEN 'confluent' THEN 0
+                WHEN 'elliott'   THEN 1
+                ELSE 2
+              END ASC,
+              end_time DESC
+            LIMIT 1"#,
+    )
+    .bind(&s.exchange)
+    .bind(&s.segment)
+    .bind(&s.symbol)
+    .bind(&s.timeframe)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    let Some(row) = tile_row else {
+        return (0.0, Value::Null);
+    };
+    let slot: i16 = row.try_get("slot").unwrap_or(0);
+    let subkind: String = row.try_get("subkind").unwrap_or_default();
+    let raw_meta: Value = row.try_get("raw_meta").unwrap_or(Value::Null);
+    let start_time: chrono::DateTime<chrono::Utc> =
+        row.try_get("start_time").unwrap_or_else(|_| chrono::Utc::now());
+    let end_time: chrono::DateTime<chrono::Utc> =
+        row.try_get("end_time").unwrap_or_else(|_| chrono::Utc::now());
+    let phase = subkind.replace("cycle_", "");
+    let source = raw_meta
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("event")
+        .to_string();
+
+    // Phase progression — how far into the tile are we? 0.0 = at
+    // start, 1.0 = at end. Used to dampen Markup/Markdown scores
+    // near the END of those trend legs (late = exhaustion).
+    let total_secs = (end_time - start_time).num_seconds().max(1) as f64;
+    let elapsed_secs = (chrono::Utc::now() - start_time).num_seconds().max(0) as f64;
+    let progress = (elapsed_secs / total_secs).clamp(0.0, 1.0);
+    let trend_late = progress > 0.5;
+
+    // Step 2 — phase ↔ polarity matrix.
+    let base = match (polarity, phase.as_str()) {
+        // ── Dip (long lens) ────────────────────────────────────────
+        (Polarity::Dip, "accumulation") => 1.0,
+        (Polarity::Dip, "markup") => {
+            if trend_late {
+                0.30
+            } else {
+                0.55
+            }
+        }
+        (Polarity::Dip, "distribution") => 0.0, // veto
+        (Polarity::Dip, "markdown") => 0.0,     // veto
+
+        // ── Top (short lens) ───────────────────────────────────────
+        (Polarity::Top, "distribution") => 1.0,
+        (Polarity::Top, "markdown") => {
+            if trend_late {
+                0.30
+            } else {
+                0.55
+            }
+        }
+        (Polarity::Top, "accumulation") => 0.0, // veto
+        (Polarity::Top, "markup") => 0.0,       // veto
+
+        _ => 0.0,
+    };
+
+    // Step 3 — source dampener. Confluent = full weight, Elliott =
+    // 0.85, Event = 0.65. Reflects evidence quality.
+    let source_weight = match source.as_str() {
+        "confluent" => 1.0,
+        "elliott" => 0.85,
+        "event" => 0.65,
+        _ => 0.5,
+    };
+    let alignment_score = base * source_weight;
+
+    let meta = json!({
+        "phase":      phase,
+        "source":     source,
+        "slot":       slot,
+        "progress":   progress,
+        "score":      alignment_score,
     });
     (alignment_score, meta)
 }

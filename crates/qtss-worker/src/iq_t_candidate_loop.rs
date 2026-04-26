@@ -264,6 +264,44 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
             }
         }
 
+        // FAZ 25.4.G — macro 4-phase cycle alignment gate.
+        // For IQ-T (short bias), Accumulation / Markup phases mean
+        // the market is basing or rallying; opening a short is
+        // structurally wrong. Default off; flip
+        // `iq_t_candidate.require_cycle_alignment` to true to
+        // enforce.
+        let require_cycle = sqlx::query_scalar::<_, Option<bool>>(
+            r#"SELECT (value->>'value')::boolean FROM system_config
+                WHERE module='iq_t_candidate'
+                  AND config_key='require_cycle_alignment'"#,
+        )
+        .fetch_optional(pool).await.ok().flatten().flatten().unwrap_or(false);
+        if require_cycle {
+            let cycle_meta = sqlx::query(
+                r#"SELECT components->'cycle_context' AS ctx
+                     FROM major_top_candidates
+                    WHERE exchange=$1 AND segment=$2
+                      AND symbol=$3 AND timeframe=$4
+                    ORDER BY candidate_time DESC LIMIT 1"#,
+            )
+            .bind(&p.exchange).bind(&p.segment).bind(&p.symbol).bind(&p.timeframe)
+            .fetch_optional(pool).await.ok().flatten();
+            let cycle_blocks = cycle_meta
+                .map(|r| {
+                    let ctx: Value = r.try_get("ctx").unwrap_or(Value::Null);
+                    let phase = ctx
+                        .get("phase")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    // Accumulation / Markup vetoes IQ-T short.
+                    matches!(phase, "accumulation" | "markup")
+                })
+                .unwrap_or(false);
+            if cycle_blocks {
+                continue;
+            }
+        }
+
         // FAZ 25.3.B — Major Dip composite gate. Look up the latest
         // major_dip_candidates row for the CHILD TF (the timeframe
         // we'\''re actually opening a position on) — IQ-T trades the
