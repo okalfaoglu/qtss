@@ -20,6 +20,7 @@ use qtss_backtest::iq::cli::{
     init_tracing, init_tracing_json, load_config_file, print_report,
     resolve_log_path,
 };
+use qtss_backtest::iq::persistence;
 use qtss_backtest::iq::IqBacktestRunner;
 
 fn main() -> Result<()> {
@@ -29,6 +30,7 @@ fn main() -> Result<()> {
     let mut config_path: Option<PathBuf> = None;
     let mut log_path: Option<PathBuf> = None;
     let mut json_logs = false;
+    let mut persist = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -47,6 +49,10 @@ fn main() -> Result<()> {
             }
             "--json-logs" => {
                 json_logs = true;
+                i += 1;
+            }
+            "--persist" => {
+                persist = true;
                 i += 1;
             }
             "--help" | "-h" => {
@@ -83,6 +89,10 @@ fn main() -> Result<()> {
         .enable_all()
         .build()
         .context("building tokio runtime")?;
+    let trade_log_path_for_persist = config
+        .trade_log_path
+        .as_ref()
+        .map(|p| p.to_string_lossy().to_string());
     let report = rt.block_on(async move {
         let database_url = std::env::var("DATABASE_URL")
             .or_else(|_| std::env::var("QTSS_DATABASE_URL"))
@@ -93,7 +103,26 @@ fn main() -> Result<()> {
             .await
             .context("connecting to Postgres")?;
         let runner = IqBacktestRunner::new(config)?;
-        runner.run(&pool).await
+        let report = runner.run(&pool).await?;
+        if persist {
+            match persistence::persist_report(
+                &pool,
+                &report,
+                trade_log_path_for_persist.as_deref(),
+            )
+            .await
+            {
+                Ok(id) => {
+                    println!();
+                    println!(" persisted run id: {}", id);
+                    println!(" view: /v2/iq-backtest/runs/{}", id);
+                }
+                Err(e) => {
+                    eprintln!("WARN: persist failed: {e}");
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(report)
     })?;
 
     print_report(&report);
@@ -102,11 +131,12 @@ fn main() -> Result<()> {
 
 fn print_usage() {
     eprintln!(
-        "usage: iq-backtest --config <path> [--log <path>] [--json-logs]\n\
+        "usage: iq-backtest --config <path> [--log <path>] [--persist] [--json-logs]\n\
          \n\
          args:\n\
          \x20 --config, -c   Path to JSON config (IqBacktestConfig).\n\
          \x20 --log, -l      Output JSONL trade log (file or directory).\n\
+         \x20 --persist      Save aggregate report to iq_backtest_runs table.\n\
          \x20 --json-logs    Emit tracing events as JSON lines.\n\
          \x20 --help, -h     Show this message.\n\
          \n\

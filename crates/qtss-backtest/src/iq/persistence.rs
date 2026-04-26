@@ -114,10 +114,16 @@ pub struct PersistedRun {
     pub trade_log_path: Option<String>,
 }
 
-/// List recent runs filtered by optional symbol + tf. `limit`
-/// caps the row count (max 200 enforced).
+/// List recent runs filtered by optional exchange + segment +
+/// symbol + tf. `limit` caps the row count (max 200 enforced).
+///
+/// Mirrors the `{venue}/{symbol}/{tf}` convention used by
+/// `/v2/chart` and `/v2/elliott` — every filter is optional so the
+/// same routine serves both the scoped path and the global list.
 pub async fn list_recent_runs(
     pool: &PgPool,
+    exchange: Option<&str>,
+    segment: Option<&str>,
     symbol: Option<&str>,
     timeframe: Option<&str>,
     limit: u32,
@@ -129,11 +135,15 @@ pub async fn list_recent_runs(
                   total_trades, wins, losses, win_rate, profit_factor,
                   net_pnl, max_drawdown_pct, created_at, trade_log_path
              FROM iq_backtest_runs
-            WHERE ($1::text IS NULL OR symbol = $1)
-              AND ($2::text IS NULL OR timeframe = $2)
+            WHERE ($1::text IS NULL OR exchange  = $1)
+              AND ($2::text IS NULL OR segment   = $2)
+              AND ($3::text IS NULL OR symbol    = $3)
+              AND ($4::text IS NULL OR timeframe = $4)
             ORDER BY created_at DESC
-            LIMIT $3"#,
+            LIMIT $5"#,
     )
+    .bind(exchange)
+    .bind(segment)
     .bind(symbol)
     .bind(timeframe)
     .bind(limit)

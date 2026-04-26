@@ -1,10 +1,14 @@
 // FAZ 26.6 — IQ Backtest Studio.
 //
-// Lists recent qtss-backtest::iq runs from /v2/iq-backtest/runs and
-// shows a detail panel for the selected run. Read-only for now —
-// dispatching new runs is queued for the next iteration (the
-// backtest can take minutes; we'll need a background-task pattern
-// for that).
+// Lists recent qtss-backtest::iq runs and shows a detail panel for
+// the selected run. Read-only for now — dispatching new runs is
+// queued for the next iteration (the backtest can take minutes;
+// we'll need a background-task pattern for that).
+//
+// API contract (mirrors /v2/chart and /v2/elliott convention):
+//   • Symbol+TF selected  → GET /v2/iq-backtest/{venue}/{sym}/{tf}/runs
+//   • Cross-symbol view   → GET /v2/iq-backtest/runs?…filters…
+//   • Single run detail   → GET /v2/iq-backtest/runs/{id}
 
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -38,6 +42,11 @@ interface RunDetail {
 }
 
 const TF_OPTIONS = ["", "15m", "1h", "4h", "1d", "1w"];
+// Defaults match /v2/chart query semantics — operator can override
+// via the inputs once we surface them, but the scoped path needs
+// venue/segment to slot into the URL.
+const DEFAULT_VENUE = "binance";
+const DEFAULT_SEGMENT = "futures";
 
 export default function BacktestStudio() {
   const [symbol, setSymbol] = useState("");
@@ -47,6 +56,19 @@ export default function BacktestStudio() {
   const runs = useQuery<RunRow[]>({
     queryKey: ["iq-backtest-runs", symbol, tf],
     queryFn: () => {
+      // When the user has nailed down both symbol AND timeframe we
+      // use the canonical {venue}/{symbol}/{tf} path — same shape
+      // as /v2/chart and /v2/elliott. Anything looser falls back
+      // to the global list with query filters so the operator can
+      // sweep across symbols.
+      if (symbol && tf) {
+        const qs = new URLSearchParams();
+        qs.set("segment", DEFAULT_SEGMENT);
+        qs.set("limit", "100");
+        return apiFetch(
+          `/v2/iq-backtest/${DEFAULT_VENUE}/${symbol}/${tf}/runs?${qs.toString()}`,
+        );
+      }
       const qs = new URLSearchParams();
       if (symbol) qs.set("symbol", symbol);
       if (tf) qs.set("timeframe", tf);

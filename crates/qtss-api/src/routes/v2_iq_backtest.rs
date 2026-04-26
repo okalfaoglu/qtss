@@ -4,9 +4,19 @@
 //! (`qtss-backtest::iq`). The runs table `iq_backtest_runs` is the
 //! queryable index of completed backtest runs.
 //!
-//! Endpoints:
-//!   GET  /v2/iq-backtest/runs            — list recent runs
-//!   GET  /v2/iq-backtest/runs/:id        — single run detail
+//! Endpoints (canonical, `{venue}/{symbol}/{tf}` shape — same
+//! convention as `/v2/chart` and `/v2/elliott`):
+//!
+//!   GET  /v2/iq-backtest/{venue}/{symbol}/{tf}/runs
+//!        — runs scoped to a specific (exchange, symbol, timeframe).
+//!          `?segment=spot|futures` query param (default `futures`)
+//!          mirrors the chart route. `?limit=` caps row count.
+//!   GET  /v2/iq-backtest/runs
+//!        — global list across all symbols. Optional `?exchange=`,
+//!          `?segment=`, `?symbol=`, `?timeframe=`, `?limit=`.
+//!   GET  /v2/iq-backtest/runs/{id}
+//!        — single run detail by UUID. UUIDs are global so no scope
+//!          segment is needed.
 //!
 //! Writes (dispatch a run) live in a separate module — backtest
 //! runs can take minutes; the dispatch endpoint queues the work
@@ -27,12 +37,22 @@ use crate::state::SharedState;
 
 pub fn v2_iq_backtest_router() -> Router<SharedState> {
     Router::new()
+        // Canonical scoped path — matches /v2/chart/{venue}/{symbol}/{tf}
+        // and /v2/elliott/{venue}/{symbol}/{tf} convention.
+        .route(
+            "/v2/iq-backtest/{venue}/{symbol}/{tf}/runs",
+            get(list_runs_scoped),
+        )
+        // Global list for cross-symbol views (e.g. ops dashboard).
         .route("/v2/iq-backtest/runs", get(list_runs))
+        // UUID-keyed detail (UUIDs are global, no scope needed).
         .route("/v2/iq-backtest/runs/{id}", get(get_run))
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
+    pub exchange: Option<String>,
+    pub segment: Option<String>,
     pub symbol: Option<String>,
     pub timeframe: Option<String>,
     /// Default 50, capped at 200.
@@ -46,8 +66,44 @@ async fn list_runs(
     let limit = q.limit.unwrap_or(50);
     let rows = persistence::list_recent_runs(
         &st.pool,
+        q.exchange.as_deref(),
+        q.segment.as_deref(),
         q.symbol.as_deref(),
         q.timeframe.as_deref(),
+        limit,
+    )
+    .await
+    .map_err(|e| {
+        ApiError::new(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+        )
+    })?;
+    Ok(Json(rows))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ScopedQuery {
+    /// Defaults to `futures` — same default as `/v2/chart`. Mirror
+    /// it here so the same chart-toolbar combobox feeds both.
+    pub segment: Option<String>,
+    /// Default 50, capped at 200.
+    pub limit: Option<u32>,
+}
+
+async fn list_runs_scoped(
+    State(st): State<SharedState>,
+    Path((venue, symbol, tf)): Path<(String, String, String)>,
+    Query(q): Query<ScopedQuery>,
+) -> Result<Json<Vec<PersistedRun>>, ApiError> {
+    let segment = q.segment.unwrap_or_else(|| "futures".to_string());
+    let limit = q.limit.unwrap_or(50);
+    let rows = persistence::list_recent_runs(
+        &st.pool,
+        Some(&venue),
+        Some(&segment),
+        Some(&symbol),
+        Some(&tf),
         limit,
     )
     .await
