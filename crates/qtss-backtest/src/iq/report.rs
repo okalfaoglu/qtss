@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use super::attribution::{OutcomeAttribution, OutcomeClass};
-use super::availability::DataAvailabilityReport;
 use super::config::IqBacktestConfig;
 use super::trade::IqTrade;
 
@@ -55,15 +54,6 @@ pub struct IqBacktestReport {
     /// "Which channel was the weakest at entry on average across
     /// losing trades?" — pandas-friendly.
     pub avg_loss_components: BTreeMap<String, f64>,
-
-    // ── BUG BACKTEST — pre-flight data availability snapshot ─────
-    /// Per-channel data coverage probed at the START of the run.
-    /// `None` when the runner did not probe (older snapshots).
-    /// When this shows `missing`/`empty` rows, the corresponding
-    /// scorer returned 0 for every bar in the window — usually the
-    /// reason a run produces 0 trades despite a populated tape.
-    #[serde(default)]
-    pub data_availability: Option<DataAvailabilityReport>,
 }
 
 impl IqBacktestReport {
@@ -104,7 +94,6 @@ impl IqBacktestReport {
             sharpe_ratio: None,
             loss_reason_counts: BTreeMap::new(),
             avg_loss_components: BTreeMap::new(),
-            data_availability: None,
         }
     }
 }
