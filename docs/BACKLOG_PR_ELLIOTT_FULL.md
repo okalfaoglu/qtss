@@ -31,6 +31,36 @@ $4098 against $2300 spot before the staleness gate caught it.
 
 ✅ Resolved in commit `5bf21bf` (W3 → W1 + buffer breakout entry).
 
+## 5. BC projection segment extends past actual price action
+Triggered by user 2026-04-26 (BTCUSDT 4h Z4) after FAZ 25.2 + 25.3
+landed.
+
+Repro: Elliott formations ON shows
+  motive: (3)(4)(5) → solid orange
+  abc:    (a) → (b) → (b?) projection above (b)
+          (c)  → (c?) projection below to ~70K
+The (c?) dotted segment extends down to ~70K but actual price
+never went below ~76K (current right edge ~77.3K). The simulated C
+target sits in a price zone the tape never visited; visually
+disconnected from reality.
+
+Hypothesis: clip_to_last only caps the projected anchor's
+bar_index, NOT its price. So a Fib-based (c?) price projection of
+70K stamped at the current bar still draws a diagonal line into a
+price zone the candles never reached.
+
+Possible fix path:
+- Frontend: when projected price falls outside [chart_min,
+  chart_max] of recent bars (say 50-bar window), shorten or hide
+  the segment.
+- Backend: add `projected_price_oob: bool` to the anchor JSON
+  when |projected − last_close| / last_close > N% (config).
+- Or: replace the projected anchor's price with current bar's
+  high/low when the projection has clearly missed.
+
+Address after FAZ 25.3.D (UI breakdown panel) ships, since the
+fix likely lives in the same frontend overlay code path.
+
 ## 4. Trade-open TP-proximity gate + actual fill price display
 Triggered by user after FAZ 25.2.D completes.
 

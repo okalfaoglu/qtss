@@ -41,6 +41,7 @@ mod v2_wave_bars;
 mod v2_iq_structures;
 mod v2_iq_setups;
 mod v2_iq_stream;
+mod v2_major_dip;
 mod v2_confluence;
 mod v2_radar;
 mod v2_harmonic;
@@ -81,6 +82,7 @@ pub use v2_wave_bars::v2_wave_bars_router;
 pub use v2_iq_structures::v2_iq_structures_router;
 pub use v2_iq_setups::v2_iq_setups_router;
 pub use v2_iq_stream::v2_iq_stream_router;
+pub use v2_major_dip::v2_major_dip_router;
 pub use v2_confluence::v2_confluence_router;
 pub use v2_radar::v2_radar_router;
 pub use v2_harmonic::v2_harmonic_router;
@@ -156,6 +158,7 @@ pub fn api_router(state: SharedState) -> Router<SharedState> {
         .merge(v2_wave_bars_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_iq_structures_router().layer(from_fn(require_dashboard_roles)))
         .merge(v2_iq_setups_router().layer(from_fn(require_dashboard_roles)))
+        .merge(v2_major_dip_router().layer(from_fn(require_dashboard_roles)))
         // NOTE: v2_iq_stream_router is mounted SEPARATELY in main.rs
         // outside the global jwt_layer wrap because EventSource
         // cannot attach Authorization headers. Payload only carries

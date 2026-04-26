@@ -135,6 +135,29 @@ function EarlyStatsPanel({
   });
   const setups = iqSetups.data?.setups ?? [];
 
+  // FAZ 25.3.D — Major Dip composite score breakdown panel. The
+  // 8-component score (research doc §VIII + §XII) tells the user
+  // exactly WHY a setup did or didn't arm. IQ-D/IQ-T setup creation
+  // is gated on `min_score_for_setup` (default 0.55); this panel
+  // visualises which channels lit up vs which are still stub-zero.
+  type MajorDipResp = {
+    rows: Array<{
+      candidate_bar: number;
+      candidate_time: string;
+      candidate_price: number;
+      score: number;
+      components: Record<string, number | null>;
+      verdict: string;
+    }>;
+  };
+  const majorDip = useQuery<MajorDipResp>({
+    queryKey: ["major-dip", symbol, tf],
+    queryFn: () =>
+      apiFetch(`/v2/major-dip/binance/${symbol}/${tf}?segment=futures&limit=1`),
+    refetchInterval: 30_000,
+  });
+  const dipRow = majorDip.data?.rows?.[0];
+
   return (
     <aside className="hidden w-[300px] shrink-0 overflow-y-auto border-l border-zinc-800 bg-zinc-950/40 p-3 text-xs xl:block">
       {/* FAZ 25 PR-25B — IQ-D structure summary at the top so the user
@@ -190,6 +213,93 @@ function EarlyStatsPanel({
           </div>
         );
       })}
+
+      {/* FAZ 25.3.D — Major Dip composite score panel. Per-component
+          breakdown so the operator sees exactly which channels are
+          contributing (vs which are stub zero). */}
+      <h3 className="mb-2 mt-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+        {symbol} {tf} — Major Dip
+      </h3>
+      {!dipRow && (
+        <div className="mb-2 text-[10px] text-zinc-500">No score yet.</div>
+      )}
+      {dipRow && (
+        <div className="mb-2 rounded bg-zinc-900/60 px-2 py-1 text-[10px]">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-zinc-300">
+              @ {dipRow.candidate_price.toFixed(2)}
+            </span>
+            <span
+              className={
+                dipRow.verdict === "very_high"
+                  ? "rounded bg-emerald-500/30 px-1 font-bold text-emerald-200"
+                  : dipRow.verdict === "high"
+                  ? "rounded bg-emerald-500/20 px-1 text-emerald-300"
+                  : dipRow.verdict === "developing"
+                  ? "rounded bg-amber-500/20 px-1 text-amber-300"
+                  : "rounded bg-zinc-700/40 px-1 text-zinc-400"
+              }
+            >
+              {dipRow.verdict} {(dipRow.score * 100).toFixed(0)}%
+            </span>
+          </div>
+          {/* Per-component bars. Each row paints a horizontal sparkline
+              of the component score (0..1) so the operator sees which
+              channels are contributing at a glance. Stub components
+              that always return 0 stay greyed out. */}
+          <div className="mt-1 space-y-0.5">
+            {[
+              ["structural_completion", "Yapısal", 0.20],
+              ["fib_retrace_quality", "Fib Zone", 0.15],
+              ["volume_capitulation", "Vol Capit", 0.15],
+              ["cvd_divergence", "CVD Div", 0.10],
+              ["indicator_alignment", "RSI/MACD", 0.10],
+              ["sentiment_extreme", "Sentiment", 0.10],
+              ["multi_tf_confluence", "Multi-TF", 0.10],
+              ["funding_oi_signals", "Funding/OI", 0.10],
+            ].map(([key, label, w]) => {
+              const v = (dipRow.components[key as string] as number) ?? 0;
+              const widthPct = Math.max(0, Math.min(1, v)) * 100;
+              const isStub = v === 0;
+              return (
+                <div key={key as string} className="flex items-center gap-1">
+                  <span className="w-16 truncate text-[8px] text-zinc-500">
+                    {label}
+                  </span>
+                  <div className="relative h-1.5 flex-1 overflow-hidden rounded-sm bg-zinc-800">
+                    <div
+                      className={
+                        isStub
+                          ? "h-full bg-zinc-700"
+                          : v > 0.7
+                          ? "h-full bg-emerald-500/70"
+                          : v > 0.3
+                          ? "h-full bg-amber-500/70"
+                          : "h-full bg-rose-500/50"
+                      }
+                      style={{ width: `${widthPct}%` }}
+                    />
+                  </div>
+                  <span className="w-7 text-right font-mono text-[8px] text-zinc-400">
+                    {v.toFixed(2)}
+                  </span>
+                  <span className="w-7 text-right text-[8px] text-zinc-600">
+                    ×{(w as number).toFixed(2)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-1 text-[8px] text-zinc-500">
+            {new Date(dipRow.candidate_time).toLocaleString("tr-TR", {
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </div>
+        </div>
+      )}
 
       {/* IQ-D / IQ-T setups for this symbol+tf. Active rows surface
           first; closed rows are filtered server-side by default. */}
