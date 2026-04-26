@@ -2007,8 +2007,72 @@ export function LuxAlgoChart({
         default:       return head;
       }
     };
+    // Pre-compute price extents once so the cycle bands span the
+    // visible price range. The bands are FULL-HEIGHT subtle backdrops
+    // — they live behind everything else (range boxes, events,
+    // candles).
+    let cycleHi = Number.NEGATIVE_INFINITY;
+    let cycleLo = Number.POSITIVE_INFINITY;
+    for (const c of candles) {
+      const h = typeof c.high === "number" ? c.high : Number(c.high);
+      const l = typeof c.low === "number" ? c.low : Number(c.low);
+      if (Number.isFinite(h) && h > cycleHi) cycleHi = h;
+      if (Number.isFinite(l) && l < cycleLo) cycleLo = l;
+    }
+    if (!Number.isFinite(cycleHi) || !Number.isFinite(cycleLo)) {
+      cycleHi = 1;
+      cycleLo = 0;
+    }
+    // Pad ±5% so the band hugs the chart edges without clipping when
+    // the user zooms vertically.
+    const cyclePadding = (cycleHi - cycleLo) * 0.05;
+    const cycleBandTop = cycleHi + cyclePadding;
+    const cycleBandBottom = Math.max(cycleLo - cyclePadding, 0);
+
     const renderWyckoff = (d: ChartWorkspaceDetection) => {
       if (d.anchors.length === 0) return;
+      // FAZ 25.4.D — four-phase macro market cycle bands
+      // (Accumulation → Markup → Distribution → Markdown). Each cycle
+      // segment paints a wide low-alpha backdrop covering the whole
+      // visible price range for the duration of that phase. Subtle
+      // enough to read through; the schematic range boxes (Accum/Dist)
+      // sit ON TOP for the tighter framing.
+      if (d.subkind.startsWith("cycle_") && d.anchors.length >= 2) {
+        const a0 = d.anchors[0];
+        const a1 = d.anchors[1];
+        const t0 = anchorTime(a0);
+        const t1 = anchorTime(a1);
+        if (t0 === null || t1 === null) return;
+        // Color palette: cool → warm follows the cycle.
+        //   Accumulation: emerald  (low, base)
+        //   Markup:       sky blue (rising)
+        //   Distribution: amber    (high, top)
+        //   Markdown:     rose     (falling)
+        const cyclePalette: Record<string, { fill: string; border: string; label: string }> = {
+          cycle_accumulation: { fill: "#10b9810f", border: "#10b98166", label: "Accumulation" },
+          cycle_markup:       { fill: "#0ea5e90f", border: "#0ea5e966", label: "Markup" },
+          cycle_distribution: { fill: "#f59e0b14", border: "#f59e0b66", label: "Distribution" },
+          cycle_markdown:     { fill: "#f43f5e14", border: "#f43f5e66", label: "Markdown" },
+        };
+        const palette = cyclePalette[d.subkind];
+        if (!palette) return;
+        const rect = new RectanglePrimitive({
+          time1: t0,
+          time2: t1,
+          priceTop: cycleBandTop,
+          priceBottom: cycleBandBottom,
+          fillColor: palette.fill,
+          borderColor: palette.border,
+          borderWidth: 1,
+        });
+        candleSeries.attachPrimitive(rect);
+        rectPrimitivesRef.current.push(rect);
+        // Phase label sits at the top edge of the band, anchored to
+        // the START of the phase (so a contiguous tiling reads as one
+        // label per phase rather than a stack).
+        attachLabel(t0, cycleBandTop, palette.label, palette.border, "above");
+        return;
+      }
       // FAZ 25.4.B — schematic range boxes (Accumulation / Distribution
       // rectangles). Two anchors: [start_bar, range_low] and
       // [end_bar, range_high]. Tinted fill behind the bar tape so the
@@ -2206,8 +2270,11 @@ export function LuxAlgoChart({
     const wyckoffEvents = auxDetections.filter((d) => {
       const family = d.family || d.kind;
       if (family !== "wyckoff") return false;
-      // Range rows always pass — we filter only individual events.
+      // Range + cycle rows always pass — we filter only individual
+      // events. Cycle bands are 4-per-rotation so dedup is unnecessary,
+      // and ranges already are at most one per (sym, tf, slot).
       if (d.subkind.startsWith("range_")) return false;
+      if (d.subkind.startsWith("cycle_")) return false;
       const lastAnchor = d.anchors[d.anchors.length - 1];
       const anchorBar =
         typeof lastAnchor?.bar_index === "number" ? lastAnchor.bar_index : -1;
@@ -2248,7 +2315,11 @@ export function LuxAlgoChart({
     for (const det of auxDetections) {
       const family = det.family || det.kind;
       if (!familyEnabled(family)) continue;
-      if (family === "wyckoff" && !det.subkind.startsWith("range_")) {
+      if (
+        family === "wyckoff" &&
+        !det.subkind.startsWith("range_") &&
+        !det.subkind.startsWith("cycle_")
+      ) {
         const lastAnchor = det.anchors[det.anchors.length - 1];
         const anchorBar =
           typeof lastAnchor?.bar_index === "number"
@@ -2761,7 +2832,7 @@ export function LuxAlgoChart({
             </label>
             <label
               className="flex cursor-pointer items-center gap-1"
-              title="Wyckoff events: SC / BC / Spring / UTAD / SOS / SOW / AR / ST / LPS / PS / BU / Test — phase A-E label appended"
+              title="Wyckoff: 12 events (SC/BC/Spring/UTAD/SOS/SOW/AR/ST/LPS/PS/BU/Test) + accumulation/distribution range boxes + 4-phase macro cycle bands (Accumulation → Markup → Distribution → Markdown)"
             >
               <input
                 type="checkbox"

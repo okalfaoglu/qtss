@@ -28,12 +28,14 @@
 //! events in chronological order and read `phase()` / `bias()`.
 
 mod config;
+mod cycle;
 mod event;
 mod events;
 mod phase;
 mod range;
 
 pub use config::WyckoffConfig;
+pub use cycle::{detect_cycles, WyckoffCycle, WyckoffCyclePhase};
 pub use event::{WyckoffEvent, WyckoffEventKind, WyckoffSpec};
 pub use events::{detect_events, WYCKOFF_SPECS};
 pub use phase::{WyckoffBias, WyckoffPhase, WyckoffPhaseTracker};

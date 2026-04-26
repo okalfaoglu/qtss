@@ -16,8 +16,8 @@ use qtss_domain::v2::instrument::{AssetClass, Instrument, SessionCalendar, Venue
 use qtss_domain::v2::timeframe::Timeframe;
 use qtss_storage::market_bars::{self, MarketBarRow};
 use qtss_wyckoff::{
-    detect_events, detect_ranges, WyckoffBias, WyckoffConfig, WyckoffEvent,
-    WyckoffPhaseTracker, WyckoffRange,
+    detect_cycles, detect_events, detect_ranges, WyckoffBias, WyckoffConfig,
+    WyckoffCycle, WyckoffCyclePhase, WyckoffEvent, WyckoffPhaseTracker, WyckoffRange,
 };
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
@@ -108,15 +108,15 @@ async fn process_symbol(
     // chart renders these as a primitive rectangle behind the event
     // markers.
     //
-    // Sweep stale ranges before writing fresh ones so old boxes
-    // don't pile up at the same slot.
+    // Sweep stale ranges + cycles before writing fresh ones so old
+    // boxes/segments don't pile up at the same slot.
     let _ = sqlx::query(
         r#"DELETE FROM detections
             WHERE exchange = $1 AND segment = $2
               AND symbol = $3 AND timeframe = $4
               AND pattern_family = 'wyckoff'
               AND mode = 'live'
-              AND subkind LIKE 'range_%'"#,
+              AND (subkind LIKE 'range_%' OR subkind LIKE 'cycle_%')"#,
     )
     .bind(&sym.exchange)
     .bind(&sym.segment)
@@ -129,7 +129,107 @@ async fn process_symbol(
     for r in &ranges {
         written += write_range(pool, sym, &chrono, r).await?;
     }
+
+    // FAZ 25.4.D — four-phase macro cycle (Accumulation → Markup →
+    // Distribution → Markdown). User asked: "Bu döngü bizde var mı?"
+    // The schematic ranges (Accum / Dist) are persisted above; the
+    // trend legs (Markup / Markdown) connecting them were missing.
+    // detect_cycles tiles the entire tape into a contiguous segment
+    // sequence — every bar belongs to exactly one of the 4 phases.
+    let tape_end_bar = chrono.len().saturating_sub(1);
+    let tape_end_price = chrono
+        .last()
+        .and_then(|r| r.close.to_string().parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let cycles = detect_cycles(&sorted, tape_end_bar, tape_end_price);
+    for c in &cycles {
+        written += write_cycle(pool, sym, &chrono, c).await?;
+    }
     Ok(written)
+}
+
+async fn write_cycle(
+    pool: &PgPool,
+    sym: &EngineSymbol,
+    chrono: &[MarketBarRow],
+    c: &WyckoffCycle,
+) -> anyhow::Result<usize> {
+    let phase_str = match c.phase {
+        WyckoffCyclePhase::Accumulation => "accumulation",
+        WyckoffCyclePhase::Markup => "markup",
+        WyckoffCyclePhase::Distribution => "distribution",
+        WyckoffCyclePhase::Markdown => "markdown",
+    };
+    let subkind = format!("cycle_{phase_str}");
+    let direction: i16 = match c.phase {
+        WyckoffCyclePhase::Accumulation | WyckoffCyclePhase::Markup => 1,
+        WyckoffCyclePhase::Distribution | WyckoffCyclePhase::Markdown => -1,
+    };
+    let start_time = chrono
+        .get(c.start_bar)
+        .map(|b| b.open_time)
+        .unwrap_or_else(Utc::now);
+    let end_time = chrono
+        .get(c.end_bar)
+        .map(|b| b.open_time)
+        .unwrap_or_else(Utc::now);
+    // anchors = corners of the cycle band the chart renderer needs:
+    //   anchors[0] = start at start_price
+    //   anchors[1] = end at end_price
+    let anchors = json!([
+        {
+            "label_override": phase_str,
+            "bar_index": c.start_bar as i64,
+            "price": c.start_price,
+            "time": start_time,
+        },
+        {
+            "label_override": phase_str,
+            "bar_index": c.end_bar as i64,
+            "price": c.end_price,
+            "time": end_time,
+        }
+    ]);
+    let raw_meta = json!({
+        "phase":       phase_str,
+        "start_price": c.start_price,
+        "end_price":   c.end_price,
+        "completed":   c.completed,
+        "kind":        "wyckoff_cycle",
+    });
+    sqlx::query(
+        r#"INSERT INTO detections
+              (exchange, segment, symbol, timeframe, slot,
+               pattern_family, subkind, direction,
+               start_bar, end_bar, start_time, end_time,
+               anchors, invalidated, raw_meta, mode)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'live')
+           ON CONFLICT (exchange, segment, symbol, timeframe, slot,
+                        pattern_family, subkind, start_time, end_time, mode)
+           DO UPDATE SET
+               direction  = EXCLUDED.direction,
+               anchors    = EXCLUDED.anchors,
+               raw_meta   = EXCLUDED.raw_meta,
+               updated_at = now()"#,
+    )
+    .bind(&sym.exchange)
+    .bind(&sym.segment)
+    .bind(&sym.symbol)
+    .bind(&sym.interval)
+    .bind(0i16)
+    .bind("wyckoff")
+    .bind(&subkind)
+    .bind(direction)
+    .bind(c.start_bar as i64)
+    .bind(c.end_bar as i64)
+    .bind(start_time)
+    .bind(end_time)
+    .bind(&anchors)
+    .bind(c.completed)
+    .bind(&raw_meta)
+    .execute(pool)
+    .await?;
+    Ok(1)
 }
 
 async fn write_range(
