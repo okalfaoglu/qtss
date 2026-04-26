@@ -707,11 +707,29 @@ export function LuxAlgoChart({
   // particular is noisy (sliding scan → thousands of near-duplicates);
   // showing the most recent N is the pragmatic default and keeps the
   // chart responsive. Operator can bump this via config later.
+  //
+  // FAZ 25.4.E — Wyckoff CYCLE + RANGE rows bypass the cap. They're a
+  // small set (≤ ~24 cycle tiles per symbol across 6 slots, ≤ 1 range)
+  // and represent the high-level macro framing the operator most needs
+  // to see. The cap pushed them out at busy 4h symbols where SMC /
+  // Wyckoff EVENT rows saturated the top 120.
   const AUX_RENDER_CAP = 120;
-  const auxDetections = (auxWorkspace.data?.detections ?? []).slice(
-    0,
-    AUX_RENDER_CAP,
+  const _allAuxDetections = auxWorkspace.data?.detections ?? [];
+  const _cycleRangeRows = _allAuxDetections.filter(
+    (d) =>
+      d.family === "wyckoff" &&
+      (d.subkind.startsWith("cycle_") || d.subkind.startsWith("range_")),
   );
+  const _otherRows = _allAuxDetections
+    .filter(
+      (d) =>
+        !(
+          d.family === "wyckoff" &&
+          (d.subkind.startsWith("cycle_") || d.subkind.startsWith("range_"))
+        ),
+    )
+    .slice(0, AUX_RENDER_CAP);
+  const auxDetections = [..._cycleRangeRows, ..._otherRows];
 
   // ── /v2/indicators query — pulls the technical-indicator series map
   //    for whichever overlays the operator has toggled on. Aligned to
