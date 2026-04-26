@@ -303,6 +303,38 @@ pub fn detect_cycles_from_elliott(
     let mut prev_end: Option<(usize, f64, WyckoffCyclePhase)> = None;
     let gap_min_bars: usize = 2;
 
+    // LEADING fill — Pruden's mapping says every bull motive launches
+    // from an Accumulation base (and every bear ABC starts inside a
+    // Distribution top). Before the first segment, the tape was in
+    // the phase that PRECEDES the first segment's phase. Emit that
+    // as a context tile from bar 0 to the first segment's start so
+    // the user sees Accumulation BEFORE the Markup leg, not just an
+    // empty pre-motive tape.
+    if let Some(first_seg) = sorted.first() {
+        if first_seg.start_bar > gap_min_bars {
+            let first_phase = phase_for_segment(first_seg);
+            let leading_phase = preceding_phase(first_phase);
+            let start_price = bars
+                .first()
+                .map(bar_low)
+                .filter(|p| p.is_finite() && *p > 0.0)
+                .unwrap_or(first_seg.start_price);
+            let leading = open_segment(
+                leading_phase,
+                WyckoffCycleSource::Elliott,
+                0,
+                start_price,
+                None,
+            );
+            out.push(close_segment(
+                leading,
+                first_seg.start_bar,
+                first_seg.start_price,
+                bars,
+            ));
+        }
+    }
+
     for seg in sorted {
         // Fill gap with a transition tile (Distribution or Accumulation)
         // when the previous tile ended before this segment starts.
@@ -387,6 +419,28 @@ fn transition_phase(prev: WyckoffCyclePhase) -> WyckoffCyclePhase {
         WyckoffCyclePhase::Markdown | WyckoffCyclePhase::Accumulation => {
             WyckoffCyclePhase::Accumulation
         }
+    }
+}
+
+/// Phase that PRECEDES the given phase in the canonical 4-phase
+/// rotation (Pruden). Used by `detect_cycles_from_elliott` to fill
+/// the LEADING gap before the first Elliott segment — every bull
+/// motive launches from an Accumulation base, every bear leg from a
+/// Distribution top.
+///
+///   Markup       ← Accumulation  (impulse launchpad — the most
+///                                 actionable signal: detecting
+///                                 Accumulation = anticipating the
+///                                 next Markup before W3 ignites)
+///   Distribution ← Markup        (rally tops out → distribution)
+///   Markdown     ← Distribution  (B-wave fakeout → C decline)
+///   Accumulation ← Markdown      (C bottom → basing)
+fn preceding_phase(next: WyckoffCyclePhase) -> WyckoffCyclePhase {
+    match next {
+        WyckoffCyclePhase::Markup => WyckoffCyclePhase::Accumulation,
+        WyckoffCyclePhase::Distribution => WyckoffCyclePhase::Markup,
+        WyckoffCyclePhase::Markdown => WyckoffCyclePhase::Distribution,
+        WyckoffCyclePhase::Accumulation => WyckoffCyclePhase::Markdown,
     }
 }
 
@@ -575,16 +629,41 @@ mod tests {
     }
 
     #[test]
+    fn leading_fill_emits_accumulation_before_first_motive() {
+        // Bull motive starts at bar 50; leading fill should emit an
+        // Accumulation tile [0, 50] BEFORE the Markup tile.
+        let segs = vec![motive(true, 50, 90, 100.0, 150.0)];
+        let cycles = detect_cycles_from_elliott(&segs, &[], 200, 140.0);
+        assert!(cycles.len() >= 2);
+        assert_eq!(cycles[0].phase, WyckoffCyclePhase::Accumulation);
+        assert_eq!(cycles[0].start_bar, 0);
+        assert_eq!(cycles[0].end_bar, 50);
+        assert_eq!(cycles[1].phase, WyckoffCyclePhase::Markup);
+    }
+
+    #[test]
+    fn leading_fill_emits_distribution_before_first_bearish_abc() {
+        let segs = vec![abc(false, 50, 90, 150.0, 120.0)];
+        let cycles = detect_cycles_from_elliott(&segs, &[], 200, 110.0);
+        assert!(cycles.len() >= 2);
+        assert_eq!(cycles[0].phase, WyckoffCyclePhase::Distribution);
+        assert_eq!(cycles[0].start_bar, 0);
+        assert_eq!(cycles[1].phase, WyckoffCyclePhase::Markdown);
+    }
+
+    #[test]
     fn elliott_anchored_motive_then_abc() {
         let segs = vec![
             motive(true, 10, 50, 100.0, 150.0),
             abc(false, 50, 80, 150.0, 120.0),
         ];
         let cycles = detect_cycles_from_elliott(&segs, &[], 200, 130.0);
-        // Markup, Markdown, Accumulation (trailing fill)
-        assert!(cycles.len() >= 2);
-        assert_eq!(cycles[0].phase, WyckoffCyclePhase::Markup);
-        assert_eq!(cycles[1].phase, WyckoffCyclePhase::Markdown);
+        // Leading Accumulation (bar 0→10), Markup, Markdown,
+        // trailing Accumulation (after C bottom).
+        assert!(cycles.len() >= 3);
+        assert_eq!(cycles[0].phase, WyckoffCyclePhase::Accumulation);
+        assert_eq!(cycles[1].phase, WyckoffCyclePhase::Markup);
+        assert_eq!(cycles[2].phase, WyckoffCyclePhase::Markdown);
         assert!(cycles.iter().all(|c| c.source == WyckoffCycleSource::Elliott));
     }
 
