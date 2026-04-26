@@ -2143,7 +2143,59 @@ export function LuxAlgoChart({
       return false;
     };
 
+    // FAZ 25.4.A — Wyckoff visual hierarchy. The detector is bar-
+    // tape based (volume + range, NOT pivot anchored), so it
+    // legitimately fires on EVERY qualifying bar over the 200-bar
+    // scan window. Painting all of them clutters the chart and
+    // hides the actionable signals. Apply two filters at render
+    // time:
+    //   1. Recent-window only: bars within the last 120 bars from
+    //      the rightmost candle. Older events live in DB for audit
+    //      but don't pollute the live chart.
+    //   2. Per-(subkind+variant) cap of 3 most-recent. A symbol can
+    //      legitimately spring multiple times in a range; capping
+    //      keeps the most relevant occurrence visible.
+    // User can still drill into history via the Analiz page or
+    // explicit DB query — chart prioritises clarity for the
+    // current trade decision.
+    const wyckoffWindowBars = 120;
+    const wyckoffLatestCap = 3;
+    const recentBarCutoff = Math.max(0, candles.length - 1 - wyckoffWindowBars);
+    const wyckoffByKind = new Map<string, ChartWorkspaceDetection[]>();
+    const otherDetections: ChartWorkspaceDetection[] = [];
     for (const det of auxDetections) {
+      const family = det.family || det.kind;
+      if (family === "wyckoff") {
+        // Window filter — latest anchor's bar_index must fall inside
+        // the recent slice.
+        const lastAnchor = det.anchors[det.anchors.length - 1];
+        const anchorBar =
+          typeof lastAnchor?.bar_index === "number" ? lastAnchor.bar_index : -1;
+        if (anchorBar < recentBarCutoff) continue;
+        const key = det.subkind;
+        const list = wyckoffByKind.get(key) ?? [];
+        list.push(det);
+        wyckoffByKind.set(key, list);
+      } else {
+        otherDetections.push(det);
+      }
+    }
+    // Per-subkind cap — keep latest N by anchor bar.
+    const wyckoffFiltered: ChartWorkspaceDetection[] = [];
+    for (const list of wyckoffByKind.values()) {
+      list.sort((a, b) => {
+        const ab =
+          typeof a.anchors[0]?.bar_index === "number" ? a.anchors[0].bar_index : 0;
+        const bb =
+          typeof b.anchors[0]?.bar_index === "number" ? b.anchors[0].bar_index : 0;
+        return bb - ab; // newest first
+      });
+      for (const det of list.slice(0, wyckoffLatestCap)) {
+        wyckoffFiltered.push(det);
+      }
+    }
+
+    for (const det of [...otherDetections, ...wyckoffFiltered]) {
       const family = det.family || det.kind;
       if (!familyEnabled(family)) continue;
       const render = renderByFamily[family];
