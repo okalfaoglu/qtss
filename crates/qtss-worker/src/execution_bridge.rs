@@ -398,6 +398,41 @@ async fn build_live_position_for_mode(
     let side = live_side(&row.direction);
     let liq_price = liquidation_price(&segment, side, row.entry_price, leverage, mmr);
 
+    // FAZ 25.3.C — confirmation entry trigger. Before the selected
+    // candidate becomes a real position, require the latest closed
+    // bar's price action AND momentum to agree with the trade
+    // direction. Without this, a setup that just happens to clear
+    // its entry on a counter-trend wick fills exactly at the
+    // structural reversal — same class of bug the user described
+    // earlier ("dalganın hemen dibinden entery vermişsiz, ezbere").
+    //
+    // Two checks (both config-gated):
+    //   1) Last closed bar is in the trade direction
+    //      (bull setup → close > open; bear → close < open)
+    //   2) RSI(14) is in the trade direction
+    //      (bull → ≥ rsi_threshold; bear → ≤ 100 − rsi_threshold)
+    //      Default 50 — momentum hovering at neutrality blocks the
+    //      entry. Operator tunes via system_config.execution.
+    //      confirmation_rsi_threshold.
+    //
+    // If either gate fails the candidate isn't fulfilled this tick.
+    // The selected_candidates row stays claimed; a subsequent run_tick
+    // will re-evaluate. Operators that want pure mechanical fills can
+    // disable both via execution.confirmation_enabled = false.
+    let confirmation_enabled = resolve_worker_enabled_flag(
+        pool, MODULE, "confirmation_enabled", "QTSS_EXEC_CONFIRMATION", true,
+    )
+    .await;
+    if confirmation_enabled {
+        if !confirmation_passes(pool, &row.exchange, &segment, &row.symbol, &row.timeframe, side).await {
+            debug!(
+                symbol = %row.symbol, side = %side,
+                "skip: confirmation gate failed (bar direction or RSI)",
+            );
+            return None;
+        }
+    }
+
     // Backlog #4 — TP-proximity gate. User: "işlem açarken tp ile anlık
     // değerler kontrol edilemlidir. eğer tp - anlık fiyat x bir oranı
     // geçmiş ise işlem açılmasın." Concrete repro: BTCUSDT 15m IQ-T
@@ -725,6 +760,100 @@ fn segment_from_row(meta: &serde_json::Value, default_segment: &str) -> String {
 ///   long:  entry * (1 - 1/lev + mmr)
 ///   short: entry * (1 + 1/lev - mmr)
 /// Returns `None` for spot (never liquidates) or bad leverage.
+/// FAZ 25.3.C — return `true` when the latest closed bar's direction
+/// AND a 14-period RSI both align with the trade side. Both checks
+/// are individually gated by config (defaults: both ON, RSI threshold
+/// 50). Empty / insufficient data returns `true` (fail-open) so the
+/// gate never blocks during a backfill.
+async fn confirmation_passes(
+    pool: &PgPool,
+    exchange: &str,
+    segment: &str,
+    symbol: &str,
+    timeframe: &str,
+    side: &'static str,
+) -> bool {
+    // Fetch last 30 closed bars (enough for RSI(14) Wilder smoothing).
+    let rows = sqlx::query(
+        r#"SELECT open, close FROM market_bars
+            WHERE exchange = $1 AND segment = $2
+              AND symbol = $3 AND interval = $4
+            ORDER BY open_time DESC
+            LIMIT 30"#,
+    )
+    .bind(exchange)
+    .bind(segment)
+    .bind(symbol)
+    .bind(timeframe)
+    .fetch_all(pool)
+    .await
+    .ok()
+    .unwrap_or_default();
+    if rows.len() < 16 {
+        return true;
+    }
+    use rust_decimal::prelude::ToPrimitive;
+    use sqlx::Row;
+    // Newest first → reverse to chronological so RSI gets the right
+    // direction.
+    let mut opens = Vec::with_capacity(rows.len());
+    let mut closes = Vec::with_capacity(rows.len());
+    for r in rows.iter().rev() {
+        let o: rust_decimal::Decimal = r.try_get("open").unwrap_or_default();
+        let c: rust_decimal::Decimal = r.try_get("close").unwrap_or_default();
+        opens.push(o.to_f64().unwrap_or(0.0));
+        closes.push(c.to_f64().unwrap_or(0.0));
+    }
+
+    // Gate 1 — last bar direction.
+    let bar_check_enabled = resolve_worker_enabled_flag(
+        pool, MODULE, "confirmation_bar_direction", "QTSS_EXEC_CONFIRM_BAR", true,
+    )
+    .await;
+    if bar_check_enabled {
+        let last_open = *opens.last().unwrap_or(&0.0);
+        let last_close = *closes.last().unwrap_or(&0.0);
+        let bar_bull = last_close > last_open;
+        let bar_bear = last_close < last_open;
+        match side {
+            "BUY" if !bar_bull => return false,
+            "SELL" if !bar_bear => return false,
+            _ => {}
+        }
+    }
+
+    // Gate 2 — RSI(14) on closes.
+    let rsi_check_enabled = resolve_worker_enabled_flag(
+        pool, MODULE, "confirmation_rsi", "QTSS_EXEC_CONFIRM_RSI", true,
+    )
+    .await;
+    if rsi_check_enabled {
+        let rsi_threshold = resolve_system_f64(
+            pool,
+            MODULE,
+            "confirmation_rsi_threshold",
+            "QTSS_EXEC_CONFIRM_RSI_THRESHOLD",
+            50.0,
+        )
+        .await
+        .clamp(20.0, 80.0);
+        let rsi_series = qtss_indicators::rsi::rsi(&closes, 14);
+        let last_rsi = rsi_series
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .last()
+            .unwrap_or(50.0);
+        match side {
+            "BUY" if last_rsi < rsi_threshold => return false,
+            "SELL" if last_rsi > (100.0 - rsi_threshold) => return false,
+            _ => {}
+        }
+    }
+
+    true
+}
+
 /// Latest known mark price for a series. Reads `market_bars_open`
 /// (live still-forming bar) first, falls back to the most recent
 /// closed bar from `market_bars`. Returns `None` only when neither
