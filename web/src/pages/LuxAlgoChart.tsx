@@ -2313,6 +2313,65 @@ export function LuxAlgoChart({
         attachLabel(t0, hi, label, border, "above");
         return;
       }
+      // FAZ 25.4.E — Wyckoff context filter (Gemini + Claude audit).
+      // Spring is a Phase-C accumulation event ONLY; UTAD is a
+      // Phase-C distribution event ONLY. Detector fires them on
+      // local price wick + reclaim — without checking macro phase
+      // context the same setup gets labelled in the WRONG cycle
+      // (Spring inside Distribution box; UTAD inside Accumulation
+      // box). Suppress the contextually-impossible labels.
+      //
+      // We've already built the auxDetections list which contains
+      // the cycle_* tiles. Use them to look up the active phase at
+      // the event's time and gate Spring/UTAD accordingly.
+      const eventTs =
+        typeof d.anchors[0]?.time === "string"
+          ? Math.floor(new Date(d.anchors[0].time).getTime() / 1000)
+          : NaN;
+      const phaseAt = (ts: number): "accumulation" | "distribution" | "markup" | "markdown" | null => {
+        if (!Number.isFinite(ts)) return null;
+        for (const cyc of auxDetections) {
+          if (cyc.family !== "wyckoff") continue;
+          if (!cyc.subkind.startsWith("cycle_")) continue;
+          const t0raw = cyc.anchors[0]?.time;
+          const t1raw = cyc.anchors[cyc.anchors.length - 1]?.time;
+          if (typeof t0raw !== "string" || typeof t1raw !== "string") continue;
+          const t0 = Math.floor(new Date(t0raw).getTime() / 1000);
+          const t1 = Math.floor(new Date(t1raw).getTime() / 1000);
+          if (ts >= t0 && ts <= t1) {
+            const phaseStr = cyc.subkind.replace("cycle_", "");
+            if (
+              phaseStr === "accumulation" ||
+              phaseStr === "distribution" ||
+              phaseStr === "markup" ||
+              phaseStr === "markdown"
+            ) {
+              return phaseStr;
+            }
+          }
+        }
+        return null;
+      };
+      const ctxPhase = phaseAt(eventTs);
+      // Spring belongs in Accumulation / Markup-launch zone.
+      // Suppress Spring inside Distribution / Markdown context.
+      if (
+        d.subkind.startsWith("spring_") &&
+        ctxPhase &&
+        (ctxPhase === "distribution" || ctxPhase === "markdown")
+      ) {
+        return;
+      }
+      // UTAD belongs in Distribution / Markdown-launch zone.
+      // Suppress UTAD inside Accumulation / Markup context.
+      if (
+        d.subkind.startsWith("utad_") &&
+        ctxPhase &&
+        (ctxPhase === "accumulation" || ctxPhase === "markup")
+      ) {
+        return;
+      }
+
       // FAZ 25.4.E — per-event-group filter. Group the 12 Wyckoff
       // events into 4 toggleable buckets so the operator can quickly
       // mute the noisy ones (AR/ST/LPS/PS/BU/Test fire often).
