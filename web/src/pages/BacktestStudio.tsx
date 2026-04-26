@@ -223,6 +223,15 @@ export default function BacktestStudio() {
   );
 }
 
+interface DataAvailabilityRow {
+  channel: string;
+  source: string;
+  status: "full" | "partial" | "empty" | "missing" | string;
+  rows_in_window: number;
+  earliest: string | null;
+  latest: string | null;
+}
+
 function RunDetailView({ data }: { data: RunDetail }) {
   const cfg = data.config as Record<string, unknown>;
   const report = data.report as Record<string, unknown>;
@@ -231,6 +240,10 @@ function RunDetailView({ data }: { data: RunDetail }) {
     (report.loss_reason_counts as Record<string, number>) ?? {};
   const avgLossComps =
     (report.avg_loss_components as Record<string, number>) ?? {};
+  // BUG BACKTEST — pre-flight data availability matrix. Surfaces
+  // immediately why a run produced 0 trades (e.g. missing
+  // bar_indicator_snapshots → indicator_alignment scorer always 0).
+  const availability = ((report.data_availability as { rows?: DataAvailabilityRow[] } | null)?.rows ?? null);
 
   const numField = (k: string, decimals = 2) => {
     const v = report[k];
@@ -282,47 +295,169 @@ function RunDetailView({ data }: { data: RunDetail }) {
         <Stat label="Bars" value={numField("bars_processed", 0)} />
       </div>
 
-      {/* Loss reasons */}
-      {Object.keys(lossReasons).length > 0 && (
+      {/* Data availability matrix (BUG BACKTEST) */}
+      {availability && availability.length > 0 && (
         <div className="rounded border border-zinc-800 bg-zinc-900 p-3">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
-            Loss reasons
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+              Data availability (pre-flight probe)
+            </div>
+            {availability.some(
+              (r) => r.status === "missing" || r.status === "empty",
+            ) && (
+              <span className="text-[10px] text-amber-400">
+                ⚠ critical gap detected — see scorer rows below
+              </span>
+            )}
           </div>
           <table className="w-full text-xs">
+            <thead className="text-[10px] uppercase tracking-wider text-zinc-500">
+              <tr>
+                <th className="px-2 py-1 text-left">Channel</th>
+                <th className="px-2 py-1 text-left">Source</th>
+                <th className="px-2 py-1 text-left">Status</th>
+                <th className="px-2 py-1 text-right">Rows</th>
+              </tr>
+            </thead>
             <tbody>
-              {Object.entries(lossReasons)
-                .sort((a, b) => b[1] - a[1])
-                .map(([k, v]) => (
-                  <tr key={k} className="border-t border-zinc-800">
-                    <td className="px-2 py-1 font-mono">{k}</td>
-                    <td className="px-2 py-1 text-right">{v}</td>
+              {availability.map((r) => {
+                const cls =
+                  r.status === "full"
+                    ? "text-emerald-400"
+                    : r.status === "partial"
+                      ? "text-amber-400"
+                      : "text-rose-400";
+                const glyph =
+                  r.status === "full"
+                    ? "✓"
+                    : r.status === "partial"
+                      ? "~"
+                      : "✗";
+                return (
+                  <tr
+                    key={r.channel}
+                    className="border-t border-zinc-800"
+                  >
+                    <td className="px-2 py-1 font-mono">{r.channel}</td>
+                    <td className="px-2 py-1 text-zinc-400">{r.source}</td>
+                    <td className={`px-2 py-1 ${cls}`}>
+                      {glyph} {r.status}
+                    </td>
+                    <td className="px-2 py-1 text-right font-mono">
+                      {r.rows_in_window < 0
+                        ? "—"
+                        : r.rows_in_window.toLocaleString()}
+                    </td>
                   </tr>
-                ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
 
-      {/* Avg loser components */}
+      {/* Loss reasons (with relative-share bars) */}
+      {Object.keys(lossReasons).length > 0 && (
+        <div className="rounded border border-zinc-800 bg-zinc-900 p-3">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
+            Loss reasons
+          </div>
+          {(() => {
+            const total = Object.values(lossReasons).reduce(
+              (s, v) => s + v,
+              0,
+            );
+            return (
+              <table className="w-full text-xs">
+                <tbody>
+                  {Object.entries(lossReasons)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([k, v]) => {
+                      const pct = total > 0 ? (v / total) * 100 : 0;
+                      return (
+                        <tr
+                          key={k}
+                          className="border-t border-zinc-800"
+                        >
+                          <td className="px-2 py-1 font-mono">{k}</td>
+                          <td className="px-2 py-1">
+                            <div className="flex items-center gap-2">
+                              <div className="h-2 flex-1 overflow-hidden rounded bg-zinc-800">
+                                <div
+                                  className="h-full bg-rose-500/70"
+                                  style={{ width: `${pct.toFixed(1)}%` }}
+                                />
+                              </div>
+                              <span className="w-12 text-right text-[10px] text-zinc-400">
+                                {pct.toFixed(0)}%
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-2 py-1 text-right font-mono">
+                            {v}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Avg loser components (with magnitude bars) */}
       {Object.keys(avgLossComps).length > 0 && (
         <div className="rounded border border-zinc-800 bg-zinc-900 p-3">
           <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
             Avg score on losers (lowest = weakest channel)
           </div>
-          <table className="w-full text-xs">
-            <tbody>
-              {Object.entries(avgLossComps)
-                .sort((a, b) => a[1] - b[1])
-                .map(([k, v]) => (
-                  <tr key={k} className="border-t border-zinc-800">
-                    <td className="px-2 py-1 font-mono">{k}</td>
-                    <td className="px-2 py-1 text-right">
-                      {v.toFixed(3)}
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
+          {(() => {
+            const max = Math.max(
+              0.001,
+              ...Object.values(avgLossComps).map((v) => Math.abs(v)),
+            );
+            return (
+              <table className="w-full text-xs">
+                <tbody>
+                  {Object.entries(avgLossComps)
+                    .sort((a, b) => a[1] - b[1])
+                    .map(([k, v]) => {
+                      const widthPct =
+                        max > 0 ? (Math.abs(v) / max) * 100 : 0;
+                      // Below 0.3 → red (weak), 0.3-0.6 → amber, ≥0.6 → green.
+                      const tone =
+                        v < 0.3
+                          ? "bg-rose-500/70"
+                          : v < 0.6
+                            ? "bg-amber-500/70"
+                            : "bg-emerald-500/70";
+                      return (
+                        <tr
+                          key={k}
+                          className="border-t border-zinc-800"
+                        >
+                          <td className="px-2 py-1 font-mono">{k}</td>
+                          <td className="px-2 py-1">
+                            <div className="flex items-center gap-2">
+                              <div className="h-2 flex-1 overflow-hidden rounded bg-zinc-800">
+                                <div
+                                  className={`h-full ${tone}`}
+                                  style={{ width: `${widthPct.toFixed(1)}%` }}
+                                />
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-2 py-1 text-right font-mono">
+                            {v.toFixed(3)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            );
+          })()}
         </div>
       )}
 

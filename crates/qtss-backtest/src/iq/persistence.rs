@@ -33,6 +33,10 @@ pub async fn persist_report(
         .unwrap_or_else(|_| serde_json::json!({}));
     let avg_loss_components = serde_json::to_value(&report.avg_loss_components)
         .unwrap_or_else(|_| serde_json::json!({}));
+    let availability = report
+        .data_availability
+        .as_ref()
+        .map(|a| serde_json::to_value(a).unwrap_or_else(|_| serde_json::json!(null)));
 
     sqlx::query(
         r#"INSERT INTO iq_backtest_runs (
@@ -45,11 +49,11 @@ pub async fn persist_report(
               gross_pnl, net_pnl, starting_equity, final_equity,
               peak_equity, max_drawdown_pct,
               loss_reason_counts, avg_loss_components,
-              trade_log_path
+              trade_log_path, data_availability
            ) VALUES (
               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
               $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-              $23, $24, $25, $26, $27, $28, $29, $30, $31, $32
+              $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33
            )"#,
     )
     .bind(id)
@@ -84,6 +88,7 @@ pub async fn persist_report(
     .bind(&loss_counts)
     .bind(&avg_loss_components)
     .bind(trade_log_path)
+    .bind(availability)
     .execute(pool)
     .await?;
     Ok(id)
@@ -190,7 +195,7 @@ pub async fn get_run_detail(
                   expectancy_pct, sharpe_ratio,
                   gross_pnl, net_pnl, starting_equity, final_equity,
                   peak_equity, max_drawdown_pct,
-                  trade_log_path, created_at
+                  trade_log_path, created_at, data_availability
              FROM iq_backtest_runs
             WHERE id = $1"#,
     )
@@ -226,6 +231,8 @@ pub async fn get_run_detail(
         "avg_loss_components": row.try_get::<serde_json::Value, _>("avg_loss_components")?,
         "trade_log_path":  row.try_get::<Option<String>, _>("trade_log_path")?,
         "created_at":      row.try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")?,
+        "data_availability": row.try_get::<Option<serde_json::Value>, _>("data_availability")
+                                .ok().flatten(),
     });
     Ok(Some((cfg, detail)))
 }
