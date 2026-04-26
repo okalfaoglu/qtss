@@ -31,8 +31,10 @@ mod config;
 mod event;
 mod events;
 mod phase;
+mod range;
 
 pub use config::WyckoffConfig;
 pub use event::{WyckoffEvent, WyckoffEventKind, WyckoffSpec};
 pub use events::{detect_events, WYCKOFF_SPECS};
 pub use phase::{WyckoffBias, WyckoffPhase, WyckoffPhaseTracker};
+pub use range::{detect_ranges, WyckoffRange};

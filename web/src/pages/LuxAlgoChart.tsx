@@ -2009,6 +2009,48 @@ export function LuxAlgoChart({
     };
     const renderWyckoff = (d: ChartWorkspaceDetection) => {
       if (d.anchors.length === 0) return;
+      // FAZ 25.4.B — schematic range boxes (Accumulation / Distribution
+      // rectangles). Two anchors: [start_bar, range_low] and
+      // [end_bar, range_high]. Tinted fill behind the bar tape so the
+      // events read like annotations on a labelled box.
+      if (d.subkind.startsWith("range_") && d.anchors.length >= 2) {
+        const a0 = d.anchors[0];
+        const a1 = d.anchors[1];
+        const t0 = anchorTime(a0);
+        const t1 = anchorTime(a1);
+        const lo = parsePrice(a0.price);
+        const hi = parsePrice(a1.price);
+        if (
+          t0 === null ||
+          t1 === null ||
+          Number.isNaN(lo) ||
+          Number.isNaN(hi)
+        ) {
+          return;
+        }
+        const isAccum = d.subkind === "range_accumulation";
+        const fill = isAccum ? "#22c55e15" : "#ef444415"; // 8% alpha
+        const border = isAccum ? "#22c55e" : "#ef4444";
+        const rect = new RectanglePrimitive({
+          time1: t0,
+          time2: t1,
+          priceTop: hi,
+          priceBottom: lo,
+          fillColor: fill,
+          borderColor: border,
+          borderWidth: 1,
+        });
+        candleSeries.attachPrimitive(rect);
+        rectPrimitivesRef.current.push(rect);
+        const phaseRaw = d.raw_meta?.phase;
+        const phase =
+          typeof phaseRaw === "string" ? phaseRaw.toUpperCase() : "";
+        const label = isAccum
+          ? `Accumulation${phase ? ` · P${phase}` : ""}`
+          : `Distribution${phase ? ` · P${phase}` : ""}`;
+        attachLabel(t0, hi, label, border, "above");
+        return;
+      }
       const a = d.anchors[0];
       const t = anchorTime(a);
       const p = parsePrice(a.price);
@@ -2143,61 +2185,29 @@ export function LuxAlgoChart({
       return false;
     };
 
-    // FAZ 25.4.A — Wyckoff visual hierarchy. The detector is bar-
-    // tape based (volume + range, NOT pivot anchored), so it
-    // legitimately fires on EVERY qualifying bar over the 200-bar
-    // scan window. Painting all of them clutters the chart and
-    // hides the actionable signals. Apply two filters at render
-    // time:
-    //   1. Recent-window only: bars within the last 120 bars from
-    //      the rightmost candle. Older events live in DB for audit
-    //      but don't pollute the live chart.
-    //   2. Per-(subkind+variant) cap of 3 most-recent. A symbol can
-    //      legitimately spring multiple times in a range; capping
-    //      keeps the most relevant occurrence visible.
-    // User can still drill into history via the Analiz page or
-    // explicit DB query — chart prioritises clarity for the
-    // current trade decision.
-    const wyckoffWindowBars = 120;
-    const wyckoffLatestCap = 3;
-    const recentBarCutoff = Math.max(0, candles.length - 1 - wyckoffWindowBars);
-    const wyckoffByKind = new Map<string, ChartWorkspaceDetection[]>();
-    const otherDetections: ChartWorkspaceDetection[] = [];
+    // FAZ 25.4.B — Wyckoff render policy. Earlier we hard-capped
+    // the visible events (last 120 bars + 3 per subkind) but the
+    // user reported missing BC/AR/ST historical events. Wyckoff
+    // schematics are chronological — operators want the full set
+    // so they can read accumulation→distribution→accumulation
+    // cycles across the chart. Now ranges (subkind LIKE 'range_*')
+    // ALWAYS render; individual events render in full unless their
+    // bar falls outside the loaded candle window. The Wyckoff
+    // checkbox itself remains the master toggle for clutter.
     for (const det of auxDetections) {
       const family = det.family || det.kind;
+      if (!familyEnabled(family)) continue;
+      // Drop events whose bar_index lies before the loaded candles
+      // (the timeAt() lookup would return null and the renderer
+      // would silently skip — explicit drop is faster).
       if (family === "wyckoff") {
-        // Window filter — latest anchor's bar_index must fall inside
-        // the recent slice.
         const lastAnchor = det.anchors[det.anchors.length - 1];
         const anchorBar =
-          typeof lastAnchor?.bar_index === "number" ? lastAnchor.bar_index : -1;
-        if (anchorBar < recentBarCutoff) continue;
-        const key = det.subkind;
-        const list = wyckoffByKind.get(key) ?? [];
-        list.push(det);
-        wyckoffByKind.set(key, list);
-      } else {
-        otherDetections.push(det);
+          typeof lastAnchor?.bar_index === "number"
+            ? lastAnchor.bar_index
+            : -1;
+        if (anchorBar >= 0 && anchorBar >= candles.length) continue;
       }
-    }
-    // Per-subkind cap — keep latest N by anchor bar.
-    const wyckoffFiltered: ChartWorkspaceDetection[] = [];
-    for (const list of wyckoffByKind.values()) {
-      list.sort((a, b) => {
-        const ab =
-          typeof a.anchors[0]?.bar_index === "number" ? a.anchors[0].bar_index : 0;
-        const bb =
-          typeof b.anchors[0]?.bar_index === "number" ? b.anchors[0].bar_index : 0;
-        return bb - ab; // newest first
-      });
-      for (const det of list.slice(0, wyckoffLatestCap)) {
-        wyckoffFiltered.push(det);
-      }
-    }
-
-    for (const det of [...otherDetections, ...wyckoffFiltered]) {
-      const family = det.family || det.kind;
-      if (!familyEnabled(family)) continue;
       const render = renderByFamily[family];
       if (!render) continue;
       render(det);

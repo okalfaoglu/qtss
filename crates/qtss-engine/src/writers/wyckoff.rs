@@ -15,7 +15,10 @@ use qtss_domain::v2::bar::Bar as DomainBar;
 use qtss_domain::v2::instrument::{AssetClass, Instrument, SessionCalendar, Venue};
 use qtss_domain::v2::timeframe::Timeframe;
 use qtss_storage::market_bars::{self, MarketBarRow};
-use qtss_wyckoff::{detect_events, WyckoffConfig, WyckoffEvent, WyckoffPhaseTracker};
+use qtss_wyckoff::{
+    detect_events, detect_ranges, WyckoffBias, WyckoffConfig, WyckoffEvent,
+    WyckoffPhaseTracker, WyckoffRange,
+};
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
@@ -92,10 +95,129 @@ async fn process_symbol(
     let bias_str = format!("{:?}", tracker.bias()).to_lowercase();
 
     let mut written = 0usize;
-    for ev in events {
-        written += write_event(pool, sym, &chrono, &ev, &phase_str, &bias_str).await?;
+    for ev in &events {
+        written += write_event(pool, sym, &chrono, ev, &phase_str, &bias_str).await?;
+    }
+
+    // FAZ 25.4.B — schematic range boxes. The user asked for the
+    // Accumulation / Distribution rectangle that frames events,
+    // matching the TradingView Wyckoff annotation convention. We
+    // group sorted events through detect_ranges() and persist each
+    // as its own detection row with pattern_family='wyckoff' +
+    // subkind='range_accumulation' / 'range_distribution'. The
+    // chart renders these as a primitive rectangle behind the event
+    // markers.
+    //
+    // Sweep stale ranges before writing fresh ones so old boxes
+    // don't pile up at the same slot.
+    let _ = sqlx::query(
+        r#"DELETE FROM detections
+            WHERE exchange = $1 AND segment = $2
+              AND symbol = $3 AND timeframe = $4
+              AND pattern_family = 'wyckoff'
+              AND mode = 'live'
+              AND subkind LIKE 'range_%'"#,
+    )
+    .bind(&sym.exchange)
+    .bind(&sym.segment)
+    .bind(&sym.symbol)
+    .bind(&sym.interval)
+    .execute(pool)
+    .await;
+
+    let ranges = detect_ranges(&sorted);
+    for r in &ranges {
+        written += write_range(pool, sym, &chrono, r).await?;
     }
     Ok(written)
+}
+
+async fn write_range(
+    pool: &PgPool,
+    sym: &EngineSymbol,
+    chrono: &[MarketBarRow],
+    r: &WyckoffRange,
+) -> anyhow::Result<usize> {
+    let bias_str = match r.bias {
+        WyckoffBias::Accumulation => "accumulation",
+        WyckoffBias::Distribution => "distribution",
+        WyckoffBias::Neutral => return Ok(0),
+    };
+    let subkind = format!("range_{bias_str}");
+    let direction: i16 = match r.bias {
+        WyckoffBias::Accumulation => 1,
+        WyckoffBias::Distribution => -1,
+        _ => 0,
+    };
+    let start_time = chrono
+        .get(r.start_bar)
+        .map(|c| c.open_time)
+        .unwrap_or_else(Utc::now);
+    let end_time = chrono
+        .get(r.end_bar)
+        .map(|c| c.open_time)
+        .unwrap_or_else(Utc::now);
+    // anchors = corners of the rectangle so the chart renderer can
+    // draw a filled box without an extra fetch:
+    //   anchors[0] = start, low corner
+    //   anchors[1] = end, high corner
+    let anchors = json!([
+        {
+            "label_override": bias_str,
+            "bar_index": r.start_bar as i64,
+            "price": r.range_low,
+            "time": start_time,
+        },
+        {
+            "label_override": bias_str,
+            "bar_index": r.end_bar as i64,
+            "price": r.range_high,
+            "time": end_time,
+        }
+    ]);
+    let phase_str = format!("{:?}", r.phase).to_lowercase();
+    let raw_meta = json!({
+        "phase":          phase_str,
+        "bias":           bias_str,
+        "range_high":     r.range_high,
+        "range_low":      r.range_low,
+        "event_count":    r.event_indices.len(),
+        "completed":      r.completed,
+        "kind":           "wyckoff_range",
+    });
+    sqlx::query(
+        r#"INSERT INTO detections
+              (exchange, segment, symbol, timeframe, slot,
+               pattern_family, subkind, direction,
+               start_bar, end_bar, start_time, end_time,
+               anchors, invalidated, raw_meta, mode)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'live')
+           ON CONFLICT (exchange, segment, symbol, timeframe, slot,
+                        pattern_family, subkind, start_time, end_time, mode)
+           DO UPDATE SET
+               direction  = EXCLUDED.direction,
+               anchors    = EXCLUDED.anchors,
+               raw_meta   = EXCLUDED.raw_meta,
+               updated_at = now()"#,
+    )
+    .bind(&sym.exchange)
+    .bind(&sym.segment)
+    .bind(&sym.symbol)
+    .bind(&sym.interval)
+    .bind(0i16)
+    .bind("wyckoff")
+    .bind(&subkind)
+    .bind(direction)
+    .bind(r.start_bar as i64)
+    .bind(r.end_bar as i64)
+    .bind(start_time)
+    .bind(end_time)
+    .bind(&anchors)
+    .bind(r.completed)
+    .bind(&raw_meta)
+    .execute(pool)
+    .await?;
+    Ok(1)
 }
 
 fn build_instrument(sym: &EngineSymbol) -> Instrument {
