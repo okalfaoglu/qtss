@@ -218,9 +218,18 @@ pub fn scan_level(
         }
     }
 
-    // Extended impulse — runs only on COMPLETE motives produced by the
-    // Pine port. Tags which wave (W1/W3/W5) is the extended one.
+    // Extended impulse — runs only on the LATEST COMPLETE motive
+    // produced by the Pine port. Older motives are superseded; their
+    // extension tag would just clutter the chart.
+    let latest_w5_for_ext: Option<i64> = level
+        .motives
+        .iter()
+        .map(|m| m.anchors[5].bar_index)
+        .max();
     for motive in &level.motives {
+        if Some(motive.anchors[5].bar_index) != latest_w5_for_ext {
+            continue;
+        }
         if let Some(ex) = detect_extended(motive) {
             out.push(ex);
         }
@@ -249,10 +258,37 @@ pub fn scan_level(
     // impulse). Same in mirror for bear motives. We must NOT keep
     // marking `ab?` on motives whose price action has already
     // overruled the count.
+    // 2026-04-26 user report (white circle): "fiyat geride kalmış z5
+    // değer için yeni zigzag oluşmuş. İleride pivot var. fakat biz o
+    // simülasyonu fiyatla paralel kontrol etmediğimiz için çöp data
+    // oluşuyor." Pine port retains 15 historical motives per slot;
+    // each one used to spawn its own ABC simulation. Older motives
+    // whose W5 was structurally superseded by a newer motive (price
+    // exceeded their (5) and printed a new W5 elsewhere) kept emitting
+    // garbage projections that pointed into price zones the tape had
+    // already moved past.
+    //
+    // Fix: only the LATEST motive (highest W5 bar_index) is allowed
+    // to emit ABC simulation. Older motives are structurally
+    // superseded by definition — Pine port wouldn't have promoted
+    // a newer motive if the older one's count were still valid.
+    // We also guard against motives whose W5 has been clearly
+    // INVALIDATED by post-W5 price action that exceeds the flat-
+    // running tolerance (~138% of A leg). At that breach magnitude,
+    // the W5 was a sub-wave, not a true motive end — no ABC applies.
+    let latest_motive_w5_bar: Option<i64> = level
+        .motives
+        .iter()
+        .map(|m| m.anchors[5].bar_index)
+        .max();
     for motive in &level.motives {
         if motive.abc.is_some() {
             // Pine port already detected the full ABC for this motive
             // — we don't double-mark it.
+            continue;
+        }
+        // Guard 1 — only the freshest motive per level.
+        if Some(motive.anchors[5].bar_index) != latest_motive_w5_bar {
             continue;
         }
         let p5 = &motive.anchors[5];
@@ -342,8 +378,36 @@ pub fn scan_level(
         };
         // `flat_likely`: a downstream signal the abc_nascent / forming
         // emit blocks pass into raw_meta.corrective_kind. Doesn't gate
-        // emission anymore.
+        // emission for moderate breaks (those map to expanded /
+        // running flats).
         let flat_likely = post_w5_breaks_p5;
+
+        // Guard 2 — STRUCTURAL invalidation. If post-W5 price exceeds
+        // W5 by MORE than ~50% (well beyond flat_running's 38%
+        // ceiling) the original W5 wasn't really the wave end — the
+        // move was a sub-wave of a larger impulse, and any ABC drawn
+        // off it is fiction. User report (2026-04-26): older motives'
+        // (c)? projections shooting down to $50K when actual price
+        // moved up to a new $120K W5. Skip ABC entirely in those
+        // cases instead of polluting the chart.
+        let breach_factor: f64 = if motive.direction == 1 {
+            let max_overshoot = post_w5
+                .iter()
+                .filter(|p| p.direction == 1)
+                .map(|p| (p.price - p5.price) / p5.price)
+                .fold(0.0_f64, f64::max);
+            max_overshoot
+        } else {
+            let max_overshoot = post_w5
+                .iter()
+                .filter(|p| p.direction == -1)
+                .map(|p| (p5.price - p.price) / p5.price)
+                .fold(0.0_f64, f64::max);
+            max_overshoot
+        };
+        if breach_factor > 0.50 {
+            continue;
+        }
         // ABC of a bull motive corrects DOWN: A=low, B=high, C=low.
         // ABC of a bear motive: A=high, B=low, C=high. Direction flag
         // on the EarlyMatch follows the same convention as motive.abc:
@@ -888,6 +952,35 @@ pub async fn write_early(
                 Value::String(kind.to_string()),
             );
         }
+    }
+
+    // 2026-04-26 user report (white circle): old motives' ABC
+    // simulations leaked into the chart even after a newer motive
+    // structurally superseded them. The latest-motive-only emit
+    // gate (in scan_level) stops new writes, but rows from older
+    // motives still polluted the DB. Sweep: when emitting an ABC
+    // for the LATEST motive (anchors[0] = current W5), delete any
+    // OTHER ABC rows for the same slot whose anchors[0] differs.
+    if em.subkind.starts_with("abc_") {
+        let parent_bar = em.anchors.first().map(|a| a.bar_index).unwrap_or(start_bar);
+        let _ = sqlx::query(
+            r#"DELETE FROM detections
+                WHERE exchange = $1 AND segment = $2
+                  AND symbol = $3 AND timeframe = $4
+                  AND slot = $5
+                  AND pattern_family = 'elliott_early'
+                  AND mode = 'live'
+                  AND subkind LIKE 'abc_%'
+                  AND (anchors->0->>'bar_index')::bigint <> $6"#,
+        )
+        .bind(&sym.exchange)
+        .bind(&sym.segment)
+        .bind(&sym.symbol)
+        .bind(&sym.interval)
+        .bind(slot)
+        .bind(parent_bar)
+        .execute(pool)
+        .await;
     }
 
     // Drop any stale lesser-stage ABC rows for the SAME parent motive

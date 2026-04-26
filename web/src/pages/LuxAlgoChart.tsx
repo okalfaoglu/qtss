@@ -1329,7 +1329,12 @@ export function LuxAlgoChart({
             if (Number.isFinite(hi) && hi > chartMax) chartMax = hi;
           }
           const chartBand = chartMax - chartMin;
-          const tolerance = chartBand * 1.0;
+          // 50% buffer (was 100%) — second user report (2026-04-26
+          // Z5 white circle) showed (c)? projections still leaking
+          // into zones the candles never visited even with the
+          // tighter 20-bar window. Half-band tolerance suppresses
+          // them. Real (non-projected) anchors stay unaffected.
+          const tolerance = chartBand * 0.5;
           const priceWithinBand = (p: number, projected: boolean) => {
             if (!projected) return true;
             if (!Number.isFinite(chartMin) || !Number.isFinite(chartMax)) return true;
