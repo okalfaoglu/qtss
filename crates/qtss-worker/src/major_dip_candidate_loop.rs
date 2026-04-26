@@ -202,11 +202,11 @@ async fn score_series(
     let c_struct = score_structural_completion(pool, s).await;
     let c_fib = score_fib_retrace(pool, s, &dip).await;
     let c_volume = score_volume_capit(pool, s, &dip).await;
-    let c_cvd = 0.0_f64; // STUB
-    let c_indicator = 0.0_f64; // STUB
+    let c_cvd = score_cvd_divergence(pool, s, &dip).await;
+    let c_indicator = score_indicator_alignment(pool, s).await;
     let c_sentiment = score_sentiment_extreme(pool, s).await;
     let c_multi_tf = score_multi_tf_confluence(pool, s).await;
-    let c_funding = 0.0_f64; // STUB
+    let c_funding = score_funding_oi(pool, s).await;
 
     let composite = w.structural * c_struct
         + w.fib_retrace * c_fib
@@ -468,6 +468,249 @@ async fn score_volume_capit(pool: &PgPool, s: &SymbolKey, dip: &DipPoint) -> f64
     let range_score = ((climax_range_atr - 1.0) / 1.0).clamp(0.0, 1.0);
     let shadow_score = ((lower_shadow - 0.5).max(0.0)).min(0.5) * 2.0;
     0.4 * ratio_score + 0.3 * range_score + 0.3 * shadow_score
+}
+
+/// 12.4 — CVD bullish divergence (real impl, replaces stub).
+///
+/// Pulls last 60 closed bars + computes CVD via qtss-indicators::cvd.
+/// Then looks for the classic bullish-regular-divergence signature:
+/// price prints a new low (vs prior 30-bar low), but CVD prints a
+/// HIGHER low at the same window. Magnitude scaled by how far CVD
+/// rebounded from its prior low.
+async fn score_cvd_divergence(
+    pool: &PgPool,
+    s: &SymbolKey,
+    _dip: &DipPoint,
+) -> f64 {
+    let rows = sqlx::query(
+        r#"SELECT high, low, close, volume FROM market_bars
+            WHERE exchange=$1 AND segment=$2 AND symbol=$3 AND interval=$4
+            ORDER BY open_time DESC LIMIT 60"#,
+    )
+    .bind(&s.exchange).bind(&s.segment).bind(&s.symbol).bind(&s.timeframe)
+    .fetch_all(pool).await.unwrap_or_default();
+    if rows.len() < 30 {
+        return 0.0;
+    }
+    use rust_decimal::prelude::ToPrimitive;
+    // Newest first → reverse to chronological so CVD accumulates correctly.
+    let mut highs = Vec::with_capacity(rows.len());
+    let mut lows = Vec::with_capacity(rows.len());
+    let mut closes = Vec::with_capacity(rows.len());
+    let mut vols = Vec::with_capacity(rows.len());
+    for r in rows.iter().rev() {
+        let h: rust_decimal::Decimal = r.try_get("high").unwrap_or_default();
+        let l: rust_decimal::Decimal = r.try_get("low").unwrap_or_default();
+        let c: rust_decimal::Decimal = r.try_get("close").unwrap_or_default();
+        let v: rust_decimal::Decimal = r.try_get("volume").unwrap_or_default();
+        highs.push(h.to_f64().unwrap_or(0.0));
+        lows.push(l.to_f64().unwrap_or(0.0));
+        closes.push(c.to_f64().unwrap_or(0.0));
+        vols.push(v.to_f64().unwrap_or(0.0));
+    }
+    let cvd = qtss_indicators::cvd::cvd(&highs, &lows, &closes, &vols);
+    if cvd.len() < 30 {
+        return 0.0;
+    }
+    // Two halves: older (first 30) and newer (last 30).
+    let mid = cvd.len() / 2;
+    let (older_p, older_c) = (&closes[..mid], &cvd[..mid]);
+    let (newer_p, newer_c) = (&closes[mid..], &cvd[mid..]);
+    let older_low_idx = older_p
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let newer_low_idx = newer_p
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let older_low_price = older_p[older_low_idx];
+    let newer_low_price = newer_p[newer_low_idx];
+    let older_cvd = older_c[older_low_idx];
+    let newer_cvd = newer_c[newer_low_idx];
+    if newer_low_price < older_low_price && newer_cvd > older_cvd {
+        // Bullish regular divergence — magnitude based on CVD rebound.
+        let magnitude = (newer_cvd - older_cvd) / older_cvd.abs().max(1.0);
+        (magnitude / 0.5).clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+/// 12.5 — RSI / MACD alignment (real impl, replaces stub).
+///
+/// Components:
+///   rsi_div:           bullish-regular divergence between price low
+///                      and RSI(14) low → 1.0 if present, else 0.0
+///   macd_cross:        signal line cross AND histogram positive → 1.0
+///   macd_div:          bullish-regular divergence on MACD histogram
+///   rsi_oversold_reset: RSI was < 30 and now > 35 → momentum unclamping
+async fn score_indicator_alignment(pool: &PgPool, s: &SymbolKey) -> f64 {
+    let rows = sqlx::query(
+        r#"SELECT close FROM market_bars
+            WHERE exchange=$1 AND segment=$2 AND symbol=$3 AND interval=$4
+            ORDER BY open_time DESC LIMIT 60"#,
+    )
+    .bind(&s.exchange).bind(&s.segment).bind(&s.symbol).bind(&s.timeframe)
+    .fetch_all(pool).await.unwrap_or_default();
+    if rows.len() < 30 {
+        return 0.0;
+    }
+    use rust_decimal::prelude::ToPrimitive;
+    let mut closes = Vec::with_capacity(rows.len());
+    for r in rows.iter().rev() {
+        let c: rust_decimal::Decimal = r.try_get("close").unwrap_or_default();
+        closes.push(c.to_f64().unwrap_or(0.0));
+    }
+    let rsi = qtss_indicators::rsi::rsi(&closes, 14);
+    let macd = qtss_indicators::macd::macd(&closes, 12, 26, 9);
+
+    // RSI bullish divergence — price newer-low + rsi higher-low.
+    let rsi_div = if closes.len() >= 30 && rsi.len() == closes.len() {
+        let mid = closes.len() / 2;
+        let oi = closes[..mid]
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        let ni = closes[mid..]
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        let n_abs = mid + ni;
+        let rsi_o = rsi.get(oi).copied().unwrap_or(50.0);
+        let rsi_n = rsi.get(n_abs).copied().unwrap_or(50.0);
+        if closes[n_abs] < closes[oi] && rsi_n > rsi_o && rsi_o.is_finite() && rsi_n.is_finite() {
+            1.0
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+
+    // MACD cross (signal cross + histogram positive recently).
+    let macd_cross = {
+        let last_hist = macd.histogram.iter().rev().find(|x| x.is_finite()).copied().unwrap_or(0.0);
+        let prev_hist = macd.histogram.iter().rev().filter(|x| x.is_finite()).nth(1).copied().unwrap_or(0.0);
+        if prev_hist <= 0.0 && last_hist > 0.0 {
+            1.0
+        } else {
+            0.0
+        }
+    };
+
+    // MACD bullish divergence.
+    let macd_div = if macd.histogram.len() >= 30 {
+        let h = &macd.histogram;
+        let mid = h.len() / 2;
+        let oi = h[..mid]
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        let ni = h[mid..]
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        let n_abs = mid + ni;
+        if closes[n_abs] < closes[oi] && h[n_abs] > h[oi] && h[oi].is_finite() && h[n_abs].is_finite() {
+            1.0
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+
+    // RSI oversold reset: was < 30 in the recent window, now > 35.
+    let rsi_recent_min = rsi
+        .iter()
+        .rev()
+        .take(20)
+        .filter(|x| x.is_finite())
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+    let last_rsi = rsi.iter().rev().find(|x| x.is_finite()).copied().unwrap_or(50.0);
+    let rsi_oversold_reset = if rsi_recent_min < 30.0 && last_rsi > 35.0 { 1.0 } else { 0.0 };
+
+    0.35 * rsi_div + 0.25 * macd_cross + 0.25 * macd_div + 0.15 * rsi_oversold_reset
+}
+
+/// 12.8 — Funding rate + OI clean reset (real impl, replaces stub).
+///
+/// Reads recent rows from `funding_rates` (qtss-derivatives-signals
+/// canonical table) for the symbol. Sustained-negative funding +
+/// declining OI alongside price drop = textbook short-overcrowding /
+/// liquidation flush bottom signal.
+async fn score_funding_oi(pool: &PgPool, s: &SymbolKey) -> f64 {
+    // 7-day average funding rate.
+    let funding_avg: Option<f64> = sqlx::query_scalar::<_, Option<f64>>(
+        r#"SELECT AVG(funding_rate)::DOUBLE PRECISION FROM funding_rates
+            WHERE exchange=$1 AND symbol=$2
+              AND captured_at > now() - interval '7 days'"#,
+    )
+    .bind(&s.exchange)
+    .bind(&s.symbol)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .flatten();
+    let funding_score = match funding_avg {
+        Some(f) if f <= -0.0005 => 1.0, // -0.05%+ sustained
+        Some(f) if f <= -0.0002 => 0.5,
+        _ => 0.0,
+    };
+
+    // OI 24h delta — relative to start of window.
+    let oi_score: f64 = match sqlx::query(
+        r#"SELECT
+              (SELECT open_interest FROM open_interest_snapshots
+                WHERE exchange=$1 AND symbol=$2
+                ORDER BY captured_at DESC LIMIT 1) AS oi_now,
+              (SELECT open_interest FROM open_interest_snapshots
+                WHERE exchange=$1 AND symbol=$2
+                  AND captured_at <= now() - interval '24 hours'
+                ORDER BY captured_at DESC LIMIT 1) AS oi_24h_ago"#,
+    )
+    .bind(&s.exchange)
+    .bind(&s.symbol)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(row)) => {
+            let now: Option<rust_decimal::Decimal> = row.try_get("oi_now").ok();
+            let prev: Option<rust_decimal::Decimal> = row.try_get("oi_24h_ago").ok();
+            use rust_decimal::prelude::ToPrimitive;
+            match (now.and_then(|d| d.to_f64()), prev.and_then(|d| d.to_f64())) {
+                (Some(n), Some(p)) if p > 0.0 => {
+                    let delta_pct = ((n - p) / p) * 100.0;
+                    if delta_pct < -10.0 {
+                        1.0
+                    } else if delta_pct < -5.0 {
+                        0.5
+                    } else {
+                        0.0
+                    }
+                }
+                _ => 0.0,
+            }
+        }
+        _ => 0.0,
+    };
+
+    0.5 * funding_score + 0.5 * oi_score
 }
 
 /// 12.6 — Sentiment extreme (Fear & Greed).

@@ -634,17 +634,30 @@ export function LuxAlgoChart({
   const [showCmf, setShowCmf] = useState(false);
   const [showAroon, setShowAroon] = useState(false);
   const [showTtmSqueeze, setShowTtmSqueeze] = useState(false);
+  // 2026-04-26 user request: MACD missing from oscillators ("en
+  // önemli olanı eklememişiz"). MACD + Stochastic + OBV + ATR are
+  // staples; backend already serves them via /v2/indicators.
+  const [showMacd, setShowMacd] = useState(false);
+  const [showStochastic, setShowStochastic] = useState(false);
+  const [showObv, setShowObv] = useState(false);
+  const [showAtr, setShowAtr] = useState(false);
+  const [showBollinger, setShowBollinger] = useState(false);
   const indicatorsCsv = [
     showSuperTrend && "supertrend",
     showKeltner && "keltner",
     showIchimoku && "ichimoku",
     showDonchian && "donchian",
     showPsar && "psar",
+    showBollinger && "bollinger",
     showRsi && "rsi",
+    showMacd && "macd",
+    showStochastic && "stochastic",
     showWilliamsR && "williams_r",
     showCmf && "cmf",
     showAroon && "aroon",
     showTtmSqueeze && "ttm_squeeze",
+    showObv && "obv",
+    showAtr && "atr",
   ]
     .filter((x): x is string => typeof x === "string")
     .join(",");
@@ -1294,13 +1307,19 @@ export function LuxAlgoChart({
           // Backlog #5 (2026-04-26 BTC 4h Z4 (c)? at 70K vs spot 77K):
           // a projected anchor's price can fall in a zone the candles
           // never visited, painting a diagonal dotted line into empty
-          // space. Compute the visible range from the last 100 candles
-          // and refuse to draw projected segments whose target price
-          // sits more than 30% beyond either edge of that band — at
-          // that point the projection is no longer informative, just
-          // visually misleading. Real (non-projected) anchors are
-          // never clipped (they reflect actual pivots).
-          const clipWindow = candles.slice(Math.max(0, candles.length - 100));
+          // space. The 30%-of-full-chart-band tolerance from the
+          // first cut was too generous — when an OLDER part of the
+          // tape (e.g. the W4 low at 70K from weeks ago) sits within
+          // the clip window, the simulation can still target it long
+          // after price has moved on.
+          //
+          // Tightened version: clip against the LAST 20 BARS' high/low
+          // (the user's eye-level "current swing"), with tolerance
+          // capped at 1× the recent range. A projected anchor more
+          // than one current-swing-band away from the latest tape is
+          // visually misleading. Real (non-projected) anchors stay
+          // unclipped — they reflect actual pivots.
+          const clipWindow = candles.slice(Math.max(0, candles.length - 20));
           let chartMin = Infinity;
           let chartMax = -Infinity;
           for (const c of clipWindow) {
@@ -1310,7 +1329,7 @@ export function LuxAlgoChart({
             if (Number.isFinite(hi) && hi > chartMax) chartMax = hi;
           }
           const chartBand = chartMax - chartMin;
-          const tolerance = chartBand * 0.30;
+          const tolerance = chartBand * 1.0;
           const priceWithinBand = (p: number, projected: boolean) => {
             if (!projected) return true;
             if (!Number.isFinite(chartMin) || !Number.isFinite(chartMax)) return true;
@@ -2228,6 +2247,42 @@ export function LuxAlgoChart({
       );
       addOscLine(vals, "#f472b6", 1);
     }
+    if (indSeries.macd) {
+      // MACD has 3 series: line (blue), signal (orange), histogram
+      // (filled area). Histogram > 0 = bullish momentum, < 0 = bear.
+      // Render line + signal as thin lines and histogram as a thicker
+      // bar-like polyline anchored at zero.
+      addOscLine(indSeries.macd.macd, "#3b82f6", 2);
+      addOscLine(indSeries.macd.signal, "#f97316", 1);
+      // Histogram: render as a colored line for now (fill primitive
+      // pending). Positive ticks emerald, negative rose.
+      const hist = indSeries.macd.hist ?? [];
+      const histPos = hist.map((x) => (x > 0 ? x : Number.NaN));
+      const histNeg = hist.map((x) => (x < 0 ? x : Number.NaN));
+      addOscLine(histPos, "#22c55e", 1);
+      addOscLine(histNeg, "#ef4444", 1);
+    }
+    if (indSeries.stochastic) {
+      // Stochastic %K (cyan) + %D (orange) — bounded 0..100.
+      addOscLine(indSeries.stochastic.k, "#06b6d4", 2);
+      addOscLine(indSeries.stochastic.d, "#f59e0b", 1);
+    }
+    if (indSeries.obv) {
+      // OBV is unbounded cumulative — different scale from RSI (0..100).
+      // Add as its own line; lightweight-charts auto-scales the pane.
+      addOscLine(indSeries.obv.obv, "#a855f7", 2);
+    }
+    if (indSeries.atr) {
+      // ATR — volatility line, unbounded positive.
+      addOscLine(indSeries.atr.atr, "#eab308", 2);
+    }
+    if (indSeries.bollinger) {
+      // Bollinger bands render in the PRICE pane, not osc. Use the
+      // same addLine helper as supertrend/keltner above.
+      addLine(indSeries.bollinger.upper, "#a78bfa", 1);
+      addLine(indSeries.bollinger.mid, "#71717a", 1);
+      addLine(indSeries.bollinger.lower, "#a78bfa", 1);
+    }
 
     // ── IQ price-line overlays (FAZ 25 PR-25C / PR-25D) ─────────────
     // Caller (IQChart) passes a flat list of {price, color, title}
@@ -2271,6 +2326,7 @@ export function LuxAlgoChart({
     showElliottFull, detectionSource, enabledSlotIndices,
     indicators.data, showSuperTrend, showKeltner, showIchimoku, showDonchian, showPsar,
     showRsi, showWilliamsR, showCmf, showAroon, showTtmSqueeze,
+    showMacd, showStochastic, showObv, showAtr, showBollinger,
     defaults?.priceLineOverlays,
   ]);
 
@@ -2540,10 +2596,15 @@ export function LuxAlgoChart({
             {(
               [
                 ["rsi", "RSI", showRsi, setShowRsi],
+                ["macd", "MACD", showMacd, setShowMacd],
+                ["stochastic", "Stoch", showStochastic, setShowStochastic],
                 ["williams_r", "Williams %R", showWilliamsR, setShowWilliamsR],
                 ["cmf", "CMF", showCmf, setShowCmf],
                 ["aroon", "Aroon", showAroon, setShowAroon],
                 ["ttm_squeeze", "TTM Sq", showTtmSqueeze, setShowTtmSqueeze],
+                ["obv", "OBV", showObv, setShowObv],
+                ["atr", "ATR", showAtr, setShowAtr],
+                ["bollinger", "BB", showBollinger, setShowBollinger],
               ] as const
             ).map(([key, label, val, set]) => (
               <button

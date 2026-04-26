@@ -14,6 +14,7 @@ import { EngineSymbols } from "./pages/EngineSymbols";
 import { Symbols } from "./pages/Symbols";
 import RadarReports from "./pages/RadarReports";
 import Setups from "./pages/Setups";
+import Analiz from "./pages/Analiz";
 
 // Guard: bounce to /login when there is no token in storage. We deliberately
 // keep this check synchronous (localStorage) so the first paint never flashes
@@ -48,6 +49,7 @@ export const router = createBrowserRouter(
         { path: "symbols", element: <Symbols /> },
         { path: "reports", element: <RadarReports /> },
         { path: "setups", element: <Setups /> },
+        { path: "analiz", element: <Analiz /> },
       ],
     },
     { path: "/", element: <Navigate to="/v2/dashboard" replace /> },
