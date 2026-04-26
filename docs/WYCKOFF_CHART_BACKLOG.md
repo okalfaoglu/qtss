@@ -203,6 +203,121 @@ At each Range high/low test, attach a small data tooltip showing:
   - CVD trend in the test window
 This converts subjective "is this UTAD real?" into a visual checklist.
 
+## Claude's major-minor distinction audit (POST-26.6 backlog)
+
+User asked Claude to evaluate the system's ability to distinguish
+MAJOR (structural) vs MINOR (reaction) dip/top points. Claude's
+verdict: "Sistem pattern recognition yapıyor — yapıyı tanıyor. Major-
+minor ayrımı için ise pattern qualification lazım — tanıdığı yapıyı
+ölçmesi gerekiyor."
+
+### Strengths Claude observed
+  - (5) wave labels at structural dips/tops: clean detection.
+  - Range-internal Spring/UTAD as minor entries: correctly typed.
+  - (a)(b)(c) corrective separation from major impulse: clean.
+
+### Weaknesses Claude observed
+  - 99k structural top of Jan 2026 left unmarked (Distribution box
+    7-10k below the actual peak — late detection).
+  - All labels render at the SAME visual weight: (5) major and (4)
+    minor look identical → user can't see hierarchy at-a-glance.
+  - On busy bars (5+ events in a tight window), no priority to
+    decide which is the actionable signal.
+  - No volume confirmation — Wyckoff IS volume analysis at heart.
+
+### Proposed enhancements (Claude's priority order)
+
+**B-CTX-MM-1 (HIGHEST PRIORITY) — Volume integration**
+"Wyckoff fiilen hacim analizidir — fiyat-hacim ilişkisi olmadan
+Wyckoff yarı-Wyckoff'tur." Concrete asks:
+  - Effort vs Result: high-volume Spring with reclaim → real Spring;
+    low-volume → suspect (downgrade to "weak Spring" with reduced
+    confidence).
+  - Drying-up detection: Distribution Phase D should show shrinking
+    volume; Accumulation Phase B same. Auto-flag "yapı sağlıklı /
+    sağlıksız" when volume profile contradicts the phase claim.
+  - SOS volume confirmation: range break-up bar volume > X×SMA →
+    confirmed SOS; less → fakeout (reclassify, drop the label).
+  - Detector-level: every Phase-C event evaluator should already
+    have access to bar.volume; gate the score by volume_ratio
+    threshold per event type.
+
+**B-CTX-MM-2 — Multi-cycle confluence indicator**
+Auto-detect when the SAME zone is signalled by multiple Z slots:
+  - "Major Distribution Confluence" badge fires when Z5 Distribution
+    + Z3 Distribution + Z4 UTAD all overlap a price band ≤ X% wide.
+  - Primary-cycle selection: user picks one Z (e.g. Z5) as the
+    "anchor"; lower Z labels render as "tepki / minor" automatically
+    when their direction matches Z5's trend.
+  - Contradiction warning: Z3 Distribution while Z5 in Accumulation
+    → big yellow banner "cycle conflict — exercise caution".
+
+**B-CTX-MM-3 — Visual hierarchy (size + color tiering)**
+  - Major points (Z5 (5) wave, confluent ★): 150% font size,
+    saturated colour.
+  - Minor points (Z3 (4) wave, single-source ◆): 100%, muted.
+  - Confidence score badge: every label gets a 1-5 chip ("UTAD · PC
+    (4/5)"). Below threshold dims to ghost.
+
+**B-CTX-MM-4 — Phase maturity / progression bar**
+  - Each range tile shows a small progress bar inside it: "Phase A
+    → B → C → D → E (currently 70% through D)".
+  - Age guard: <X bars old = NOT classified as range (downgrade to
+    "reaction range" or hide entirely).
+  - Early/late warnings: "this accumulation is too young, wait" or
+    "distribution at Phase E, breakdown imminent".
+
+**B-CTX-MM-5 — Fractal level scoring (1-5)**
+Direct answer to the major-vs-minor question:
+  - Level 5: highest TF reversal (across multiple symbols correlated)
+  - Level 4: confluent across ≥3 Z slots
+  - Level 3: single Z, strong confidence ★
+  - Level 2: structural sub-wave (W2, W4)
+  - Level 1: noise (filtered by default)
+  Auto-assigned per detection; chart hides Level 1 by default and
+  upgrades the visual treatment for higher levels.
+  Components: ATR-multiple of the swing (big swing = higher level),
+  liquidity zone proximity (HH/LL / round numbers boost), confluence
+  count.
+
+**B-CTX-MM-6 — Historical performance overlay**
+  - Per-event-type win rate from the backtest (FAZ 26 deliverable!):
+    "Z3 Spring · PC has been right 64% over the last 6 months on
+    BTC 4h" — chip shown next to the live label.
+  - Faded "invalidated" labels: don't delete, gray-out + tooltip
+    explaining why ("UTAD invalidated — closed 2% above range
+    high"). Keeps the chart honest and operator-trainable.
+  - "Detection latency" metric: how many bars after the actual
+    extremum did the system fire its label? Surfaces the system's
+    own latency character.
+
+**B-CTX-MM-7 — Context-aware labelling**
+  - Trend context: UTAD inside a strong uptrend ≠ UTAD inside a
+    sideways range. Apply a context multiplier to confidence.
+  - Liquidity zone proximity: events near previous HH/LL / round
+    numbers (50k, 60k, 70k) get a confidence bonus.
+  - Time context: weekend / pre-news / illiquid windows trigger an
+    advisory ("low-confidence regime, reduce sizing").
+
+**B-CTX-MM-8 — User feedback loop**
+  - Right-click "this is a major reversal / this label is wrong"
+    captures operator overrides into a feedback table.
+  - Per-user noise filter: "no more than 3 UTAD labels per Z3
+    cycle in any 6-hour window" prevents notification storm.
+  - Long-term: feedback drives a learned confidence model — each
+    event subkind gets a per-symbol/tf calibration multiplier.
+
+### Implementation order Claude recommends
+  1. **Volume integration** (huge effect, ~moderate work)
+  2. **Multi-cycle confluence indicator** (uses existing infra)
+  3. **Visual hierarchy** (low cost, high readability win)
+  4. **Confidence score chip** per label
+  5. **Phase progression bar** inside range tiles
+  6. **Volume-failed label dimming** (depends on #1)
+
+Track these as the second wave of Wyckoff polish — pick up after
+FAZ 26.6 (GUI Backtest Studio) ships.
+
 ---
 
 Tracker: revisit each B-CTX-* item after FAZ 26 backtest module ships.

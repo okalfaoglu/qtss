@@ -25,6 +25,12 @@ async-trait.workspace = true
 tokio.workspace = true
 sqlx.workspace = true
 
+tracing-subscriber.workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
 tempfile = "3"
+
+[[bin]]
+name = "iq-backtest"
+path = "src/bin/iq_backtest.rs"

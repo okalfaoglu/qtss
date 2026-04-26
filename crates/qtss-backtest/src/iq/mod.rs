@@ -38,6 +38,7 @@
 //! plus emits per-trade JSONL if a log path is configured.
 
 pub mod attribution;
+pub mod cli;
 pub mod config;
 pub mod cost;
 pub mod detector;
