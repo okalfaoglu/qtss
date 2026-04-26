@@ -2029,7 +2029,11 @@ export function LuxAlgoChart({
           return;
         }
         const isAccum = d.subkind === "range_accumulation";
-        const fill = isAccum ? "#22c55e15" : "#ef444415"; // 8% alpha
+        // 18% alpha fill (was 8%) so the box reads cleanly against
+        // candles + a 2px border for the outline. Distribution
+        // boxes use rose; accumulation emerald — colour-codes the
+        // bias at a glance without reading the label.
+        const fill = isAccum ? "#22c55e2e" : "#ef44442e";
         const border = isAccum ? "#22c55e" : "#ef4444";
         const rect = new RectanglePrimitive({
           time1: t0,
@@ -2038,7 +2042,7 @@ export function LuxAlgoChart({
           priceBottom: lo,
           fillColor: fill,
           borderColor: border,
-          borderWidth: 1,
+          borderWidth: 2,
         });
         candleSeries.attachPrimitive(rect);
         rectPrimitivesRef.current.push(rect);
@@ -2185,28 +2189,73 @@ export function LuxAlgoChart({
       return false;
     };
 
-    // FAZ 25.4.B — Wyckoff render policy. Earlier we hard-capped
-    // the visible events (last 120 bars + 3 per subkind) but the
-    // user reported missing BC/AR/ST historical events. Wyckoff
-    // schematics are chronological — operators want the full set
-    // so they can read accumulation→distribution→accumulation
-    // cycles across the chart. Now ranges (subkind LIKE 'range_*')
-    // ALWAYS render; individual events render in full unless their
-    // bar falls outside the loaded candle window. The Wyckoff
-    // checkbox itself remains the master toggle for clutter.
+    // FAZ 25.4.B — Wyckoff render policy.
+    //
+    // Range boxes (subkind LIKE 'range_*') always render — they're
+    // the schematic frame and there's at most one per (sym, tf, slot).
+    //
+    // Individual events: BC/SC/AR/ST/Spring/UTAD/SOS/SOW/LPS/BU/PS/Test
+    // can fire repeatedly in a single range (UTAD especially — every
+    // wick above range top qualifies). User reported visual overload
+    // (\"UTAD-PC neden çok\") + missing BC/AR/ST overshadowed by the
+    // repeated UTADs. Apply proximity dedup: per subkind, drop any
+    // event whose bar is within `proximityBars` of an already-kept
+    // event of the same subkind. Keeps the freshest per cluster, lets
+    // every distinct event type surface.
+    const proximityBars = 8;
+    const wyckoffEvents = auxDetections.filter((d) => {
+      const family = d.family || d.kind;
+      if (family !== "wyckoff") return false;
+      // Range rows always pass — we filter only individual events.
+      if (d.subkind.startsWith("range_")) return false;
+      const lastAnchor = d.anchors[d.anchors.length - 1];
+      const anchorBar =
+        typeof lastAnchor?.bar_index === "number" ? lastAnchor.bar_index : -1;
+      return anchorBar >= 0 && anchorBar < candles.length;
+    });
+    // Score-based dedup (user: \"utad-pc'lerden hangisini neye göre
+    // tekilleştireceksin\"). Sort by `confidence` DESC — the
+    // detector'\\''s own structural score (volume_ratio × range_ratio
+    // × body coverage). Walk in that order; for each event, KEEP it
+    // only if no already-kept event of the same subkind sits within
+    // proximityBars. Result: the strongest UTAD/Spring/SOS in each
+    // cluster wins — the one with the most informative volume +
+    // range fingerprint, not just the latest tick.
+    const scoreOf = (d: ChartWorkspaceDetection): number => {
+      const c = d.confidence;
+      if (typeof c === "number") return c;
+      if (typeof c === "string") {
+        const p = parseFloat(c);
+        return Number.isFinite(p) ? p : 0;
+      }
+      return 0;
+    };
+    wyckoffEvents.sort((a, b) => scoreOf(b) - scoreOf(a));
+    const keptByKind = new Map<string, number[]>();
+    const wyckoffKeep = new Set<string>();
+    for (const det of wyckoffEvents) {
+      const a = det.anchors[0];
+      const bar = typeof a?.bar_index === "number" ? a.bar_index : -1;
+      if (bar < 0) continue;
+      const list = keptByKind.get(det.subkind) ?? [];
+      const tooClose = list.some((b) => Math.abs(b - bar) < proximityBars);
+      if (!tooClose) {
+        list.push(bar);
+        keptByKind.set(det.subkind, list);
+        wyckoffKeep.add(det.id);
+      }
+    }
     for (const det of auxDetections) {
       const family = det.family || det.kind;
       if (!familyEnabled(family)) continue;
-      // Drop events whose bar_index lies before the loaded candles
-      // (the timeAt() lookup would return null and the renderer
-      // would silently skip — explicit drop is faster).
-      if (family === "wyckoff") {
+      if (family === "wyckoff" && !det.subkind.startsWith("range_")) {
         const lastAnchor = det.anchors[det.anchors.length - 1];
         const anchorBar =
           typeof lastAnchor?.bar_index === "number"
             ? lastAnchor.bar_index
             : -1;
-        if (anchorBar >= 0 && anchorBar >= candles.length) continue;
+        if (anchorBar < 0 || anchorBar >= candles.length) continue;
+        if (!wyckoffKeep.has(det.id)) continue;
       }
       const render = renderByFamily[family];
       if (!render) continue;

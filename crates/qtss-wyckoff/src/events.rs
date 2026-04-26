@@ -117,10 +117,16 @@ pub fn eval_selling_climax(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEven
             continue;
         }
         let body = bar_close(bar) - bar.open.to_f64().unwrap_or(0.0);
-        // SC = wide-range, high-volume bar with lower close + long
-        // lower wick (classic panic flush).
+        // SC = wide-range, high-volume bar with a long LOWER wick
+        // (panic flush + rejection). Body sign relaxed: classic SC
+        // often has a NEUTRAL or even slightly positive body
+        // (capitulation bottoms reverse intra-bar). Body must just
+        // not be a strong continuation up — that would be a SOS
+        // not a SC. Threshold: body ≤ 20% of range allowed.
         let lower_wick = bar.open.to_f64().unwrap_or(0.0).min(bar_close(bar)) - bar_low(bar);
-        if body < 0.0 && lower_wick > bar_range(bar) * 0.4 {
+        let range = bar_range(bar);
+        let weak_body = body <= range * 0.2;
+        if weak_body && lower_wick > range * 0.4 {
             out.push(WyckoffEvent {
                 kind: WyckoffEventKind::Sc,
                 variant: "bull",
@@ -162,7 +168,13 @@ pub fn eval_buying_climax(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent
         }
         let body = bar_close(bar) - bar.open.to_f64().unwrap_or(0.0);
         let upper_wick = bar_high(bar) - bar.open.to_f64().unwrap_or(0.0).max(bar_close(bar));
-        if body > 0.0 && upper_wick > bar_range(bar) * 0.4 {
+        let range = bar_range(bar);
+        // BC mirror of SC: weak (any near-zero or slightly negative)
+        // body OK as long as the upper wick dominates — classic
+        // blowoff top often has a small body with a long upper wick
+        // showing rejection of the high.
+        let weak_body = body >= range * -0.2;
+        if weak_body && upper_wick > range * 0.4 {
             out.push(WyckoffEvent {
                 kind: WyckoffEventKind::Bc,
                 variant: "bear",
