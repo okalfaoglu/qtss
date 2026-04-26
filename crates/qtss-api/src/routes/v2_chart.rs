@@ -34,6 +34,7 @@ use qtss_gui_api::{
     OpenPositionView,
 };
 use qtss_storage::market_bars;
+use qtss_storage::market_bars_open;
 use qtss_storage::wave_chain;
 
 use crate::error::ApiError;
@@ -61,6 +62,13 @@ pub struct ChartQuery {
     /// wants to see. Filters backtest overlays to the levels whose
     /// toggle button is ON. Defaults to all four.
     pub levels: Option<String>,
+    /// BUG5 — Append the live forming bar from `market_bars_open`
+    /// when this is the current view (no `before` cursor). Defaults
+    /// to `true` so the chart matches the zigzag/elliott/harmonic
+    /// overlays which already merge the open bar; setting this to
+    /// `false` returns only closed bars (e.g. for analysis snapshots
+    /// that must not see the still-forming candle).
+    pub include_open: Option<bool>,
 }
 
 pub fn v2_chart_router() -> Router<SharedState> {
@@ -173,6 +181,35 @@ async fn get_chart(
         })
         .collect();
     candles.reverse();
+
+    // BUG5 — Append the live forming bar so chart candles stay in
+    // lockstep with the zigzag / elliott / harmonic overlays (which
+    // already merge `market_bars_open`). Without this the operator
+    // sees those overlays drawing on a "ghost" candle that the price
+    // axis hasn't drawn yet — looks like a lag and on short TFs causes
+    // late entries that close at a loss. Skip when paging back into
+    // history (`before` set) or when caller explicitly opts out.
+    let include_open = q.before.is_none() && q.include_open.unwrap_or(true);
+    if include_open {
+        if let Ok(Some(open_bar)) =
+            market_bars_open::get_open_bar(&st.pool, &venue, &segment, &symbol, &tf).await
+        {
+            let is_newer = candles
+                .last()
+                .map(|c| open_bar.open_time > c.open_time)
+                .unwrap_or(true);
+            if is_newer {
+                candles.push(CandleBar {
+                    open_time: open_bar.open_time,
+                    open: open_bar.open,
+                    high: open_bar.high,
+                    low: open_bar.low,
+                    close: open_bar.close,
+                    volume: open_bar.volume,
+                });
+            }
+        }
+    }
 
     let brick_pct = match q.brick_pct {
         Some(p) => p,
