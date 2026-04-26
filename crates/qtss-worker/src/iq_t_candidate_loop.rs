@@ -284,7 +284,7 @@ async fn run_tick(pool: &PgPool) -> anyhow::Result<(usize, usize)> {
                       AND symbol=$3 AND timeframe=$4
                     ORDER BY candidate_time DESC LIMIT 1"#,
             )
-            .bind(&p.exchange).bind(&p.segment).bind(&p.symbol).bind(&p.timeframe)
+            .bind(&parent.exchange).bind(&parent.segment).bind(&parent.symbol).bind(&child_tf)
             .fetch_optional(pool).await.ok().flatten();
             let cycle_blocks = cycle_meta
                 .map(|r| {
