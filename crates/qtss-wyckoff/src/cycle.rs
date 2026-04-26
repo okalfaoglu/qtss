@@ -324,14 +324,16 @@ pub fn detect_cycles_from_elliott(
         if first_seg.start_bar > gap_min_bars {
             let first_phase = phase_for_segment(first_seg);
             let leading_phase = preceding_phase(first_phase);
-            // Bound leading window to roughly the same duration as
-            // the first segment (clamped to [50, 500] bars). A wider
-            // window across all pre-segment history gives a tile so
-            // tall it dominates the chart vertically; matching the
-            // segment's own length keeps the basing/topping context
-            // visually comparable to the impulse itself.
+            // Bound leading window — small fraction of segment
+            // duration so the basing/topping zone stays a tight
+            // contextual box, not a slab. Previous formula
+            // (lookback = seg_dur capped at 500) painted 4-6 month
+            // boxes on 1d which user flagged as "bu kadar büyük
+            // accumulation olmaz". 1/3 of segment duration with a
+            // 60-bar absolute cap gives ~3-week basing zones on 4h
+            // and ~2-month basing zones on 1d.
             let seg_dur = first_seg.end_bar.saturating_sub(first_seg.start_bar);
-            let lookback = seg_dur.max(50).min(500);
+            let lookback = (seg_dur / 3).max(20).min(60);
             let leading_start = first_seg.start_bar.saturating_sub(lookback);
             let start_price = bars
                 .get(leading_start)
@@ -356,7 +358,7 @@ pub fn detect_cycles_from_elliott(
         }
     }
 
-    for seg in sorted {
+    for seg in &sorted {
         // Fill gap with a transition tile (Distribution or Accumulation)
         // when the previous tile ended before this segment starts.
         if let Some((p_end, p_price, p_phase)) = prev_end {
@@ -409,11 +411,29 @@ pub fn detect_cycles_from_elliott(
         }
     }
 
-    // Trailing fill — extend the last tile (or its transition) to the
-    // tape head so the chart has continuous coverage.
+    // Trailing fill — extend the last tile to the tape head, but
+    // bound the extension so a slot that hasn't seen a new Elliott
+    // segment in months doesn't paint a 12+ month "Distribution"
+    // tile (user flagged this on 1d Z5: cycle_distribution
+    // 2025-01-20 → 2026-04-26 = 15 months). Cap to 3× the last
+    // segment's duration with a hard min/max [30, 250] bars.
     if let Some((p_end, p_price, p_phase)) = prev_end {
         if tape_end_bar > p_end + gap_min_bars {
             let transition = transition_phase(p_phase);
+            let last_dur = sorted
+                .last()
+                .map(|s| s.end_bar.saturating_sub(s.start_bar))
+                .unwrap_or(60);
+            let max_trail = (last_dur * 3).max(30).min(250);
+            let trailing_end = (p_end + max_trail).min(tape_end_bar);
+            let trailing_end_price = if trailing_end >= tape_end_bar {
+                tape_end_price
+            } else {
+                bars.get(trailing_end)
+                    .map(bar_low)
+                    .filter(|p| p.is_finite() && *p > 0.0)
+                    .unwrap_or(p_price)
+            };
             let mut trailing = open_segment(
                 transition,
                 WyckoffCycleSource::Elliott,
@@ -421,8 +441,8 @@ pub fn detect_cycles_from_elliott(
                 p_price,
                 None,
             );
-            trailing.end_bar = tape_end_bar;
-            trailing.end_price = tape_end_price;
+            trailing.end_bar = trailing_end;
+            trailing.end_price = trailing_end_price;
             let (hi, lo) = compute_bounds(
                 bars,
                 trailing.start_bar,
@@ -775,14 +795,13 @@ mod tests {
 
     #[test]
     fn leading_fill_emits_accumulation_before_first_motive() {
-        // Bull motive [800, 840] (40-bar dur) — leading window is
-        // clamped to max(seg_dur, 50) = 50 bars, so leading
-        // Accumulation should span [750, 800].
+        // Bull motive [800, 840] (40-bar dur) — leading lookback =
+        // max(40/3, 20).min(60) = 20 bars, so Accumulation [780, 800].
         let segs = vec![motive(true, 800, 840, 100.0, 150.0)];
         let cycles = detect_cycles_from_elliott(&segs, &[], 1000, 140.0);
         assert!(cycles.len() >= 2);
         assert_eq!(cycles[0].phase, WyckoffCyclePhase::Accumulation);
-        assert_eq!(cycles[0].start_bar, 750);
+        assert_eq!(cycles[0].start_bar, 780);
         assert_eq!(cycles[0].end_bar, 800);
         assert_eq!(cycles[1].phase, WyckoffCyclePhase::Markup);
     }
@@ -793,7 +812,7 @@ mod tests {
         let cycles = detect_cycles_from_elliott(&segs, &[], 1000, 110.0);
         assert!(cycles.len() >= 2);
         assert_eq!(cycles[0].phase, WyckoffCyclePhase::Distribution);
-        assert_eq!(cycles[0].start_bar, 750);
+        assert_eq!(cycles[0].start_bar, 780); // 800 - 20
         assert_eq!(cycles[1].phase, WyckoffCyclePhase::Markdown);
     }
 
@@ -855,14 +874,14 @@ mod tests {
     }
 
     #[test]
-    fn leading_fill_capped_to_500_bars_for_giant_segments() {
-        // A 1000-bar segment would request a 1000-bar leading window;
-        // cap kicks in at 500.
+    fn leading_fill_capped_to_60_bars_for_giant_segments() {
+        // A 1000-bar segment requests 1000/3 = 333 bars, cap kicks
+        // in at 60.
         let segs = vec![motive(true, 1500, 2500, 100.0, 200.0)];
         let cycles = detect_cycles_from_elliott(&segs, &[], 3000, 180.0);
         assert!(cycles.len() >= 2);
         assert_eq!(cycles[0].phase, WyckoffCyclePhase::Accumulation);
-        assert_eq!(cycles[0].start_bar, 1000); // 1500 - 500 (cap)
+        assert_eq!(cycles[0].start_bar, 1440); // 1500 - 60 (cap)
     }
 
     #[test]
