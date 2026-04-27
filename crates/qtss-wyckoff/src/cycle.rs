@@ -318,7 +318,19 @@ pub fn detect_cycles(
                     None,
                 ));
             }
-            WyckoffEventKind::Bu | WyckoffEventKind::Sos => {
+            // BUG4 — Wyckoff Phase D Markup-ignition signal set:
+            //   Bu  (Jump-Across-Creek / Backup) — range top broken
+            //   Sos (Sign of Strength) — first wide bull bar
+            //   Lps (Last Point of Support) — higher-low after Bu
+            // All three are equivalent triggers for the Acc → Markup
+            // transition. The user asked "marketup başlangıcını
+            // anlayacağımız sinyal yok mu" — these three (plus the
+            // existing Spring / Test Phase C signals that prep the
+            // launchpad) are the canonical answer; the cycle state
+            // machine accepts all of them as Markup openers.
+            WyckoffEventKind::Bu
+            | WyckoffEventKind::Sos
+            | WyckoffEventKind::Lps => {
                 if let Some(prev) = current.as_ref() {
                     if prev.phase == WyckoffCyclePhase::Accumulation {
                         let opened_at = ev.bar_index;
@@ -336,6 +348,16 @@ pub fn detect_cycles(
                     }
                 }
             }
+            // BUG4 — Sow (Sign of Weakness) opens Markdown when prev
+            // is Distribution. LPSY (bear-variant Lps) is also a
+            // valid Markdown trigger but it shares the
+            // WyckoffEventKind::Lps tag with the bull-side LPS used
+            // by the Markup branch above; keeping Lps in the Markup
+            // branch only is fine because the prev_phase check on
+            // that branch fails when prev = Distribution, so the
+            // bear LPSY event simply doesn't transition (Sow does
+            // the work). Adding Lps here would create a duplicate
+            // match arm — Rust rejects it.
             WyckoffEventKind::Sow => {
                 if let Some(prev) = current.as_ref() {
                     if prev.phase == WyckoffCyclePhase::Distribution {
