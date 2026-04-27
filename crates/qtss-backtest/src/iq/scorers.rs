@@ -359,13 +359,29 @@ pub async fn cvd_divergence(
 }
 
 /// 12.5 — Indicator alignment (RSI extremes + MACD turn).
-/// Reads the most-recent indicator snapshot ≤ bar_time.
+///
+/// 2026-04-27 — switched from `bar_indicator_snapshots` (a table
+/// that was never populated in this DB and silently zeroed the
+/// scorer) to INLINE computation from market_bars. RSI / MACD are
+/// pure functions of recent closes, so there's no reason to depend
+/// on a separate snapshot writer when market_bars already carries
+/// the full bar history. Falls back to the snapshot table when it
+/// EXISTS and has data — that preserves any future setup where the
+/// operator wants pre-computed indicator series.
 pub async fn indicator_alignment(
     pool: &PgPool,
     k: &ScoreKey<'_>,
     bar_time: DateTime<Utc>,
     polarity: IqPolarity,
 ) -> f64 {
+    // Primary path — inline computation from market_bars.
+    let inline_score =
+        indicator_alignment_inline(pool, k, bar_time, polarity).await;
+    if inline_score > 0.0 {
+        return inline_score;
+    }
+    // Fallback — pre-computed snapshot row when the table happens
+    // to exist and cover the bar. Silent zero if not.
     let row = sqlx::query(
         r#"SELECT data
              FROM bar_indicator_snapshots
@@ -390,6 +406,83 @@ pub async fn indicator_alignment(
         IqPolarity::Top => ((rsi - 70.0).max(0.0) / 30.0).clamp(0.0, 1.0),
     };
     // MACD: positive histogram for Dip turn-up, negative for Top.
+    let macd_score = match polarity {
+        IqPolarity::Dip => {
+            if macd_hist > 0.0 {
+                (macd_hist / 100.0).clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        }
+        IqPolarity::Top => {
+            if macd_hist < 0.0 {
+                (-macd_hist / 100.0).clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        }
+    };
+    0.6 * rsi_score + 0.4 * macd_score
+}
+
+/// Inline RSI + MACD computation from market_bars. Pulls the most
+/// recent N closes <= bar_time, computes Wilder RSI(14) and
+/// MACD(12, 26, 9), then folds them into the same Dip/Top score
+/// the live snapshot path uses. Returns 0.0 when there isn't enough
+/// history (need >= 50 bars to seed MACD's slow EMA).
+async fn indicator_alignment_inline(
+    pool: &PgPool,
+    k: &ScoreKey<'_>,
+    bar_time: DateTime<Utc>,
+    polarity: IqPolarity,
+) -> f64 {
+    // 200 bars is plenty for RSI(14) and MACD(12, 26, 9) to stabilise.
+    let rows = sqlx::query(
+        r#"SELECT close
+             FROM market_bars
+            WHERE exchange=$1 AND segment=$2 AND symbol=$3
+              AND interval=$4 AND open_time <= $5
+            ORDER BY open_time DESC
+            LIMIT 200"#,
+    )
+    .bind(k.exchange)
+    .bind(k.segment)
+    .bind(k.symbol)
+    .bind(k.timeframe)
+    .bind(bar_time)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    if rows.len() < 50 {
+        return 0.0;
+    }
+    // Reverse to chronological for the indicator helpers.
+    let mut closes: Vec<f64> = rows
+        .iter()
+        .filter_map(|r| {
+            r.try_get::<Decimal, _>("close")
+                .ok()
+                .and_then(|d| d.to_f64())
+        })
+        .collect();
+    closes.reverse();
+    if closes.len() < 50 {
+        return 0.0;
+    }
+
+    let rsi_series = qtss_indicators::rsi::rsi(&closes, 14);
+    let rsi = rsi_series.last().copied().unwrap_or(50.0);
+    let macd_out = qtss_indicators::macd::macd(&closes, 12, 26, 9);
+    let macd_hist = macd_out
+        .histogram
+        .last()
+        .copied()
+        .unwrap_or(0.0);
+
+    let rsi_score = match polarity {
+        IqPolarity::Dip => ((30.0 - rsi).max(0.0) / 30.0).clamp(0.0, 1.0),
+        IqPolarity::Top => ((rsi - 70.0).max(0.0) / 30.0).clamp(0.0, 1.0),
+    };
     let macd_score = match polarity {
         IqPolarity::Dip => {
             if macd_hist > 0.0 {

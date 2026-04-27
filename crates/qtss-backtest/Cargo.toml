@@ -21,6 +21,7 @@ qtss-strategy.workspace = true
 qtss-portfolio.workspace = true
 qtss-execution-v2.workspace = true
 qtss-fees.workspace = true
+qtss-indicators.workspace = true
 async-trait.workspace = true
 tokio.workspace = true
 sqlx.workspace = true

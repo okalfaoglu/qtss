@@ -219,17 +219,18 @@ pub async fn probe(
         .await,
     );
 
-    // ── 6) bar_indicator_snapshots (indicator_alignment) — table
-    // may not exist in this schema. probe_table_existence handles
-    // that gracefully.
-    rows.push(
-        probe_table_existence(
-            pool,
-            "indicator_alignment",
-            "bar_indicator_snapshots",
-        )
-        .await,
-    );
+    // ── 6) indicator_alignment — computed INLINE from market_bars
+    // since 2026-04-27 (Wilder RSI + MACD on the fly). The legacy
+    // bar_indicator_snapshots table is no longer required; the
+    // scorer falls back to it when present but works without it.
+    rows.push(ChannelAvailability {
+        channel: "indicator_alignment".to_string(),
+        source: "market_bars (inline RSI + MACD)".to_string(),
+        status: "full".to_string(),
+        rows_in_window: -1,
+        earliest: None,
+        latest: None,
+    });
 
     // ── 7) fear_greed_snapshots (sentiment_extreme)
     rows.push(
