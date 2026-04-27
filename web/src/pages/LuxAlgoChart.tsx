@@ -2190,8 +2190,6 @@ export function LuxAlgoChart({
         if (!m) return;
         const phaseLetter = m[1].toUpperCase();
         const isAcc = m[2] === "acc";
-        // Per-phase filter — defaults all on; operator can drop a
-        // single phase via the Wyckoff settings menu.
         const phaseFilterKey =
           `schematic_${m[1]}` as keyof typeof wyckoffFilter;
         if (!wyckoffFilter[phaseFilterKey]) return;
@@ -2200,45 +2198,31 @@ export function LuxAlgoChart({
         const t0 = anchorTime(a0);
         const t1 = anchorTime(a1);
         if (t0 === null || t1 === null) return;
-        // 2026-04-27 chart-audit fix — render phase as TWO THIN
-        // dashed lines (top + bottom) without a fill, so the
-        // bracket reads as a "tape annotation" rather than a heavy
-        // colored region that hides candles. Operator can dial in
-        // a single phase via the schematic toggles to focus on a
-        // particular Wyckoff window.
-        const sideColor = isAcc ? "#10b981" : "#f43f5e";
+        // 2026-04-28 — per-phase distinct hues (user request:
+        // "eventlerin line çizgilerini kaldır. A,B,C,D,E nin her
+        // birini farklı renk yap"). Lines are gone; only a coloured
+        // text label remains at the start of the phase, with the
+        // letter as the principal cue and side suffix
+        // (Acc / Dist) telling the operator which schematic.
+        //
+        // Hue logic — shared across Acc and Dist sides because the
+        // letter alone uniquely identifies the phase, and the side
+        // suffix in the label disambiguates schematic.
+        const phaseHue: Record<string, string> = {
+          A: "#3b82f6", // blue   — stopping action
+          B: "#a855f7", // violet — building cause
+          C: "#f59e0b", // amber  — test (most actionable)
+          D: "#22c55e", // green  — move out of TR
+          E: "#ec4899", // pink   — markup/markdown leg
+        };
+        const color = phaseHue[phaseLetter] ?? "#10b981";
         const lo = Number(d.raw_meta?.phase_low) || Number(a0.price);
         const hi = Number(d.raw_meta?.phase_high) || Number(a1.price);
-        const ceiling = chart.addSeries(LineSeries, {
-          color: sideColor,
-          lineWidth: 1,
-          lineStyle: LineStyle.Dashed,
-          priceLineVisible: false,
-          lastValueVisible: false,
-        });
-        ceiling.setData([
-          { time: t0, value: hi },
-          { time: t1, value: hi },
-        ]);
-        overlaySeriesRef.current.push(ceiling);
-        const floor = chart.addSeries(LineSeries, {
-          color: sideColor,
-          lineWidth: 1,
-          lineStyle: LineStyle.Dashed,
-          priceLineVisible: false,
-          lastValueVisible: false,
-        });
-        floor.setData([
-          { time: t0, value: lo },
-          { time: t1, value: lo },
-        ]);
-        overlaySeriesRef.current.push(floor);
-        // Compact label at start: just "A·Acc" / "C·Dist" instead
-        // of the verbose "Phase X (Acc/Dist)" so multiple phases
-        // stacked on the same x-coordinate don't smother each
-        // other. Phase A and Phase C — the actionable starts —
-        // render their label ABOVE; B / D / E render BELOW so a
-        // phase sequence is readable as a vertical ladder.
+        // Label-only annotation at phase start. A / C labels go
+        // ABOVE (these mark structural starts — Stopping action /
+        // Test); B / D / E go BELOW so a vertical ladder reads
+        // chronologically. The side colour was retired in favour
+        // of the per-letter palette above.
         const compactLabel = `${phaseLetter}·${isAcc ? "Acc" : "Dist"}`;
         const labelAbove =
           phaseLetter === "A" || phaseLetter === "C";
@@ -2246,7 +2230,7 @@ export function LuxAlgoChart({
           t0,
           labelAbove ? hi : lo,
           compactLabel,
-          sideColor,
+          color,
           labelAbove ? "above" : "below",
         );
         return;

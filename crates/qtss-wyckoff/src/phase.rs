@@ -102,6 +102,17 @@ impl WyckoffPhaseTracker {
                 self.saw_bu = true;
                 self.phase = WyckoffPhase::E;
             }
+            // Phase B intra-range probes — neither advance nor retreat
+            // the phase tracker. They confirm the cause-building
+            // motion but the actual structural pivot is Spring/UTAD
+            // (handled above).
+            WyckoffEventKind::Ut | WyckoffEventKind::Msow => {
+                if self.phase == WyckoffPhase::A
+                    || self.phase == WyckoffPhase::B
+                {
+                    self.phase = WyckoffPhase::B;
+                }
+            }
             WyckoffEventKind::Test => {}
         }
     }

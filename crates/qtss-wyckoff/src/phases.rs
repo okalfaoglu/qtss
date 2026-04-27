@@ -237,7 +237,51 @@ pub fn classify_schematic_phases(
     out.extend(acc_spans.into_iter().filter(|s| s.end_bar >= s.start_bar));
     out.extend(dist_spans.into_iter().filter(|s| s.end_bar >= s.start_bar));
     out.sort_by_key(|s| (s.start_bar, schematic_phase_rank(s.phase)));
+
+    // 2026-04-28 — strict same-side phase sequencing. Wyckoff
+    // doctrine: A → B → C → D → E never overlaps within one
+    // schematic. Inputs to classify_side already enforce this by
+    // construction (each phase's bounds are derived from the
+    // surrounding phases' anchors), but we double-check here:
+    // walk per-side, when phase X.start lies inside phase Y where
+    // Y.end > X.start AND rank(Y) < rank(X), clip Y.end to
+    // X.start - 1 so the prior phase yields to the next one
+    // taking over.
+    enforce_intra_side_sequencing(&mut out);
     out
+}
+
+fn enforce_intra_side_sequencing(spans: &mut Vec<WyckoffSchematicSpan>) {
+    // For each side, ensure A → B → C → D → E is strictly
+    // sequential. When a higher-ranked phase starts inside a
+    // lower-ranked one, the lower-ranked one yields.
+    let dir_rank = |d: WyckoffSchematicDirection| -> u8 {
+        match d {
+            WyckoffSchematicDirection::Accumulation => 0,
+            WyckoffSchematicDirection::Distribution => 1,
+        }
+    };
+    spans.sort_by_key(|s| {
+        (dir_rank(s.direction), s.start_bar, schematic_phase_rank(s.phase))
+    });
+    for i in 0..spans.len() {
+        let s_i_dir = spans[i].direction;
+        let s_i_rank = schematic_phase_rank(spans[i].phase);
+        let s_i_start = spans[i].start_bar;
+        for j in 0..i {
+            if spans[j].direction != s_i_dir {
+                continue;
+            }
+            let s_j_rank = schematic_phase_rank(spans[j].phase);
+            if s_j_rank < s_i_rank
+                && spans[j].end_bar >= s_i_start
+                && spans[j].start_bar < s_i_start
+            {
+                spans[j].end_bar = s_i_start.saturating_sub(1);
+            }
+        }
+    }
+    spans.retain(|s| s.end_bar >= s.start_bar);
 }
 
 /// Clip spans against opposite-direction Phase A anchors. When an

@@ -72,9 +72,23 @@ impl Default for WyckoffConfig {
             min_structural_score: 0.55,
             climax_volume_mult: 3.0,
             volume_sma_bars: 20,
-            climax_range_atr_mult: 2.0,
-            spring_wick_max_pct: 0.15,
-            spring_reclaim_bars: 3,
+            // 2026-04-27 chart audit — was 2.0; tightened too far,
+            // 1d/1w climax bars often fail with that. ATR×1.5 is the
+            // Weis convention.
+            climax_range_atr_mult: 1.5,
+            // 2026-04-27 chart audit — was 0.15 (15%). Real Wyckoff
+            // Springs on higher TFs (1d/1w) routinely pierce 30-45%
+            // of the trading range as the final shakeout flush. The
+            // tight 15% gate suppressed every multi-month BTC Spring
+            // visible to the eye on 1w. 0.40 admits genuine
+            // climactic flushes while still rejecting all-out
+            // breakdowns (>40% pierce = trend continuation, not
+            // Spring).
+            spring_wick_max_pct: 0.40,
+            // 2026-04-27 chart audit — was 3 bars. On 1w that's a
+            // 3-week reclaim; on 4h it's only 12 hours. 5 bars is a
+            // better universal default (≈ 1 swing across timeframes).
+            spring_reclaim_bars: 5,
             range_max_width_pct: 0.12,
             range_min_bars: 20,
             sos_amplifier: 1.5,
@@ -83,13 +97,18 @@ impl Default for WyckoffConfig {
             st_proximity_pct: 0.015,
             st_volume_max_mult: 0.85,
             lps_lookforward_bars: 30,
-            // FAZ 26 backlog (B-CTX-MM-1) — Wyckoff doctrine: real
-            // Spring fires on HEAVY volume (sellers exhausted on the
-            // wick). 1.0 = baseline-or-better gate; below that the
-            // event is suppressed entirely. 2.5 = saturate at max
-            // score (3×+ baseline = textbook climactic).
-            spring_min_volume_mult: 1.0,
-            spring_max_volume_mult: 2.5,
+            // 2026-04-27 chart audit — was 1.0 floor. Genuine
+            // Springs at 1w / 1d sometimes have volume slightly
+            // below SMA when the broader market is quiet (the
+            // SHAKEOUT version of a Spring, less climactic).
+            // Lowered to 0.85 so muted-volume shakeouts still fire.
+            spring_min_volume_mult: 0.85,
+            // 2026-04-27 chart audit — was 2.5. 1w / 1d Springs
+            // routinely have 4-6× SMA volume during major
+            // capitulations; capping at 2.5 disqualified them.
+            // 5.0 saturates the score at 5× and lets the very
+            // heavy bars through.
+            spring_max_volume_mult: 5.0,
         }
     }
 }

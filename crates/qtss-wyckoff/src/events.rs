@@ -165,16 +165,24 @@ pub fn eval_selling_climax(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEven
             continue;
         }
         let body = bar_close(bar) - bar.open.to_f64().unwrap_or(0.0);
-        // SC = wide-range, high-volume bar with a long LOWER wick
-        // (panic flush + rejection). Body sign relaxed: classic SC
-        // often has a NEUTRAL or even slightly positive body
-        // (capitulation bottoms reverse intra-bar). Body must just
-        // not be a strong continuation up — that would be a SOS
-        // not a SC. Threshold: body ≤ 20% of range allowed.
+        // SC = wide-range, high-volume bar with EITHER a long
+        // lower wick (intra-bar reclaim) OR a wide bear body
+        // (panic close at low). Two flavours of capitulation;
+        // both qualify. The original `body <= 20% AND lower_wick
+        // > 40%` gate accepted ONLY the wick-reclaim flavour and
+        // suppressed every panic-close SC visible on 1w / 1d
+        // (chart audit 2026-04-27).
         let lower_wick = bar.open.to_f64().unwrap_or(0.0).min(bar_close(bar)) - bar_low(bar);
         let range = bar_range(bar);
-        let weak_body = body <= range * 0.2;
-        if weak_body && lower_wick > range * 0.4 {
+        let body_pct = body / range.max(1e-9);
+        let wick_pct = lower_wick / range.max(1e-9);
+        // Either: small body (≤ 40%) AND any lower wick (>= 20%) —
+        //         classic Wyckoff SC with intra-bar reclaim.
+        // Or:     big bear body (≤ -50%) — panic close at low,
+        //         the capitulation completed without a reclaim.
+        let intra_bar_reclaim = body_pct <= 0.40 && wick_pct >= 0.20;
+        let panic_close = body_pct <= -0.50;
+        if intra_bar_reclaim || panic_close {
             out.push(WyckoffEvent {
                 kind: WyckoffEventKind::Sc,
                 variant: "bull",
@@ -226,12 +234,19 @@ pub fn eval_buying_climax(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent
         let body = bar_close(bar) - bar.open.to_f64().unwrap_or(0.0);
         let upper_wick = bar_high(bar) - bar.open.to_f64().unwrap_or(0.0).max(bar_close(bar));
         let range = bar_range(bar);
-        // BC mirror of SC: weak (any near-zero or slightly negative)
-        // body OK as long as the upper wick dominates — classic
-        // blowoff top often has a small body with a long upper wick
-        // showing rejection of the high.
-        let weak_body = body >= range * -0.2;
-        if weak_body && upper_wick > range * 0.4 {
+        // BC mirror of SC. Two flavours:
+        //   1. Intra-bar rejection (small body, long upper wick) —
+        //      blow-off top with sellers stepping in mid-bar.
+        //   2. Euphoric close (huge bull body) — final FOMO bar
+        //      that closes near the high without a reclaim.
+        // Original gate `body >= -20% AND upper_wick > 40%`
+        // accepted only flavour 1; flavour-2 BCs disappeared from
+        // 1w / 1d charts (chart audit 2026-04-27).
+        let body_pct = body / range.max(1e-9);
+        let wick_pct = upper_wick / range.max(1e-9);
+        let intra_bar_rejection = body_pct >= -0.40 && wick_pct >= 0.20;
+        let euphoric_close = body_pct >= 0.50;
+        if intra_bar_rejection || euphoric_close {
             out.push(WyckoffEvent {
                 kind: WyckoffEventKind::Bc,
                 variant: "bear",
@@ -1077,6 +1092,132 @@ pub fn eval_test_distribution(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffE
     out
 }
 
+/// 2026-04-28 — eval_ut: Phase B Upthrust (UT / UA per Trading
+/// Wyckoff). Minor pierce-then-reject of a recent range high
+/// INSIDE the trading range. Distinguished from Phase C UTAD by:
+///   - Smaller volume gate (UT happens during low-volume Phase B
+///     while UTAD is the climactic Phase C high-volume blow-off)
+///   - Smaller pierce depth allowed
+///   - No trend-top requirement (UT can happen anywhere in Phase B)
+///
+/// Geometry: bar high pierces 20-bar range high by 0.1-0.5%
+/// (small pierce — minor upthrust, not a blow-off), then closes
+/// back BELOW the range high in the same bar or the next bar.
+/// Volume: any (no climax requirement).
+pub fn eval_ut(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
+    let mut out = Vec::new();
+    let n = bars.len();
+    if n < 20 {
+        return out;
+    }
+    let start = n.saturating_sub(cfg.scan_lookback);
+    for i in start.max(20)..n {
+        let bar = &bars[i];
+        let (hi, _, _) = match recent_range(bars, i, 20) {
+            Some(x) => x,
+            None => continue,
+        };
+        let bar_h = bar_high(bar);
+        let pierce = bar_h - hi;
+        if pierce <= 0.0 {
+            continue;
+        }
+        let pierce_pct = pierce / hi.max(1e-9);
+        // 0.1% to 0.5% pierce — minor upthrust. Larger pierces are
+        // either UTAD (handled separately with trend gate) or
+        // genuine breakouts.
+        if !(0.001..=0.005).contains(&pierce_pct) {
+            continue;
+        }
+        // Reject — close below range high within 2 bars.
+        let end_r = (i + 2).min(n - 1);
+        let mut rejected = false;
+        for k in i..=end_r {
+            if bar_close(&bars[k]) < hi {
+                rejected = true;
+                break;
+            }
+        }
+        if !rejected {
+            continue;
+        }
+        out.push(WyckoffEvent {
+            kind: WyckoffEventKind::Ut,
+            variant: "bear",
+            score: 0.50,
+            bar_index: i,
+            reference_price: bar_h,
+            volume_ratio: 0.0,
+            range_ratio: pierce_pct,
+            note: format!(
+                "UT/UA (Phase B upthrust): pierced range top {:.2} by {:.2}%, rejected",
+                hi,
+                pierce_pct * 100.0
+            ),
+        });
+    }
+    out
+}
+
+/// 2026-04-28 — eval_msow: minor Sign of Weakness inside Phase B
+/// (Trading Wyckoff "ST as SOW / mSOW"). Wide-range bear bar
+/// during the building-cause phase that DOESN'T yet break the
+/// range — signals supply leaning into demand. Differs from the
+/// Phase D SOW (eval_sow) by:
+///   - Lower volume / range threshold (SOW is the breakout bar
+///     with full conviction; mSOW is a probe within the range)
+///   - Bar low must stay ABOVE the range low (no breakout)
+pub fn eval_msow(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
+    let mut out = Vec::new();
+    let n = bars.len();
+    if n < 20 + (cfg.volume_sma_bars as usize) {
+        return out;
+    }
+    let start = n.saturating_sub(cfg.scan_lookback);
+    for i in start.max(20.max(cfg.volume_sma_bars as usize))..n {
+        let bar = &bars[i];
+        let (_, lo, _) = match recent_range(bars, i, 20) {
+            Some(x) => x,
+            None => continue,
+        };
+        // Bar must STAY inside the range (no breakdown).
+        if bar_low(bar) <= lo {
+            continue;
+        }
+        let avg = sma_volume(bars, i, cfg.volume_sma_bars as usize);
+        if avg < 1e-9 {
+            continue;
+        }
+        let vol_ratio = bar_vol(bar) / avg;
+        let a = atr(bars, i, 14).max(1e-9);
+        let range_ratio = bar_range(bar) / a;
+        // mSOW thresholds: lower than the Phase D SOW (sos_amplifier).
+        // 1.2× volume + 1.0× ATR is the floor.
+        if vol_ratio < 1.2 || range_ratio < 1.0 {
+            continue;
+        }
+        let body = bar_close(bar) - bar.open.to_f64().unwrap_or(0.0);
+        let body_pct = body / bar_range(bar).max(1e-9);
+        // Real mSOW is a wide bear bar; require body <= -40%.
+        if body_pct > -0.40 {
+            continue;
+        }
+        out.push(WyckoffEvent {
+            kind: WyckoffEventKind::Msow,
+            variant: "bear",
+            score: 0.45,
+            bar_index: i,
+            reference_price: bar_close(bar),
+            volume_ratio: vol_ratio,
+            range_ratio,
+            note: format!(
+                "mSOW (Phase B): wide bear bar inside range, vol {vol_ratio:.1}× SMA"
+            ),
+        });
+    }
+    out
+}
+
 pub static WYCKOFF_SPECS: &[WyckoffSpec] = &[
     WyckoffSpec { name: "ps",        kind: WyckoffEventKind::Ps,     eval: eval_ps },
     WyckoffSpec { name: "sc",        kind: WyckoffEventKind::Sc,     eval: eval_selling_climax },
@@ -1090,6 +1231,9 @@ pub static WYCKOFF_SPECS: &[WyckoffSpec] = &[
     WyckoffSpec { name: "bc",        kind: WyckoffEventKind::Bc,     eval: eval_buying_climax },
     WyckoffSpec { name: "utad",      kind: WyckoffEventKind::Utad,   eval: eval_utad },
     WyckoffSpec { name: "sow",       kind: WyckoffEventKind::Sow,    eval: eval_sow },
+    // 2026-04-28 — Phase B intra-range Upthrust + minor SoW.
+    WyckoffSpec { name: "ut",        kind: WyckoffEventKind::Ut,     eval: eval_ut },
+    WyckoffSpec { name: "msow",      kind: WyckoffEventKind::Msow,   eval: eval_msow },
     // FAZ 25.4.C — distribution-side variants.
     WyckoffSpec { name: "ar_dist",   kind: WyckoffEventKind::Ar,     eval: eval_ar_distribution },
     WyckoffSpec { name: "st_dist",   kind: WyckoffEventKind::St,     eval: eval_st_distribution },
