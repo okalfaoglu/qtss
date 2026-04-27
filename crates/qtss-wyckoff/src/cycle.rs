@@ -771,18 +771,122 @@ fn source_priority(
     a: WyckoffCycleSource,
     b: WyckoffCycleSource,
 ) -> WyckoffCycleSource {
-    fn rank(s: WyckoffCycleSource) -> u8 {
-        match s {
-            WyckoffCycleSource::Confluent => 3,
-            WyckoffCycleSource::Elliott => 2,
-            WyckoffCycleSource::Event => 1,
-        }
-    }
-    if rank(a) >= rank(b) {
+    if source_rank(a) >= source_rank(b) {
         a
     } else {
         b
     }
+}
+
+fn source_rank(s: WyckoffCycleSource) -> u8 {
+    match s {
+        WyckoffCycleSource::Confluent => 3,
+        WyckoffCycleSource::Elliott => 2,
+        WyckoffCycleSource::Event => 1,
+    }
+}
+
+/// BUG3 (round 2 — 2026-04-27) — Resolve overlapping DIFFERENT-phase
+/// tiles by source priority + length tiebreak.
+///
+/// `merge_cycles_with_confluence` only pairs SAME-phase tiles. When
+/// the event-driven detector flags Distribution [bar 100, 200] and
+/// the Elliott-anchored detector flags Markdown [bar 110, 250] for
+/// the same slot, the merger's phase guard rejects both, and they
+/// flow through as separate overlapping boxes. The chart then shows
+/// nested rectangles for the SAME time period — exactly what the
+/// user reported with ETHUSDT 1h Z1: a giant Distribution box with
+/// Markdown and Accumulation tiles drawn INSIDE it.
+///
+/// Wyckoff doctrine demands a strict phase alternation per slot:
+/// Accumulation → Markup → Distribution → Markdown → Accumulation
+/// (or substages of those). At any single bar there is exactly ONE
+/// active phase; concurrent phases are an artefact of two
+/// independent detection paths emitting their own opinion.
+///
+/// This pass enforces a single non-overlapping timeline by:
+///   1. Sorting tiles by source priority DESC (Confluent > Elliott >
+///      Event), then by length DESC (longer = more confident).
+///   2. Walking the sorted list — each tile is "placed" by trimming
+///      it against everything already placed. Higher-priority tiles
+///      always survive intact; lower-priority tiles get clipped to
+///      the gaps between higher-priority neighbours.
+///   3. A tile that gets fully covered (no gap left) is dropped.
+///
+/// The output is sorted by start_bar and never has two tiles whose
+/// [start, end] ranges overlap. Different-phase trimming preserves
+/// the macroscopic Wyckoff narrative: where event and Elliott
+/// disagree on phase boundaries, the higher-conviction (Confluent)
+/// boundary wins, and the lower-conviction tile compresses to the
+/// margins where the higher-priority detector had no opinion.
+pub fn enforce_non_overlap(
+    cycles: Vec<WyckoffCycle>,
+) -> Vec<WyckoffCycle> {
+    if cycles.is_empty() {
+        return cycles;
+    }
+    let mut sorted = cycles;
+    // Priority DESC, then length DESC (longer tiles more likely to
+    // be the macroscopic phase rather than a sub-event).
+    sorted.sort_by(|a, b| {
+        let ra = source_rank(a.source);
+        let rb = source_rank(b.source);
+        rb.cmp(&ra).then_with(|| {
+            let la = a.end_bar.saturating_sub(a.start_bar);
+            let lb = b.end_bar.saturating_sub(b.start_bar);
+            lb.cmp(&la)
+        })
+    });
+
+    let mut placed: Vec<WyckoffCycle> = Vec::new();
+
+    for c in sorted {
+        // Trim c against every already-placed tile. We keep a list
+        // of "alive" sub-segments of c that have not yet been
+        // claimed by a higher-priority neighbour.
+        let mut alive: Vec<(usize, usize)> =
+            vec![(c.start_bar, c.end_bar)];
+        for p in &placed {
+            let mut next_alive: Vec<(usize, usize)> =
+                Vec::with_capacity(alive.len() + 1);
+            for (s, e) in &alive {
+                let s = *s;
+                let e = *e;
+                let ovs = s.max(p.start_bar);
+                let ove = e.min(p.end_bar);
+                if ovs >= ove {
+                    // No intersection — keep segment whole.
+                    next_alive.push((s, e));
+                    continue;
+                }
+                // Intersection [ovs, ove] is owned by p — drop it
+                // from c. Keep the parts before and after.
+                if s < ovs {
+                    next_alive.push((s, ovs));
+                }
+                if ove < e {
+                    next_alive.push((ove, e));
+                }
+            }
+            alive = next_alive;
+            if alive.is_empty() {
+                break;
+            }
+        }
+
+        // Emit one clipped tile per surviving segment.
+        for (s, e) in alive {
+            if e > s {
+                let mut clone = c.clone();
+                clone.start_bar = s;
+                clone.end_bar = e;
+                placed.push(clone);
+            }
+        }
+    }
+
+    placed.sort_by_key(|c| c.start_bar);
+    placed
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
@@ -1287,6 +1391,104 @@ mod tests {
         assert_eq!(out[0].phase, WyckoffCyclePhase::Accumulation);
         assert_eq!(out[1].phase, WyckoffCyclePhase::Markup);
         assert_eq!(out[2].phase, WyckoffCyclePhase::Accumulation);
+    }
+
+    // BUG3 round 2 — overlapping different-phase tiles must collapse
+    // to a single non-overlapping timeline. Higher-priority source
+    // (Confluent > Elliott > Event) wins the contested bars; lower-
+    // priority tiles compress into the surrounding gaps.
+    #[test]
+    fn enforce_non_overlap_clips_lower_priority_inside_higher() {
+        let make = |source, phase, start: usize, end: usize| WyckoffCycle {
+            phase,
+            source,
+            start_bar: start,
+            end_bar: end,
+            start_price: 100.0,
+            end_price: 110.0,
+            phase_high: 115.0,
+            phase_low: 95.0,
+            completed: true,
+            source_pattern_id: None,
+        };
+        // Event tile spans [0, 200] — long but lowest priority.
+        // Elliott tile [50, 150] — different phase, mid priority.
+        // Result: Elliott wins [50, 150]; Event survives only on
+        // the wings [0, 50] and [150, 200].
+        let cycles = vec![
+            make(WyckoffCycleSource::Event, WyckoffCyclePhase::Distribution, 0, 200),
+            make(WyckoffCycleSource::Elliott, WyckoffCyclePhase::Markdown, 50, 150),
+        ];
+        let out = enforce_non_overlap(cycles);
+        assert_eq!(out.len(), 3);
+        // Sorted by start_bar.
+        assert_eq!(out[0].source, WyckoffCycleSource::Event);
+        assert_eq!(out[0].start_bar, 0);
+        assert_eq!(out[0].end_bar, 50);
+        assert_eq!(out[1].source, WyckoffCycleSource::Elliott);
+        assert_eq!(out[1].start_bar, 50);
+        assert_eq!(out[1].end_bar, 150);
+        assert_eq!(out[2].source, WyckoffCycleSource::Event);
+        assert_eq!(out[2].start_bar, 150);
+        assert_eq!(out[2].end_bar, 200);
+    }
+
+    // Same-priority overlap: longer tile wins. Three event tiles,
+    // the longest claims its full span; the shorter ones compress.
+    #[test]
+    fn enforce_non_overlap_uses_length_as_tiebreaker() {
+        let make = |phase, start: usize, end: usize| WyckoffCycle {
+            phase,
+            source: WyckoffCycleSource::Event,
+            start_bar: start,
+            end_bar: end,
+            start_price: 100.0,
+            end_price: 110.0,
+            phase_high: 115.0,
+            phase_low: 95.0,
+            completed: true,
+            source_pattern_id: None,
+        };
+        let cycles = vec![
+            make(WyckoffCyclePhase::Markup, 10, 60),         // len 50
+            make(WyckoffCyclePhase::Distribution, 0, 100),   // len 100 (winner)
+            make(WyckoffCyclePhase::Accumulation, 70, 90),   // len 20
+        ];
+        let out = enforce_non_overlap(cycles);
+        // Longest Distribution claims [0, 100] entirely. Markup
+        // [10, 60] is fully inside → dropped. Accumulation [70, 90]
+        // is fully inside → dropped.
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].phase, WyckoffCyclePhase::Distribution);
+        assert_eq!(out[0].start_bar, 0);
+        assert_eq!(out[0].end_bar, 100);
+    }
+
+    // Non-overlapping tiles pass through untouched.
+    #[test]
+    fn enforce_non_overlap_preserves_disjoint_tiles() {
+        let make = |phase, start: usize, end: usize| WyckoffCycle {
+            phase,
+            source: WyckoffCycleSource::Elliott,
+            start_bar: start,
+            end_bar: end,
+            start_price: 100.0,
+            end_price: 110.0,
+            phase_high: 115.0,
+            phase_low: 95.0,
+            completed: true,
+            source_pattern_id: None,
+        };
+        let cycles = vec![
+            make(WyckoffCyclePhase::Accumulation, 0, 50),
+            make(WyckoffCyclePhase::Markup, 50, 100),
+            make(WyckoffCyclePhase::Distribution, 100, 150),
+        ];
+        let out = enforce_non_overlap(cycles);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].phase, WyckoffCyclePhase::Accumulation);
+        assert_eq!(out[1].phase, WyckoffCyclePhase::Markup);
+        assert_eq!(out[2].phase, WyckoffCyclePhase::Distribution);
     }
 
     // Confluent must beat both Elliott and Event in source priority.

@@ -18,8 +18,8 @@ use qtss_storage::market_bars::{self, MarketBarRow};
 use qtss_wyckoff::{
     boost_with_phase_c_events, detect_cycles_for_slot,
     detect_cycles_from_elliott, detect_events, detect_ranges,
-    dedupe_consecutive_same_phase, filter_phase_c_events_in_context,
-    merge_cycles_with_confluence,
+    dedupe_consecutive_same_phase, enforce_non_overlap,
+    filter_phase_c_events_in_context, merge_cycles_with_confluence,
     ElliottSegment, ElliottSegmentKind, WyckoffBias, WyckoffConfig,
     WyckoffCycle, WyckoffCyclePhase, WyckoffCycleSource, WyckoffEvent,
     WyckoffPhaseTracker, WyckoffRange,
@@ -223,14 +223,53 @@ async fn process_symbol(
             0.5,
         );
 
-        // (3c) BUG3 — Wyckoff doctrine demands a strict
-        // Acc→Markup→Dist→Markdown alternation. The merge step pairs
-        // ONE event with ONE Elliott tile but doesn't squash adjacent
-        // same-phase tiles, so the chart renders 2-3 boxes stacked
-        // for the same macro Accumulation. Coalesce them into a
-        // single spanning tile, preserving the highest-priority
-        // source tag (Confluent > Elliott > Event).
+        // (3c) BUG3 round 1 — collapse ADJACENT same-phase tiles
+        // (e.g. 3 sequential Accumulations) into one spanning tile.
         let merged = dedupe_consecutive_same_phase(merged);
+
+        // (3d) BUG3 round 2 (2026-04-27) — resolve OVERLAPPING
+        // DIFFERENT-phase tiles. Event-driven and Elliott-anchored
+        // detectors run in parallel; when they disagree on phase
+        // boundaries (e.g. Event flags Distribution at the BC
+        // climax while Elliott still calls the same window Markup
+        // because W5 has not printed yet), the merger leaves both
+        // tiles in place and the chart renders them stacked. The
+        // user reported this on ETHUSDT 1h Z1: a giant Distribution
+        // box with Markdown and Accumulation tiles drawn INSIDE.
+        // `enforce_non_overlap` clips lower-priority tiles to the
+        // gaps where the higher-priority detector had no opinion,
+        // producing a single non-overlapping timeline per slot.
+        let merged = enforce_non_overlap(merged);
+
+        // (3e) Re-fuse — clipping in (3d) can create new adjacent
+        // same-phase tiles when a higher-priority middle tile is
+        // skipped past. Run dedupe a second time to collapse them.
+        let merged = dedupe_consecutive_same_phase(merged);
+
+        // (3f) BUG3 round 2 — clean stale cycle_* rows for this slot
+        // before writing the fresh non-overlapping set. write_cycle's
+        // ON CONFLICT key includes (start_time, end_time), which means
+        // old tiles whose boundaries shifted under enforce_non_overlap
+        // get LEFT BEHIND and the chart still renders them stacked
+        // alongside the corrected ones. Delete first, then insert.
+        // The cycle tile count per slot is small (~tens) so this is
+        // cheap.
+        sqlx::query(
+            r#"DELETE FROM detections
+                WHERE exchange = $1 AND segment = $2
+                  AND symbol = $3 AND timeframe = $4
+                  AND slot = $5
+                  AND pattern_family = 'wyckoff'
+                  AND subkind LIKE 'cycle\_%' ESCAPE '\'
+                  AND mode = 'live'"#,
+        )
+        .bind(&sym.exchange)
+        .bind(&sym.segment)
+        .bind(&sym.symbol)
+        .bind(&sym.interval)
+        .bind(slot)
+        .execute(pool)
+        .await?;
 
         for c in &merged {
             written += write_cycle(pool, sym, &chrono, c, slot).await?;
