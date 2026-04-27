@@ -37,6 +37,8 @@ pub async fn persist_report(
         .data_availability
         .as_ref()
         .map(|a| serde_json::to_value(a).unwrap_or_else(|_| serde_json::json!(null)));
+    let equity_curve = serde_json::to_value(&report.equity_curve)
+        .unwrap_or_else(|_| serde_json::json!([]));
 
     sqlx::query(
         r#"INSERT INTO iq_backtest_runs (
@@ -49,11 +51,12 @@ pub async fn persist_report(
               gross_pnl, net_pnl, starting_equity, final_equity,
               peak_equity, max_drawdown_pct,
               loss_reason_counts, avg_loss_components,
-              trade_log_path, data_availability
+              trade_log_path, data_availability, equity_curve
            ) VALUES (
               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
               $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-              $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33
+              $23, $24, $25, $26, $27, $28, $29, $30, $31, $32,
+              $33, $34
            )"#,
     )
     .bind(id)
@@ -89,6 +92,7 @@ pub async fn persist_report(
     .bind(&avg_loss_components)
     .bind(trade_log_path)
     .bind(availability)
+    .bind(&equity_curve)
     .execute(pool)
     .await?;
     Ok(id)
@@ -195,7 +199,8 @@ pub async fn get_run_detail(
                   expectancy_pct, sharpe_ratio,
                   gross_pnl, net_pnl, starting_equity, final_equity,
                   peak_equity, max_drawdown_pct,
-                  trade_log_path, created_at, data_availability
+                  trade_log_path, created_at, data_availability,
+                  equity_curve
              FROM iq_backtest_runs
             WHERE id = $1"#,
     )
@@ -233,6 +238,9 @@ pub async fn get_run_detail(
         "created_at":      row.try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")?,
         "data_availability": row.try_get::<Option<serde_json::Value>, _>("data_availability")
                                 .ok().flatten(),
+        "equity_curve":      row.try_get::<Option<serde_json::Value>, _>("equity_curve")
+                                .ok().flatten()
+                                .unwrap_or(serde_json::json!([])),
     });
     Ok(Some((cfg, detail)))
 }

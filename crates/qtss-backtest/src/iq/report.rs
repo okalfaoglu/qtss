@@ -9,6 +9,7 @@
 //! For deeper analysis the JSONL trade log is the source of truth;
 //! this report is the concise snapshot.
 
+use chrono::{DateTime, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,26 @@ use super::attribution::{OutcomeAttribution, OutcomeClass};
 use super::availability::DataAvailabilityReport;
 use super::config::IqBacktestConfig;
 use super::trade::IqTrade;
+
+/// One point on the equity curve — emitted as each closed trade lands
+/// in the aggregator. Pre-cost `gross_pnl_cum` and post-cost
+/// `net_pnl_cum` are both retained so the GUI can show the cost drag
+/// visually if the operator wants it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EquityPoint {
+    /// Sequential trade index (0-based, in close-time order).
+    pub trade_index: u64,
+    /// Trade exit time (or entry time if still open at end).
+    pub time: DateTime<Utc>,
+    /// Cumulative net PnL including this trade.
+    pub net_pnl_cum: Decimal,
+    /// Equity = starting_equity + net_pnl_cum.
+    pub equity: Decimal,
+    /// Running peak equity up to this point.
+    pub peak_equity: Decimal,
+    /// Drawdown from running peak, expressed as percentage.
+    pub drawdown_pct: f64,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IqBacktestReport {
@@ -64,6 +85,15 @@ pub struct IqBacktestReport {
     /// reason a run produces 0 trades despite a populated tape.
     #[serde(default)]
     pub data_availability: Option<DataAvailabilityReport>,
+
+    // ── Equity curve (per-trade time series) ──────────────────────
+    /// One point per closed trade in close-time order. Lets the GUI
+    /// draw the cumulative PnL curve and the drawdown shape without
+    /// re-streaming the JSONL trade log. `Vec` always populated even
+    /// when zero trades fired (so the FE doesn't have to guard for
+    /// `None`).
+    #[serde(default)]
+    pub equity_curve: Vec<EquityPoint>,
 }
 
 impl IqBacktestReport {
@@ -105,6 +135,7 @@ impl IqBacktestReport {
             loss_reason_counts: BTreeMap::new(),
             avg_loss_components: BTreeMap::new(),
             data_availability: None,
+            equity_curve: Vec::new(),
         }
     }
 }
@@ -128,7 +159,18 @@ pub fn aggregate(
     let mut comp_sums: BTreeMap<String, f64> = BTreeMap::new();
     let mut comp_counts: BTreeMap<String, u64> = BTreeMap::new();
 
-    for (t, attr) in trades {
+    // Walk trades in CLOSE-TIME order so the equity curve runs
+    // chronologically. The runner appends trades as they close, so
+    // input order is already ~chronological, but with concurrent
+    // open trades different trades can close on the same bar in any
+    // detector-emit order. Sort defensively. Trades still open at
+    // the end of the window have exit_time = None — bucket them last
+    // (they don't contribute to the curve until they close anyway).
+    let mut ordered: Vec<&(IqTrade, OutcomeAttribution)> =
+        trades.iter().collect();
+    ordered.sort_by_key(|(t, _)| t.exit_time.unwrap_or(t.entry_time));
+
+    for (idx, (t, attr)) in ordered.iter().enumerate() {
         report.total_trades += 1;
         report.gross_pnl += t.gross_pnl;
         report.net_pnl += t.net_pnl;
@@ -140,6 +182,18 @@ pub fn aggregate(
         if dd_pct > max_dd {
             max_dd = dd_pct;
         }
+        // Equity curve point — one per closed trade. exit_time
+        // present for closed/aborted trades; falls back to entry
+        // time for the open-at-end bucket so the line still has a
+        // tail.
+        report.equity_curve.push(EquityPoint {
+            trade_index: idx as u64,
+            time: t.exit_time.unwrap_or(t.entry_time),
+            net_pnl_cum: report.net_pnl,
+            equity: net_run,
+            peak_equity: peak,
+            drawdown_pct: dd_pct,
+        });
 
         match attr.class {
             OutcomeClass::Win => {

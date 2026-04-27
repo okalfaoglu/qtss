@@ -289,6 +289,138 @@ interface DataAvailabilityRow {
   latest: string | null;
 }
 
+interface EquityPoint {
+  trade_index: number;
+  time: string;
+  net_pnl_cum: string;
+  equity: string;
+  peak_equity: string;
+  drawdown_pct: number;
+}
+
+/// Inline SVG line chart — equity curve + drawdown shading. Avoids
+/// a chart-lib dependency so the bundle stays small. Rendering is
+/// O(n) on points; for 10k+ trade runs we'd downsample but that's
+/// not realistic here.
+function EquityCurveChart({ points }: { points: EquityPoint[] }) {
+  if (points.length === 0) return null;
+  const W = 720;
+  const H = 220;
+  const PADX = 50;
+  const PADY = 12;
+  const equities = points.map((p) => Number(p.equity));
+  const minEq = Math.min(...equities);
+  const maxEq = Math.max(...equities);
+  const range = Math.max(1, maxEq - minEq);
+  const xStep =
+    (W - PADX - 12) / Math.max(1, points.length - 1);
+  const eqPath = points
+    .map((p, i) => {
+      const x = PADX + i * xStep;
+      const y =
+        PADY +
+        ((maxEq - Number(p.equity)) / range) * (H - PADY * 2);
+      return `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+    })
+    .join(" ");
+  // Drawdown ribbon — area between peak and current equity, shaded
+  // red to highlight underwater stretches.
+  const ddPath =
+    points
+      .map((p, i) => {
+        const x = PADX + i * xStep;
+        const y =
+          PADY +
+          ((maxEq - Number(p.peak_equity)) / range) * (H - PADY * 2);
+        return `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+      })
+      .join(" ") +
+    " " +
+    points
+      .slice()
+      .reverse()
+      .map((p, i) => {
+        const x =
+          PADX + (points.length - 1 - i) * xStep;
+        const y =
+          PADY +
+          ((maxEq - Number(p.equity)) / range) * (H - PADY * 2);
+        return `L ${x.toFixed(1)} ${y.toFixed(1)}`;
+      })
+      .join(" ") +
+    " Z";
+  // Y-axis ticks (3 levels: max, mid, min).
+  const ticks = [maxEq, (maxEq + minEq) / 2, minEq];
+  const last = points[points.length - 1];
+  const finalEq = Number(last.equity);
+  const finalNet = Number(last.net_pnl_cum);
+  const finalDd = last.drawdown_pct;
+  return (
+    <div className="rounded border border-zinc-800 bg-zinc-900 p-3">
+      <div className="mb-2 flex items-center justify-between text-xs">
+        <span className="font-semibold uppercase tracking-wider text-zinc-400">
+          Equity curve
+        </span>
+        <span className="font-mono text-zinc-500">
+          final: {finalEq.toFixed(0)} ·{" "}
+          <span
+            className={
+              finalNet >= 0 ? "text-emerald-400" : "text-rose-400"
+            }
+          >
+            {finalNet >= 0 ? "+" : ""}
+            {finalNet.toFixed(0)}
+          </span>{" "}
+          · DD {finalDd.toFixed(1)}%
+        </span>
+      </div>
+      <svg
+        width={W}
+        height={H}
+        viewBox={`0 0 ${W} ${H}`}
+        className="overflow-visible"
+      >
+        {/* Y-axis grid */}
+        {ticks.map((t, i) => {
+          const y =
+            PADY + ((maxEq - t) / range) * (H - PADY * 2);
+          return (
+            <g key={i}>
+              <line
+                x1={PADX}
+                y1={y}
+                x2={W - 8}
+                y2={y}
+                stroke="#27272a"
+                strokeDasharray="2 4"
+              />
+              <text
+                x={PADX - 6}
+                y={y + 3}
+                fill="#71717a"
+                fontSize="10"
+                textAnchor="end"
+                fontFamily="monospace"
+              >
+                {t.toFixed(0)}
+              </text>
+            </g>
+          );
+        })}
+        {/* Drawdown ribbon */}
+        <path d={ddPath} fill="rgba(239,68,68,0.10)" stroke="none" />
+        {/* Equity line */}
+        <path
+          d={eqPath}
+          fill="none"
+          stroke="#10b981"
+          strokeWidth={1.5}
+        />
+      </svg>
+    </div>
+  );
+}
+
 function RunDetailView({ data }: { data: RunDetail }) {
   const cfg = data.config as Record<string, unknown>;
   const report = data.report as Record<string, unknown>;
@@ -301,6 +433,7 @@ function RunDetailView({ data }: { data: RunDetail }) {
   // immediately why a run produced 0 trades (e.g. missing
   // bar_indicator_snapshots → indicator_alignment scorer always 0).
   const availability = ((report.data_availability as { rows?: DataAvailabilityRow[] } | null)?.rows ?? null);
+  const equityCurve = (report.equity_curve as EquityPoint[] | null) ?? [];
 
   const numField = (k: string, decimals = 2) => {
     const v = report[k];
@@ -351,6 +484,9 @@ function RunDetailView({ data }: { data: RunDetail }) {
         />
         <Stat label="Bars" value={numField("bars_processed", 0)} />
       </div>
+
+      {/* Equity curve */}
+      {equityCurve.length > 0 && <EquityCurveChart points={equityCurve} />}
 
       {/* Data availability matrix (BUG BACKTEST) */}
       {availability && availability.length > 0 && (
