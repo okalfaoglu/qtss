@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   createChart,
+  AreaSeries,
   CandlestickSeries,
   LineSeries,
   type IChartApi,
@@ -636,6 +637,15 @@ export function LuxAlgoChart({
     cycle_markdown: true,
     cycle_accumulation: true,
     ranges: true,
+    // 2026-04-27 — canonical 5-phase schematic (Phase A → E)
+    // bracket boxes on top of macro cycles. Default ON so the
+    // operator immediately sees the doctrine layer; toggle off
+    // when only macro phases are wanted.
+    schematic_a: true,
+    schematic_b: true,
+    schematic_c: true,
+    schematic_d: true,
+    schematic_e: true,
     events_climax: false,   // SC, BC
     events_spring: true,    // Spring, UTAD (Phase-C high-conviction)
     events_sos_sow: false,  // SOS, SOW
@@ -2166,6 +2176,105 @@ export function LuxAlgoChart({
 
     const renderWyckoff = (d: ChartWorkspaceDetection) => {
       if (d.anchors.length === 0) return;
+      // 2026-04-27 — canonical 5-phase Wyckoff schematic boxes
+      // (Phase A → E for Accumulation and Distribution sides). The
+      // engine writer persists these via `phases.rs` /
+      // `classify_schematic_phases`. Render as bracket boxes ON TOP
+      // of macro cycles with a thin dashed border + small phase
+      // letter label so the doctrine layer is unmistakable. Colour
+      // is keyed to the side (Accumulation = emerald, Distribution =
+      // rose) so the operator immediately sees which schematic
+      // they're inside.
+      if (d.subkind.startsWith("phase_") && d.anchors.length >= 2) {
+        const m = d.subkind.match(/^phase_([abcde])_(acc|dist)$/);
+        if (!m) return;
+        const phaseLetter = m[1].toUpperCase();
+        const isAcc = m[2] === "acc";
+        // Per-phase filter — defaults all on; operator can drop a
+        // single phase via the Wyckoff settings menu.
+        const phaseFilterKey =
+          `schematic_${m[1]}` as keyof typeof wyckoffFilter;
+        if (!wyckoffFilter[phaseFilterKey]) return;
+        const a0 = d.anchors[0];
+        const a1 = d.anchors[1];
+        const t0 = anchorTime(a0);
+        const t1 = anchorTime(a1);
+        if (t0 === null || t1 === null) return;
+        const sideColor = isAcc ? "#10b981" : "#f43f5e";
+        // Phase-specific opacity hierarchy: A is the "stopping
+        // action" so it gets a stronger border (it's where
+        // structure starts). C and D are actionable so they're
+        // bright. E is the trend leg, kept subtle so it doesn't
+        // dominate the chart for the entire markup leg.
+        const borderAlpha: Record<string, number> = {
+          A: 0.55,
+          B: 0.30,
+          C: 0.65,
+          D: 0.55,
+          E: 0.25,
+        };
+        const fillAlpha: Record<string, number> = {
+          A: 0.06,
+          B: 0.04,
+          C: 0.10,
+          D: 0.07,
+          E: 0.03,
+        };
+        const lo = Number(d.raw_meta?.phase_low) || Number(a0.price);
+        const hi = Number(d.raw_meta?.phase_high) || Number(a1.price);
+        const phaseBox = chart.addSeries(AreaSeries, {
+          topColor: `rgba(${
+            isAcc ? "16,185,129" : "244,63,94"
+          },${fillAlpha[phaseLetter]})`,
+          bottomColor: `rgba(${
+            isAcc ? "16,185,129" : "244,63,94"
+          },${fillAlpha[phaseLetter] * 0.5})`,
+          lineColor: sideColor,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          priceLineVisible: false,
+          lastValueVisible: false,
+        });
+        const _ = borderAlpha;
+        // Build a simple two-point area at the phase's high band so
+        // the chart reads "phase ceiling between t0 and t1". The
+        // dashed border + light fill shows the bracket without
+        // hiding candles.
+        phaseBox.setData([
+          { time: t0, value: hi },
+          { time: t1, value: hi },
+        ]);
+        overlaySeriesRef.current.push(phaseBox);
+        // Floor band — same dashed line at phase_low to close the
+        // box visually. Two areas instead of a primitive rectangle
+        // because lightweight-charts ships no first-class rect API.
+        const floor = chart.addSeries(AreaSeries, {
+          topColor: "rgba(0,0,0,0)",
+          bottomColor: `rgba(${
+            isAcc ? "16,185,129" : "244,63,94"
+          },${fillAlpha[phaseLetter] * 0.4})`,
+          lineColor: sideColor,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          priceLineVisible: false,
+          lastValueVisible: false,
+        });
+        floor.setData([
+          { time: t0, value: lo },
+          { time: t1, value: lo },
+        ]);
+        overlaySeriesRef.current.push(floor);
+        // Phase letter label at the top-left of the box so the
+        // operator can read "Phase B (Accum)" at a glance.
+        attachLabel(
+          t0,
+          hi,
+          `Phase ${phaseLetter} (${isAcc ? "Acc" : "Dist"})`,
+          sideColor,
+          "above",
+        );
+        return;
+      }
       // FAZ 25.4.D — four-phase macro market cycle bands
       // (Accumulation → Markup → Distribution → Markdown). Each cycle
       // segment paints a wide low-alpha backdrop covering the whole
@@ -3286,6 +3395,39 @@ export function LuxAlgoChart({
                 />
                 A-E box
               </label>
+              {/* 2026-04-27 — canonical 5-phase schematic layer.
+                  These render as bracketed dashed boxes on top of
+                  the macro cycle tiles, coloured by side
+                  (emerald = Accum, rose = Dist) with phase letter
+                  label at the top-left. Each phase has its own
+                  toggle so the operator can dial in just C / D
+                  during a hunt for the Spring + breakout combo. */}
+              <span className="ml-2 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+                schematic
+              </span>
+              {(["a", "b", "c", "d", "e"] as const).map((p) => {
+                const key =
+                  `schematic_${p}` as keyof typeof wyckoffFilter;
+                return (
+                  <label
+                    key={p}
+                    className="flex cursor-pointer items-center gap-1"
+                    title={`Phase ${p.toUpperCase()} bracket box`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={wyckoffFilter[key] as boolean}
+                      onChange={(e) =>
+                        setWyckoffFilter((f) => ({
+                          ...f,
+                          [key]: e.target.checked,
+                        }))
+                      }
+                    />
+                    {p.toUpperCase()}
+                  </label>
+                );
+              })}
               <span className="ml-2 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
                 events
               </span>
