@@ -60,10 +60,19 @@ const TF_OPTIONS = ["", "15m", "1h", "4h", "1d", "1w"];
 const DEFAULT_VENUE = "binance";
 const DEFAULT_SEGMENT = "futures";
 
+interface CompareResponse {
+  left: { config: Record<string, unknown>; report: Record<string, unknown> };
+  right: { config: Record<string, unknown>; report: Record<string, unknown> };
+  delta: Record<string, { left: unknown; right: unknown }>;
+}
+
 export default function BacktestStudio() {
   const [symbol, setSymbol] = useState("");
   const [tf, setTf] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Run comparison — when set, the right pane swaps the single-run
+  // detail for a side-by-side diff.
+  const [compareWith, setCompareWith] = useState<string | null>(null);
 
   const runs = useQuery<RunRow[]>({
     queryKey: ["iq-backtest-runs", symbol, tf],
@@ -94,6 +103,19 @@ export default function BacktestStudio() {
     queryKey: ["iq-backtest-run", selectedId],
     queryFn: () => apiFetch(`/v2/iq-backtest/runs/${selectedId}`),
     enabled: !!selectedId,
+  });
+
+  // POST /v2/iq-backtest/compare — server returns both run details
+  // plus a sparse delta block keyed by headline fields.
+  const compare = useQuery<CompareResponse>({
+    queryKey: ["iq-backtest-compare", selectedId, compareWith],
+    queryFn: () =>
+      apiFetch("/v2/iq-backtest/compare", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ left: selectedId, right: compareWith }),
+      }),
+    enabled: !!selectedId && !!compareWith,
   });
 
   // 🔁 Re-run — clone the selected run's config and POST to dispatch.
@@ -209,10 +231,31 @@ export default function BacktestStudio() {
                       onClick={() => setSelectedId(r.id)}
                       className={`cursor-pointer border-t border-zinc-800 hover:bg-zinc-900 ${
                         r.id === selectedId ? "bg-zinc-800" : ""
-                      }`}
+                      } ${r.id === compareWith ? "ring-1 ring-amber-500/40" : ""}`}
                     >
                       <td className="px-2 py-1">
-                        <div className="font-mono text-[11px]">{r.run_tag}</div>
+                        <div className="flex items-center justify-between gap-1">
+                          <div className="font-mono text-[11px]">{r.run_tag}</div>
+                          {selectedId && r.id !== selectedId && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCompareWith(
+                                  compareWith === r.id ? null : r.id,
+                                );
+                              }}
+                              className={`rounded border px-1 py-0 text-[9px] ${
+                                compareWith === r.id
+                                  ? "border-amber-500 text-amber-400"
+                                  : "border-zinc-700 text-zinc-400 hover:border-amber-700"
+                              }`}
+                              title="Compare this run to the selected run"
+                            >
+                              {compareWith === r.id ? "✓ vs" : "vs"}
+                            </button>
+                          )}
+                        </div>
                         <div className="text-[10px] text-zinc-400">
                           {r.symbol} {r.timeframe} ·{" "}
                           <span
@@ -260,6 +303,28 @@ export default function BacktestStudio() {
             <div className="text-sm text-zinc-500">
               {selectedId ? "Loading detail…" : "Select a run to view details."}
             </div>
+          ) : compareWith ? (
+            <>
+              <div className="mb-3 flex items-center justify-between">
+                <div className="text-sm font-semibold">
+                  Run comparison
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCompareWith(null)}
+                  className="rounded border border-zinc-700 bg-zinc-800 px-3 py-1 text-xs hover:bg-zinc-700"
+                >
+                  ✕ exit comparison
+                </button>
+              </div>
+              {compare.isLoading || !compare.data ? (
+                <div className="text-sm text-zinc-500">
+                  Loading comparison…
+                </div>
+              ) : (
+                <CompareView data={compare.data} />
+              )}
+            </>
           ) : (
             <>
               <div className="mb-3 flex items-center gap-3">
@@ -282,6 +347,9 @@ export default function BacktestStudio() {
                     {dispatchStatus}
                   </span>
                 )}
+                <span className="text-[11px] text-zinc-500">
+                  Pick another run's <span className="rounded border border-zinc-700 px-1">vs</span> button in the list to compare.
+                </span>
               </div>
               <RunDetailView data={detail.data} runId={selectedId!} />
             </>
@@ -674,6 +742,189 @@ function RunDetailView({
 
       {/* Trade timeline browser */}
       <TradeTimeline runId={runId} report={report} />
+    </div>
+  );
+}
+
+function CompareView({ data }: { data: CompareResponse }) {
+  // Render the headline numbers that the server's delta map flagged
+  // as different. Each row shows left | right with the side that
+  // performed better tinted green for PnL-style fields.
+  const fmt = (v: unknown) => {
+    if (v === null || v === undefined) return "—";
+    if (typeof v === "number") return v.toFixed(4);
+    if (typeof v === "string") {
+      const n = Number(v);
+      return Number.isFinite(n) ? n.toFixed(4) : v;
+    }
+    return String(v);
+  };
+  const leftReport = data.left.report;
+  const rightReport = data.right.report;
+  const leftCfg = data.left.config as Record<string, unknown>;
+  const rightCfg = data.right.config as Record<string, unknown>;
+  const deltaKeys = Object.keys(data.delta);
+  // For "higher is better" fields, tint the larger value green.
+  // For "lower is better" (drawdown, losses), tint the smaller green.
+  const lowerIsBetter = new Set([
+    "max_drawdown_pct",
+    "losses",
+  ]);
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 text-xs">
+        <div className="rounded border border-emerald-700/40 bg-emerald-900/10 p-3">
+          <div className="text-[10px] uppercase tracking-wider text-emerald-400">
+            Left (selected)
+          </div>
+          <div className="mt-1 font-mono text-sm">
+            {leftCfg.run_tag as string}
+          </div>
+          <div className="text-[10px] text-zinc-400">
+            {(leftCfg.universe as Record<string, string>)?.symbol}{" "}
+            {(leftCfg.universe as Record<string, string>)?.timeframe} ·{" "}
+            {leftCfg.polarity as string}
+          </div>
+        </div>
+        <div className="rounded border border-amber-700/40 bg-amber-900/10 p-3">
+          <div className="text-[10px] uppercase tracking-wider text-amber-400">
+            Right (comparison)
+          </div>
+          <div className="mt-1 font-mono text-sm">
+            {rightCfg.run_tag as string}
+          </div>
+          <div className="text-[10px] text-zinc-400">
+            {(rightCfg.universe as Record<string, string>)?.symbol}{" "}
+            {(rightCfg.universe as Record<string, string>)?.timeframe} ·{" "}
+            {rightCfg.polarity as string}
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded border border-zinc-800 bg-zinc-900 p-3">
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
+          Headline diff ({deltaKeys.length} field
+          {deltaKeys.length === 1 ? "" : "s"} differ)
+        </div>
+        {deltaKeys.length === 0 ? (
+          <div className="text-[11px] text-zinc-500">
+            All headline numbers match — this is unusual; check that you
+            didn't pick the same run twice.
+          </div>
+        ) : (
+          <table className="w-full text-xs">
+            <thead className="text-[10px] uppercase tracking-wider text-zinc-500">
+              <tr>
+                <th className="px-2 py-1 text-left">Field</th>
+                <th className="px-2 py-1 text-right">Left</th>
+                <th className="px-2 py-1 text-right">Right</th>
+                <th className="px-2 py-1 text-right">Δ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {deltaKeys.map((k) => {
+                const lv = Number(data.delta[k]?.left ?? 0);
+                const rv = Number(data.delta[k]?.right ?? 0);
+                const diff = rv - lv;
+                const winner =
+                  lowerIsBetter.has(k)
+                    ? lv < rv
+                      ? "left"
+                      : "right"
+                    : lv > rv
+                      ? "left"
+                      : "right";
+                return (
+                  <tr key={k} className="border-t border-zinc-800">
+                    <td className="px-2 py-1 font-mono">{k}</td>
+                    <td
+                      className={`px-2 py-1 text-right font-mono ${
+                        winner === "left"
+                          ? "text-emerald-400"
+                          : "text-zinc-300"
+                      }`}
+                    >
+                      {fmt(data.delta[k]?.left)}
+                    </td>
+                    <td
+                      className={`px-2 py-1 text-right font-mono ${
+                        winner === "right"
+                          ? "text-emerald-400"
+                          : "text-zinc-300"
+                      }`}
+                    >
+                      {fmt(data.delta[k]?.right)}
+                    </td>
+                    <td
+                      className={`px-2 py-1 text-right font-mono ${
+                        diff > 0
+                          ? "text-emerald-400"
+                          : diff < 0
+                            ? "text-rose-400"
+                            : "text-zinc-500"
+                      }`}
+                    >
+                      {diff >= 0 ? "+" : ""}
+                      {diff.toFixed(2)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Loss-reason side-by-side */}
+      <div className="grid grid-cols-2 gap-3">
+        {[
+          { side: "left", report: leftReport, label: "Left losses" },
+          { side: "right", report: rightReport, label: "Right losses" },
+        ].map(({ side, report, label }) => {
+          const reasons =
+            (report.loss_reason_counts as Record<string, number>) ?? {};
+          const total = Object.values(reasons).reduce(
+            (s, v) => s + v,
+            0,
+          );
+          return (
+            <div
+              key={side}
+              className="rounded border border-zinc-800 bg-zinc-900 p-3"
+            >
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                {label}
+              </div>
+              {Object.keys(reasons).length === 0 ? (
+                <div className="text-[10px] text-zinc-500">
+                  No losses recorded.
+                </div>
+              ) : (
+                <table className="w-full text-[11px]">
+                  <tbody>
+                    {Object.entries(reasons)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([k, v]) => (
+                        <tr
+                          key={k}
+                          className="border-t border-zinc-800"
+                        >
+                          <td className="px-2 py-1 font-mono">{k}</td>
+                          <td className="px-2 py-1 text-right">{v}</td>
+                          <td className="px-2 py-1 text-right text-zinc-500">
+                            {total > 0
+                              ? `${((v / total) * 100).toFixed(0)}%`
+                              : "—"}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
