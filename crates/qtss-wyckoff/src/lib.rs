@@ -49,8 +49,8 @@ pub use events::{
 };
 pub use phase::{WyckoffBias, WyckoffPhase, WyckoffPhaseTracker};
 pub use phases::{
-    classify_schematic_phases, compute_wyckoff_view, EventAnchor,
-    WyckoffPhaseView, WyckoffSchematicDirection, WyckoffSchematicPhase,
-    WyckoffSchematicSpan,
+    classify_elliott_anchored_phases, classify_schematic_phases,
+    compute_wyckoff_view, EventAnchor, WyckoffPhaseView,
+    WyckoffSchematicDirection, WyckoffSchematicPhase, WyckoffSchematicSpan,
 };
 pub use range::{detect_ranges, WyckoffRange};

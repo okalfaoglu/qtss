@@ -298,6 +298,157 @@ fn enforce_intra_side_sequencing(spans: &mut Vec<WyckoffSchematicSpan>) {
     spans.retain(|s| s.end_bar >= s.start_bar);
 }
 
+/// 2026-04-28 — Pruden Elliott-Wyckoff correlation.
+///
+/// Map an Elliott motive + ABC structure into the canonical
+/// Wyckoff Phase A→E sequence so the schematic layer aligns 1:1
+/// with the wave count visible on the chart. Doctrine reference:
+/// Hank Pruden, "The Three Skills of Top Trading"; Trading
+/// Wyckoff "Elliott + Wyckoff Integration".
+///
+/// ## Accumulation
+/// ```text
+/// Bear motive  W3 → W5  ↦  Phase A  (stopping action, climax low)
+/// Bear ABC     X0 → B   ↦  Phase B  (building cause, range)
+/// Bear ABC     B  → C   ↦  Phase C  (Spring at the C low)
+/// Bull motive  W0 → W2  ↦  Phase D  (move out of TR, SOS / LPS)
+/// Bull motive  W2 → W5  ↦  Phase E  (markup leg)
+/// ```
+///
+/// ## Distribution (mirror)
+/// ```text
+/// Bull motive  W3 → W5  ↦  Phase A  (climax high)
+/// Bull ABC     X0 → B   ↦  Phase B
+/// Bull ABC     B  → C   ↦  Phase C  (UTAD at the C high)
+/// Bear motive  W0 → W2  ↦  Phase D  (move out of TR, SOW / LPSY)
+/// Bear motive  W2 → W5  ↦  Phase E  (markdown leg)
+/// ```
+pub fn classify_elliott_anchored_phases(
+    elliott_segments: &[ElliottSegment],
+    bars: &[Bar],
+    direction: WyckoffSchematicDirection,
+    window_start: usize,
+    window_end: usize,
+) -> Vec<WyckoffSchematicSpan> {
+    use crate::cycle::ElliottSegmentKind;
+    let acc = matches!(direction, WyckoffSchematicDirection::Accumulation);
+    let prior_motive_bullish = !acc;
+    let abc_bullish = !acc;
+    let new_motive_bullish = acc;
+    let inside = |seg: &ElliottSegment| -> bool {
+        (seg.start_bar >= window_start && seg.start_bar <= window_end)
+            || (seg.end_bar >= window_start && seg.end_bar <= window_end)
+    };
+    let prior_motive = elliott_segments
+        .iter()
+        .filter(|s| {
+            s.kind == ElliottSegmentKind::Motive
+                && s.bullish == prior_motive_bullish
+                && s.end_bar <= window_start.saturating_add(3)
+        })
+        .max_by_key(|s| s.end_bar);
+    let abc_seg = elliott_segments
+        .iter()
+        .filter(|s| {
+            s.kind == ElliottSegmentKind::Abc
+                && s.bullish == abc_bullish
+                && inside(s)
+        })
+        .min_by_key(|s| s.start_bar);
+    let new_motive = elliott_segments
+        .iter()
+        .filter(|s| {
+            s.kind == ElliottSegmentKind::Motive
+                && s.bullish == new_motive_bullish
+                && s.start_bar >= window_start.saturating_sub(3)
+                && inside(s)
+        })
+        .min_by_key(|s| s.start_bar);
+
+    let mut out: Vec<WyckoffSchematicSpan> = Vec::new();
+    let mk_span = |phase: WyckoffSchematicPhase,
+                   start: usize,
+                   end: usize|
+     -> Option<WyckoffSchematicSpan> {
+        if end < start {
+            return None;
+        }
+        let (hi, lo) = bar_bounds(bars, start, end);
+        Some(WyckoffSchematicSpan {
+            phase,
+            direction,
+            start_bar: start,
+            end_bar: end,
+            phase_high: hi,
+            phase_low: lo,
+            anchor_events: Vec::new(),
+            completed: end < window_end,
+        })
+    };
+    if let Some(seg) = prior_motive {
+        if seg.wave_anchors.len() >= 6 {
+            let (a_start, _) = seg.wave_anchors[3];
+            let (a_end, _) = seg.wave_anchors[5];
+            if let Some(s) = mk_span(WyckoffSchematicPhase::A, a_start, a_end) {
+                out.push(s);
+            }
+        }
+    }
+    if let Some(seg) = abc_seg {
+        if seg.wave_anchors.len() >= 4 {
+            let (x0, _) = seg.wave_anchors[0];
+            let (b, _) = seg.wave_anchors[2];
+            let (c, _) = seg.wave_anchors[3];
+            if let Some(s) = mk_span(WyckoffSchematicPhase::B, x0, b) {
+                out.push(s);
+            }
+            if let Some(s) = mk_span(WyckoffSchematicPhase::C, b, c) {
+                out.push(s);
+            }
+        } else {
+            // Whole-segment fallback: split ABC evenly into B + C.
+            let mid = (seg.start_bar + seg.end_bar) / 2;
+            if let Some(s) =
+                mk_span(WyckoffSchematicPhase::B, seg.start_bar, mid)
+            {
+                out.push(s);
+            }
+            if let Some(s) =
+                mk_span(WyckoffSchematicPhase::C, mid, seg.end_bar)
+            {
+                out.push(s);
+            }
+        }
+    }
+    if let Some(seg) = new_motive {
+        if seg.wave_anchors.len() >= 6 {
+            let (w0, _) = seg.wave_anchors[0];
+            let (w2, _) = seg.wave_anchors[2];
+            let (w5, _) = seg.wave_anchors[5];
+            if let Some(s) = mk_span(WyckoffSchematicPhase::D, w0, w2) {
+                out.push(s);
+            }
+            if let Some(s) = mk_span(WyckoffSchematicPhase::E, w2, w5) {
+                out.push(s);
+            }
+        } else {
+            let dur = seg.end_bar.saturating_sub(seg.start_bar);
+            let pivot = seg.start_bar + (dur * 4) / 10;
+            if let Some(s) =
+                mk_span(WyckoffSchematicPhase::D, seg.start_bar, pivot)
+            {
+                out.push(s);
+            }
+            if let Some(s) =
+                mk_span(WyckoffSchematicPhase::E, pivot, seg.end_bar)
+            {
+                out.push(s);
+            }
+        }
+    }
+    out
+}
+
 /// 2026-04-28 — split a sorted single-side event stream into
 /// CYCLE GROUPS so each Wyckoff cycle on the tape gets its own
 /// A-E span set. Without this, a long chart with multiple Acc

@@ -333,12 +333,36 @@ async fn process_symbol(
             if inside.is_empty() {
                 continue;
             }
-            let phases = qtss_wyckoff::classify_schematic_phases(
+            let event_phases = qtss_wyckoff::classify_schematic_phases(
                 &inside,
                 &bars,
                 tile.end_bar,
             );
-            for span in &phases {
+            // 2026-04-28 — Pruden Elliott-Wyckoff correlation.
+            // The same `segments` Vec we used for cycle macro
+            // classification gets re-purposed here: map Elliott
+            // motive + ABC anchors to Phase A-E inside this Acc /
+            // Dist tile so the (1)..(5)/(a)..(c) wave count on
+            // the chart aligns 1:1 with the schematic boxes.
+            //
+            // Both event-driven AND elliott-anchored spans are
+            // persisted. The chart can render both — they
+            // typically agree, and where they disagree the
+            // operator sees the doctrine layer (Elliott) overlaid
+            // on the volume/wick layer (events).
+            let elliott_phases =
+                qtss_wyckoff::classify_elliott_anchored_phases(
+                    &segments,
+                    &bars,
+                    if is_acc_macro {
+                        qtss_wyckoff::WyckoffSchematicDirection::Accumulation
+                    } else {
+                        qtss_wyckoff::WyckoffSchematicDirection::Distribution
+                    },
+                    tile.start_bar,
+                    tile.end_bar,
+                );
+            for span in event_phases.iter().chain(elliott_phases.iter()) {
                 written +=
                     write_schematic_phase_at_slot(pool, sym, &chrono, span, slot)
                         .await?;
