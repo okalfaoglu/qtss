@@ -39,25 +39,52 @@ pub struct ScoreKey<'a> {
     pub timeframe: &'a str,
 }
 
-/// 12.1 — Structural completion. Reads the iq_structures row
-/// FROZEN at `bar_time` (the most recent advance ≤ that time).
+/// 12.1 — Structural completion. Reads the structural state FROZEN
+/// at `bar_time` (the most recent advance ≤ that time).
+///
+/// 2026-04-27 — switched from `iq_structures` to
+/// `iq_structure_snapshots`. The point-in-time `iq_structures` table
+/// only carries the CURRENT state of every structure — when the live
+/// worker advances a structure, the row is overwritten and the
+/// historical state is lost. The backtest needs a time-series view,
+/// which `iq_structure_snapshots` provides (one row per bar per
+/// tracked structure). Falls back to `iq_structures` when no
+/// snapshot covers the bar so legacy DBs without backfill still
+/// work, just at reduced fidelity.
 pub async fn structural_completion(
     pool: &PgPool,
     k: &ScoreKey<'_>,
     bar_time: DateTime<Utc>,
 ) -> f64 {
+    // Primary path — snapshot table.
     let row = sqlx::query(
         r#"SELECT current_wave, state, raw_meta
-             FROM iq_structures
+             FROM iq_structure_snapshots
             WHERE exchange=$1 AND segment=$2 AND symbol=$3
               AND timeframe=$4
               AND state IN ('candidate','tracking','completed')
-              AND last_advanced_at <= $5
-            ORDER BY last_advanced_at DESC LIMIT 1"#,
+              AND bar_time <= $5
+            ORDER BY bar_time DESC LIMIT 1"#,
     )
     .bind(k.exchange).bind(k.segment).bind(k.symbol).bind(k.timeframe)
     .bind(bar_time)
     .fetch_optional(pool).await.ok().flatten();
+    // Fallback — point-in-time iq_structures (legacy / sparse DBs).
+    let row = match row {
+        Some(r) => Some(r),
+        None => sqlx::query(
+            r#"SELECT current_wave, state, raw_meta
+                 FROM iq_structures
+                WHERE exchange=$1 AND segment=$2 AND symbol=$3
+                  AND timeframe=$4
+                  AND state IN ('candidate','tracking','completed')
+                  AND last_advanced_at <= $5
+                ORDER BY last_advanced_at DESC LIMIT 1"#,
+        )
+        .bind(k.exchange).bind(k.segment).bind(k.symbol).bind(k.timeframe)
+        .bind(bar_time)
+        .fetch_optional(pool).await.ok().flatten(),
+    };
     let Some(r) = row else { return 0.0; };
     let cw: String = r.try_get("current_wave").unwrap_or_default();
     let state: String = r.try_get("state").unwrap_or_default();

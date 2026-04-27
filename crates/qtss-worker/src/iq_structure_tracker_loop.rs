@@ -1102,6 +1102,13 @@ async fn upsert_structure(
         .bind(&update.raw_meta)
         .execute(pool)
         .await?;
+        // Mirror to the snapshot table on every advance. Reading by
+        // bar_time + ON CONFLICT(bar_time) means re-runs on the same
+        // bar are idempotent — the captured_at timestamp is the only
+        // thing that bumps.
+        if advanced {
+            write_structure_snapshot(pool, key, sample, update).await?;
+        }
         Ok(advanced)
     } else {
         insert_fresh(pool, key, sample, update).await?;
@@ -1136,6 +1143,53 @@ async fn insert_fresh(
     .bind(&update.structure_anchors)
     .bind(&update.seed_hash)
     .bind(&update.invalidation_reason)
+    .bind(&update.raw_meta)
+    .execute(pool)
+    .await?;
+    // Time-series snapshot — every fresh insert is also a state
+    // observation at the sample bar's end_time. The backtest's
+    // structural_completion scorer reads from this table to
+    // reconstruct historical state without depending on the
+    // point-in-time iq_structures row (which gets overwritten as
+    // structures advance).
+    write_structure_snapshot(pool, key, sample, update).await?;
+    Ok(())
+}
+
+/// Time-series mirror of iq_structures. Captures the (state,
+/// current_wave, raw_meta) tuple at `sample.end_time` so the
+/// backtest can ask "what did the structure look like at bar T?"
+/// without losing history when the live worker advances the
+/// underlying structure row.
+async fn write_structure_snapshot(
+    pool: &PgPool,
+    key: &(String, String, String, String, i16),
+    sample: &DetectionRow,
+    update: &StructureUpdate,
+) -> anyhow::Result<()> {
+    let (exchange, segment, symbol, timeframe, slot) = key;
+    sqlx::query(
+        r#"INSERT INTO iq_structure_snapshots
+              (exchange, segment, symbol, timeframe, slot,
+               bar_time, state, current_wave, direction, raw_meta)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+           ON CONFLICT (exchange, segment, symbol, timeframe, slot, bar_time)
+           DO UPDATE SET
+               state        = EXCLUDED.state,
+               current_wave = EXCLUDED.current_wave,
+               direction    = EXCLUDED.direction,
+               raw_meta     = EXCLUDED.raw_meta,
+               captured_at  = now()"#,
+    )
+    .bind(exchange)
+    .bind(segment)
+    .bind(symbol)
+    .bind(timeframe)
+    .bind(*slot)
+    .bind(sample.end_time)
+    .bind(&update.state)
+    .bind(&update.current_wave)
+    .bind(sample.direction)
     .bind(&update.raw_meta)
     .execute(pool)
     .await?;
