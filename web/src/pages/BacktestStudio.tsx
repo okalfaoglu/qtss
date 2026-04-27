@@ -973,11 +973,21 @@ function TradeTimeline({
         <div className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
           Per-trade timeline
         </div>
-        {trades.data && (
-          <span className="text-[10px] text-zinc-500">
-            {trades.data.returned}/{trades.data.total_in_file} trades
-          </span>
-        )}
+        <div className="flex items-center gap-3">
+          {trades.data && (
+            <span className="text-[10px] text-zinc-500">
+              {trades.data.returned}/{trades.data.total_in_file} trades
+            </span>
+          )}
+          {/* CSV export — server streams the JSONL flattened to CSV. */}
+          <a
+            href={`/api/v2/iq-backtest/runs/${runId}/trades.csv`}
+            className="rounded border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-[10px] hover:bg-zinc-700"
+            title="Download every trade as CSV (pandas / Excel)"
+          >
+            ⬇ CSV
+          </a>
+        </div>
       </div>
       <div className="mb-2 flex items-center gap-2 text-[11px]">
         <label className="flex items-center gap-1">

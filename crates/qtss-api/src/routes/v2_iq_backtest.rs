@@ -69,6 +69,8 @@ pub fn v2_iq_backtest_router() -> Router<SharedState> {
         .route("/v2/iq-backtest/runs/{id}", get(get_run))
         // Per-trade JSONL stream — powers the trade timeline GUI.
         .route("/v2/iq-backtest/runs/{id}/trades", get(get_run_trades))
+        // CSV export of the per-trade log for pandas / Excel.
+        .route("/v2/iq-backtest/runs/{id}/trades.csv", get(get_run_trades_csv))
         // Side-by-side diff for two runs.
         .route("/v2/iq-backtest/compare", post(compare_runs))
         // Dispatch — queue a fresh run from a config payload.
@@ -296,6 +298,132 @@ async fn get_run_trades(
         total_in_file: total,
         trades,
     }))
+}
+
+/// Streams the per-trade JSONL as a flat CSV for pandas / Excel.
+/// Columns are the most-watched fields off `trade` and `attribution`.
+/// Returns `text/csv` with `Content-Disposition: attachment` so the
+/// browser saves it to disk instead of trying to render it.
+async fn get_run_trades_csv(
+    State(st): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::body::Body;
+    use axum::response::IntoResponse;
+    let row = sqlx::query(
+        r#"SELECT run_tag, trade_log_path
+             FROM iq_backtest_runs
+            WHERE id = $1"#,
+    )
+    .bind(id)
+    .fetch_optional(&st.pool)
+    .await
+    .map_err(|e| {
+        ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?;
+    let Some(row) = row else {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            format!("run {id} not found"),
+        ));
+    };
+    use sqlx::Row;
+    let run_tag: String = row.try_get("run_tag").unwrap_or_default();
+    let trade_log_path: Option<String> =
+        row.try_get("trade_log_path").ok();
+    let Some(path) = trade_log_path else {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "this run has no JSONL trade log; re-run with --log"
+                .to_string(),
+        ));
+    };
+    let raw = match tokio::fs::read_to_string(&path).await {
+        Ok(s) => s,
+        Err(e) => {
+            return Err(ApiError::new(
+                StatusCode::NOT_FOUND,
+                format!("trade log not readable at {path}: {e}"),
+            ));
+        }
+    };
+
+    // Build CSV body. Stream-style writer keeps memory bounded.
+    let mut csv = String::new();
+    csv.push_str(
+        "trade_id,entry_time,exit_time,polarity,entry_price,exit_price,\
+         outcome,bars_held,gross_pnl,net_pnl,net_pnl_pct,\
+         max_favorable_pct,max_adverse_pct,entry_composite_score,\
+         loss_reason,outcome_class\n",
+    );
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let v: serde_json::Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let t = v.get("trade").cloned().unwrap_or(serde_json::Value::Null);
+        let a = v
+            .get("attribution")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        // CSV escape — quote any field containing comma / quote / newline.
+        let cell = |val: &serde_json::Value| -> String {
+            let s = match val {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Null => String::new(),
+                other => other.to_string(),
+            };
+            if s.contains(',') || s.contains('"') || s.contains('\n') {
+                format!("\"{}\"", s.replace('"', "\"\""))
+            } else {
+                s
+            }
+        };
+        let row_csv = format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            cell(t.get("trade_id").unwrap_or(&serde_json::Value::Null)),
+            cell(t.get("entry_time").unwrap_or(&serde_json::Value::Null)),
+            cell(t.get("exit_time").unwrap_or(&serde_json::Value::Null)),
+            cell(t.get("polarity").unwrap_or(&serde_json::Value::Null)),
+            cell(t.get("entry_price").unwrap_or(&serde_json::Value::Null)),
+            cell(t.get("exit_price").unwrap_or(&serde_json::Value::Null)),
+            cell(t.get("outcome").unwrap_or(&serde_json::Value::Null)),
+            cell(t.get("bars_held").unwrap_or(&serde_json::Value::Null)),
+            cell(t.get("gross_pnl").unwrap_or(&serde_json::Value::Null)),
+            cell(t.get("net_pnl").unwrap_or(&serde_json::Value::Null)),
+            cell(t.get("net_pnl_pct").unwrap_or(&serde_json::Value::Null)),
+            cell(t.get("max_favorable_pct").unwrap_or(&serde_json::Value::Null)),
+            cell(t.get("max_adverse_pct").unwrap_or(&serde_json::Value::Null)),
+            cell(
+                t.get("entry_composite_score")
+                    .unwrap_or(&serde_json::Value::Null),
+            ),
+            cell(a.get("loss_reason").unwrap_or(&serde_json::Value::Null)),
+            cell(a.get("class").unwrap_or(&serde_json::Value::Null)),
+        );
+        csv.push_str(&row_csv);
+    }
+
+    let filename = format!("{}_{}.csv", run_tag, id);
+    let response = axum::http::Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "text/csv; charset=utf-8")
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{}\"", filename),
+        )
+        .body(Body::from(csv))
+        .map_err(|e| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                e.to_string(),
+            )
+        })?;
+    Ok(response.into_response())
 }
 
 #[derive(Debug, Deserialize)]
