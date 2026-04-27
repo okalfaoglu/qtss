@@ -632,17 +632,54 @@ pub fn scan_level(
         // oraya kadar gitmiş sen kalkmışsın b yi a-b ortasına koymuşsun."
         // Mini-pivot fallback can insert same-direction-as-A pivots
         // between real Pine port confirmations, breaking the naive
-        // post_w5[1] indexing. We now pick the FIRST opposite-direction
-        // pivot AFTER A — guaranteed to be a real B candidate, not a
-        // stuttering mini-low between two Pine lows.
+        // post_w5[1] indexing.
+        //
+        // 2026-04-27 second user critique (BUG3): "pivot noktası
+        // değişince abc noktaları ile bacaklar değişmiyor." Symptom:
+        // when the pivot tape printed a HIGHER high after the initial
+        // B (bearish ABC: A=low, B=high; subsequent higher high),
+        // `find` was still returning the FIRST opposite-direction
+        // pivot — the now-lower stale value — rather than the new
+        // extreme. The (b) marker on the chart stayed pinned to the
+        // first bounce attempt while the eye saw a clearly higher
+        // high to the right.
+        //
+        // Fix: pick the EXTREME post-A opposite-direction pivot
+        //   bearish ABC (motive +1 → A=low → B=high): MAX price
+        //   bullish ABC (motive -1 → A=high → B=low): MIN price
+        // C still scans for the next same-direction-as-A pivot
+        // AFTER the chosen B (handled in the forming block — this
+        // branch only emits the nascent A/B pair).
         if post_w5.len() >= 2 {
             let a_anchor = post_w5[0];
-            let b_idx_opt = post_w5
+            let b_candidates: Vec<(usize, &PivotPoint)> = post_w5
                 .iter()
                 .enumerate()
                 .skip(1)
-                .find(|(_, p)| p.direction != a_anchor.direction)
-                .map(|(i, _)| i);
+                .filter(|(_, p)| p.direction != a_anchor.direction)
+                .map(|(i, p)| (i, *p))
+                .collect();
+            let b_idx_opt: Option<usize> = if motive.direction == 1 {
+                // Bearish ABC: B is a HIGH → take max price.
+                b_candidates
+                    .iter()
+                    .max_by(|x, y| {
+                        x.1.price
+                            .partial_cmp(&y.1.price)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|(i, _)| *i)
+            } else {
+                // Bullish ABC: B is a LOW → take min price.
+                b_candidates
+                    .iter()
+                    .min_by(|x, y| {
+                        x.1.price
+                            .partial_cmp(&y.1.price)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|(i, _)| *i)
+            };
             // No proper alternation B → forming block below also can't
             // fire (it requires A,B,C alternation too). Skip both.
             // The next tick may emit abc_projected (0 or 1 real pivot
@@ -804,20 +841,71 @@ pub fn scan_level(
         // pollute.
         if post_w5.len() >= 3 {
             let a_anchor = post_w5[0];
-            let b_idx_opt = post_w5
+            // BUG3 — same extreme-selection fix as the nascent
+            // branch. B = max-price (bearish ABC) / min-price
+            // (bullish ABC) over post-A opposite-direction pivots.
+            let b_candidates_f: Vec<(usize, &PivotPoint)> = post_w5
                 .iter()
                 .enumerate()
                 .skip(1)
-                .find(|(_, p)| p.direction != a_anchor.direction)
-                .map(|(i, _)| i);
+                .filter(|(_, p)| p.direction != a_anchor.direction)
+                .map(|(i, p)| (i, *p))
+                .collect();
+            let b_idx_opt = if motive.direction == 1 {
+                b_candidates_f
+                    .iter()
+                    .max_by(|x, y| {
+                        x.1.price
+                            .partial_cmp(&y.1.price)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|(i, _)| *i)
+            } else {
+                b_candidates_f
+                    .iter()
+                    .min_by(|x, y| {
+                        x.1.price
+                            .partial_cmp(&y.1.price)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|(i, _)| *i)
+            };
             let Some(b_idx) = b_idx_opt else { continue; };
             let b_anchor = post_w5[b_idx];
-            let c_idx_opt = post_w5
+            // C must come AFTER the chosen B and continue the
+            // alternation. Symmetric extreme selection: bearish ABC
+            // → C is a low (min price); bullish ABC → C is a high
+            // (max price). Without this the writer would pick the
+            // first dip after B, which on stair-step corrections is
+            // shallower than the actual C target.
+            let c_candidates: Vec<(usize, &PivotPoint)> = post_w5
                 .iter()
                 .enumerate()
                 .skip(b_idx + 1)
-                .find(|(_, p)| p.direction != b_anchor.direction)
-                .map(|(i, _)| i);
+                .filter(|(_, p)| p.direction != b_anchor.direction)
+                .map(|(i, p)| (i, *p))
+                .collect();
+            let c_idx_opt = if motive.direction == 1 {
+                // Bearish ABC: C is a LOW → min price.
+                c_candidates
+                    .iter()
+                    .min_by(|x, y| {
+                        x.1.price
+                            .partial_cmp(&y.1.price)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|(i, _)| *i)
+            } else {
+                // Bullish ABC: C is a HIGH → max price.
+                c_candidates
+                    .iter()
+                    .max_by(|x, y| {
+                        x.1.price
+                            .partial_cmp(&y.1.price)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|(i, _)| *i)
+            };
             let Some(c_idx) = c_idx_opt else { continue; };
             let c_anchor = post_w5[c_idx];
             if a_anchor.direction != p5.direction
