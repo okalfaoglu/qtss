@@ -41,6 +41,18 @@ interface RunDetail {
   report: Record<string, unknown>;
 }
 
+interface TradesResponse {
+  run_id: string;
+  run_tag: string;
+  trade_log_path: string | null;
+  returned: number;
+  total_in_file: number;
+  trades: Array<{
+    trade?: Record<string, unknown>;
+    attribution?: Record<string, unknown>;
+  }>;
+}
+
 const TF_OPTIONS = ["", "15m", "1h", "4h", "1d", "1w"];
 // Defaults match /v2/chart query semantics — operator can override
 // via the inputs once we surface them, but the scoped path needs
@@ -271,7 +283,7 @@ export default function BacktestStudio() {
                   </span>
                 )}
               </div>
-              <RunDetailView data={detail.data} />
+              <RunDetailView data={detail.data} runId={selectedId!} />
             </>
           )}
         </main>
@@ -421,7 +433,13 @@ function EquityCurveChart({ points }: { points: EquityPoint[] }) {
   );
 }
 
-function RunDetailView({ data }: { data: RunDetail }) {
+function RunDetailView({
+  data,
+  runId,
+}: {
+  data: RunDetail;
+  runId: string;
+}) {
   const cfg = data.config as Record<string, unknown>;
   const report = data.report as Record<string, unknown>;
   const universe = (cfg.universe ?? {}) as Record<string, string>;
@@ -654,20 +672,173 @@ function RunDetailView({ data }: { data: RunDetail }) {
         </div>
       )}
 
-      {/* Trade log path hint */}
-      {report.trade_log_path !== undefined && report.trade_log_path !== null && (
-        <div className="rounded border border-zinc-800 bg-zinc-900 p-3">
-          <div className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
-            Per-trade JSONL
-          </div>
-          <div className="mt-1 font-mono text-[11px] text-zinc-200">
-            {report.trade_log_path as string}
-          </div>
-          <div className="mt-2 text-[11px] text-zinc-400">
-            Slice with DuckDB or pandas. See docs/BACKTEST.md for examples.
-          </div>
+      {/* Trade timeline browser */}
+      <TradeTimeline runId={runId} report={report} />
+    </div>
+  );
+}
+
+function TradeTimeline({
+  runId,
+  report,
+}: {
+  runId: string;
+  report: Record<string, unknown>;
+}) {
+  const tradeLogPath = report.trade_log_path as string | null | undefined;
+  const [outcomeFilter, setOutcomeFilter] = useState<string>("");
+  const [reasonFilter, setReasonFilter] = useState<string>("");
+  const trades = useQuery<TradesResponse>({
+    queryKey: ["iq-backtest-trades", runId, outcomeFilter, reasonFilter],
+    queryFn: () => {
+      const qs = new URLSearchParams();
+      qs.set("limit", "500");
+      if (outcomeFilter) qs.set("outcome", outcomeFilter);
+      if (reasonFilter) qs.set("loss_reason", reasonFilter);
+      return apiFetch(
+        `/v2/iq-backtest/runs/${runId}/trades?${qs.toString()}`,
+      );
+    },
+    enabled: !!tradeLogPath,
+  });
+
+  if (!tradeLogPath) {
+    return (
+      <div className="rounded border border-zinc-800 bg-zinc-900 p-3">
+        <div className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+          Per-trade timeline
         </div>
-      )}
+        <div className="mt-2 text-[11px] text-zinc-500">
+          This run was launched without --log; per-trade detail is not
+          available. Re-run with --log to capture the JSONL stream.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded border border-zinc-800 bg-zinc-900 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+          Per-trade timeline
+        </div>
+        {trades.data && (
+          <span className="text-[10px] text-zinc-500">
+            {trades.data.returned}/{trades.data.total_in_file} trades
+          </span>
+        )}
+      </div>
+      <div className="mb-2 flex items-center gap-2 text-[11px]">
+        <label className="flex items-center gap-1">
+          <span className="text-zinc-500">Outcome</span>
+          <select
+            value={outcomeFilter}
+            onChange={(e) => setOutcomeFilter(e.target.value)}
+            className="rounded border border-zinc-700 bg-zinc-900 px-1 py-0.5"
+          >
+            <option value="">(any)</option>
+            <option value="take_profit_full">take_profit_full</option>
+            <option value="take_profit_partial">take_profit_partial</option>
+            <option value="stop_loss">stop_loss</option>
+            <option value="trailing_stop">trailing_stop</option>
+            <option value="timeout">timeout</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-1">
+          <span className="text-zinc-500">Loss reason</span>
+          <select
+            value={reasonFilter}
+            onChange={(e) => setReasonFilter(e.target.value)}
+            className="rounded border border-zinc-700 bg-zinc-900 px-1 py-0.5"
+          >
+            <option value="">(any)</option>
+            <option value="StopLossNoTp">StopLossNoTp</option>
+            <option value="StopLossAfterPartialTp">
+              StopLossAfterPartialTp
+            </option>
+            <option value="TrailingStopAfterMfe">
+              TrailingStopAfterMfe
+            </option>
+            <option value="TimeoutNoProgress">TimeoutNoProgress</option>
+            <option value="TimeoutNegative">TimeoutNegative</option>
+            <option value="MfeBeyondSlButNoTp">MfeBeyondSlButNoTp</option>
+            <option value="CostsOnly">CostsOnly</option>
+            <option value="InvalidationEvent">InvalidationEvent</option>
+          </select>
+        </label>
+      </div>
+      <div className="max-h-[400px] overflow-auto">
+        <table className="w-full text-[11px]">
+          <thead className="sticky top-0 bg-zinc-900 text-[10px] uppercase tracking-wider text-zinc-500">
+            <tr>
+              <th className="px-2 py-1 text-left">#</th>
+              <th className="px-2 py-1 text-left">Entry</th>
+              <th className="px-2 py-1 text-right">Entry $</th>
+              <th className="px-2 py-1 text-left">Outcome</th>
+              <th className="px-2 py-1 text-right">PnL</th>
+              <th className="px-2 py-1 text-right">PnL %</th>
+              <th className="px-2 py-1 text-right">Bars</th>
+              <th className="px-2 py-1 text-right">MFE</th>
+              <th className="px-2 py-1 text-right">MAE</th>
+              <th className="px-2 py-1 text-left">Loss reason</th>
+              <th className="px-2 py-1 text-right">Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            {trades.data?.trades.map((row, i) => {
+              const t =
+                (row.trade as Record<string, unknown>) ?? {};
+              const a =
+                (row.attribution as Record<string, unknown>) ?? {};
+              const pnl = Number(t.net_pnl ?? 0);
+              const pnlPct = Number(t.net_pnl_pct ?? 0);
+              const outcome = (t.outcome as string) ?? "—";
+              const lossReason =
+                (a.loss_reason as string | null) ?? "";
+              const cls = pnl >= 0 ? "text-emerald-400" : "text-rose-400";
+              return (
+                <tr
+                  key={(t.trade_id as string) ?? `row-${i}`}
+                  className="border-t border-zinc-800 hover:bg-zinc-800/40"
+                >
+                  <td className="px-2 py-1 text-zinc-500">{i + 1}</td>
+                  <td className="px-2 py-1 font-mono">
+                    {(t.entry_time as string)?.slice(0, 16) ?? "—"}
+                  </td>
+                  <td className="px-2 py-1 text-right font-mono">
+                    {Number(t.entry_price ?? 0).toFixed(2)}
+                  </td>
+                  <td className="px-2 py-1">{outcome}</td>
+                  <td className={`px-2 py-1 text-right font-mono ${cls}`}>
+                    {pnl >= 0 ? "+" : ""}
+                    {pnl.toFixed(2)}
+                  </td>
+                  <td className={`px-2 py-1 text-right font-mono ${cls}`}>
+                    {pnlPct >= 0 ? "+" : ""}
+                    {pnlPct.toFixed(2)}%
+                  </td>
+                  <td className="px-2 py-1 text-right text-zinc-400">
+                    {t.bars_held as number}
+                  </td>
+                  <td className="px-2 py-1 text-right font-mono text-emerald-400/80">
+                    {Number(t.max_favorable_pct ?? 0).toFixed(2)}
+                  </td>
+                  <td className="px-2 py-1 text-right font-mono text-rose-400/80">
+                    {Number(t.max_adverse_pct ?? 0).toFixed(2)}
+                  </td>
+                  <td className="px-2 py-1 text-zinc-300">{lossReason}</td>
+                  <td className="px-2 py-1 text-right font-mono text-zinc-400">
+                    {Number(t.entry_composite_score ?? 0).toFixed(2)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="mt-2 font-mono text-[10px] text-zinc-500">
+        {tradeLogPath}
+      </div>
     </div>
   );
 }
