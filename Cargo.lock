@@ -2277,6 +2277,7 @@ dependencies = [
  "qtss-domain",
  "qtss-execution-v2",
  "qtss-fees",
+ "qtss-indicators",
  "qtss-portfolio",
  "qtss-runtime",
  "qtss-strategy",
