@@ -2200,60 +2200,29 @@ export function LuxAlgoChart({
         const t0 = anchorTime(a0);
         const t1 = anchorTime(a1);
         if (t0 === null || t1 === null) return;
+        // 2026-04-27 chart-audit fix — render phase as TWO THIN
+        // dashed lines (top + bottom) without a fill, so the
+        // bracket reads as a "tape annotation" rather than a heavy
+        // colored region that hides candles. Operator can dial in
+        // a single phase via the schematic toggles to focus on a
+        // particular Wyckoff window.
         const sideColor = isAcc ? "#10b981" : "#f43f5e";
-        // Phase-specific opacity hierarchy: A is the "stopping
-        // action" so it gets a stronger border (it's where
-        // structure starts). C and D are actionable so they're
-        // bright. E is the trend leg, kept subtle so it doesn't
-        // dominate the chart for the entire markup leg.
-        const borderAlpha: Record<string, number> = {
-          A: 0.55,
-          B: 0.30,
-          C: 0.65,
-          D: 0.55,
-          E: 0.25,
-        };
-        const fillAlpha: Record<string, number> = {
-          A: 0.06,
-          B: 0.04,
-          C: 0.10,
-          D: 0.07,
-          E: 0.03,
-        };
         const lo = Number(d.raw_meta?.phase_low) || Number(a0.price);
         const hi = Number(d.raw_meta?.phase_high) || Number(a1.price);
-        const phaseBox = chart.addSeries(AreaSeries, {
-          topColor: `rgba(${
-            isAcc ? "16,185,129" : "244,63,94"
-          },${fillAlpha[phaseLetter]})`,
-          bottomColor: `rgba(${
-            isAcc ? "16,185,129" : "244,63,94"
-          },${fillAlpha[phaseLetter] * 0.5})`,
-          lineColor: sideColor,
+        const ceiling = chart.addSeries(LineSeries, {
+          color: sideColor,
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
           priceLineVisible: false,
           lastValueVisible: false,
         });
-        const _ = borderAlpha;
-        // Build a simple two-point area at the phase's high band so
-        // the chart reads "phase ceiling between t0 and t1". The
-        // dashed border + light fill shows the bracket without
-        // hiding candles.
-        phaseBox.setData([
+        ceiling.setData([
           { time: t0, value: hi },
           { time: t1, value: hi },
         ]);
-        overlaySeriesRef.current.push(phaseBox);
-        // Floor band — same dashed line at phase_low to close the
-        // box visually. Two areas instead of a primitive rectangle
-        // because lightweight-charts ships no first-class rect API.
-        const floor = chart.addSeries(AreaSeries, {
-          topColor: "rgba(0,0,0,0)",
-          bottomColor: `rgba(${
-            isAcc ? "16,185,129" : "244,63,94"
-          },${fillAlpha[phaseLetter] * 0.4})`,
-          lineColor: sideColor,
+        overlaySeriesRef.current.push(ceiling);
+        const floor = chart.addSeries(LineSeries, {
+          color: sideColor,
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
           priceLineVisible: false,
@@ -2264,14 +2233,21 @@ export function LuxAlgoChart({
           { time: t1, value: lo },
         ]);
         overlaySeriesRef.current.push(floor);
-        // Phase letter label at the top-left of the box so the
-        // operator can read "Phase B (Accum)" at a glance.
+        // Compact label at start: just "A·Acc" / "C·Dist" instead
+        // of the verbose "Phase X (Acc/Dist)" so multiple phases
+        // stacked on the same x-coordinate don't smother each
+        // other. Phase A and Phase C — the actionable starts —
+        // render their label ABOVE; B / D / E render BELOW so a
+        // phase sequence is readable as a vertical ladder.
+        const compactLabel = `${phaseLetter}·${isAcc ? "Acc" : "Dist"}`;
+        const labelAbove =
+          phaseLetter === "A" || phaseLetter === "C";
         attachLabel(
           t0,
-          hi,
-          `Phase ${phaseLetter} (${isAcc ? "Acc" : "Dist"})`,
+          labelAbove ? hi : lo,
+          compactLabel,
           sideColor,
-          "above",
+          labelAbove ? "above" : "below",
         );
         return;
       }

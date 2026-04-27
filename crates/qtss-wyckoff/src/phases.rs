@@ -166,7 +166,20 @@ pub fn compute_wyckoff_view(
 }
 
 /// Top-level entry: sort events, split by direction, run the
-/// schematic classifier on each side.
+/// schematic classifier on each side, then enforce SIDE MUTEX so
+/// Acc-side and Dist-side phases don't render on top of each
+/// other. Wyckoff doctrine: at any bar the market is in EITHER an
+/// accumulation OR a distribution schematic, never both.
+///
+/// Side mutex algorithm (2026-04-27 chart audit fix):
+/// 1. Run the classifier independently on both sides → get raw
+///    spans tagged Acc / Dist.
+/// 2. For each span S, if an opposite-direction span O overlaps
+///    S's range AND O's anchor (event bar that triggered Phase A
+///    of that side) sits inside S, clip S to end at O's start.
+/// 3. Phase E spans are particularly aggressive about this — once
+///    the OPPOSITE side's Phase A starts, the current side's
+///    Phase E (the trend leg) is officially terminated.
 pub fn classify_schematic_phases(
     events: &[WyckoffEvent],
     bars: &[Bar],
@@ -189,21 +202,61 @@ pub fn classify_schematic_phases(
         .copied()
         .collect();
 
-    let mut out = Vec::new();
-    out.extend(classify_side(
+    let mut acc_spans = classify_side(
         &bull,
         bars,
         tape_end_bar,
         WyckoffSchematicDirection::Accumulation,
-    ));
-    out.extend(classify_side(
+    );
+    let mut dist_spans = classify_side(
         &bear,
         bars,
         tape_end_bar,
         WyckoffSchematicDirection::Distribution,
-    ));
+    );
+
+    // Side mutex — find each side's Phase A start anchor and use
+    // it to clip the OTHER side's overlapping spans.
+    let acc_phase_a_starts: Vec<usize> = acc_spans
+        .iter()
+        .filter(|s| s.phase == WyckoffSchematicPhase::A)
+        .map(|s| s.start_bar)
+        .collect();
+    let dist_phase_a_starts: Vec<usize> = dist_spans
+        .iter()
+        .filter(|s| s.phase == WyckoffSchematicPhase::A)
+        .map(|s| s.start_bar)
+        .collect();
+    clip_spans_by_opposite_anchors(&mut acc_spans, &dist_phase_a_starts);
+    clip_spans_by_opposite_anchors(&mut dist_spans, &acc_phase_a_starts);
+
+    let mut out = Vec::with_capacity(acc_spans.len() + dist_spans.len());
+    // Single-bar spans (Phase C with Spring but no Test) survive —
+    // they're a valid Wyckoff phase even at one bar. Only drop
+    // spans that got CLIPPED to negative width by side mutex.
+    out.extend(acc_spans.into_iter().filter(|s| s.end_bar >= s.start_bar));
+    out.extend(dist_spans.into_iter().filter(|s| s.end_bar >= s.start_bar));
     out.sort_by_key(|s| (s.start_bar, schematic_phase_rank(s.phase)));
     out
+}
+
+/// Clip spans against opposite-direction Phase A anchors. When an
+/// opposite-side Phase A starts INSIDE a span, the span ends at
+/// (anchor - 1). This is the side mutex enforcement — Wyckoff
+/// doctrine has each schematic playing out in its own time window;
+/// concurrent schematics are an artefact of the per-side
+/// classifier running independently.
+fn clip_spans_by_opposite_anchors(
+    spans: &mut Vec<WyckoffSchematicSpan>,
+    anchors: &[usize],
+) {
+    for span in spans.iter_mut() {
+        for &a in anchors {
+            if a > span.start_bar && a < span.end_bar {
+                span.end_bar = a.saturating_sub(1).max(span.start_bar);
+            }
+        }
+    }
 }
 
 fn schematic_phase_rank(p: WyckoffSchematicPhase) -> u8 {
@@ -319,7 +372,35 @@ fn classify_side(
         .or(phase_d_start);
 
     let phase_e_start = phase_d_end;
-    let phase_e_end = tape_end_bar;
+    // BUG (2026-04-27 chart audit) — Phase E used to extend to
+    // `tape_end_bar` for every detected schematic, painting a 1000+
+    // bar dashed box across the entire chart. Doctrine says Phase E
+    // is the markup/markdown leg that follows the breakout; once
+    // the OPPOSITE side's Phase A starts (Distribution begins after
+    // Markup tops), the current Phase E ends.
+    //
+    // We approximate this by capping Phase E at:
+    //   - the bar where the opposite direction's PS/PSY or SC/BC
+    //     event fires (clear cycle reversal), OR
+    //   - phase_d_end + 3 × max(phase_d_duration, 30) bars (so a
+    //     thin Phase D doesn't make Phase E run forever), OR
+    //   - tape_end_bar (whichever is smallest).
+    let opposite_kind_first_anchor: Option<usize> = {
+        // The classifier runs once per direction; events vector
+        // here is already filtered to ONE side. The OPPOSITE side's
+        // first stopping-action anchor lives in the FULL events
+        // list, but we don't have that here. Instead we use the
+        // tape_end_bar bound + lookforward cap.
+        None
+    };
+    let _ = opposite_kind_first_anchor;
+    let phase_e_lookforward = phase_d_start
+        .zip(phase_d_end)
+        .map(|(s, e)| (e.saturating_sub(s)).max(30) * 3)
+        .unwrap_or(150);
+    let phase_e_end = phase_e_start
+        .map(|s| (s + phase_e_lookforward).min(tape_end_bar))
+        .unwrap_or(tape_end_bar);
 
     let mut out = Vec::new();
     let mk = |phase: WyckoffSchematicPhase,
