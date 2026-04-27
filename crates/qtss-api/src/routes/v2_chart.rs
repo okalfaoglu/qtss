@@ -303,7 +303,8 @@ async fn detections_for(
                   slot = ANY($5)
                   OR pattern_family IN ('gap', 'candle')
                   OR (pattern_family = 'wyckoff'
-                      AND subkind NOT LIKE 'cycle_%')
+                      AND subkind NOT LIKE 'cycle_%'
+                      AND subkind NOT LIKE 'phase_%')
               )
               AND mode = ANY($6)
               AND invalidated = false

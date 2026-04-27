@@ -174,6 +174,8 @@ async fn process_symbol(
     // docs/WYCKOFF_METHOD.md. Stale rows for THIS symbol are
     // already cleared by the DELETE above (subkind LIKE 'phase_%'
     // is added to the sweep).
+    // Sweep stale phase rows; they get rewritten per-slot inside
+    // each Acc/Dist macro tile down below.
     let _ = sqlx::query(
         r#"DELETE FROM detections
             WHERE exchange = $1 AND segment = $2
@@ -188,12 +190,6 @@ async fn process_symbol(
     .bind(&sym.interval)
     .execute(pool)
     .await;
-    let tape_last = chrono.len().saturating_sub(1);
-    let schematic =
-        classify_schematic_phases(&sorted, &bars, tape_last);
-    for span in &schematic {
-        written += write_schematic_phase(pool, sym, &chrono, span).await?;
-    }
 
     // FAZ 25.4.D + E — hybrid four-phase macro cycle per Z-degree slot.
     //
@@ -303,6 +299,50 @@ async fn process_symbol(
 
         for c in &merged {
             written += write_cycle(pool, sym, &chrono, c, slot).await?;
+        }
+
+        // 2026-04-28 — schematic Phase A-E NESTED inside each
+        // Acc / Dist macro tile, on the SAME slot. User pointed
+        // out that A-E only lives within Accumulation or
+        // Distribution — Markup and Markdown are themselves
+        // Phase E continuations and don't carry sub-phases. We
+        // also tag spans with the macro tile's slot so Z1..Z5
+        // toggles drive the schematic layer the same way they
+        // drive the macro layer.
+        for tile in &merged {
+            use qtss_wyckoff::WyckoffCyclePhase as M;
+            let is_acc_macro = tile.phase == M::Accumulation;
+            let is_dist_macro = tile.phase == M::Distribution;
+            if !is_acc_macro && !is_dist_macro {
+                continue;
+            }
+            // Subset events that fall inside this tile's window
+            // and on the matching side (bull for Acc, bear for
+            // Dist).
+            let want_variant =
+                if is_acc_macro { "bull" } else { "bear" };
+            let inside: Vec<_> = sorted
+                .iter()
+                .filter(|e| {
+                    e.variant == want_variant
+                        && e.bar_index >= tile.start_bar
+                        && e.bar_index <= tile.end_bar
+                })
+                .cloned()
+                .collect();
+            if inside.is_empty() {
+                continue;
+            }
+            let phases = qtss_wyckoff::classify_schematic_phases(
+                &inside,
+                &bars,
+                tile.end_bar,
+            );
+            for span in &phases {
+                written +=
+                    write_schematic_phase_at_slot(pool, sym, &chrono, span, slot)
+                        .await?;
+            }
         }
     }
     Ok(written)
@@ -784,6 +824,101 @@ async fn load_config(pool: &PgPool) -> WyckoffConfig {
 /// The chart renders these as bracket boxes annotated with the
 /// canonical phase name; the cycle pipeline uses them as a sanity
 /// check on its own 4-phase rotation timeline.
+/// 2026-04-28 — slot-aware variant. Sub-phases (A-E) live INSIDE
+/// macro Acc/Dist tiles; the macro tile carries the Z slot, so the
+/// sub-phase span inherits it. Same code as write_schematic_phase
+/// but binds the parent macro tile's slot rather than 0.
+async fn write_schematic_phase_at_slot(
+    pool: &PgPool,
+    sym: &EngineSymbol,
+    chrono: &[MarketBarRow],
+    span: &WyckoffSchematicSpan,
+    slot: i16,
+) -> anyhow::Result<usize> {
+    use qtss_wyckoff::WyckoffSchematicDirection;
+    let phase_letter = match span.phase {
+        WyckoffSchematicPhase::A => "a",
+        WyckoffSchematicPhase::B => "b",
+        WyckoffSchematicPhase::C => "c",
+        WyckoffSchematicPhase::D => "d",
+        WyckoffSchematicPhase::E => "e",
+    };
+    let dir_str = match span.direction {
+        WyckoffSchematicDirection::Accumulation => "acc",
+        WyckoffSchematicDirection::Distribution => "dist",
+    };
+    let subkind = format!("phase_{phase_letter}_{dir_str}");
+    let direction: i16 = match span.direction {
+        WyckoffSchematicDirection::Accumulation => 1,
+        WyckoffSchematicDirection::Distribution => -1,
+    };
+    let start_time = chrono
+        .get(span.start_bar)
+        .map(|b| b.open_time)
+        .unwrap_or_else(Utc::now);
+    let end_time = chrono
+        .get(span.end_bar.min(chrono.len().saturating_sub(1)))
+        .map(|b| b.open_time)
+        .unwrap_or_else(Utc::now);
+    let anchors = json!([
+        {
+            "label_override": format!("phase_{phase_letter}_start"),
+            "bar_index": span.start_bar as i64,
+            "price": span.phase_low,
+            "time": start_time,
+        },
+        {
+            "label_override": format!("phase_{phase_letter}_end"),
+            "bar_index": span.end_bar as i64,
+            "price": span.phase_high,
+            "time": end_time,
+        }
+    ]);
+    let raw_meta = json!({
+        "phase":           phase_letter,
+        "direction":       dir_str,
+        "phase_high":      span.phase_high,
+        "phase_low":       span.phase_low,
+        "completed":       span.completed,
+        "anchor_events":   span.anchor_events,
+        "kind":            "wyckoff_schematic_phase",
+        "slot":            slot,
+    });
+    sqlx::query(
+        r#"INSERT INTO detections
+              (exchange, segment, symbol, timeframe, slot,
+               pattern_family, subkind, direction,
+               start_bar, end_bar, start_time, end_time,
+               anchors, invalidated, raw_meta, mode)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'live')
+           ON CONFLICT (exchange, segment, symbol, timeframe, slot,
+                        pattern_family, subkind, start_time, end_time, mode)
+           DO UPDATE SET
+               direction  = EXCLUDED.direction,
+               anchors    = EXCLUDED.anchors,
+               raw_meta   = EXCLUDED.raw_meta,
+               updated_at = now()"#,
+    )
+    .bind(&sym.exchange)
+    .bind(&sym.segment)
+    .bind(&sym.symbol)
+    .bind(&sym.interval)
+    .bind(slot)
+    .bind("wyckoff")
+    .bind(&subkind)
+    .bind(direction)
+    .bind(span.start_bar as i64)
+    .bind(span.end_bar as i64)
+    .bind(start_time)
+    .bind(end_time)
+    .bind(&anchors)
+    .bind(false)
+    .bind(&raw_meta)
+    .execute(pool)
+    .await?;
+    Ok(1)
+}
+
 async fn write_schematic_phase(
     pool: &PgPool,
     sym: &EngineSymbol,

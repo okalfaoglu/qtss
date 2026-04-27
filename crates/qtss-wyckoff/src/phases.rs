@@ -202,18 +202,32 @@ pub fn classify_schematic_phases(
         .copied()
         .collect();
 
-    let mut acc_spans = classify_side(
-        &bull,
-        bars,
-        tape_end_bar,
-        WyckoffSchematicDirection::Accumulation,
-    );
-    let mut dist_spans = classify_side(
-        &bear,
-        bars,
-        tape_end_bar,
-        WyckoffSchematicDirection::Distribution,
-    );
+    // 2026-04-28 multi-cycle support — split events into cycle
+    // GROUPS along the bar tape so a 4-year chart with 6 separate
+    // Accumulation cycles produces 6 sets of A-E spans, not one
+    // mega-D-E that swallows everything. A new cycle starts at the
+    // next PS/SC/Spring that fires AFTER the previous cycle's
+    // BU/JAC (which marks Phase D close → Phase E start).
+    let acc_groups = split_into_cycles(&bull, /*bull=*/ true);
+    let dist_groups = split_into_cycles(&bear, /*bull=*/ false);
+    let mut acc_spans = Vec::new();
+    for grp in &acc_groups {
+        acc_spans.extend(classify_side(
+            grp,
+            bars,
+            tape_end_bar,
+            WyckoffSchematicDirection::Accumulation,
+        ));
+    }
+    let mut dist_spans = Vec::new();
+    for grp in &dist_groups {
+        dist_spans.extend(classify_side(
+            grp,
+            bars,
+            tape_end_bar,
+            WyckoffSchematicDirection::Distribution,
+        ));
+    }
 
     // Side mutex — find each side's Phase A start anchor and use
     // it to clip the OTHER side's overlapping spans.
@@ -282,6 +296,47 @@ fn enforce_intra_side_sequencing(spans: &mut Vec<WyckoffSchematicSpan>) {
         }
     }
     spans.retain(|s| s.end_bar >= s.start_bar);
+}
+
+/// 2026-04-28 — split a sorted single-side event stream into
+/// CYCLE GROUPS so each Wyckoff cycle on the tape gets its own
+/// A-E span set. Without this, a long chart with multiple Acc
+/// cycles produces a single D-E that spans years.
+///
+/// Cycle boundary heuristic: a new cycle starts at the next
+/// PS/SC/Spring that fires AFTER a Bu/JAC (which terminates the
+/// prior cycle's Phase D and opens Phase E). Mirror for the
+/// Distribution side.
+fn split_into_cycles<'a>(
+    sorted: &[&'a WyckoffEvent],
+    _bull: bool,
+) -> Vec<Vec<&'a WyckoffEvent>> {
+    use WyckoffEventKind::*;
+    if sorted.is_empty() {
+        return Vec::new();
+    }
+    let mut groups: Vec<Vec<&'a WyckoffEvent>> = Vec::new();
+    let mut current: Vec<&'a WyckoffEvent> = Vec::new();
+    let mut last_was_bu = false;
+    for ev in sorted {
+        // Cycle restart trigger: this event is a fresh
+        // PS/SC/Spring AND we've already seen a BU/JAC in the
+        // current group. The fresh stopping-action / shakeout
+        // belongs to the NEXT cycle.
+        let is_cycle_start = matches!(ev.kind, Ps | Sc | Bc | Spring | Utad);
+        if last_was_bu && is_cycle_start && !current.is_empty() {
+            groups.push(std::mem::take(&mut current));
+            last_was_bu = false;
+        }
+        current.push(*ev);
+        if matches!(ev.kind, Bu) {
+            last_was_bu = true;
+        }
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+    groups
 }
 
 /// Clip spans against opposite-direction Phase A anchors. When an
