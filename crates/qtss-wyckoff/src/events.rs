@@ -94,6 +94,45 @@ fn recent_range(
     Some((hi, lo, count))
 }
 
+/// BUG4 (2026-04-27) — trend context gate for climax events.
+///
+/// A Buying Climax (BC) marks the END of a sustained UPTREND, not
+/// just any wide-range high-volume bar. Without this gate the
+/// detector fires BC on every impulsive W3 bar, mislabelling the
+/// middle of a Markup phase as Distribution. Mirror for Selling
+/// Climax (SC) which must mark the END of a downtrend.
+///
+/// Gate: bar `i` qualifies as a TREND TOP if its HIGH exceeds the
+/// max high of the previous `lookback` bars by ≥ `min_breakout_pct`.
+/// Mirror for TREND BOTTOM.
+fn at_trend_top(bars: &[Bar], i: usize, lookback: usize, min_breakout_pct: f64) -> bool {
+    if i < lookback {
+        return false;
+    }
+    let bar_h = bar_high(&bars[i]);
+    let prior_max = (i.saturating_sub(lookback)..i)
+        .map(|j| bar_high(&bars[j]))
+        .fold(f64::NEG_INFINITY, f64::max);
+    if !prior_max.is_finite() || prior_max <= 0.0 {
+        return false;
+    }
+    bar_h >= prior_max * (1.0 + min_breakout_pct)
+}
+
+fn at_trend_bottom(bars: &[Bar], i: usize, lookback: usize, min_breakdown_pct: f64) -> bool {
+    if i < lookback {
+        return false;
+    }
+    let bar_l = bar_low(&bars[i]);
+    let prior_min = (i.saturating_sub(lookback)..i)
+        .map(|j| bar_low(&bars[j]))
+        .fold(f64::INFINITY, f64::min);
+    if !prior_min.is_finite() || prior_min <= 0.0 {
+        return false;
+    }
+    bar_l <= prior_min * (1.0 - min_breakdown_pct)
+}
+
 // ── SC — Selling Climax ─────────────────────────────────────────────
 
 pub fn eval_selling_climax(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
@@ -114,6 +153,15 @@ pub fn eval_selling_climax(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEven
         let a = atr(bars, i, 14).max(1e-9);
         let rr = bar_range(bar) / a;
         if vr < cfg.climax_volume_mult || rr < cfg.climax_range_atr_mult {
+            continue;
+        }
+        // BUG4 — trend context: SC marks the END of a sustained
+        // DOWNTREND, not just any wide-range high-volume drop. Bar
+        // must have made a fresh N-bar low or the detector treats
+        // mid-impulse W3 bars as climaxes. 30 bars / 1% breakdown is
+        // a deliberately mild gate — Wyckoff allows for absorbed
+        // selling that only marginally undercuts prior lows.
+        if !at_trend_bottom(bars, i, 30, 0.01) {
             continue;
         }
         let body = bar_close(bar) - bar.open.to_f64().unwrap_or(0.0);
@@ -164,6 +212,15 @@ pub fn eval_buying_climax(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent
         let a = atr(bars, i, 14).max(1e-9);
         let rr = bar_range(bar) / a;
         if vr < cfg.climax_volume_mult || rr < cfg.climax_range_atr_mult {
+            continue;
+        }
+        // BUG4 — trend context: BC marks the END of a sustained
+        // UPTREND. Without this gate the detector fires on every
+        // impulsive W3 / breakout bar with high volume, painting
+        // the middle of a Markup phase as Distribution. Bar must
+        // have made a fresh N-bar high before we treat it as a
+        // climax candidate.
+        if !at_trend_top(bars, i, 30, 0.01) {
             continue;
         }
         let body = bar_close(bar) - bar.open.to_f64().unwrap_or(0.0);

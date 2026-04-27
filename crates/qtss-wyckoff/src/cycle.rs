@@ -180,8 +180,61 @@ pub fn detect_cycles(
         let ev = &events[i];
         match ev.kind {
             WyckoffEventKind::Sc => {
+                // BUG4 — symmetric Markdown inference. SC marks the
+                // bottom of a downtrend leg; if the prev phase was
+                // Distribution and SoW didn't fire, insert an
+                // inferred Markdown [distribution_end, SC] so the
+                // rotation alternates Acc → Markup → Dist →
+                // Markdown → Acc as Wyckoff demands.
                 if let Some(prev) = current.take() {
-                    out.push(close_segment(prev, ev.bar_index, ev.reference_price, bars));
+                    let prev_phase = prev.phase;
+                    let prev_start = prev.start_bar;
+                    out.push(close_segment(
+                        prev,
+                        ev.bar_index,
+                        ev.reference_price,
+                        bars,
+                    ));
+                    if prev_phase == WyckoffCyclePhase::Distribution {
+                        // Mirror of the BC inference: scan for the
+                        // HIGHEST high in the prior Distribution
+                        // window — that's where the markdown leg
+                        // launched from.
+                        let scan_lo = prev_start.max(0);
+                        let scan_hi = ev.bar_index;
+                        let mut max_idx = scan_hi.saturating_sub(1);
+                        let mut max_price = f64::NEG_INFINITY;
+                        for bar_idx in scan_lo..scan_hi {
+                            if let Some(b) = bars.get(bar_idx) {
+                                let h = bar_high(b);
+                                if h > max_price {
+                                    max_price = h;
+                                    max_idx = bar_idx;
+                                }
+                            }
+                        }
+                        if !max_price.is_finite() {
+                            max_price = ev.reference_price;
+                        }
+                        if max_idx <= prev_start {
+                            max_idx = prev_start + 1;
+                        }
+                        if max_idx < ev.bar_index {
+                            let inferred = open_segment(
+                                WyckoffCyclePhase::Markdown,
+                                WyckoffCycleSource::Event,
+                                max_idx,
+                                max_price,
+                                None,
+                            );
+                            out.push(close_segment(
+                                inferred,
+                                ev.bar_index,
+                                ev.reference_price,
+                                bars,
+                            ));
+                        }
+                    }
                 }
                 current = Some(open_segment(
                     WyckoffCyclePhase::Accumulation,
@@ -192,8 +245,70 @@ pub fn detect_cycles(
                 ));
             }
             WyckoffEventKind::Bc => {
+                // BUG4 — Wyckoff doctrine demands a Markup leg
+                // BETWEEN Accumulation and the BC top. When the
+                // event tape skips Bu / SoS (common — Bu fires
+                // less reliably than the climax events), the
+                // state machine used to leap straight from
+                // Accumulation to Distribution and the entire
+                // bullish leg got tagged Distribution by mistake.
+                // Insert an INFERRED Markup tile from the close of
+                // Accumulation to the BC bar so the rotation
+                // alternates correctly.
                 if let Some(prev) = current.take() {
-                    out.push(close_segment(prev, ev.bar_index, ev.reference_price, bars));
+                    let prev_phase = prev.phase;
+                    let prev_start = prev.start_bar;
+                    out.push(close_segment(
+                        prev,
+                        ev.bar_index,
+                        ev.reference_price,
+                        bars,
+                    ));
+                    if prev_phase == WyckoffCyclePhase::Accumulation {
+                        // Inferred Markup span = from the LOWEST low
+                        // in the prior Accumulation window to the BC
+                        // bar. That low is the structural launchpad
+                        // of the impulse (Spring / Test / first
+                        // breakout HL). Wider than 1 bar so the
+                        // rendered tile covers the actual rally.
+                        let scan_lo = prev_start.max(0);
+                        let scan_hi = ev.bar_index;
+                        let mut min_idx = scan_hi.saturating_sub(1);
+                        let mut min_price = f64::INFINITY;
+                        for bar_idx in scan_lo..scan_hi {
+                            if let Some(b) = bars.get(bar_idx) {
+                                let l = bar_low(b);
+                                if l < min_price {
+                                    min_price = l;
+                                    min_idx = bar_idx;
+                                }
+                            }
+                        }
+                        if !min_price.is_finite() {
+                            min_price = ev.reference_price;
+                        }
+                        // Cap the start so we never overlap the
+                        // earlier accumulation tile fully — keep the
+                        // inferred Markup AFTER prev.start_bar.
+                        if min_idx <= prev_start {
+                            min_idx = prev_start + 1;
+                        }
+                        if min_idx < ev.bar_index {
+                            let inferred = open_segment(
+                                WyckoffCyclePhase::Markup,
+                                WyckoffCycleSource::Event,
+                                min_idx,
+                                min_price,
+                                None,
+                            );
+                            out.push(close_segment(
+                                inferred,
+                                ev.bar_index,
+                                ev.reference_price,
+                                bars,
+                            ));
+                        }
+                    }
                 }
                 current = Some(open_segment(
                     WyckoffCyclePhase::Distribution,
@@ -1308,11 +1423,131 @@ mod tests {
         ];
         events[0].score = 0.6;
         events[1].score = 0.9;
+        // BUG4 — when SC then BC fire without an explicit SoS in
+        // between, the state machine inserts an INFERRED Markup
+        // tile so the rotation alternates correctly. The Z0 path
+        // (both events pass the score gate) now produces 3 tiles:
+        // Accumulation [10..60], inferred Markup [pre-BC..60],
+        // Distribution [60..200].
         let z0 = detect_cycles_for_slot(&events, &[], 0.55, 200, 100.0);
         let z3 = detect_cycles_for_slot(&events, &[], 0.85, 200, 100.0);
-        assert_eq!(z0.len(), 2);
+        assert_eq!(z0.len(), 3);
+        assert!(z0.iter().any(|c| c.phase == WyckoffCyclePhase::Accumulation));
+        assert!(z0.iter().any(|c| c.phase == WyckoffCyclePhase::Markup));
+        assert!(z0.iter().any(|c| c.phase == WyckoffCyclePhase::Distribution));
+        // High-bar gate drops SC; only BC survives → single
+        // Distribution tile (no Accumulation prefix → no inferred
+        // Markup either).
         assert_eq!(z3.len(), 1);
         assert_eq!(z3[0].phase, WyckoffCyclePhase::Distribution);
+    }
+
+    // BUG4 — when an Accumulation phase ends and BC fires without
+    // an explicit SoS event between them, the state machine must
+    // INFER a Markup tile instead of leaping straight from
+    // Accumulation to Distribution. The inferred tile spans from
+    // the lowest low in the Accumulation window to the BC bar so
+    // the box covers the actual bullish leg.
+    #[test]
+    fn bc_after_accumulation_inserts_inferred_markup() {
+        // Make a synthetic bar tape: bars 0..40 in [100, 110]
+        // (accumulation range), then bars 40..70 climbing 110→140
+        // (the bullish leg), bar 70 = BC.
+        let mut bars = Vec::new();
+        for i in 0..70 {
+            let close = if i < 40 {
+                100.0 + (i as f64 * 0.25) // small fluctuation 100..110
+            } else {
+                110.0 + ((i - 40) as f64) // rally 110→140
+            };
+            bars.push(make_bar(i, close - 0.5, close + 0.5, close - 1.0, close + 1.0));
+        }
+        let events = vec![
+            ev_bull(WyckoffEventKind::Sc, 5, 100.0),
+            ev_bear(WyckoffEventKind::Bc, 70, 145.0),
+        ];
+        let cycles = detect_cycles(&events, &bars, 100, 145.0);
+        // Expect: Accumulation, inferred Markup, Distribution.
+        let phases: Vec<_> = cycles.iter().map(|c| c.phase).collect();
+        assert!(
+            phases.contains(&WyckoffCyclePhase::Accumulation),
+            "Accumulation tile missing: {phases:?}"
+        );
+        assert!(
+            phases.contains(&WyckoffCyclePhase::Markup),
+            "inferred Markup tile missing: {phases:?}"
+        );
+        assert!(
+            phases.contains(&WyckoffCyclePhase::Distribution),
+            "Distribution tile missing: {phases:?}"
+        );
+        // Inferred Markup must end at the BC bar.
+        let markup = cycles
+            .iter()
+            .find(|c| c.phase == WyckoffCyclePhase::Markup)
+            .unwrap();
+        assert_eq!(markup.end_bar, 70, "inferred markup must end at BC");
+        // And start somewhere INSIDE the accumulation window (not
+        // at bar 0, not 1 bar before BC).
+        assert!(markup.start_bar > 0 && markup.start_bar < 70);
+    }
+
+    // Helper: synthetic bar with the v2 Bar shape used by the
+    // wyckoff crate (matches qtss_domain::v2::bar::Bar fixture).
+    fn make_bar(idx: usize, open: f64, close: f64, low: f64, high: f64) -> Bar {
+        use chrono::TimeZone;
+        use rust_decimal::prelude::FromPrimitive;
+        use qtss_domain::v2::instrument::{
+            AssetClass, Instrument, SessionCalendar, Venue,
+        };
+        use qtss_domain::v2::timeframe::Timeframe;
+        Bar {
+            instrument: Instrument {
+                venue: Venue::Binance,
+                asset_class: AssetClass::CryptoFutures,
+                symbol: "TESTUSDT".into(),
+                quote_ccy: "USDT".into(),
+                tick_size: rust_decimal::Decimal::from_f64(0.01).unwrap(),
+                lot_size: rust_decimal::Decimal::from_f64(0.00001).unwrap(),
+                session: SessionCalendar::binance_24x7(),
+            },
+            timeframe: Timeframe::H1,
+            open_time: chrono::Utc
+                .timestamp_opt(idx as i64 * 3600, 0)
+                .unwrap(),
+            open: rust_decimal::Decimal::from_f64(open).unwrap(),
+            high: rust_decimal::Decimal::from_f64(high).unwrap(),
+            low: rust_decimal::Decimal::from_f64(low).unwrap(),
+            close: rust_decimal::Decimal::from_f64(close).unwrap(),
+            volume: rust_decimal::Decimal::from(1000),
+            closed: true,
+        }
+    }
+
+    fn ev_bull(kind: WyckoffEventKind, bar_index: usize, price: f64) -> WyckoffEvent {
+        WyckoffEvent {
+            kind,
+            variant: "bull",
+            score: 1.0,
+            bar_index,
+            reference_price: price,
+            volume_ratio: 0.0,
+            range_ratio: 0.0,
+            note: String::new(),
+        }
+    }
+
+    fn ev_bear(kind: WyckoffEventKind, bar_index: usize, price: f64) -> WyckoffEvent {
+        WyckoffEvent {
+            kind,
+            variant: "bear",
+            score: 1.0,
+            bar_index,
+            reference_price: price,
+            volume_ratio: 0.0,
+            range_ratio: 0.0,
+            note: String::new(),
+        }
     }
 
     // BUG3 — three Accumulation tiles stacked on the same Z-level
