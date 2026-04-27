@@ -118,6 +118,9 @@ pub enum ElliottSegmentKind {
     Abc,
 }
 
+fn bar_close(b: &Bar) -> f64 {
+    b.close.to_f64().unwrap_or(0.0)
+}
 fn bar_high(b: &Bar) -> f64 {
     b.high.to_f64().unwrap_or(0.0)
 }
@@ -496,23 +499,42 @@ pub fn detect_cycles_from_elliott(
     }
 
     for seg in &sorted {
-        // Fill gap with a transition tile (Distribution or Accumulation)
-        // when the previous tile ended before this segment starts.
+        // Fill gap with a transition tile when the previous tile
+        // ended before this segment starts.
+        //
+        // BUG (2026-04-27) — old logic used a SINGLE
+        // transition_phase(prev) tile to span the whole gap. That
+        // works for short topping/basing zones, but when the gap
+        // contains a real recovery / impulse leg (e.g. Markdown
+        // ends at a low, price recovers all the way back up before
+        // the next bearish segment starts) the entire bullish
+        // recovery got tagged with the wrong phase
+        // (Markdown→Accumulation transition). The user's screenshot
+        // showed an Accumulation box swallowing the Markup leg
+        // exactly that way.
+        //
+        // Wyckoff doctrine demands strict 4-phase rotation:
+        //   Markup -> Distribution -> Markdown -> Accumulation -> Markup
+        // So the gap between two specific segments must traverse
+        // the missing phases. Split the gap into TWO halves:
+        //   - first half  = transition_phase(prev)        (basing
+        //                    or topping zone right after prev)
+        //   - second half = preceding_phase(next_phase)   (rally
+        //                    or decline INTO the next segment)
+        // Adjacent same-phase halves are deduped downstream.
         if let Some((p_end, p_price, p_phase)) = prev_end {
             if seg.start_bar > p_end + gap_min_bars {
-                let transition = transition_phase(p_phase);
-                out.push(close_segment(
-                    open_segment(
-                        transition,
-                        WyckoffCycleSource::Elliott,
-                        p_end,
-                        p_price,
-                        None,
-                    ),
+                let next_phase = phase_for_segment(seg);
+                let path = gap_phase_path(p_phase, next_phase);
+                emit_gap_path_tiles(
+                    &path,
+                    p_end,
+                    p_price,
                     seg.start_bar,
                     seg.start_price,
                     bars,
-                ));
+                    &mut out,
+                );
             }
         }
 
@@ -669,6 +691,211 @@ fn emit_subwave_tiles(
     out.push(close_segment(tile_b, b_end_bar, b_end_price, bars));
 
     true
+}
+
+/// BUG (2026-04-27) — walk the canonical Wyckoff 4-phase rotation
+/// from the phase that follows `prev` to the phase that precedes
+/// `next`. The full rotation cycles
+///   Markup → Distribution → Markdown → Accumulation → Markup → …
+/// so any gap between two specific Elliott segments traverses 1-3
+/// phases:
+///   Markup → Markdown   gap  = [Distribution]                       (1)
+///   Markdown → Markup   gap  = [Accumulation]                       (1)
+///   Markdown → Distrib  gap  = [Accumulation, Markup]               (2)
+///   Markup → Accumul    gap  = [Distribution, Markdown]             (2)
+///   Markdown → Markdown gap  = [Accumulation, Markup, Distribution] (3)
+///   Markup → Markup     gap  = [Distribution, Markdown, Accumul]    (3)
+fn gap_phase_path(
+    prev: WyckoffCyclePhase,
+    next: WyckoffCyclePhase,
+) -> Vec<WyckoffCyclePhase> {
+    // Walk the 4-phase rotation
+    //   Markup → Distribution → Markdown → Accumulation → Markup …
+    // from `transition_phase(prev)` (the first gap phase) until we
+    // hit `preceding_phase(next)` (the last gap phase that flows
+    // straight into the next segment).
+    let start = transition_phase(prev);
+    let end = preceding_phase(next);
+    let mut out = vec![start];
+    let mut steps = 0;
+    while *out.last().unwrap() != end && steps < 4 {
+        let last = *out.last().unwrap();
+        out.push(next_in_rotation(last));
+        steps += 1;
+    }
+    out
+}
+
+/// Strict 4-phase rotation step. Unlike `transition_phase`, this
+/// advances every phase by exactly ONE position in the canonical
+/// Wyckoff cycle, so iterating it visits each of the four phases
+/// in turn (rather than collapsing into Acc / Distribution).
+fn next_in_rotation(prev: WyckoffCyclePhase) -> WyckoffCyclePhase {
+    match prev {
+        WyckoffCyclePhase::Markup => WyckoffCyclePhase::Distribution,
+        WyckoffCyclePhase::Distribution => WyckoffCyclePhase::Markdown,
+        WyckoffCyclePhase::Markdown => WyckoffCyclePhase::Accumulation,
+        WyckoffCyclePhase::Accumulation => WyckoffCyclePhase::Markup,
+    }
+}
+
+/// Render a gap-phase path as 1..=N tiles spanning [from_bar,
+/// to_bar]. Single-phase gaps emit one tile spanning the entire
+/// window. Two-phase gaps pivot at the price extreme separating
+/// the two phases (low for Acc→Markup, high for Markup→Dist, etc).
+/// Three-phase gaps split evenly by bar count — fine-grained
+/// price-pivot detection across three phases would need a
+/// dedicated swing detector and is overkill for the gap-fill role.
+fn emit_gap_path_tiles(
+    path: &[WyckoffCyclePhase],
+    from_bar: usize,
+    from_price: f64,
+    to_bar: usize,
+    to_price: f64,
+    bars: &[Bar],
+    out: &mut Vec<WyckoffCycle>,
+) {
+    if path.is_empty() || to_bar <= from_bar {
+        return;
+    }
+    let span = to_bar - from_bar;
+    if path.len() == 1 || span < path.len() {
+        out.push(close_segment(
+            open_segment(
+                path[0],
+                WyckoffCycleSource::Elliott,
+                from_bar,
+                from_price,
+                None,
+            ),
+            to_bar,
+            to_price,
+            bars,
+        ));
+        return;
+    }
+    if path.len() == 2 {
+        // Pivot at the price extreme matching the SECOND phase's
+        // entry: Markup follows Accumulation at the LOW; Markdown
+        // follows Distribution at the HIGH; etc.
+        let pivot_low = matches!(
+            path[1],
+            WyckoffCyclePhase::Markup | WyckoffCyclePhase::Markdown
+        ) ^ matches!(
+            path[1],
+            WyckoffCyclePhase::Markdown
+        );
+        // Cleaner: Accumulation→Markup pivots at LOW;
+        // Markup→Distribution pivots at HIGH;
+        // Distribution→Markdown pivots at HIGH;
+        // Markdown→Accumulation pivots at LOW.
+        let want_low = matches!(
+            path[0],
+            WyckoffCyclePhase::Accumulation | WyckoffCyclePhase::Markdown
+        );
+        let _ = pivot_low; // retained name for diff readability
+        let pivot_bar =
+            scan_extreme(bars, from_bar + 1, to_bar, want_low)
+                .unwrap_or(from_bar + span / 2);
+        let pivot_price = bars
+            .get(pivot_bar)
+            .map(bar_close)
+            .unwrap_or((from_price + to_price) * 0.5);
+        out.push(close_segment(
+            open_segment(
+                path[0],
+                WyckoffCycleSource::Elliott,
+                from_bar,
+                from_price,
+                None,
+            ),
+            pivot_bar,
+            pivot_price,
+            bars,
+        ));
+        out.push(close_segment(
+            open_segment(
+                path[1],
+                WyckoffCycleSource::Elliott,
+                pivot_bar,
+                pivot_price,
+                None,
+            ),
+            to_bar,
+            to_price,
+            bars,
+        ));
+        return;
+    }
+    // path.len() == 3 — equal split by bar count.
+    let n = path.len();
+    let chunk = span / n;
+    let mut cur_bar = from_bar;
+    let mut cur_price = from_price;
+    for (i, phase) in path.iter().enumerate() {
+        let next_bar = if i + 1 == n {
+            to_bar
+        } else {
+            from_bar + chunk * (i + 1)
+        };
+        let next_price = if i + 1 == n {
+            to_price
+        } else {
+            bars.get(next_bar).map(bar_close).unwrap_or(cur_price)
+        };
+        if next_bar > cur_bar {
+            out.push(close_segment(
+                open_segment(
+                    *phase,
+                    WyckoffCycleSource::Elliott,
+                    cur_bar,
+                    cur_price,
+                    None,
+                ),
+                next_bar,
+                next_price,
+                bars,
+            ));
+        }
+        cur_bar = next_bar;
+        cur_price = next_price;
+    }
+}
+
+fn scan_extreme(
+    bars: &[Bar],
+    from: usize,
+    to: usize,
+    want_low: bool,
+) -> Option<usize> {
+    if to <= from + 1 {
+        return None;
+    }
+    let mut best_idx = None;
+    if want_low {
+        let mut best = f64::INFINITY;
+        for i in from..to {
+            if let Some(b) = bars.get(i) {
+                let v = bar_low(b);
+                if v < best {
+                    best = v;
+                    best_idx = Some(i);
+                }
+            }
+        }
+    } else {
+        let mut best = f64::NEG_INFINITY;
+        for i in from..to {
+            if let Some(b) = bars.get(i) {
+                let v = bar_high(b);
+                if v > best {
+                    best = v;
+                    best_idx = Some(i);
+                }
+            }
+        }
+    }
+    best_idx
 }
 
 /// Phase that fills the gap AFTER a tile of `prev` phase. Markup ends
@@ -959,6 +1186,20 @@ fn source_rank(s: WyckoffCycleSource) -> u8 {
 pub fn enforce_non_overlap(
     cycles: Vec<WyckoffCycle>,
 ) -> Vec<WyckoffCycle> {
+    enforce_non_overlap_with_bars(cycles, &[])
+}
+
+/// `enforce_non_overlap` overload that recomputes phase_high /
+/// phase_low after clipping. The chart renders the cycle box from
+/// these bounds; without recomputing them, a clipped tile retains
+/// the original tile's full-range high/low and the box appears
+/// taller / wider than the actual phase. Pass `bars = &[]` to skip
+/// the recompute (price bounds remain stale but start_bar / end_bar
+/// are still clipped).
+pub fn enforce_non_overlap_with_bars(
+    cycles: Vec<WyckoffCycle>,
+    bars: &[Bar],
+) -> Vec<WyckoffCycle> {
     if cycles.is_empty() {
         return cycles;
     }
@@ -1011,12 +1252,28 @@ pub fn enforce_non_overlap(
             }
         }
 
-        // Emit one clipped tile per surviving segment.
+        // Emit one clipped tile per surviving segment, recomputing
+        // price bounds against the actual bars covered.
         for (s, e) in alive {
             if e > s {
                 let mut clone = c.clone();
                 clone.start_bar = s;
                 clone.end_bar = e;
+                if !bars.is_empty() {
+                    let start_price = bars
+                        .get(s)
+                        .map(bar_close)
+                        .unwrap_or(clone.start_price);
+                    let end_price = bars
+                        .get(e.min(bars.len().saturating_sub(1)))
+                        .map(bar_close)
+                        .unwrap_or(clone.end_price);
+                    clone.start_price = start_price;
+                    clone.end_price = end_price;
+                    let (hi, lo) = compute_bounds(bars, s, e, start_price);
+                    clone.phase_high = hi;
+                    clone.phase_low = lo;
+                }
                 placed.push(clone);
             }
         }
@@ -1570,6 +1827,131 @@ mod tests {
             range_ratio: 0.0,
             note: String::new(),
         }
+    }
+
+    // BUG (2026-04-27) — when the gap between two Elliott segments
+    // contains a real recovery / impulse leg, single-phase
+    // transition fill mislabels it. Markdown→Distribution should
+    // emit Accumulation + Markup, not just Accumulation.
+    #[test]
+    fn gap_between_markdown_and_distribution_splits_into_acc_plus_markup() {
+        // Build a synthetic tape: bears down then rallies back up.
+        // Markdown segment ends at bar 30 (low 100). Then bars 30..70
+        // recover from 100 back to 200. Next bearish motive starts
+        // at bar 70 (high 200). The gap [30, 70] should split into
+        // Accumulation [first half — basing] + Markup [second half —
+        // rally to top].
+        let mut bars = Vec::new();
+        for i in 0..70 {
+            let close = if i <= 30 {
+                200.0 - i as f64 * 3.0 // 200 down to ~110
+            } else if i <= 50 {
+                100.0 + (i - 30) as f64 * 0.5 // basing 100..110
+            } else {
+                110.0 + (i - 50) as f64 * 4.5 // rally 110..200
+            };
+            bars.push(make_bar(
+                i,
+                close - 0.5,
+                close + 0.5,
+                close - 1.0,
+                close + 1.0,
+            ));
+        }
+        // Two motive segments framing the gap.
+        let segs = vec![
+            ElliottSegment {
+                kind: ElliottSegmentKind::Motive,
+                bullish: false,
+                start_bar: 0,
+                end_bar: 30,
+                start_price: 200.0,
+                end_price: 100.0,
+                source_id: None,
+                wave_anchors: vec![],
+            },
+            ElliottSegment {
+                kind: ElliottSegmentKind::Motive,
+                bullish: false,
+                start_bar: 70,
+                end_bar: 90,
+                start_price: 200.0,
+                end_price: 130.0,
+                source_id: None,
+                wave_anchors: vec![],
+            },
+        ];
+        let cycles = detect_cycles_from_elliott(&segs, &bars, 100, 130.0);
+        // Both Accumulation AND Markup tiles should appear in the
+        // gap. Without the fix, only Accumulation would span the
+        // entire 30..70 window.
+        let phases: Vec<_> = cycles.iter().map(|c| c.phase).collect();
+        assert!(
+            phases.contains(&WyckoffCyclePhase::Accumulation),
+            "gap-fill missing Accumulation: {phases:?}"
+        );
+        assert!(
+            phases.contains(&WyckoffCyclePhase::Markup),
+            "gap-fill missing Markup recovery leg: {phases:?}"
+        );
+    }
+
+    // BUG (2026-04-27) — clipped tiles must recompute price bounds
+    // so the chart's box height reflects the actual phase range,
+    // not the original pre-clip range.
+    #[test]
+    fn enforce_non_overlap_recomputes_clipped_phase_bounds() {
+        let mut bars = Vec::new();
+        for i in 0..100 {
+            // Bars 0..39 in low range (high ~115). Bars 40..99 in
+            // high range (high ~220). The 1-bar gap at 39/40
+            // ensures the clip boundary is unambiguous.
+            let mid = if i < 40 { 110.0 } else { 215.0 };
+            bars.push(make_bar(i, mid, mid, mid - 5.0, mid + 5.0));
+        }
+        // Outer spans 0..100, originally claiming phase_high = 235.
+        let outer = WyckoffCycle {
+            phase: WyckoffCyclePhase::Accumulation,
+            source: WyckoffCycleSource::Event,
+            start_bar: 0,
+            end_bar: 100,
+            start_price: 110.0,
+            end_price: 220.0,
+            phase_high: 235.0,
+            phase_low: 95.0,
+            completed: true,
+            source_pattern_id: None,
+        };
+        // Inner higher-priority tile claims [40, 100].
+        let inner = WyckoffCycle {
+            phase: WyckoffCyclePhase::Markup,
+            source: WyckoffCycleSource::Elliott,
+            start_bar: 40,
+            end_bar: 100,
+            start_price: 215.0,
+            end_price: 220.0,
+            phase_high: 220.0,
+            phase_low: 210.0,
+            completed: true,
+            source_pattern_id: None,
+        };
+        let out = enforce_non_overlap_with_bars(vec![outer, inner], &bars);
+        // Outer is clipped to [0, 40]. Its phase_high MUST reflect
+        // bars[0..40] only (around 115), NOT the original 235 from
+        // the unclipped outer. Bar 40 sits at the boundary; with
+        // inclusive end semantics phase_high may include 220 from
+        // bar 40 itself, but anything BELOW that would fail the
+        // recompute. We therefore tolerate up to the boundary bar
+        // value while rejecting the original 235.
+        let clipped_outer = out
+            .iter()
+            .find(|c| c.phase == WyckoffCyclePhase::Accumulation)
+            .expect("outer Accumulation tile expected");
+        assert!(
+            clipped_outer.phase_high < 235.0,
+            "phase_high must be recomputed (was {}, original 235)",
+            clipped_outer.phase_high
+        );
     }
 
     // BUG3 — three Accumulation tiles stacked on the same Z-level

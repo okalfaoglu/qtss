@@ -18,7 +18,7 @@ use qtss_storage::market_bars::{self, MarketBarRow};
 use qtss_wyckoff::{
     boost_with_phase_c_events, detect_cycles_for_slot,
     detect_cycles_from_elliott, detect_events, detect_ranges,
-    dedupe_consecutive_same_phase, enforce_non_overlap,
+    dedupe_consecutive_same_phase, enforce_non_overlap_with_bars,
     filter_phase_c_events_in_context, merge_cycles_with_confluence,
     ElliottSegment, ElliottSegmentKind, WyckoffBias, WyckoffConfig,
     WyckoffCycle, WyckoffCyclePhase, WyckoffCycleSource, WyckoffEvent,
@@ -239,7 +239,7 @@ async fn process_symbol(
         // `enforce_non_overlap` clips lower-priority tiles to the
         // gaps where the higher-priority detector had no opinion,
         // producing a single non-overlapping timeline per slot.
-        let merged = enforce_non_overlap(merged);
+        let merged = enforce_non_overlap_with_bars(merged, &bars);
 
         // (3e) Re-fuse — clipping in (3d) can create new adjacent
         // same-phase tiles when a higher-priority middle tile is
