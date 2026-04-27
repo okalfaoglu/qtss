@@ -18,8 +18,10 @@ use qtss_storage::market_bars::{self, MarketBarRow};
 use qtss_wyckoff::{
     boost_with_phase_c_events, detect_cycles_for_slot,
     detect_cycles_from_elliott, detect_events, detect_ranges,
-    dedupe_consecutive_same_phase, enforce_non_overlap_with_bars,
-    filter_phase_c_events_in_context, merge_cycles_with_confluence,
+    classify_schematic_phases, dedupe_consecutive_same_phase,
+    enforce_non_overlap_with_bars, filter_phase_c_events_in_context,
+    merge_cycles_with_confluence, WyckoffSchematicPhase,
+    WyckoffSchematicSpan,
     ElliottSegment, ElliottSegmentKind, WyckoffBias, WyckoffConfig,
     WyckoffCycle, WyckoffCyclePhase, WyckoffCycleSource, WyckoffEvent,
     WyckoffPhaseTracker, WyckoffRange,
@@ -163,6 +165,34 @@ async fn process_symbol(
     let ranges = detect_ranges(&sorted);
     for r in &ranges {
         written += write_range(pool, sym, &chrono, r).await?;
+    }
+
+    // 2026-04-27 — canonical 5-phase Wyckoff schematic spans
+    // (A → E for both Accumulation and Distribution sides). Same
+    // events drive the phase classifier; the output is what the
+    // chart renders as A / B / C / D / E bracket boxes per
+    // docs/WYCKOFF_METHOD.md. Stale rows for THIS symbol are
+    // already cleared by the DELETE above (subkind LIKE 'phase_%'
+    // is added to the sweep).
+    let _ = sqlx::query(
+        r#"DELETE FROM detections
+            WHERE exchange = $1 AND segment = $2
+              AND symbol = $3 AND timeframe = $4
+              AND pattern_family = 'wyckoff'
+              AND mode = 'live'
+              AND subkind LIKE 'phase\_%' ESCAPE '\'"#,
+    )
+    .bind(&sym.exchange)
+    .bind(&sym.segment)
+    .bind(&sym.symbol)
+    .bind(&sym.interval)
+    .execute(pool)
+    .await;
+    let tape_last = chrono.len().saturating_sub(1);
+    let schematic =
+        classify_schematic_phases(&sorted, &bars, tape_last);
+    for span in &schematic {
+        written += write_schematic_phase(pool, sym, &chrono, span).await?;
     }
 
     // FAZ 25.4.D + E — hybrid four-phase macro cycle per Z-degree slot.
@@ -747,4 +777,98 @@ async fn load_config(pool: &PgPool) -> WyckoffConfig {
         }
     }
     cfg
+}
+
+/// Persist a 5-phase schematic span (Phase A..E) as a wyckoff
+/// detection row. Subkind format: `phase_{a|b|c|d|e}_{acc|dist}`.
+/// The chart renders these as bracket boxes annotated with the
+/// canonical phase name; the cycle pipeline uses them as a sanity
+/// check on its own 4-phase rotation timeline.
+async fn write_schematic_phase(
+    pool: &PgPool,
+    sym: &EngineSymbol,
+    chrono: &[MarketBarRow],
+    span: &WyckoffSchematicSpan,
+) -> anyhow::Result<usize> {
+    use qtss_wyckoff::WyckoffSchematicDirection;
+    let phase_letter = match span.phase {
+        WyckoffSchematicPhase::A => "a",
+        WyckoffSchematicPhase::B => "b",
+        WyckoffSchematicPhase::C => "c",
+        WyckoffSchematicPhase::D => "d",
+        WyckoffSchematicPhase::E => "e",
+    };
+    let dir_str = match span.direction {
+        WyckoffSchematicDirection::Accumulation => "acc",
+        WyckoffSchematicDirection::Distribution => "dist",
+    };
+    let subkind = format!("phase_{phase_letter}_{dir_str}");
+    let direction: i16 = match span.direction {
+        WyckoffSchematicDirection::Accumulation => 1,
+        WyckoffSchematicDirection::Distribution => -1,
+    };
+    let start_time = chrono
+        .get(span.start_bar)
+        .map(|b| b.open_time)
+        .unwrap_or_else(Utc::now);
+    let end_time = chrono
+        .get(span.end_bar.min(chrono.len().saturating_sub(1)))
+        .map(|b| b.open_time)
+        .unwrap_or_else(Utc::now);
+    let anchors = json!([
+        {
+            "label_override": format!("phase_{phase_letter}_start"),
+            "bar_index": span.start_bar as i64,
+            "price": span.phase_low,
+            "time": start_time,
+        },
+        {
+            "label_override": format!("phase_{phase_letter}_end"),
+            "bar_index": span.end_bar as i64,
+            "price": span.phase_high,
+            "time": end_time,
+        }
+    ]);
+    let raw_meta = json!({
+        "phase":           phase_letter,
+        "direction":       dir_str,
+        "phase_high":      span.phase_high,
+        "phase_low":       span.phase_low,
+        "completed":       span.completed,
+        "anchor_events":   span.anchor_events,
+        "kind":            "wyckoff_schematic_phase",
+    });
+    sqlx::query(
+        r#"INSERT INTO detections
+              (exchange, segment, symbol, timeframe, slot,
+               pattern_family, subkind, direction,
+               start_bar, end_bar, start_time, end_time,
+               anchors, invalidated, raw_meta, mode)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'live')
+           ON CONFLICT (exchange, segment, symbol, timeframe, slot,
+                        pattern_family, subkind, start_time, end_time, mode)
+           DO UPDATE SET
+               direction  = EXCLUDED.direction,
+               anchors    = EXCLUDED.anchors,
+               raw_meta   = EXCLUDED.raw_meta,
+               updated_at = now()"#,
+    )
+    .bind(&sym.exchange)
+    .bind(&sym.segment)
+    .bind(&sym.symbol)
+    .bind(&sym.interval)
+    .bind(0i16) // schematic is per-symbol, not per-degree
+    .bind("wyckoff")
+    .bind(&subkind)
+    .bind(direction)
+    .bind(span.start_bar as i64)
+    .bind(span.end_bar as i64)
+    .bind(start_time)
+    .bind(end_time)
+    .bind(&anchors)
+    .bind(false)
+    .bind(&raw_meta)
+    .execute(pool)
+    .await?;
+    Ok(1)
 }

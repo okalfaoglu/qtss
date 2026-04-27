@@ -32,6 +32,7 @@ mod cycle;
 mod event;
 mod events;
 mod phase;
+mod phases;
 mod range;
 
 pub use config::WyckoffConfig;
@@ -47,4 +48,9 @@ pub use events::{
     detect_events, filter_phase_c_events_in_context, WYCKOFF_SPECS,
 };
 pub use phase::{WyckoffBias, WyckoffPhase, WyckoffPhaseTracker};
+pub use phases::{
+    classify_schematic_phases, compute_wyckoff_view, EventAnchor,
+    WyckoffPhaseView, WyckoffSchematicDirection, WyckoffSchematicPhase,
+    WyckoffSchematicSpan,
+};
 pub use range::{detect_ranges, WyckoffRange};

@@ -1,0 +1,600 @@
+//! Canonical Wyckoff schematic phase classifier (Phase A → E).
+//!
+//! Maps a stream of Wyckoff events plus the underlying bar tape to
+//! a sequence of `WyckoffSchematicSpan`s — one per phase — that the
+//! GUI overlays as bracketed boxes on the chart, and the cycle
+//! pipeline cross-references against its 4-phase rotation.
+//!
+//! Anchoring rules follow the StockCharts ChartSchool tutorial and
+//! the Trading Wyckoff phase guide (URLs in
+//! `docs/WYCKOFF_METHOD.md`):
+//!
+//! ## Accumulation
+//! ```text
+//! Phase A (Stopping action)   ← PS  ─ SC  ─ AR  ─ ST
+//! Phase B (Building cause)    ← (last ST of A) → Spring
+//! Phase C (Test of supply)    ← Spring + Test of Spring
+//! Phase D (Move out of TR)    ← SOS  ─ LPS  ─ BU/JAC
+//! Phase E (Markup)            ← BU/JAC → next markup leg
+//! ```
+//!
+//! ## Distribution (mirror)
+//! ```text
+//! Phase A   ← PSY ─ BC  ─ AR  ─ ST
+//! Phase B   ← (last ST) → UTAD
+//! Phase C   ← UTAD + Test of UTAD
+//! Phase D   ← SOW ─ LPSY ─ Breakdown
+//! Phase E   ← Breakdown → Markdown leg
+//! ```
+//!
+//! When a phase's anchor event is missing the classifier falls back
+//! to the surrounding phases' boundaries (Phase B is whatever
+//! survives between A and C, etc). Phase E is bounded by the next
+//! direction reversal — if the markup runs all the way until the
+//! next BC event, Phase E ends there.
+
+use crate::cycle::{
+    detect_cycles, detect_cycles_from_elliott, dedupe_consecutive_same_phase,
+    enforce_non_overlap_with_bars, ElliottSegment, WyckoffCycle,
+};
+use crate::event::{WyckoffEvent, WyckoffEventKind};
+use qtss_domain::v2::bar::Bar;
+use serde::{Deserialize, Serialize};
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WyckoffSchematicPhase {
+    /// Stopping action — PS/PSY through ST.
+    A,
+    /// Building cause — sideways absorption inside the TR.
+    B,
+    /// Test of supply / demand — Spring or UTAD plus its retest.
+    C,
+    /// Move out of the trading range — SOS / SOW signature events.
+    D,
+    /// Markup / Markdown — the trend leg that follows BU / BO.
+    E,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WyckoffSchematicDirection {
+    Accumulation,
+    Distribution,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WyckoffSchematicSpan {
+    pub phase: WyckoffSchematicPhase,
+    pub direction: WyckoffSchematicDirection,
+    /// Inclusive bar where the phase opens.
+    pub start_bar: usize,
+    /// Inclusive bar where the phase closes (or last fed bar when
+    /// still active).
+    pub end_bar: usize,
+    /// Highest HIGH across the phase span.
+    pub phase_high: f64,
+    /// Lowest LOW across the phase span.
+    pub phase_low: f64,
+    /// Event bar indices that anchored this phase. Used by the GUI
+    /// to draw the bracket markers above / below the phase box.
+    pub anchor_events: Vec<EventAnchor>,
+    /// `true` once the next phase opens; `false` while still
+    /// active at the tape head.
+    pub completed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EventAnchor {
+    pub kind: String,
+    pub bar_index: usize,
+    pub price: f64,
+}
+
+/// Full Wyckoff view — both layers in one struct so callers (the
+/// engine writer, the GUI, the API) can render the macro 4-phase
+/// rotation AND the canonical 5-phase schematic side-by-side.
+///
+/// `macro_cycles` carries the four-phase macro tiles
+///   (Accumulation → Markup → Distribution → Markdown)
+/// computed from the merged Event + Elliott pipeline (see `cycle.rs`).
+///
+/// `schematic_phases` carries the canonical 5-phase Wyckoff
+/// sub-phases (Phase A → Phase E) per Accumulation / Distribution
+/// side, anchored to the events documented in
+/// `docs/WYCKOFF_METHOD.md`.
+///
+/// The two layers complement each other: the macro tiles tell the
+/// trader WHICH side of the cycle they're in (basing? rallying?
+/// topping? declining?), and the schematic phases tell them WHERE
+/// inside that side they are (still in stopping action? past the
+/// Spring? ready to ride the markup leg?).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WyckoffPhaseView {
+    pub macro_cycles: Vec<WyckoffCycle>,
+    pub schematic_phases: Vec<WyckoffSchematicSpan>,
+}
+
+/// Compute BOTH layers from the same input. Single entry point so
+/// callers don't have to worry about which crate function to call
+/// first or whether the macro and schematic sides agree.
+///
+/// Macro pipeline (re-uses cycle.rs):
+///   1. event-driven cycles (`detect_cycles`)
+///   2. elliott-anchored cycles (`detect_cycles_from_elliott`)
+///   3. enforce_non_overlap to clip overlapping different-phase tiles
+///   4. dedupe_consecutive_same_phase to fuse adjacent same-phase tiles
+///
+/// Schematic pipeline (`classify_schematic_phases` below):
+///   1. sort events by bar
+///   2. split by direction (bull = Accumulation side, bear = Distribution)
+///   3. anchor each phase A-E to its canonical event(s)
+///
+/// Returns both as a single struct ready to serialize.
+pub fn compute_wyckoff_view(
+    events: &[WyckoffEvent],
+    elliott_segments: &[ElliottSegment],
+    bars: &[Bar],
+    tape_end_bar: usize,
+    tape_end_price: f64,
+) -> WyckoffPhaseView {
+    // Macro layer.
+    let event_cycles =
+        detect_cycles(events, bars, tape_end_bar, tape_end_price);
+    let elliott_cycles = detect_cycles_from_elliott(
+        elliott_segments,
+        bars,
+        tape_end_bar,
+        tape_end_price,
+    );
+    let merged: Vec<_> =
+        event_cycles.into_iter().chain(elliott_cycles).collect();
+    let merged = enforce_non_overlap_with_bars(merged, bars);
+    let merged = dedupe_consecutive_same_phase(merged);
+
+    // Schematic layer.
+    let schematic = classify_schematic_phases(events, bars, tape_end_bar);
+
+    WyckoffPhaseView {
+        macro_cycles: merged,
+        schematic_phases: schematic,
+    }
+}
+
+/// Top-level entry: sort events, split by direction, run the
+/// schematic classifier on each side.
+pub fn classify_schematic_phases(
+    events: &[WyckoffEvent],
+    bars: &[Bar],
+    tape_end_bar: usize,
+) -> Vec<WyckoffSchematicSpan> {
+    if events.is_empty() {
+        return Vec::new();
+    }
+    let mut sorted: Vec<&WyckoffEvent> = events.iter().collect();
+    sorted.sort_by_key(|e| e.bar_index);
+
+    let bull: Vec<&WyckoffEvent> = sorted
+        .iter()
+        .filter(|e| e.variant == "bull")
+        .copied()
+        .collect();
+    let bear: Vec<&WyckoffEvent> = sorted
+        .iter()
+        .filter(|e| e.variant == "bear")
+        .copied()
+        .collect();
+
+    let mut out = Vec::new();
+    out.extend(classify_side(
+        &bull,
+        bars,
+        tape_end_bar,
+        WyckoffSchematicDirection::Accumulation,
+    ));
+    out.extend(classify_side(
+        &bear,
+        bars,
+        tape_end_bar,
+        WyckoffSchematicDirection::Distribution,
+    ));
+    out.sort_by_key(|s| (s.start_bar, schematic_phase_rank(s.phase)));
+    out
+}
+
+fn schematic_phase_rank(p: WyckoffSchematicPhase) -> u8 {
+    match p {
+        WyckoffSchematicPhase::A => 0,
+        WyckoffSchematicPhase::B => 1,
+        WyckoffSchematicPhase::C => 2,
+        WyckoffSchematicPhase::D => 3,
+        WyckoffSchematicPhase::E => 4,
+    }
+}
+
+/// Classify a single direction (Accumulation OR Distribution).
+///
+/// Algorithm — anchor-driven:
+///   1. Walk events forward, gathering candidate anchors per phase.
+///   2. Phase A: starts at the first PS / PSY (or, when absent, the
+///      first SC / BC); ends at the LAST ST before the first
+///      Spring / UTAD.
+///   3. Phase B: from end of Phase A to the bar BEFORE the first
+///      Spring / UTAD.
+///   4. Phase C: the Spring / UTAD bar plus the bar of its Test
+///      (when present).
+///   5. Phase D: from the first SOS / SOW after Phase C through
+///      the last LPS / LPSY (or BU / BO).
+///   6. Phase E: from the BU / BO breakout through `tape_end_bar`
+///      (or earlier if a same-direction A re-enters the picture).
+///
+/// Each phase emits a span only when its trigger anchor is
+/// present — Phase B can exist without explicit Phase B-only
+/// events because its boundaries are the surrounding phases.
+fn classify_side(
+    events: &[&WyckoffEvent],
+    bars: &[Bar],
+    tape_end_bar: usize,
+    direction: WyckoffSchematicDirection,
+) -> Vec<WyckoffSchematicSpan> {
+    use WyckoffEventKind::*;
+    let bull = matches!(direction, WyckoffSchematicDirection::Accumulation);
+    if events.is_empty() {
+        return Vec::new();
+    }
+    // Collect anchor bars per kind.
+    let by_kind = |k: WyckoffEventKind| -> Vec<&WyckoffEvent> {
+        events.iter().copied().filter(|e| e.kind == k).collect()
+    };
+    let ps = by_kind(Ps); // works for both PS (bull) and PSY (bear)
+    let sc_or_bc = by_kind(if bull { Sc } else { Bc });
+    let ar = by_kind(Ar);
+    let st = by_kind(St);
+    let spring_or_utad =
+        by_kind(if bull { Spring } else { Utad });
+    let test_events = by_kind(Test);
+    let sos_or_sow = by_kind(if bull { Sos } else { Sow });
+    let lps = by_kind(Lps);
+    let bu = by_kind(Bu);
+
+    let phase_a_anchor_start = ps
+        .first()
+        .map(|e| e.bar_index)
+        .or_else(|| sc_or_bc.first().map(|e| e.bar_index));
+    let phase_a_anchor_end = st
+        .iter()
+        .filter(|e| {
+            spring_or_utad
+                .first()
+                .map(|sp| e.bar_index < sp.bar_index)
+                .unwrap_or(true)
+        })
+        .last()
+        .map(|e| e.bar_index)
+        .or_else(|| ar.first().map(|e| e.bar_index));
+
+    let phase_c_start = spring_or_utad.first().map(|e| e.bar_index);
+    let phase_c_end = test_events
+        .iter()
+        .filter(|e| {
+            phase_c_start
+                .map(|c| e.bar_index >= c)
+                .unwrap_or(false)
+        })
+        .last()
+        .map(|e| e.bar_index)
+        .or(phase_c_start);
+
+    let phase_d_start = sos_or_sow
+        .iter()
+        .find(|e| {
+            phase_c_end
+                .map(|c| e.bar_index > c)
+                .unwrap_or(true)
+        })
+        .map(|e| e.bar_index);
+    let phase_d_end = bu
+        .iter()
+        .filter(|e| {
+            phase_d_start
+                .map(|d| e.bar_index >= d)
+                .unwrap_or(false)
+        })
+        .last()
+        .map(|e| e.bar_index)
+        .or_else(|| {
+            lps.iter()
+                .filter(|e| {
+                    phase_d_start
+                        .map(|d| e.bar_index >= d)
+                        .unwrap_or(false)
+                })
+                .last()
+                .map(|e| e.bar_index)
+        })
+        .or(phase_d_start);
+
+    let phase_e_start = phase_d_end;
+    let phase_e_end = tape_end_bar;
+
+    let mut out = Vec::new();
+    let mk = |phase: WyckoffSchematicPhase,
+              start: usize,
+              end: usize,
+              anchors: Vec<EventAnchor>|
+     -> WyckoffSchematicSpan {
+        let (hi, lo) = bar_bounds(bars, start, end);
+        WyckoffSchematicSpan {
+            phase,
+            direction,
+            start_bar: start,
+            end_bar: end,
+            phase_high: hi,
+            phase_low: lo,
+            anchor_events: anchors,
+            completed: end < tape_end_bar,
+        }
+    };
+    let to_anchor = |e: &WyckoffEvent| EventAnchor {
+        kind: format!("{:?}", e.kind).to_lowercase(),
+        bar_index: e.bar_index,
+        price: e.reference_price,
+    };
+
+    // Phase A
+    if let (Some(s), Some(e)) = (phase_a_anchor_start, phase_a_anchor_end) {
+        if e >= s {
+            let mut anchors: Vec<EventAnchor> = Vec::new();
+            anchors.extend(ps.iter().map(|x| to_anchor(*x)));
+            anchors.extend(sc_or_bc.iter().map(|x| to_anchor(*x)));
+            anchors.extend(ar.iter().map(|x| to_anchor(*x)));
+            anchors.extend(
+                st.iter()
+                    .filter(|e| e.bar_index <= phase_a_anchor_end.unwrap())
+                    .map(|x| to_anchor(*x)),
+            );
+            out.push(mk(WyckoffSchematicPhase::A, s, e, anchors));
+        }
+    }
+
+    // Phase B — between A's end and Spring/UTAD start.
+    if let (Some(b_start), Some(b_end)) = (
+        phase_a_anchor_end.map(|x| x.saturating_add(1)),
+        phase_c_start.map(|x| x.saturating_sub(1)),
+    ) {
+        if b_end > b_start {
+            // Anchor B with any STs that fall in this window.
+            let anchors: Vec<EventAnchor> = st
+                .iter()
+                .filter(|e| {
+                    e.bar_index > phase_a_anchor_end.unwrap()
+                        && e.bar_index < phase_c_start.unwrap()
+                })
+                .map(|x| to_anchor(*x))
+                .collect();
+            out.push(mk(WyckoffSchematicPhase::B, b_start, b_end, anchors));
+        }
+    }
+
+    // Phase C — Spring/UTAD plus its test.
+    if let (Some(s), Some(e)) = (phase_c_start, phase_c_end) {
+        let mut anchors: Vec<EventAnchor> = Vec::new();
+        anchors.extend(spring_or_utad.iter().map(|x| to_anchor(*x)));
+        anchors.extend(
+            test_events
+                .iter()
+                .filter(|t| t.bar_index >= s && t.bar_index <= e)
+                .map(|x| to_anchor(*x)),
+        );
+        out.push(mk(WyckoffSchematicPhase::C, s, e, anchors));
+    }
+
+    // Phase D — SOS through LPS/BU.
+    if let (Some(s), Some(e)) = (phase_d_start, phase_d_end) {
+        let mut anchors: Vec<EventAnchor> = Vec::new();
+        anchors.extend(
+            sos_or_sow
+                .iter()
+                .filter(|x| x.bar_index >= s && x.bar_index <= e)
+                .map(|x| to_anchor(*x)),
+        );
+        anchors.extend(
+            lps.iter()
+                .filter(|x| x.bar_index >= s && x.bar_index <= e)
+                .map(|x| to_anchor(*x)),
+        );
+        anchors.extend(
+            bu.iter()
+                .filter(|x| x.bar_index >= s && x.bar_index <= e)
+                .map(|x| to_anchor(*x)),
+        );
+        out.push(mk(WyckoffSchematicPhase::D, s, e, anchors));
+    }
+
+    // Phase E — markup / markdown leg from D's end to tape head.
+    if let Some(s) = phase_e_start {
+        if phase_e_end > s {
+            out.push(mk(
+                WyckoffSchematicPhase::E,
+                s,
+                phase_e_end,
+                Vec::new(),
+            ));
+        }
+    }
+
+    out
+}
+
+fn bar_bounds(bars: &[Bar], start: usize, end: usize) -> (f64, f64) {
+    use rust_decimal::prelude::ToPrimitive;
+    if bars.is_empty() {
+        return (0.0, 0.0);
+    }
+    let s = start.min(bars.len() - 1);
+    let e = end.min(bars.len() - 1).max(s);
+    let mut hi = f64::NEG_INFINITY;
+    let mut lo = f64::INFINITY;
+    for b in &bars[s..=e] {
+        let h = b.high.to_f64().unwrap_or(0.0);
+        let l = b.low.to_f64().unwrap_or(0.0);
+        if h > hi {
+            hi = h;
+        }
+        if l < lo {
+            lo = l;
+        }
+    }
+    if !hi.is_finite() {
+        hi = 0.0;
+    }
+    if !lo.is_finite() {
+        lo = 0.0;
+    }
+    (hi, lo)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::WyckoffEvent;
+    use chrono::TimeZone;
+    use qtss_domain::v2::instrument::{
+        AssetClass, Instrument, SessionCalendar, Venue,
+    };
+    use qtss_domain::v2::timeframe::Timeframe;
+    use rust_decimal::prelude::FromPrimitive;
+
+    fn synth_bar(idx: usize, mid: f64) -> Bar {
+        Bar {
+            instrument: Instrument {
+                venue: Venue::Binance,
+                asset_class: AssetClass::CryptoFutures,
+                symbol: "TESTUSDT".into(),
+                quote_ccy: "USDT".into(),
+                tick_size: rust_decimal::Decimal::from_f64(0.01).unwrap(),
+                lot_size: rust_decimal::Decimal::from_f64(0.00001).unwrap(),
+                session: SessionCalendar::binance_24x7(),
+            },
+            timeframe: Timeframe::H1,
+            open_time: chrono::Utc
+                .timestamp_opt(idx as i64 * 3600, 0)
+                .unwrap(),
+            open: rust_decimal::Decimal::from_f64(mid).unwrap(),
+            high: rust_decimal::Decimal::from_f64(mid + 1.0).unwrap(),
+            low: rust_decimal::Decimal::from_f64(mid - 1.0).unwrap(),
+            close: rust_decimal::Decimal::from_f64(mid).unwrap(),
+            volume: rust_decimal::Decimal::from(1000),
+            closed: true,
+        }
+    }
+
+    fn ev(
+        kind: WyckoffEventKind,
+        variant: &'static str,
+        bar_index: usize,
+        price: f64,
+    ) -> WyckoffEvent {
+        WyckoffEvent {
+            kind,
+            variant,
+            score: 1.0,
+            bar_index,
+            reference_price: price,
+            volume_ratio: 0.0,
+            range_ratio: 0.0,
+            note: String::new(),
+        }
+    }
+
+    /// Canonical accumulation sequence: PS → SC → AR → ST → Spring
+    /// → Test → SOS → LPS → BU. The classifier should emit all
+    /// five phases A..E in order.
+    #[test]
+    fn full_accumulation_sequence_emits_all_five_phases() {
+        let bars: Vec<Bar> =
+            (0..200).map(|i| synth_bar(i, 100.0 + i as f64 * 0.1)).collect();
+        let events = vec![
+            ev(WyckoffEventKind::Ps, "bull", 10, 99.0),
+            ev(WyckoffEventKind::Sc, "bull", 15, 95.0),
+            ev(WyckoffEventKind::Ar, "bull", 25, 105.0),
+            ev(WyckoffEventKind::St, "bull", 40, 96.0),
+            ev(WyckoffEventKind::Spring, "bull", 70, 93.0),
+            ev(WyckoffEventKind::Test, "bull", 80, 94.0),
+            ev(WyckoffEventKind::Sos, "bull", 100, 110.0),
+            ev(WyckoffEventKind::Lps, "bull", 120, 108.0),
+            ev(WyckoffEventKind::Bu, "bull", 140, 109.0),
+        ];
+        let phases = classify_schematic_phases(&events, &bars, 199);
+        let names: Vec<_> = phases.iter().map(|p| p.phase).collect();
+        assert!(
+            names.contains(&WyckoffSchematicPhase::A),
+            "Phase A missing: {names:?}"
+        );
+        assert!(
+            names.contains(&WyckoffSchematicPhase::B),
+            "Phase B missing: {names:?}"
+        );
+        assert!(
+            names.contains(&WyckoffSchematicPhase::C),
+            "Phase C missing: {names:?}"
+        );
+        assert!(
+            names.contains(&WyckoffSchematicPhase::D),
+            "Phase D missing: {names:?}"
+        );
+        assert!(
+            names.contains(&WyckoffSchematicPhase::E),
+            "Phase E missing: {names:?}"
+        );
+    }
+
+    /// Distribution sequence emits five phases on the bear side.
+    #[test]
+    fn full_distribution_sequence_emits_all_five_phases() {
+        let bars: Vec<Bar> =
+            (0..200).map(|i| synth_bar(i, 200.0 - i as f64 * 0.1)).collect();
+        let events = vec![
+            ev(WyckoffEventKind::Ps, "bear", 10, 201.0),
+            ev(WyckoffEventKind::Bc, "bear", 15, 205.0),
+            ev(WyckoffEventKind::Ar, "bear", 25, 195.0),
+            ev(WyckoffEventKind::St, "bear", 40, 204.0),
+            ev(WyckoffEventKind::Utad, "bear", 70, 207.0),
+            ev(WyckoffEventKind::Test, "bear", 80, 206.0),
+            ev(WyckoffEventKind::Sow, "bear", 100, 190.0),
+            ev(WyckoffEventKind::Lps, "bear", 120, 192.0),
+            ev(WyckoffEventKind::Bu, "bear", 140, 191.0),
+        ];
+        let phases = classify_schematic_phases(&events, &bars, 199);
+        let acc_phases: Vec<_> = phases
+            .iter()
+            .filter(|p| {
+                p.direction == WyckoffSchematicDirection::Distribution
+            })
+            .map(|p| p.phase)
+            .collect();
+        assert_eq!(acc_phases.len(), 5, "phases: {acc_phases:?}");
+    }
+
+    /// Sparse events (missing Phase A anchors) — classifier still
+    /// emits Phase C / D / E from the Spring / SOS markers alone.
+    #[test]
+    fn sparse_event_set_still_emits_phase_c_through_e() {
+        let bars: Vec<Bar> =
+            (0..200).map(|i| synth_bar(i, 100.0)).collect();
+        let events = vec![
+            ev(WyckoffEventKind::Spring, "bull", 70, 93.0),
+            ev(WyckoffEventKind::Sos, "bull", 100, 110.0),
+            ev(WyckoffEventKind::Bu, "bull", 140, 109.0),
+        ];
+        let phases = classify_schematic_phases(&events, &bars, 199);
+        let names: Vec<_> = phases.iter().map(|p| p.phase).collect();
+        assert!(names.contains(&WyckoffSchematicPhase::C));
+        assert!(names.contains(&WyckoffSchematicPhase::D));
+        assert!(names.contains(&WyckoffSchematicPhase::E));
+    }
+}

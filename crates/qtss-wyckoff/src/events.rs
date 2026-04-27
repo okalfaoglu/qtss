@@ -658,6 +658,16 @@ pub fn eval_ps(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEvent> {
         if emitted {
             break;
         }
+        // BUG (2026-04-27) — trend context: PS marks the FIRST sign
+        // of buying interest after a sustained DECLINE. Without this
+        // gate the detector fired on every elevated-volume + lower-
+        // wick bar and the schematic phase classifier latched onto
+        // wrong starting points. PS by Wyckoff doctrine requires
+        // the bar to sit in a downtrend window — bar low must
+        // touch a recent N-bar minimum.
+        if !at_trend_bottom(bars, i, 30, 0.005) {
+            continue;
+        }
         let bar = &bars[i];
         let avg = sma_volume(bars, i, cfg.volume_sma_bars as usize);
         if avg < 1e-9 {
@@ -944,6 +954,13 @@ pub fn eval_ps_distribution(bars: &[Bar], cfg: &WyckoffConfig) -> Vec<WyckoffEve
     for i in start.max(cfg.volume_sma_bars as usize)..n {
         if emitted {
             break;
+        }
+        // BUG (2026-04-27) — symmetric trend gate. PSY (Preliminary
+        // Supply) sits at the END of a sustained UPTREND, mirror of
+        // PS. Without this gate the detector fired on every bar
+        // with an upper wick + elevated volume regardless of trend.
+        if !at_trend_top(bars, i, 30, 0.005) {
+            continue;
         }
         let bar = &bars[i];
         let avg = sma_volume(bars, i, cfg.volume_sma_bars as usize);
