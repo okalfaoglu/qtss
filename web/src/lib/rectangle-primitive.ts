@@ -23,12 +23,15 @@ export interface RectangleOptions {
   priceTop: number;
   /** Bottom price */
   priceBottom: number;
-  /** Fill color with alpha, e.g. "#3b82f630" */
+  /** Fill color with alpha, e.g. "#3b82f630". Empty / "transparent" /
+   * "rgba(0,0,0,0)" means outline-only (no fill drawn). */
   fillColor: string;
   /** Border color, e.g. "#3b82f6" */
   borderColor: string;
   /** Border width (0 = no border) */
   borderWidth?: number;
+  /** Dashed pattern for the border, e.g. [4, 4]. Defaults to solid. */
+  borderDash?: number[];
   /** Optional label text */
   label?: string;
   /** Label color */
@@ -69,16 +72,36 @@ class RectangleRenderer implements IPrimitivePaneRenderer {
       const y = Math.min(this._y1, this._y2) * vRatio;
       const h = Math.abs(this._y2 - this._y1) * vRatio;
 
-      // Fill
-      ctx.fillStyle = this._opts.fillColor;
-      ctx.fillRect(x, y, w, h);
+      // Fill — skip when caller asked for outline-only.
+      const fc = this._opts.fillColor;
+      const isTransparent =
+        !fc ||
+        fc === "transparent" ||
+        fc === "rgba(0,0,0,0)" ||
+        fc.endsWith(",0)") ||
+        fc.endsWith(", 0)");
+      if (!isTransparent) {
+        ctx.fillStyle = fc;
+        ctx.fillRect(x, y, w, h);
+      }
 
-      // Border
+      // Border — supports dashed pattern. setLineDash applies to
+      // strokeRect as well, so a single call wraps the whole box
+      // in the requested dash.
       const bw = this._opts.borderWidth ?? 1;
       if (bw > 0) {
         ctx.strokeStyle = this._opts.borderColor;
         ctx.lineWidth = bw * ratio;
+        const dash = this._opts.borderDash;
+        if (dash && dash.length > 0) {
+          ctx.setLineDash(dash.map((d) => d * ratio));
+        } else {
+          ctx.setLineDash([]);
+        }
         ctx.strokeRect(x, y, w, h);
+        // Reset so subsequent draws on the same canvas don't
+        // inherit the dash pattern.
+        ctx.setLineDash([]);
       }
 
       // Label

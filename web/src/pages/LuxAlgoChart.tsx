@@ -2198,41 +2198,39 @@ export function LuxAlgoChart({
         const t0 = anchorTime(a0);
         const t1 = anchorTime(a1);
         if (t0 === null || t1 === null) return;
-        // 2026-04-28 — per-phase distinct hues (user request:
-        // "eventlerin line çizgilerini kaldır. A,B,C,D,E nin her
-        // birini farklı renk yap"). Lines are gone; only a coloured
-        // text label remains at the start of the phase, with the
-        // letter as the principal cue and side suffix
-        // (Acc / Dist) telling the operator which schematic.
-        //
-        // Hue logic — shared across Acc and Dist sides because the
-        // letter alone uniquely identifies the phase, and the side
-        // suffix in the label disambiguates schematic.
+        // 2026-04-28 user audit — switch from "label only" back
+        // to a proper bracketed RECTANGLE because the reference
+        // Trading Wyckoff diagram shows clear dashed boundaries
+        // top-to-bottom around each phase. lightweight-charts has
+        // no first-class vertical-line API; the closest pragmatic
+        // match is the existing RectanglePrimitive painted
+        // outline-only with a dashed stroke. Inside stays
+        // transparent so candles read through unchanged.
         const phaseHue: Record<string, string> = {
           A: "#3b82f6", // blue   — stopping action
           B: "#a855f7", // violet — building cause
           C: "#f59e0b", // amber  — test (most actionable)
-          D: "#22c55e", // green  — move out of TR
-          E: "#ec4899", // pink   — markup/markdown leg
+          D: "#22c55e", // green  — breakout
+          E: "#ec4899", // pink   — markup / markdown leg
         };
         const color = phaseHue[phaseLetter] ?? "#10b981";
         const lo = Number(d.raw_meta?.phase_low) || Number(a0.price);
         const hi = Number(d.raw_meta?.phase_high) || Number(a1.price);
-        // Label-only annotation at phase start. A / C labels go
-        // ABOVE (these mark structural starts — Stopping action /
-        // Test); B / D / E go BELOW so a vertical ladder reads
-        // chronologically. The side colour was retired in favour
-        // of the per-letter palette above.
-        const compactLabel = `${phaseLetter}·${isAcc ? "Acc" : "Dist"}`;
-        const labelAbove =
-          phaseLetter === "A" || phaseLetter === "C";
-        attachLabel(
-          t0,
-          labelAbove ? hi : lo,
-          compactLabel,
-          color,
-          labelAbove ? "above" : "below",
-        );
+        const rect = new RectanglePrimitive({
+          time1: t0,
+          time2: t1,
+          priceTop: hi,
+          priceBottom: lo,
+          fillColor: "rgba(0,0,0,0)", // outline only, no fill
+          borderColor: color,
+          borderWidth: 1,
+          borderDash: [4, 4],
+          label: `${phaseLetter}·${isAcc ? "Acc" : "Dist"}`,
+          labelColor: color,
+          labelSize: 11,
+        });
+        candleSeries.attachPrimitive(rect);
+        rectPrimitivesRef.current.push(rect);
         return;
       }
       // FAZ 25.4.D — four-phase macro market cycle bands

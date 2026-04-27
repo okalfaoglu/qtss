@@ -59,6 +59,8 @@ mod lifecycle_manager;
 mod nansen_symbol_lifecycle;
 mod regime_deep_loop;
 mod data_health_report;
+mod fear_greed_loop;
+mod funding_rate_loop;
 
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -388,6 +390,18 @@ async fn main() -> anyhow::Result<()> {
         // RADAR hit-rate stats.
         let outcome_pool = pool.clone();
         tokio::spawn(outcome_tracker_loop::outcome_tracker_loop(outcome_pool));
+        // 2026-04-28 — sentiment + funding ingest writers. Both
+        // are public-API polls that populate the previously-empty
+        // fear_greed_snapshots and external_snapshots tables so
+        // the backtest's `sentiment_extreme` and
+        // `funding_oi_signals` scorers stop returning 0.
+        // Cadences: F&G every 4h (the index publishes daily),
+        // funding every 30m (Binance funding period is 8h but
+        // the rate is updated continuously).
+        let fg_pool = pool.clone();
+        tokio::spawn(fear_greed_loop::run(fg_pool));
+        let funding_pool = pool.clone();
+        tokio::spawn(funding_rate_loop::run(funding_pool));
         // Allocator v2 — autonomous dry-mode setup creator. Reads
         // confluence_snapshots + latest bar/ATR, runs the AI multi-
         // gate, arms approved setups in qtss_setups (mode='dry'). The
