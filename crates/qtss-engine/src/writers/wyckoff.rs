@@ -288,15 +288,29 @@ async fn load_elliott_segments(
     slot: i16,
     chrono: &[MarketBarRow],
 ) -> anyhow::Result<Vec<ElliottSegment>> {
+    // BUG (2026-04-27) — `elliott_full` family carries the bulk of
+    // confirmed Elliott patterns (18k+ rows: leading_diagonal_*,
+    // ending_diagonal_*, flat_*, zigzag_*, combination_*, triangle_*).
+    // The original filter `IN ('motive', 'abc')` only loaded 1k of
+    // those, so any rally / decline detected as elliott_full had no
+    // cycle tile emitted — the chart showed the wave labels but the
+    // Markup / Distribution / Markdown boxes for that segment were
+    // missing entirely. User reported on ETHUSDT 1h: a clear
+    // (1)..(5) bullish leg with no corresponding Markup tile.
+    //
+    // Now we also pull `elliott_full` rows and map their subkind to
+    // ElliottSegmentKind below (impulse / leading-diagonal /
+    // ending-diagonal → Motive; flat / zigzag / triangle /
+    // combination → Abc).
     let rows = sqlx::query(
-        r#"SELECT id::text AS id, pattern_family, direction,
+        r#"SELECT id::text AS id, pattern_family, subkind, direction,
                   start_bar, end_bar, anchors
              FROM detections
             WHERE exchange = $1 AND segment = $2
               AND symbol = $3 AND timeframe = $4
               AND slot = $5
               AND mode = 'live'
-              AND pattern_family IN ('motive', 'abc')
+              AND pattern_family IN ('motive', 'abc', 'elliott_full')
               AND invalidated = false
             ORDER BY start_bar"#,
     )
@@ -313,6 +327,7 @@ async fn load_elliott_segments(
     for r in rows {
         let id: String = r.try_get("id").unwrap_or_default();
         let family: String = r.try_get("pattern_family").unwrap_or_default();
+        let subkind: String = r.try_get("subkind").unwrap_or_default();
         let direction: i16 = r.try_get("direction").unwrap_or(0);
         let start_bar: i64 = r.try_get("start_bar").unwrap_or(0);
         let end_bar: i64 = r.try_get("end_bar").unwrap_or(0);
@@ -321,6 +336,30 @@ async fn load_elliott_segments(
         let kind = match family.as_str() {
             "motive" => ElliottSegmentKind::Motive,
             "abc" => ElliottSegmentKind::Abc,
+            "elliott_full" => {
+                // Subkind-driven classification. Impulse and the
+                // two diagonal variants are 5-wave motives; flat,
+                // zigzag, triangle and combination are corrective
+                // (3-wave or compound). Anything we don't
+                // recognise we skip rather than guess.
+                let s = subkind.as_str();
+                if s.starts_with("impulse")
+                    || s.starts_with("leading_diagonal")
+                    || s.starts_with("ending_diagonal")
+                    || s.starts_with("truncated_fifth")
+                {
+                    ElliottSegmentKind::Motive
+                } else if s.starts_with("flat")
+                    || s.starts_with("zigzag")
+                    || s.starts_with("triangle")
+                    || s.starts_with("combination")
+                    || s.starts_with("abc")
+                {
+                    ElliottSegmentKind::Abc
+                } else {
+                    continue;
+                }
+            }
             _ => continue,
         };
         let bullish = direction >= 0;
