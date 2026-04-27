@@ -1310,6 +1310,10 @@ export function LuxAlgoChart({
         abc_nascent: "abc",
         abc_forming: "abc",
         abc_projected: "abc?",
+        // BUG2 — post-ABC motive forecast emitted by elliott_early.
+        // Multi-anchor render path picks up the (1)?..(5)? labels;
+        // this single-letter fallback only fires defensively.
+        motive_projected_post_abc: "P",
       };
       // Pre-compute motive bar ranges per slot so we can suppress
       // nascent / forming markers that have since been promoted to a
@@ -1389,9 +1393,19 @@ export function LuxAlgoChart({
         if (
           em.stage === "abc_nascent" ||
           em.stage === "abc_forming" ||
-          em.stage === "abc_projected"
+          em.stage === "abc_projected" ||
+          // BUG2 — post-ABC motive forecast: 6 anchors W0..W5 with
+          // W0 at C and (1)?..(5)? projected. Reuses the same
+          // multi-anchor render pipeline (clip window, projected vs
+          // real, polyline). Labels come from the per-anchor
+          // label_override the writer already sets, so the segLabels
+          // fallback table only covers the ABC case.
+          em.stage === "motive_projected_post_abc"
         ) {
-          const segLabels = ["", "(a)", "(b)", "(c)"];
+          const segLabels =
+            em.stage === "motive_projected_post_abc"
+              ? ["", "(1)?", "(2)?", "(3)?", "(4)?", "(5)?"]
+              : ["", "(a)", "(b)", "(c)"];
           // Single colour — taken from the Z1..Z5 slot palette so the
           // ABC inherits the same colour as its motive lines. Real
           // vs projected are distinguished ONLY by line style

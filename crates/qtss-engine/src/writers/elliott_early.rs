@@ -416,6 +416,48 @@ pub fn scan_level(
         let suffix = if abc_dir == 1 { "bull" } else { "bear" };
         let p0 = &motive.anchors[0];
 
+        // BUG1 fix (2026-04-27) — live-bar re-evaluation. The user
+        // reported 3-5 times: "ABC noktaları ve dalga tahminlemesi
+        // değişen fiyat ve piyasa şartlarına göre düzenlemiyor."
+        // Symptom: once A and B were detected, the (c)? projection
+        // froze at A - (B - A) and never reflected post-B price
+        // action. If price reversed back above B (bearish ABC) or
+        // reclaimed the W5 high, the chart still drew a stale C
+        // target far below the current tape.
+        //
+        // Fix three live-bar conditions consume `latest_close` and
+        // either INVALIDATE the corrective entirely (don't emit) or
+        // RE-ANCHOR the C projection at where price actually is so
+        // the dotted target moves with the market instead of staying
+        // pinned to its inception value.
+        //
+        // The conditions are intentionally conservative — small
+        // wicks shouldn't kill an ABC, only sustained closes that
+        // structurally violate the corrective.
+        let latest_close: f64 = chrono_bars
+            .last()
+            .and_then(|b| b.close.to_f64())
+            .unwrap_or(0.0);
+        // Invalidation buffer (% of price). 0.3% absorbs typical 1h
+        // candle wicks without letting genuine reclaims through.
+        const LIVE_INVAL_BUFFER: f64 = 0.003;
+        let p5_price = motive.anchors[5].price;
+        // Was W5 itself reclaimed since the motive completed?
+        // Bearish ABC needs the bull motive's W5 to remain the high.
+        // Bullish ABC needs the bear motive's W5 to remain the low.
+        let w5_reclaimed = if motive.direction == 1 {
+            latest_close > p5_price * (1.0 + LIVE_INVAL_BUFFER)
+        } else {
+            latest_close < p5_price * (1.0 - LIVE_INVAL_BUFFER)
+        };
+        if w5_reclaimed {
+            // The motive's W5 has been broken on close — any ABC
+            // drawn off it is now fiction. Skip emission. The next
+            // tick will detect the new motive forming and rebuild
+            // from there.
+            continue;
+        }
+
         // Projection geometry — Fib-based, mirrored automatically by
         // the price arithmetic since W5 - W0 carries the impulse sign.
         // A retraces ~50% of the W0→W5 swing; B retraces ~50% of A's
@@ -430,6 +472,35 @@ pub fn scan_level(
             // C = A - (B - A) keeps C on the same side as A relative
             // to B, with leg length matching A.
             from_a - (from_b - from_a)
+        };
+        // BUG1 helper — once we have A and B, decide whether the
+        // CURRENT bar already "completed" the C leg (price has run
+        // past the projected target without printing a confirmed
+        // pivot). When yes we re-anchor C at the live close so the
+        // dotted target sits ON the market instead of dangling at
+        // a stale projection. When `b_real` is None we can't run the
+        // re-anchor (no B yet) and just return the inception value.
+        let live_c_anchor = |a_price: f64,
+                             b_real: Option<f64>|
+         -> (f64, bool) {
+            let proj_c = match b_real {
+                Some(b) => project_c(a_price, b),
+                None => return (project_c(a_price, project_b(p5_price, a_price)), false),
+            };
+            // For a bearish ABC (motive direction = +1): C is a
+            // LOW below A. If latest close has already pushed BELOW
+            // proj_c, C has effectively printed at/under the target —
+            // re-anchor at the live close. Mirror for bullish ABC.
+            let crossed = if motive.direction == 1 {
+                latest_close < proj_c
+            } else {
+                latest_close > proj_c
+            };
+            if crossed {
+                (latest_close, true)
+            } else {
+                (proj_c, false)
+            }
         };
         // Bar spacing — use motive's W3 duration as a proxy. Each ABC
         // leg projects forward by (W3 bars or 5, whichever is bigger).
@@ -462,7 +533,16 @@ pub fn scan_level(
             let c_dir = -p5.direction;
             let a_proj = project_a(p5.price);
             let b_proj = project_b(p5.price, a_proj);
-            let c_proj = project_c(a_proj, b_proj);
+            // BUG1 — re-anchor C against live close so the (c?) on
+            // the chart tracks the actual market when price has
+            // already overshot the inception projection.
+            let (c_proj, c_live_anchored) =
+                live_c_anchor(a_proj, Some(b_proj));
+            let c_bar = if c_live_anchored {
+                last_bar_index
+            } else {
+                clip_to_last(motive.anchors[5].bar_index + leg_bars * 3)
+            };
             out.push(EarlyMatch {
                 subkind: format!("abc_projected_{suffix}"),
                 direction: abc_dir,
@@ -470,7 +550,18 @@ pub fn scan_level(
                     p5.clone(),
                     make_proj(leg_bars, a_proj, a_dir, "a?"),
                     make_proj(leg_bars * 2, b_proj, b_dir, "b?"),
-                    make_proj(leg_bars * 3, c_proj, c_dir, "c?"),
+                    PivotPoint {
+                        direction: c_dir,
+                        bar_index: c_bar,
+                        price: c_proj,
+                        label_override: Some(if c_live_anchored {
+                            "c (live)"
+                        } else {
+                            "c?"
+                        }
+                        .into()),
+                        hide_label: false,
+                    },
                 ],
                 score: 0.30,
                 invalidation_price: p5.price,
@@ -487,7 +578,9 @@ pub fn scan_level(
                 let a_leg_bars =
                     (a_anchor.bar_index - p5.bar_index).max(5);
                 let b_proj = project_b(p5.price, a_anchor.price);
-                let c_proj = project_c(a_anchor.price, b_proj);
+                // BUG1 — re-anchor C against live close.
+                let (c_proj, c_live_anchored) =
+                    live_c_anchor(a_anchor.price, Some(b_proj));
                 let b_dir = p5.direction;
                 let c_dir = -p5.direction;
                 out.push(EarlyMatch {
@@ -507,11 +600,20 @@ pub fn scan_level(
                         },
                         PivotPoint {
                             direction: c_dir,
-                            bar_index: clip_to_last(
-                                a_anchor.bar_index + a_leg_bars * 2,
-                            ),
+                            bar_index: if c_live_anchored {
+                                last_bar_index
+                            } else {
+                                clip_to_last(
+                                    a_anchor.bar_index + a_leg_bars * 2,
+                                )
+                            },
                             price: c_proj,
-                            label_override: Some("c?".into()),
+                            label_override: Some(if c_live_anchored {
+                                "c (live)"
+                            } else {
+                                "c?"
+                            }
+                            .into()),
                             hide_label: false,
                         },
                     ],
@@ -592,11 +694,38 @@ pub fn scan_level(
                     if !b_in_band {
                         b_clone.label_override = Some("b?".into());
                     }
+                    // BUG1 — B-violation guard. For a bearish ABC the
+                    // motive's W5 = high, A = low, B = high (lower
+                    // than W5). If price closes ABOVE B + buffer, B
+                    // has been reclaimed and the corrective is no
+                    // longer "B-then-C" — it's morphing into a new
+                    // bullish leg. Skip emission so the stale (c?)
+                    // dotted target disappears from the chart.
+                    let b_violated = if motive.direction == 1 {
+                        // Bearish ABC: B is a high. Reclaim = close >
+                        // B + buffer.
+                        latest_close > b_anchor.price * (1.0 + LIVE_INVAL_BUFFER)
+                    } else {
+                        // Bullish ABC: B is a low. Reclaim = close <
+                        // B - buffer.
+                        latest_close < b_anchor.price * (1.0 - LIVE_INVAL_BUFFER)
+                    };
+                    if b_violated {
+                        continue;
+                    }
+
                     // Project C from the candidate (validated or not)
                     // B price; if B is out-of-band the C target also
                     // shifts — the projection follows the actual pivot
                     // tape rather than guessing a "perfect" B.
-                    let c_proj = project_c(a_anchor.price, b_anchor.price);
+                    //
+                    // BUG1 — `live_c_anchor` re-anchors C at the live
+                    // close when price has already pierced the
+                    // textbook target without printing a confirmed
+                    // pivot. The chart's (c?) marker tracks the tape
+                    // instead of frozen at A - (B - A).
+                    let (c_proj, c_live_anchored) =
+                        live_c_anchor(a_anchor.price, Some(b_anchor.price));
                     let c_dir = a_anchor.direction;
                     // Elliott zigzag time rule — C duration ≈ A
                     // duration (the canonical "equality" guideline,
@@ -621,6 +750,17 @@ pub fn scan_level(
                     } else {
                         "zigzag"
                     };
+                    // BUG1 — when the live close has already pierced
+                    // the projected C, anchor the (c?) marker at the
+                    // CURRENT bar instead of `b_anchor + c_offset`
+                    // (which sits in the future). The chart then sees
+                    // a dashed line that ends at today's candle, not
+                    // dangling 30 bars ahead at a stale target.
+                    let c_bar_index = if c_live_anchored {
+                        last_bar_index
+                    } else {
+                        clip_to_last(b_anchor.bar_index + c_offset_bars)
+                    };
                     out.push(EarlyMatch {
                         subkind: format!("abc_nascent_{suffix}"),
                         direction: abc_dir,
@@ -630,11 +770,14 @@ pub fn scan_level(
                             b_clone,
                             PivotPoint {
                                 direction: c_dir,
-                                bar_index: clip_to_last(
-                                    b_anchor.bar_index + c_offset_bars,
-                                ),
+                                bar_index: c_bar_index,
                                 price: c_proj,
-                                label_override: Some("c?".into()),
+                                label_override: Some(if c_live_anchored {
+                                    "c (live)"
+                                } else {
+                                    "c?"
+                                }
+                                .into()),
                                 hide_label: false,
                             },
                         ],
@@ -727,7 +870,7 @@ pub fn scan_level(
                     out.push(EarlyMatch {
                         subkind: format!("abc_forming_{suffix}"),
                         direction: abc_dir,
-                        anchors: vec![p5.clone(), a_clone, b_clone, c_clone],
+                        anchors: vec![p5.clone(), a_clone, b_clone, c_clone.clone()],
                         score: 0.65,
                         invalidation_price: p5.price,
                         stage: "abc_forming",
@@ -740,6 +883,111 @@ pub fn scan_level(
                         ],
                         corrective_kind: Some(corrective_kind),
                     });
+
+                    // BUG2 (2026-04-27) — Once the ABC is forming
+                    // (A, B, C all real pivots), forecast the next
+                    // 12345 motive that should launch from C in the
+                    // opposite direction. The user complained 3-5
+                    // times that the forecast doesn't update — this
+                    // emission re-runs every tick, so the projected
+                    // (1)..(5) anchors slide forward as the live tape
+                    // moves. Cancellation triggers if the live close
+                    // violates the W2 retrace ceiling.
+                    //
+                    // Projection geometry (Frost & Prechter §1.3):
+                    //   W0 = C
+                    //   W1 ≈ |A - C|          (zigzag-equality)
+                    //   W2 ≈ 50% retrace of W1
+                    //   W3 ≈ 1.618 × W1       (textbook centre)
+                    //   W4 ≈ 38% retrace of W3
+                    //   W5 ≈ equality with W1 from W4 (canonical)
+                    let new_dir: i8 = -abc_dir; // motive opposes ABC
+                    let w1_len = (c_anchor.price - a_anchor.price).abs();
+                    if w1_len > 0.0 {
+                        let mut w_prices = [c_anchor.price; 6];
+                        let dir_sign = new_dir as f64;
+                        w_prices[0] = c_anchor.price;
+                        w_prices[1] = c_anchor.price + dir_sign * w1_len;
+                        w_prices[2] =
+                            w_prices[1] - dir_sign * 0.5 * w1_len;
+                        w_prices[3] =
+                            w_prices[2] + dir_sign * 1.618 * w1_len;
+                        let w3_len = (w_prices[3] - w_prices[2]).abs();
+                        w_prices[4] = w_prices[3] - dir_sign * 0.382 * w3_len;
+                        w_prices[5] = w_prices[4] + dir_sign * w1_len;
+
+                        // Live cancellation — if latest close has
+                        // already retraced more than ~110% of the
+                        // projected W1 (i.e. price has gone all the
+                        // way back through C), the motive is dead
+                        // before it began. Skip emission.
+                        let w2_violation_threshold = c_anchor.price
+                            - dir_sign * 0.10 * w1_len;
+                        let cancel = if new_dir == 1 {
+                            latest_close < w2_violation_threshold
+                        } else {
+                            latest_close > w2_violation_threshold
+                        };
+
+                        // Bar spacing — assume each post-ABC wave
+                        // takes ~half the original W3 duration
+                        // (impulses are typically faster than the
+                        // preceding correction). Floor 5 bars.
+                        let post_abc_step: i64 = ((motive.anchors[3]
+                            .bar_index
+                            - motive.anchors[2].bar_index)
+                            / 2)
+                            .max(5);
+
+                        if !cancel {
+                            // Build the 6 projected pivots. W0 sits
+                            // at C; subsequent waves step forward
+                            // by post_abc_step bars. clip_to_last
+                            // keeps them on chart even when the
+                            // tape hasn't reached them yet.
+                            let mk = |idx: usize, dir: i8, label: &str| PivotPoint {
+                                direction: dir,
+                                bar_index: clip_to_last(
+                                    c_anchor.bar_index
+                                        + post_abc_step * idx as i64,
+                                ),
+                                price: w_prices[idx],
+                                label_override: Some(label.into()),
+                                hide_label: false,
+                            };
+                            let post_w1_dir = new_dir;
+                            let post_w2_dir = -new_dir;
+                            let post_w3_dir = new_dir;
+                            let post_w4_dir = -new_dir;
+                            let post_w5_dir = new_dir;
+                            out.push(EarlyMatch {
+                                subkind: format!(
+                                    "motive_projected_post_abc_{suffix}"
+                                ),
+                                direction: new_dir,
+                                anchors: vec![
+                                    c_clone, // W0 = C (real anchor)
+                                    mk(1, post_w1_dir, "(1)?"),
+                                    mk(2, post_w2_dir, "(2)?"),
+                                    mk(3, post_w3_dir, "(3)?"),
+                                    mk(4, post_w4_dir, "(4)?"),
+                                    mk(5, post_w5_dir, "(5)?"),
+                                ],
+                                score: 0.35,
+                                // Invalidation = the retrace ceiling
+                                // — frontend can shade the box if
+                                // close pierces it.
+                                invalidation_price: w2_violation_threshold,
+                                stage: "motive_projected_post_abc",
+                                w3_extension: 1.618,
+                                anchor_scores: vec![
+                                    1.0, // W0 = C is real
+                                    0.0, 0.0, 0.0, 0.0, 0.0,
+                                ],
+                                corrective_kind: None,
+                            });
+                        }
+                    }
                 }
             }
         }
